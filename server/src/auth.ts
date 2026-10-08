@@ -1,0 +1,67 @@
+import { betterAuth } from "better-auth";
+import { admin, organization } from "better-auth/plugins";
+import { createAccessControl } from "better-auth/plugins/access";
+import { adminAc, userAc } from "better-auth/plugins/admin/access";
+import type { Pool } from "pg";
+
+// Organization roles. Better Auth's default "owner" role is deliberately absent:
+// "Owner" is a domain term for the party accountable for a Managed Certificate.
+export const ORG_ADMIN_ROLE = "organization-administrator";
+export const APPROVER_ROLE = "approver";
+export const MEMBER_ROLE = "member";
+
+const statements = {
+  organization: ["update", "delete"],
+  member: ["create", "update", "delete"],
+  invitation: ["create", "cancel"],
+  team: ["create", "update", "delete"],
+} as const;
+
+const ac = createAccessControl(statements);
+
+export const orgRoles = {
+  [ORG_ADMIN_ROLE]: ac.newRole({
+    organization: ["update", "delete"],
+    member: ["create", "update", "delete"],
+    invitation: ["create", "cancel"],
+    team: ["create", "update", "delete"],
+  }),
+  [APPROVER_ROLE]: ac.newRole({ organization: [], member: [], invitation: [], team: [] }),
+  [MEMBER_ROLE]: ac.newRole({ organization: [], member: [], invitation: [], team: [] }),
+};
+
+export const PLATFORM_OPERATOR_ROLE = "platform-operator";
+
+export interface AuthConfig {
+  pool: Pool;
+  baseURL: string;
+  secret: string;
+}
+
+export function createAuth({ pool, baseURL, secret }: AuthConfig) {
+  return betterAuth({
+    database: pool,
+    baseURL,
+    secret,
+    basePath: "/api/auth",
+    trustedOrigins: [baseURL],
+    emailAndPassword: { enabled: true, autoSignIn: true, minPasswordLength: 12 },
+    plugins: [
+      admin({
+        adminRoles: [PLATFORM_OPERATOR_ROLE],
+        defaultRole: "user",
+        roles: { [PLATFORM_OPERATOR_ROLE]: adminAc, user: userAc },
+      }),
+      organization({
+        ac,
+        roles: orgRoles,
+        creatorRole: ORG_ADMIN_ROLE,
+        teams: { enabled: true },
+        // Organizations are created only by Platform Operators, through the platform API.
+        allowUserToCreateOrganization: false,
+      }),
+    ],
+  });
+}
+
+export type Auth = ReturnType<typeof createAuth>;
