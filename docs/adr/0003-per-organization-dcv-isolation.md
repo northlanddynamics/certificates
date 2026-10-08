@@ -1,0 +1,3 @@
+# DCV is isolated per Organization; no shared Validation Zone
+
+Each Organization has its own ACME accounts, DNS Provider credentials and Validation Zone hosted on DNS that the Organization provides. The platform never offers a shared Validation Zone, even though it would make onboarding simpler, because a shared zone would let one Organization pass DCV for names delegated by another. The platform does not try to detect cross-Organization misconfiguration (such as one Organization delegating its `_acme-challenge` names into another's Validation Zone): that requires a deliberate act by the Organizations involved and is outside the platform's threat model.

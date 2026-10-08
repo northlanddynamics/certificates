@@ -1,0 +1,3 @@
+# Agents run admin-uploaded Deployment Scripts
+
+Agents run arbitrary Bash or PowerShell Deployment Scripts supplied through the platform, accepting that a compromise of the platform or of an Organization administrator account means code execution on every host running that Organization's Agents. We chose this over a fixed set of built-in actions or an allowlist local to each host because administrators need the flexibility to deploy to targets the platform does not know about. The risk is contained by restricting script upload to Organization administrators; built-in actions may be added later.
