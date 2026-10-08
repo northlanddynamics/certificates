@@ -4,6 +4,8 @@ import { join } from "node:path";
 import { Pool } from "pg";
 import { createAuth } from "./auth";
 
+/** Serialises concurrent migration runs (e.g. several app instances starting together). */
+const MIGRATION_LOCK_ID = 7731001;
 const MIGRATIONS_DIR = join(import.meta.dir, "..", "migrations");
 
 /**
@@ -21,7 +23,7 @@ export async function runMigrations(pool: Pool, authOptions: Parameters<typeof g
   for (const file of files) {
     const client = await pool.connect();
     try {
-      await client.query("select pg_advisory_lock(7731001)");
+      await client.query(`select pg_advisory_lock(${MIGRATION_LOCK_ID})`);
       const done = await client.query(`select 1 from schema_migration where name = $1`, [file]);
       if (done.rowCount) continue;
       await client.query("begin");
@@ -32,7 +34,7 @@ export async function runMigrations(pool: Pool, authOptions: Parameters<typeof g
       await client.query("rollback").catch(() => {});
       throw err;
     } finally {
-      await client.query("select pg_advisory_unlock(7731001)").catch(() => {});
+      await client.query(`select pg_advisory_unlock(${MIGRATION_LOCK_ID})`).catch(() => {});
       client.release();
     }
   }

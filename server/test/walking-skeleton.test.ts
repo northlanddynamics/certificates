@@ -83,6 +83,11 @@ describe("walking skeleton", () => {
     const right = await h.signUp("admin@acme.test", PASSWORD);
     expect((await h.api(url, { cookie: right, method: "POST" })).status).toBe(200);
     expect((await h.api(url, { cookie: right, method: "POST" })).status).toBe(409);
+
+    // Only the one successful acceptance (plus the Organization's creation) was audited.
+    const admin = await h.signIn("admin@acme.test", PASSWORD);
+    const audit = await h.api(`/api/organizations/${created.body.id}/audit-events`, { cookie: admin });
+    expect(audit.body.items.map((e: any) => e.action)).toEqual(["organization.created", "invitation.accepted"]);
   });
 
   test("users of one Organization cannot see or reach another Organization", async () => {

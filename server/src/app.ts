@@ -3,6 +3,7 @@ import type { Context } from "hono";
 import type { Pool } from "pg";
 import { ORG_ADMIN_ROLE, PLATFORM_OPERATOR_ROLE, createAuth } from "./auth";
 import { listAudit, recordAudit } from "./audit";
+import { withTransaction } from "./db";
 import type { Mailer } from "./mailer";
 
 export interface AppDeps {
@@ -106,39 +107,35 @@ export function createApp(deps: AppDeps) {
       const now = clock();
       const orgId = crypto.randomUUID();
       const invitationId = crypto.randomUUID();
-      const client = await pool.connect();
       try {
-        await client.query("begin");
-        await client.query(
-          `insert into organization (id, name, slug, "createdAt") values ($1, $2, $3, $4)`,
-          [orgId, name, slug, now],
-        );
-        await client.query(
-          `insert into invitation (id, "organizationId", email, role, status, "expiresAt", "createdAt", "inviterId")
-           values ($1, $2, $3, $4, 'pending', $5, $6, $7)`,
-          [invitationId, orgId, adminEmail.toLowerCase(), ORG_ADMIN_ROLE, new Date(now.getTime() + INVITATION_TTL_MS), now, operator.id],
-        );
-        await recordAudit(client, {
-          organizationId: orgId,
-          occurredAt: now,
-          actor: operator,
-          action: "organization.created",
-          target: { type: "organization", id: orgId },
-          detail: { slug, firstAdministrator: adminEmail.toLowerCase() },
+        await withTransaction(pool, async (tx) => {
+          await tx.query(`insert into organization (id, name, slug, "createdAt") values ($1, $2, $3, $4)`, [orgId, name, slug, now]);
+          await tx.query(
+            `insert into invitation (id, "organizationId", email, role, status, "expiresAt", "createdAt", "inviterId")
+             values ($1, $2, $3, $4, 'pending', $5, $6, $7)`,
+            [invitationId, orgId, adminEmail.toLowerCase(), ORG_ADMIN_ROLE, new Date(now.getTime() + INVITATION_TTL_MS), now, operator.id],
+          );
+          await recordAudit(tx, {
+            organizationId: orgId,
+            occurredAt: now,
+            actor: operator,
+            action: "organization.created",
+            target: { type: "organization", id: orgId },
+            detail: { slug, firstAdministrator: adminEmail.toLowerCase() },
+          });
         });
-        await client.query("commit");
       } catch (err: any) {
-        await client.query("rollback").catch(() => {});
         if (err?.code === "23505") throw new HttpError(409, "slug already in use");
         throw err;
-      } finally {
-        client.release();
       }
-      await mailer.send({
-        to: adminEmail,
-        subject: `You are invited to administer ${name}`,
-        text: `Accept your invitation: ${deps.baseURL}/accept-invitation/${invitationId}`,
-      });
+      // The Organization and invitation are committed; a mail failure must not hide that from the caller.
+      await mailer
+        .send({
+          to: adminEmail,
+          subject: `You are invited to administer ${name}`,
+          text: `Accept your invitation: ${deps.baseURL}/accept-invitation/${invitationId}`,
+        })
+        .catch((err) => console.error("invitation email failed", err));
       return c.json({ id: orgId, invitationId }, 201);
     },
   );
@@ -175,21 +172,19 @@ export function createApp(deps: AppDeps) {
       const user = await requireUser(c);
       const { id } = c.req.valid("param");
       const now = clock();
-      const client = await pool.connect();
-      try {
-        await client.query("begin");
-        const { rows } = await client.query(`select * from invitation where id = $1 for update`, [id]);
+      const result = await withTransaction(pool, async (tx) => {
+        const { rows } = await tx.query(`select * from invitation where id = $1 for update`, [id]);
         const inv = rows[0];
         if (!inv) throw new HttpError(404, "invitation not found");
         if (inv.email.toLowerCase() !== user.email.toLowerCase()) throw new HttpError(403, "invitation is for a different email");
         if (inv.status !== "pending") throw new HttpError(409, "invitation already used");
         if (new Date(inv.expiresAt) < now) throw new HttpError(404, "invitation expired");
-        await client.query(`update invitation set status = 'accepted' where id = $1`, [id]);
-        await client.query(
+        await tx.query(`update invitation set status = 'accepted' where id = $1`, [id]);
+        await tx.query(
           `insert into member (id, "organizationId", "userId", role, "createdAt") values ($1, $2, $3, $4, $5)`,
           [crypto.randomUUID(), inv.organizationId, user.id, inv.role, now],
         );
-        await recordAudit(client, {
+        await recordAudit(tx, {
           organizationId: inv.organizationId,
           occurredAt: now,
           actor: user,
@@ -197,14 +192,9 @@ export function createApp(deps: AppDeps) {
           target: { type: "invitation", id },
           detail: { role: inv.role },
         });
-        await client.query("commit");
-        return c.json({ organizationId: inv.organizationId as string, role: inv.role as string }, 200);
-      } catch (err) {
-        await client.query("rollback").catch(() => {});
-        throw err;
-      } finally {
-        client.release();
-      }
+        return { organizationId: inv.organizationId as string, role: inv.role as string };
+      });
+      return c.json(result, 200);
     },
   );
 
