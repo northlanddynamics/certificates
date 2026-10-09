@@ -3,7 +3,7 @@
 // renewal-scheduler.ts and what is due and when in renewal.ts.
 import { OpenAPIHono, createRoute, z } from "@hono/zod-openapi";
 import { and, eq } from "drizzle-orm";
-import { CsrError, parseCsr } from "./csr";
+import { CsrError, MAX_CSR_LENGTH, parseCsr } from "./csr";
 import type { Db } from "./db/client";
 import { issuance, managedCertificate } from "./db/schema";
 import { HttpError, errors, json } from "./http";
@@ -11,9 +11,6 @@ import { refusalMessage, type Issuances } from "./issuance";
 import { Issuance, ManagedCertificate, ManagedCertificateParams, RenewalPolicy, toIssuance, type ManagedCertificateReader } from "./managed-certificate-reader";
 import { sameNames } from "./names";
 import type { Actor, UnitOfWork } from "./unit-of-work";
-
-/** Far more than any CSR for the names a Managed Certificate may have (MAX_NAMES), so a larger body is refused before it is parsed. */
-const MAX_CSR_LENGTH = 64_000;
 
 export function registerRenewalRoutes(ctx: {
   app: OpenAPIHono;

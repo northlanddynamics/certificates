@@ -56,6 +56,44 @@ export const managedCertificate = pgTable(
 );
 
 /**
+ * A change of a Managed Certificate's names, with the CSR for the new names. One by a non-administrator waits for
+ * Approval (`pending`) while Renewal carries on with the Managed Certificate's own names and CSR, which the change
+ * replaces only when approved; a rejected one is kept as a record and changes nothing. An Organization Administrator's
+ * change is applied as it is made and leaves only its Audit Event. At most one is pending for a Managed Certificate.
+ */
+export const nameChange = pgTable(
+  "name_change",
+  {
+    id: uuid("id").primaryKey().defaultRandom(),
+    organizationId: text("organization_id")
+      .notNull()
+      .references(() => organization.id),
+    managedCertificateId: uuid("managed_certificate_id").notNull(),
+    status: text("status").$type<"pending" | "approved" | "rejected">().notNull(),
+    /** The names asked for; lower case. */
+    names: text("names").array().notNull(),
+    /** The CSR for `names`, which replaces the Managed Certificate's when the change is approved. */
+    csr: text("csr").notNull(),
+    proposedById: text("proposed_by_id").notNull(),
+    proposedByEmail: text("proposed_by_email").notNull(),
+    decidedById: text("decided_by_id"),
+    decidedByEmail: text("decided_by_email"),
+    decidedAt: timestamp("decided_at", { withTimezone: true }),
+    decisionReason: text("decision_reason"),
+    createdAt: timestamp("created_at", { withTimezone: true }).notNull().defaultNow(),
+  },
+  (t) => [
+    foreignKey({ columns: [t.managedCertificateId, t.organizationId], foreignColumns: [managedCertificate.id, managedCertificate.organizationId] }),
+    index("name_change_managed_certificate_idx").on(t.managedCertificateId, t.createdAt),
+    index("name_change_pending_idx").on(t.organizationId).where(sql`${t.status} = 'pending'`),
+    uniqueIndex("name_change_one_pending_per_managed_certificate")
+      .on(t.managedCertificateId)
+      .where(sql`${t.status} = 'pending'`),
+    check("name_change_status", sql`${t.status} in ('pending', 'approved', 'rejected')`),
+  ],
+);
+
+/**
  * A user or a Team accountable for a Managed Certificate: exactly one of `userId` and `teamId`. A Managed Certificate
  * may have none. Owners see the Managed Certificate (visibility) and may change who its Owners are. A user must be a
  * member of the Organization and a Team one of its Teams; the platform checks that when adding, and takes an Owner off

@@ -79,8 +79,21 @@ export interface InventoryFilters {
   archived?: boolean;
   keyCustody?: "owner";
 }
+/** A change of a Managed Certificate's names waiting for Approval. */
+export interface PendingNameChange {
+  names: string[];
+  proposedBy: { id: string; email: string };
+  proposedAt: string;
+}
 export type HistoryEntry =
-  | { kind: "created" | "proposed" | "approved" | "rejected"; at: string; actor: { id: string; email: string } | null; reason: string | null }
+  | {
+      kind: "created" | "proposed" | "approved" | "rejected" | "names_change_proposed" | "names_change_approved" | "names_change_rejected" | "names_changed";
+      at: string;
+      actor: { id: string; email: string } | null;
+      reason: string | null;
+      /** The names before and after, for a name change. */
+      names: { from: string[]; to: string[] } | null;
+    }
   | { kind: "certificate_issued"; at: string; certificate: { fingerprint: string; notBefore: string; notAfter: string; names: string[] } };
 export interface RenewalPolicy {
   mode: "automatic" | "manual";
@@ -104,9 +117,15 @@ export interface ManagedCertificate {
   environment: "staging" | "production";
   owners: Owner[];
   approval: Approval;
+  /** Until it is approved, Renewal uses `names`. */
+  pendingNameChange: PendingNameChange | null;
   renewal: Renewal;
   issuance: Issuance | null;
   currentCertificate: { fingerprint: string; notAfter: string } | null;
+}
+export interface QueuedNameChange extends PendingNameChange {
+  managedCertificateId: string;
+  currentNames: string[];
 }
 export const EXPORT_FORMATS: [string, string][] = [
   ["pem", "PEM"],
@@ -171,11 +190,18 @@ export const api = {
   history: (orgId: string, id: string) => call<{ items: HistoryEntry[] }>(`/api/organizations/${orgId}/managed-certificates/${id}/history`),
   createManagedCertificate: (orgId: string, body: NewManagedCertificate) =>
     call<ManagedCertificate>(`/api/organizations/${orgId}/managed-certificates`, { body }),
-  approvalQueue: (orgId: string) => call<{ items: ManagedCertificate[] }>(`/api/organizations/${orgId}/approvals`),
+  approvalQueue: (orgId: string) => call<{ items: ManagedCertificate[]; nameChanges: QueuedNameChange[] }>(`/api/organizations/${orgId}/approvals`),
   approve: (orgId: string, id: string, reason?: string) =>
     call<ManagedCertificate>(`/api/organizations/${orgId}/managed-certificates/${id}/approve`, { body: { reason } }),
   reject: (orgId: string, id: string, reason: string) =>
     call<ManagedCertificate>(`/api/organizations/${orgId}/managed-certificates/${id}/reject`, { body: { reason } }),
+  /** An Organization Administrator's change applies at once; anyone else's is proposed and waits for Approval. */
+  changeNames: (orgId: string, id: string, body: { names: string[]; csr: string }) =>
+    call<ManagedCertificate>(`/api/organizations/${orgId}/managed-certificates/${id}/name-change`, { body }),
+  approveNameChange: (orgId: string, id: string, reason?: string) =>
+    call<ManagedCertificate>(`/api/organizations/${orgId}/managed-certificates/${id}/name-change/approve`, { body: { reason } }),
+  rejectNameChange: (orgId: string, id: string, reason: string) =>
+    call<ManagedCertificate>(`/api/organizations/${orgId}/managed-certificates/${id}/name-change/reject`, { body: { reason } }),
   retryIssuance: (orgId: string, id: string) =>
     call<Issuance>(`/api/organizations/${orgId}/managed-certificates/${id}/issuances`, { method: "POST", body: {} }),
   setRenewalPolicy: (orgId: string, id: string, policy: RenewalPolicy) =>

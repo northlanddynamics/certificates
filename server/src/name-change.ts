@@ -1,0 +1,80 @@
+// Name changes: replacing the names a Managed Certificate is issued for, together with the CSR for the new names.
+// Approval is needed when someone other than an Organization Administrator makes one (approval.ts), and until it is
+// given Renewal carries on with the last approved names and CSR, which are the Managed Certificate's own. A change that
+// is approved, or made by an Organization Administrator, replaces them and an Issuance of the new names begins. The
+// routes are in name-change-routes.ts; the decisions on them are made in the Approval queue (approvals.ts).
+import { z } from "@hono/zod-openapi";
+import { and, asc, eq, inArray, isNull } from "drizzle-orm";
+import type { ApprovalStatus } from "./approval";
+import type { Tx, Db } from "./db/client";
+import { managedCertificate, nameChange } from "./db/schema";
+import { HttpError } from "./http";
+import type { Issuances } from "./issuance";
+import type { Actor, Change } from "./unit-of-work";
+
+/** A name change waiting for Approval. */
+export const PendingNameChange = z.object({
+  names: z.array(z.string()).openapi({ description: "The names asked for; the Managed Certificate keeps its own until this is approved." }),
+  proposedBy: z.object({ id: z.string(), email: z.string() }),
+  proposedAt: z.string(),
+});
+
+type NameChangeRow = typeof nameChange.$inferSelect;
+
+export const toPendingNameChange = (row: NameChangeRow) => ({
+  names: row.names,
+  proposedBy: { id: row.proposedById, email: row.proposedByEmail },
+  proposedAt: row.createdAt.toISOString(),
+});
+
+/** The name change each of the Managed Certificates is waiting on, for those with one. */
+export async function pendingNameChanges(db: Db | Tx, managedCertificateIds: string[]): Promise<Map<string, NameChangeRow>> {
+  if (managedCertificateIds.length === 0) return new Map();
+  const rows = await db
+    .select()
+    .from(nameChange)
+    .where(and(inArray(nameChange.managedCertificateId, managedCertificateIds), eq(nameChange.status, "pending")));
+  return new Map(rows.map((row) => [row.managedCertificateId, row]));
+}
+
+/** Every name change in the Organization waiting for Approval, the oldest first; an archived Managed Certificate's cannot be approved, so is left out. */
+export const pendingNameChangesOf = (db: Db, organizationId: string) =>
+  db
+    .select({ change: nameChange, currentNames: managedCertificate.names })
+    .from(nameChange)
+    .innerJoin(managedCertificate, and(eq(managedCertificate.id, nameChange.managedCertificateId), eq(managedCertificate.organizationId, nameChange.organizationId)))
+    .where(and(eq(nameChange.organizationId, organizationId), eq(nameChange.status, "pending"), isNull(managedCertificate.archivedAt)))
+    .orderBy(asc(nameChange.createdAt), asc(nameChange.id));
+
+/** Locks the Managed Certificate for the rest of the transaction, so changes to its names, its archiving and its Issuances take turns. */
+export async function lockManagedCertificate(tx: Tx, organizationId: string, id: string) {
+  const [mc] = await tx
+    .select()
+    .from(managedCertificate)
+    .where(and(eq(managedCertificate.id, id), eq(managedCertificate.organizationId, organizationId)))
+    .for("update");
+  if (!mc) throw new HttpError(404, "Managed Certificate not found");
+  return mc;
+}
+
+/** Why the Managed Certificate's names may not be changed now, if they may not. */
+export function refusalToChangeNames(mc: { approvalStatus: ApprovalStatus; archivedAt: Date | null }): string | null {
+  if (mc.archivedAt) return "the Managed Certificate is archived, so its names cannot be changed";
+  if (mc.approvalStatus === "pending") return "the Managed Certificate is awaiting Approval, which decides its names, so they cannot be changed";
+  if (mc.approvalStatus === "rejected") return "the Managed Certificate is rejected, so its names cannot be changed";
+  return null;
+}
+
+/**
+ * Gives the locked Managed Certificate its new names and CSR, as a change that is approved or needs no Approval, and
+ * has an Issuance for them begin. Refused (409) while an Issuance runs, which keeps what it started with: the new names
+ * would get no Certificate until the next Renewal, so the change is made once that has ended.
+ */
+export async function applyNames(tx: Tx, change: Change, actor: Actor, issuances: Issuances, mc: { id: string; organizationId: string }, to: { names: string[]; csr: string }) {
+  await tx.update(managedCertificate).set({ names: to.names, csr: to.csr }).where(and(eq(managedCertificate.id, mc.id), eq(managedCertificate.organizationId, mc.organizationId)));
+  const begun = await issuances.begin(tx, change, actor, mc, "issue");
+  if ("refused" in begun) {
+    if (begun.refused === "already_running") throw new HttpError(409, "an Issuance of this Managed Certificate is running; its names can be changed once it has ended");
+    throw new Error(`the Issuance of a Managed Certificate whose names were just changed was refused: ${begun.refused}`);
+  }
+}

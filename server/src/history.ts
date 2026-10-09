@@ -1,6 +1,6 @@
 // A Managed Certificate's history: how it got to its current state, oldest first. It is read from the audit log and
-// from its Certificates, so it can only say what really happened, and a later kind of change (a name change, a
-// Deployment Run) adds its Audit Event action to HISTORY_KINDS.
+// from its Certificates, so it can only say what really happened, and a later kind of change (a Deployment Run)
+// adds its Audit Event action to HISTORY_KINDS.
 import { OpenAPIHono, createRoute, z } from "@hono/zod-openapi";
 import { and, asc, eq, inArray } from "drizzle-orm";
 import type { Db } from "./db/client";
@@ -15,6 +15,10 @@ export const HISTORY_KINDS = {
   "managed_certificate.proposed": "proposed",
   "managed_certificate.approved": "approved",
   "managed_certificate.rejected": "rejected",
+  "name_change.proposed": "names_change_proposed",
+  "name_change.approved": "names_change_approved",
+  "name_change.rejected": "names_change_rejected",
+  "managed_certificate.names_changed": "names_changed",
 } as const;
 type HistoryKind = (typeof HISTORY_KINDS)[keyof typeof HISTORY_KINDS];
 
@@ -24,8 +28,12 @@ type HistoryEvent = {
   actor: { id: string; email: string } | null;
   /** What the Approver said, for a decision. */
   reason: string | null;
+  /** The names before and after, for a name change. */
+  names: { from: string[]; to: string[] } | null;
 };
 type HistoryCertificate = { kind: "certificate_issued"; at: string; certificate: typeof certificate.$inferSelect };
+
+const isNames = (value: unknown): value is string[] => Array.isArray(value) && value.every((name) => typeof name === "string");
 
 export async function historyOf(db: Db, organizationId: string, managedCertificateId: string): Promise<(HistoryEvent | HistoryCertificate)[]> {
   const events = await db
@@ -52,6 +60,7 @@ export async function historyOf(db: Db, organizationId: string, managedCertifica
         at: e.occurredAt.toISOString(),
         actor: e.actorId && e.actorEmail ? { id: e.actorId, email: e.actorEmail } : null,
         reason: typeof e.detail.reason === "string" ? e.detail.reason : null,
+        names: isNames(e.detail.from) && isNames(e.detail.to) ? { from: e.detail.from, to: e.detail.to } : null,
       }),
     ),
     ...certificates.map((c): HistoryCertificate => ({ kind: "certificate_issued", at: c.issuedAt.toISOString(), certificate: c })),
@@ -66,6 +75,7 @@ const HistoryEntry = z.discriminatedUnion("kind", [
     at: z.string(),
     actor: Person.nullable(),
     reason: z.string().nullable().openapi({ description: "What the Approver said, for a decision." }),
+    names: z.object({ from: z.array(z.string()), to: z.array(z.string()) }).nullable().openapi({ description: "The names before and after, for a name change." }),
   }),
   z.object({ kind: z.literal("certificate_issued"), at: z.string(), certificate: Certificate }),
 ]);
@@ -85,7 +95,7 @@ export function registerHistory(ctx: {
       path: "/api/organizations/{orgId}/managed-certificates/{id}/history",
       tags: ["Managed Certificates"],
       summary: "How the Managed Certificate got to its current state, oldest first",
-      description: "Its creation or proposal, its Approvals and the Certificates issued for it.",
+      description: "Its creation or proposal, its Approvals, its name changes and the Certificates issued for it.",
       request: { params: ManagedCertificateParams },
       responses: { 200: json(z.object({ items: z.array(HistoryEntry) })), ...errors(401, 403, 404) },
     }),

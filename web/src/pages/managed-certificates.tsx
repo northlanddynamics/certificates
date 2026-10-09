@@ -5,6 +5,7 @@ import { Checkbox } from "@/components/ui/checkbox";
 import { Label } from "@/components/ui/label";
 import { Select, SelectContent, SelectItem, SelectTrigger, SelectValue } from "@/components/ui/select";
 import { Textarea } from "@/components/ui/textarea";
+import { NameChange } from "./name-change-controls";
 import { Renewal } from "./renewal-controls";
 import {
   EXPORT_CHAINS,
@@ -115,6 +116,7 @@ export function ManagedCertificates({ org }: { org: Me["organizations"][number] 
                 {m.issuance.failure.message}
               </span>
             )}
+            <NameChange org={org} m={m} userId={me.data?.user.id} onChanged={refresh} />
             <Renewal org={org} m={m} userId={me.data?.user.id} onChanged={refresh} />
             <Owners org={org} m={m} userId={me.data?.user.id} onChanged={refresh} />
             <span className="flex gap-3">
@@ -257,16 +259,25 @@ function Download({ org, m }: { org: Me["organizations"][number]; m: ManagedCert
   );
 }
 
-const HISTORY_WORDS = { created: "Created", proposed: "Proposed", approved: "Approved", rejected: "Rejected" } as const;
+const HISTORY_WORDS = {
+  created: "Created",
+  proposed: "Proposed",
+  approved: "Approved",
+  rejected: "Rejected",
+  names_change_proposed: "Name change proposed",
+  names_change_approved: "Name change approved",
+  names_change_rejected: "Name change rejected",
+  names_changed: "Names changed",
+} as const;
 const historyLine = (e: HistoryEntry) =>
   e.kind === "certificate_issued"
     ? `Certificate issued, valid until ${new Date(e.certificate.notAfter).toLocaleDateString()} (${e.certificate.fingerprint.slice(0, 16)}…)`
-    : `${HISTORY_WORDS[e.kind]}${e.actor ? ` by ${e.actor.email}` : ""}${e.reason ? `: ${e.reason}` : ""}`;
+    : `${HISTORY_WORDS[e.kind]}${e.actor ? ` by ${e.actor.email}` : ""}${e.names ? ` (${e.names.from.join(", ")} to ${e.names.to.join(", ")})` : ""}${e.reason ? `: ${e.reason}` : ""}`;
 
 /** How a Managed Certificate got to where it is: its Approvals and Certificates, oldest first; fetched when opened. */
 function History({ org, m }: { org: Me["organizations"][number]; m: ManagedCertificate }) {
   const [open, setOpen] = useState(false);
-  const history = useQuery({ queryKey: ["history", org.id, m.id, m.currentCertificate?.fingerprint, m.approval.status], queryFn: () => api.history(org.id, m.id), enabled: open });
+  const history = useQuery({ queryKey: ["history", org.id, m.id, m.currentCertificate?.fingerprint, m.approval.status, m.names, m.pendingNameChange?.proposedAt], queryFn: () => api.history(org.id, m.id), enabled: open });
   return (
     <details onToggle={(e) => setOpen(e.currentTarget.open)}>
       <summary className="cursor-pointer text-muted-foreground">History</summary>
@@ -289,14 +300,21 @@ function ApprovalQueue({ org, onDecided: decided }: { org: Me["organizations"][n
     mutationFn: ({ id, reason }: { id: string; reason: string }) => api.reject(org.id, id, reason),
     onSuccess: decided,
   });
+  const approveNames = useMutation({ mutationFn: (id: string) => api.approveNameChange(org.id, id), onSuccess: decided });
+  const rejectNames = useMutation({
+    mutationFn: ({ id, reason }: { id: string; reason: string }) => api.rejectNameChange(org.id, id, reason),
+    onSuccess: decided,
+  });
   const [reasons, setReasons] = useState<Record<string, string>>({});
   const items = queue.data?.items ?? [];
-  const error = approve.error ?? reject.error;
+  const nameChanges = queue.data?.nameChanges ?? [];
+  const busy = approve.isPending || reject.isPending || approveNames.isPending || rejectNames.isPending;
+  const error = approve.error ?? reject.error ?? approveNames.error ?? rejectNames.error;
 
   return (
     <div className="flex flex-col gap-3">
       <h3 className="font-medium">Awaiting Approval</h3>
-      {queue.data && items.length === 0 && <p className="text-sm text-muted-foreground">Nothing is waiting for Approval.</p>}
+      {queue.data && items.length === 0 && nameChanges.length === 0 && <p className="text-sm text-muted-foreground">Nothing is waiting for Approval.</p>}
       <ul className="flex flex-col gap-3 text-sm">
         {items.map((m) => (
           <li key={m.id} className="flex flex-col gap-2 rounded-md border p-3">
@@ -312,20 +330,36 @@ function ApprovalQueue({ org, onDecided: decided }: { org: Me["organizations"][n
               onChange={(e) => setReasons({ ...reasons, [m.id]: e.target.value })}
             />
             <span className="flex gap-2">
-              <Button size="sm" disabled={approve.isPending || reject.isPending} onClick={() => approve.mutate(m.id)}>
+              <Button size="sm" disabled={busy} onClick={() => approve.mutate(m.id)}>
                 Approve
               </Button>
-              <Button
-                size="sm"
-                variant="outline"
-                disabled={approve.isPending || reject.isPending || !(reasons[m.id] ?? "").trim()}
-                onClick={() => reject.mutate({ id: m.id, reason: reasons[m.id]! })}
-              >
+              <Button size="sm" variant="outline" disabled={busy || !(reasons[m.id] ?? "").trim()} onClick={() => reject.mutate({ id: m.id, reason: reasons[m.id]! })}>
                 Reject
               </Button>
             </span>
           </li>
         ))}
+        {nameChanges.map((n) => {
+          const key = `names:${n.managedCertificateId}`;
+          const label = `name change of ${n.currentNames.join(", ")}`;
+          return (
+            <li key={key} className="flex flex-col gap-2 rounded-md border p-3">
+              <span className="font-medium">Name change: {n.currentNames.join(", ")}</span>
+              <span className="text-muted-foreground">
+                to {n.names.join(", ")}, proposed by {n.proposedBy.email}
+              </span>
+              <Textarea aria-label={`Reason for ${label}`} placeholder="Reason (required to reject)" rows={2} value={reasons[key] ?? ""} onChange={(e) => setReasons({ ...reasons, [key]: e.target.value })} />
+              <span className="flex gap-2">
+                <Button size="sm" disabled={busy} onClick={() => approveNames.mutate(n.managedCertificateId)}>
+                  Approve
+                </Button>
+                <Button size="sm" variant="outline" disabled={busy || !(reasons[key] ?? "").trim()} onClick={() => rejectNames.mutate({ id: n.managedCertificateId, reason: reasons[key]! })}>
+                  Reject
+                </Button>
+              </span>
+            </li>
+          );
+        })}
       </ul>
       {error && <p className="text-sm text-destructive">{error.message}</p>}
     </div>

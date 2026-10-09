@@ -11,6 +11,7 @@ import type { Db } from "./db/client";
 import { certificate, issuance, managedCertificate } from "./db/schema";
 import { HttpError, OrgParam } from "./http";
 import { ISSUANCE_FAILURE_CODES } from "./issuance-failure";
+import { PendingNameChange, pendingNameChanges, toPendingNameChange } from "./name-change";
 import { isOwner, ownedByUser, ownersOf } from "./owners";
 import { roleCan, type Permissions } from "./permissions";
 import { MAX_RENEWAL_DAYS, RENEWAL_MODES, failuresOf, nextAttemptAt, renewalDue } from "./renewal";
@@ -95,6 +96,7 @@ export const ManagedCertificate = z.object({
   createdAt: z.string(),
   owners: z.array(Owner).openapi({ description: "Users and Teams accountable for it, in the order they were added; none is allowed." }),
   approval: Approval,
+  pendingNameChange: PendingNameChange.nullable().openapi({ description: "A change of its names waiting for Approval; until it is approved, Renewal uses the names above." }),
   renewal: Renewal,
   issuance: Issuance.nullable().openapi({ description: "The latest attempt to issue a Certificate." }),
   currentCertificate: Certificate.nullable().openapi({ description: "The most recently issued Certificate." }),
@@ -193,6 +195,7 @@ export function createManagedCertificateReader({ db, authorize }: { db: Db; auth
       .orderBy(certificate.managedCertificateId, desc(certificate.createdAt), desc(certificate.id));
     const owners = await ownersOf(db, ids);
     const failures = await failuresOf(db, ids);
+    const nameChanges = await pendingNameChanges(db, ids);
     const information = await informationOf(db, currentCertificates.map((c) => c.id));
     return rows.map((row) => {
       const latest = latestIssuances.find((i) => i.managedCertificateId === row.id);
@@ -201,6 +204,7 @@ export function createManagedCertificateReader({ db, authorize }: { db: Db; auth
       // A failed first Issuance is not a failing Renewal: there is no Certificate yet to renew.
       const failed = current ? failures.get(row.id) : undefined;
       const ari = current ? information.get(current.id) : undefined;
+      const pending = nameChanges.get(row.id);
       const due = policy.mode === "automatic" && current ? renewalDue(current, policy.daysBeforeExpiry, ari?.window ?? null) : null;
       return {
         id: row.id,
@@ -217,6 +221,7 @@ export function createManagedCertificateReader({ db, authorize }: { db: Db; auth
           decidedAt: row.decidedAt?.toISOString() ?? null,
           reason: row.decisionReason,
         },
+        pendingNameChange: pending ? toPendingNameChange(pending) : null,
         renewal: {
           policy,
           dueAt: due?.at.toISOString() ?? null,

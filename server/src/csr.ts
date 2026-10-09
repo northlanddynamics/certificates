@@ -13,6 +13,9 @@ export type KeyCustody = "owner";
 // By OID: looked up by class, an extension is not found when two copies of the library are loaded.
 const SUBJECT_ALTERNATIVE_NAME = "2.5.29.17";
 
+/** Far more than any CSR for the names a Managed Certificate may have (MAX_NAMES), so a larger body is refused before it is parsed. */
+export const MAX_CSR_LENGTH = 64_000;
+
 export class CsrError extends Error {}
 
 export interface ParsedCsr {

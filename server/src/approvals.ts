@@ -1,4 +1,5 @@
-// The Approval queue and the decisions on it (what Approval is: approval.ts).
+// The Approval queue and the decisions on proposed Managed Certificates (what Approval is: approval.ts); the decisions
+// on name changes are in name-change-routes.ts.
 import { OpenAPIHono, createRoute, z } from "@hono/zod-openapi";
 import type { Context } from "hono";
 import { and, asc, eq, ne } from "drizzle-orm";
@@ -8,7 +9,10 @@ import { managedCertificate } from "./db/schema";
 import { OrgParam, HttpError, errors, json } from "./http";
 import type { Issuances } from "./issuance";
 import { ManagedCertificate, ManagedCertificateParams, type ManagedCertificateReader } from "./managed-certificate-reader";
+import { PendingNameChange, pendingNameChangesOf, toPendingNameChange } from "./name-change";
 import type { Actor, UnitOfWork } from "./unit-of-work";
+
+const QueuedNameChange = PendingNameChange.extend({ managedCertificateId: z.string(), currentNames: z.array(z.string()) });
 
 export function registerApprovals(ctx: {
   app: OpenAPIHono;
@@ -27,10 +31,18 @@ export function registerApprovals(ctx: {
       method: "get",
       path: "/api/organizations/{orgId}/approvals",
       tags: ["Approval"],
-      summary: "The Approval queue: proposed Managed Certificates the caller may decide, the oldest first",
+      summary: "The Approval queue: proposed Managed Certificates and name changes the caller may decide, the oldest first",
       description: "A proposal is decided by someone other than who proposed it, so the caller's own proposals are not in their queue.",
       request: { params: OrgParam },
-      responses: { 200: json(z.object({ items: z.array(ManagedCertificate) })), ...errors(401, 403, 404) },
+      responses: {
+        200: json(
+          z.object({
+            items: z.array(ManagedCertificate).openapi({ description: "Proposed Managed Certificates." }),
+            nameChanges: z.array(QueuedNameChange).openapi({ description: "Name changes of existing Managed Certificates; each is decided at `.../managed-certificates/{managedCertificateId}/name-change`." }),
+          }),
+        ),
+        ...errors(401, 403, 404),
+      },
     }),
     async (c) => {
       const { orgId } = c.req.valid("param");
@@ -47,7 +59,11 @@ export function registerApprovals(ctx: {
           ),
         )
         .orderBy(asc(managedCertificate.createdAt), asc(managedCertificate.id));
-      return c.json({ items: await withState(rows) }, 200);
+      const changes = await pendingNameChangesOf(db, orgId);
+      const nameChanges = changes
+        .filter(({ change }) => change.proposedById !== actor.id)
+        .map(({ change, currentNames }) => ({ managedCertificateId: change.managedCertificateId, currentNames, ...toPendingNameChange(change) }));
+      return c.json({ items: await withState(rows), nameChanges }, 200);
     },
   );
 

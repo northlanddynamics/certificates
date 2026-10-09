@@ -15,7 +15,7 @@ A named group of users within an Organization.
 _Avoid_: group, department
 
 **Owner**:
-An optional user or Team accountable for a Managed Certificate, who can renew it, change who its Owners are, and, if a Member, see it: a Member sees only the Managed Certificates they own (directly or through a Team) or proposed, while Approvers and Organization Administrators see them all. A Managed Certificate may have none. Whoever leaves the Organization, or the Team that is deleted, stops being one.
+An optional user or Team accountable for a Managed Certificate, who can renew it, change who its Owners are, propose a Name Change, and, if a Member, see it: a Member sees only the Managed Certificates they own (directly or through a Team) or proposed, while Approvers and Organization Administrators see them all. A Managed Certificate may have none. Whoever leaves the Organization, or the Team that is deleted, stops being one.
 _Avoid_: contact, assignee, requester (when meaning the ongoing responsible party)
 
 **Platform Operator**:
@@ -51,6 +51,10 @@ _Avoid_: sign-off, authorization
 **Proposal**:
 A Managed Certificate that someone who may not create one outright has asked for: it waits for Approval with no Certificates and no Issuance, and is either approved, which starts its Issuance, or rejected with a reason, which ends it. Whoever proposed it cannot decide it.
 _Avoid_: request, draft, pending certificate
+
+**Name Change**:
+A Managed Certificate's names replaced by others, together with a CSR for the new names. An Owner proposes one and it waits for Approval, with Renewal continuing on the last approved names and CSR until then; an Organization Administrator's applies at once. Applying one, by approval or by an Organization Administrator, has an Issuance of the new names begin, so it is refused while another Issuance runs. At most one is pending at a time, and a rejected one is discarded, leaving the Managed Certificate as it was.
+_Avoid_: rename, reissue (when meaning the change of names rather than the Issuance that follows)
 
 **Archive**:
 Soft deletion of a Managed Certificate: it stops issuing, renewing and deploying, but it and its Certificates and history are retained. Archiving never revokes.

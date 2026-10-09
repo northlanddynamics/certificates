@@ -9,6 +9,7 @@ import { parseCsr } from "./csr";
 import type { Dcv } from "./dcv";
 import type { Db, Tx } from "./db/client";
 import { acmeAccount, certificate, issuance, managedCertificate } from "./db/schema";
+import { sameNames } from "./names";
 import { IssuanceFailure, type IssuanceFailureCode } from "./issuance-failure";
 import type { Secrets } from "./secrets";
 import type { Actor, Change, UnitOfWork } from "./unit-of-work";
@@ -174,13 +175,14 @@ export function createIssuances({ db, unitOfWork, certificateAuthority: ca, dcv,
 
       const accountKey = await secrets.open(db, row.organizationId, account.secretId);
       // An Issuance of a Managed Certificate that has a Certificate is its Renewal, and names the Certificate it replaces so a CA with ARI can tell.
+      // Not when its names have changed since: that Certificate is not what this one renews, and a CA may refuse the order for saying so.
       const [replaced] = await db
-        .select({ chainPem: certificate.chainPem })
+        .select({ chainPem: certificate.chainPem, names: certificate.names })
         .from(certificate)
         .where(and(eq(certificate.organizationId, row.organizationId), eq(certificate.managedCertificateId, mc.id)))
         .orderBy(desc(certificate.createdAt), desc(certificate.id))
         .limit(1);
-      chainPem = await ca.issue(mc.environment, { accountUrl: account.accountUrl, accountKey }, { csr: mc.csr, responder, replaces: replaced?.chainPem });
+      chainPem = await ca.issue(mc.environment, { accountUrl: account.accountUrl, accountKey }, { csr: mc.csr, responder, replaces: replaced && sameNames(replaced.names, mc.names) ? replaced.chainPem : undefined });
     } catch (err) {
       return fail(row, failureOf(err), responder.leftovers());
     }

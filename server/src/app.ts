@@ -21,6 +21,7 @@ import { registerApprovals } from "./approvals";
 import { registerHistory } from "./history";
 import { createManagedCertificateReader } from "./managed-certificate-reader";
 import { registerManagedCertificates } from "./managed-certificates";
+import { registerNameChangeRoutes } from "./name-change-routes";
 import { registerOwnerRoutes } from "./owner-routes";
 import { createRenewalScheduler } from "./renewal-scheduler";
 import { registerRenewalRoutes } from "./renewal-routes";
@@ -241,6 +242,7 @@ export function createApp(deps: AppDeps) {
   registerOwnerRoutes({ app, requireUser, unitOfWork, reader });
   registerRenewalRoutes({ app, db, requireUser, unitOfWork, issuances, reader });
   const renewals = createRenewalScheduler({ db, unitOfWork, issuances, certificateAuthority: deps.certificateAuthority, clock });
+  registerNameChangeRoutes({ app, requireUser, authorize, unitOfWork, issuances, reader });
   registerApprovals({ app, db, requireUser, authorize, unitOfWork, issuances, reader });
   registerHistory({ app, db, requireUser, reader });
 
