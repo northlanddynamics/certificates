@@ -22,7 +22,6 @@ const API_KEY_OPTIONS = {
   // A key's Organization (and, for an Organization's key, its maker) is in the metadata (see api-keys.ts).
   enableMetadata: true,
   requireName: true,
-  maximumNameLength: 100,
   // The plugin's default is 10 requests a day, far too few for a pipeline that fetches on every run.
   rateLimit: { enabled: true, timeWindow: 60 * 60 * 1000, maxRequests: 600 },
 };

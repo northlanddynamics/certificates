@@ -19,7 +19,8 @@ import { HttpError, OrgParam, errors, json } from "./http";
 import { carries, permissionsOf, roleCan, type Permissions } from "./permissions";
 import type { Actor, UnitOfWork } from "./unit-of-work";
 
-const MAX_NAME_LENGTH = 100;
+// The plugin's own limit on a key's name (its `maximumNameLength` default); the API refuses longer ones the same way.
+const MAX_NAME_LENGTH = 32;
 
 export const API_KEY_TYPES = ["user", "organization"] as const;
 type ApiKeyType = (typeof API_KEY_TYPES)[number];

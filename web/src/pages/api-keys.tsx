@@ -101,7 +101,7 @@ export function ApiKeysPage() {
             )}
             <div className="flex flex-col gap-2">
               <Label htmlFor="key-name">Name (what the key is for)</Label>
-              <Input id="key-name" value={name} maxLength={100} onChange={(e) => setName(e.target.value)} required />
+              <Input id="key-name" value={name} maxLength={32} onChange={(e) => setName(e.target.value)} required />
             </div>
             <div className="flex flex-col gap-2">
               <Label htmlFor="key-days">Expires after (days, optional)</Label>
