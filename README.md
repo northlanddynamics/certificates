@@ -9,6 +9,7 @@ docker compose up -d --wait        # Postgres on localhost:5433 (databases: cert
 bun install
 export DATABASE_URL=postgres://postgres:postgres@localhost:5433/certs
 export AUTH_SECRET=$(openssl rand -hex 32)
+export WEB_URL=http://localhost:5173 TRUSTED_ORIGINS=http://localhost:5173   # the Vite dev server
 export OPERATOR_EMAIL=operator@example.com OPERATOR_PASSWORD='a-long-password'   # creates the Platform Operator
 bun run dev:server                 # API on :3000, applies migrations on start
 bun run dev:web                    # UI on :5173 (the web/ workspace), proxies /api to :3000

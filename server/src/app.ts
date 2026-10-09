@@ -12,7 +12,11 @@ export interface AppDeps {
   pool: Pool;
   mailer: Mailer;
   clock: () => Date;
+  /** Where the API is served; Better Auth builds its URLs from this. */
   baseURL: string;
+  /** Where users open the web UI, for links in emails. Defaults to baseURL. */
+  webURL?: string;
+  trustedOrigins?: string[];
   secret: string;
 }
 
@@ -145,7 +149,7 @@ export function createApp(deps: AppDeps) {
         .send({
           to: adminEmail,
           subject: `You are invited to administer ${name}`,
-          text: `Accept your invitation: ${deps.baseURL}/accept-invitation/${invitationId}`,
+          text: `Accept your invitation: ${deps.webURL ?? deps.baseURL}/accept-invitation/${invitationId}`,
         })
         .catch((err) => console.error("invitation email failed", err));
       return c.json({ id: orgId, invitationId }, 201);

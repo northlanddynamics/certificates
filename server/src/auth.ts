@@ -38,15 +38,17 @@ export interface AuthConfig {
   db: NodePgDatabase<any>;
   baseURL: string;
   secret: string;
+  /** Extra origins allowed to call the auth endpoints from a browser (e.g. the Vite dev server). */
+  trustedOrigins?: string[];
 }
 
-export function createAuth({ db, baseURL, secret }: AuthConfig) {
+export function createAuth({ db, baseURL, secret, trustedOrigins = [] }: AuthConfig) {
   return betterAuth({
     database: drizzleAdapter(db, { provider: "pg" }),
     baseURL,
     secret,
     basePath: "/api/auth",
-    trustedOrigins: [baseURL],
+    trustedOrigins: [baseURL, ...trustedOrigins],
     emailAndPassword: { enabled: true, autoSignIn: true, minPasswordLength: 12 },
     plugins: [
       admin({

@@ -14,6 +14,8 @@ const { app, auth, db } = createApp({
   mailer: new ConsoleMailer(),
   clock: () => new Date(),
   baseURL: process.env.BASE_URL ?? "http://localhost:3000",
+  webURL: process.env.WEB_URL,
+  trustedOrigins: process.env.TRUSTED_ORIGINS?.split(",").map((o) => o.trim()).filter(Boolean),
   secret,
 });
 await runMigrations(pool);
