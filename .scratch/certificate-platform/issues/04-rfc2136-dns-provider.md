@@ -21,7 +21,7 @@ Implemented on `main`; typecheck and the full Seam A suite pass against Postgres
 - "Test connection" publishes a throwaway TXT at `_acme-challenge.<zone>` (a name any update policy that lets the key do its job must allow) and removes it; if the removal fails the error names the record to delete by hand. It is always a 200 with `ok`, and every test, passing or failing, is audited (`dns_provider.tested`).
 - The protocol is spoken directly (DNS UPDATE and TSIG, hmac-sha1/256/384/512 and md5) over TCP, and every reply must be correctly signed or the update counts as failed. Tests run against a real BIND (`docker/bind`), whose keys cover each algorithm. Not supported: GSS-TSIG (Windows secure dynamic updates) and UDP.
 - Known: the platform connects to whatever `server` and `port` an administrator enters, and "test connection" tells them whether it answered. For a hosted platform that makes an Organization Administrator able to probe the platform's own network. Not addressed here; relayed providers (16) move internal DNS behind an Agent, and egress restrictions belong with deployment (26).
-- Known: CI (`.github/workflows/ci.yml`) provides only Postgres, so the Pebble tests from 03 and these BIND tests do not run there yet.
+- CI (`.github/workflows/ci.yml`) now starts Pebble and BIND from `docker-compose.yml` before the tests (Postgres stays its service container). Not yet seen running on GitHub.
 
 Review: stored settings or a secret that can no longer be used are now a failed, audited test rather than a 500, and any TSIG error code a server returns is reported. Left as they are, for the tickets that need them:
 
