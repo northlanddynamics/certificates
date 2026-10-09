@@ -1,36 +1,76 @@
-// Better Auth's organization endpoints, served as they are, but each change on a transaction of the unit of work,
-// with Better Auth's organization hooks writing the Audit Events on that same transaction. Its endpoints open
-// no transaction themselves (and its hooks run between separate statements), so running them in the unit of work
-// is what makes "the change and its Audit Event commit or roll back together" true for everything it does.
+// Better Auth's organization plugin endpoints, served as they are, but each change on a transaction of the unit of
+// work, with Better Auth's organization hooks writing the Audit Events on that same transaction. Its endpoints
+// open no transaction themselves (and its hooks run between separate statements), so running them in the unit of
+// work is what makes "the change and its Audit Event commit or roll back together" true for everything it does.
+//
+// This module is the only one that knows which of those endpoints exist, which locks each change takes and which
+// rules wrap it. Anything not listed here is not served. In particular `leave` removes a member without running
+// Better Auth's hooks (no Audit Event, no removal hook), and updating or deleting an Organization is not offered.
 import { APIError } from "better-auth/api";
 import { and, asc, eq, inArray, ne, sql } from "drizzle-orm";
 import { createAuth, type Auth, type AuthConfig } from "./auth";
 import type { AuditAction } from "./audit";
+import type { Authorizer } from "./authorization";
 import type { Tx } from "./db/client";
 import { invitation, member, team, teamMember } from "./db/schema";
+import { HttpError } from "./http";
 import { invitationEmail } from "./invitation-email";
-import { memberRemovalHooks } from "./member-removal";
-import { ORG_ADMIN_ROLE, isKnownRole } from "./permissions";
+import type { MemberRemovalHook } from "./member-removal";
+import { ORG_ADMIN_ROLE, isKnownRole, type Permissions } from "./permissions";
 import type { Actor, Change, UnitOfWork } from "./unit-of-work";
+
+const PATH = "/api/auth/organization/";
+
+/** Reads go straight to Better Auth. Better Auth shows a member more than we want to; the permission, where one is listed, narrows who may read. */
+const READS = new Map<string, Permissions | undefined>([
+  ["list-members", undefined],
+  // Better Auth lists every invitation, with the invited addresses, to any member; here only to those who may invite.
+  ["list-invitations", { invitation: ["create"] }],
+  ["list-teams", undefined],
+  ["list-team-members", undefined],
+]);
+
+/** Each changing endpoint, and whether it may remove or demote an Organization Administrator. */
+const CHANGES = new Map<string, { administrators: boolean }>([
+  ["invite-member", { administrators: false }],
+  ["accept-invitation", { administrators: false }],
+  ["reject-invitation", { administrators: false }],
+  ["cancel-invitation", { administrators: false }],
+  ["update-member-role", { administrators: true }],
+  ["remove-member", { administrators: true }],
+  ["create-team", { administrators: false }],
+  ["update-team", { administrators: false }],
+  ["remove-team", { administrators: false }],
+  ["add-team-member", { administrators: false }],
+  ["remove-team-member", { administrators: false }],
+]);
+
+/** The changing endpoints served, by name. */
+export const organizationChangeEndpoints: readonly string[] = [...CHANGES.keys()];
 
 export interface OrganizationChangesDeps {
   unitOfWork: UnitOfWork;
+  /** Better Auth as configured for reads and for looking up who is asking. */
+  auth: Auth;
   authConfig: Omit<AuthConfig, "db" | "organization">;
+  /** For the reads that need a permission. */
+  authorize: Authorizer["authorize"];
   /** Where users open the web UI, for the link in invitation emails. */
   webURL: string;
+  /**
+   * Run, in the transaction that removes a user from an Organization, for whatever depends on the user's membership
+   * (Teams are cleaned up by Better Auth itself; Managed Certificate Owners and Subscribers will register here
+   * once they exist). A throwing hook rolls the removal and its Audit Event back.
+   */
+  memberRemovalHooks?: MemberRemovalHook[];
 }
 
 export interface OrganizationChanges {
   /**
-   * Hands `request` to Better Auth on a transaction. A response with an error status rolls everything back, so a
-   * refused or failed change leaves no trace. Invitation emails are sent only after a successful commit.
-   *
-   * `administrators`: the change may remove or demote an Organization Administrator. Better Auth refuses to leave
-   * an Organization with none, but by reading, so two concurrent changes could both pass; locking the
-   * administrators makes each wait for the other. Otherwise the actor's own memberships are locked, so that a
-   * concurrent demotion or removal of the actor waits for this change instead of racing it.
+   * Answers a request under /api/auth/organization/. A refused or failed change leaves no trace, and invitation
+   * emails go out only after a successful commit. Throws an HttpError where the platform itself refuses a read.
    */
-  handle(actor: Actor, request: Request, options?: { administrators?: boolean }): Promise<Response>;
+  serve(request: Request): Promise<Response>;
 }
 
 /** Thrown to roll back and still answer with Better Auth's own error response. */
@@ -40,29 +80,68 @@ class Refused extends Error {
   }
 }
 
-export function createOrganizationChanges({ unitOfWork, authConfig, webURL }: OrganizationChangesDeps): OrganizationChanges {
-  return {
-    async handle(actor, request, { administrators = false } = {}) {
-      try {
-        return await unitOfWork.run(actor, async (tx, change) => {
-          await (administrators ? lockAdministrators(tx, actor) : lockMemberships(tx, actor));
-          const auth: Auth = createAuth({
-            ...authConfig,
-            db: tx,
-            organization: {
-              organizationHooks: auditHooks(tx, change),
-              sendInvitationEmail: async ({ id, email, organization }) =>
-                change.mail(invitationEmail(webURL, { to: email, invitationId: id, organizationName: organization.name })),
-            },
-          });
-          const res = await auth.handler(request);
-          if (res.status >= 400) throw new Refused(res);
-          return res;
+const refusal = (status: number, error: string) => Response.json({ error }, { status });
+
+export function createOrganizationChanges(deps: OrganizationChangesDeps): OrganizationChanges {
+  const { unitOfWork, auth, authConfig, authorize, webURL, memberRemovalHooks = [] } = deps;
+
+  /**
+   * `administrators`: the change may remove or demote an Organization Administrator. Better Auth refuses to leave
+   * an Organization with none, but by reading, so two concurrent changes could both pass; locking the
+   * administrators makes each wait for the other. Otherwise the actor's own memberships are locked, so that a
+   * concurrent demotion or removal of the actor waits for this change instead of racing it.
+   */
+  async function change(actor: Actor, request: Request, { administrators }: { administrators: boolean }) {
+    try {
+      return await unitOfWork.run(actor, async (tx, change) => {
+        await (administrators ? lockAdministrators(tx, actor) : lockMemberships(tx, actor));
+        const transactional: Auth = createAuth({
+          ...authConfig,
+          db: tx,
+          organization: {
+            organizationHooks: auditHooks(tx, change, memberRemovalHooks),
+            sendInvitationEmail: async ({ id, email, organization }) =>
+              change.mail(invitationEmail(webURL, { to: email, invitationId: id, organizationName: organization.name })),
+          },
         });
-      } catch (err) {
-        if (err instanceof Refused) return err.response;
-        throw err;
+        const res = await transactional.handler(request);
+        if (res.status >= 400) throw new Refused(res);
+        return res;
+      });
+    } catch (err) {
+      if (err instanceof Refused) return err.response;
+      throw err;
+    }
+  }
+
+  return {
+    async serve(request) {
+      const url = new URL(request.url);
+      const endpoint = url.pathname.slice(PATH.length);
+
+      if (request.method === "GET" && READS.has(endpoint)) {
+        const needs = READS.get(endpoint);
+        if (needs) {
+          const organizationId = url.searchParams.get("organizationId");
+          if (!organizationId) return refusal(400, "organizationId is required");
+          const session = await auth.api.getSession({ headers: request.headers });
+          if (!session) throw new HttpError(401, "sign in required");
+          await authorize(session.user, organizationId, needs);
+        }
+        return auth.handler(request);
       }
+
+      const rule = request.method === "POST" ? CHANGES.get(endpoint) : undefined;
+      if (!rule) return refusal(404, "not found");
+      const session = await auth.api.getSession({ headers: request.headers });
+      if (!session) return auth.handler(request); // Better Auth's own 401
+      // Inviting someone already invited with `resend` extends the invitation and sends it again, returning before
+      // any hook runs, so it would go unaudited. Invite again after cancelling instead.
+      if (endpoint === "invite-member") {
+        const body = await request.clone().json().catch(() => null);
+        if (body?.resend) return refusal(400, "resend is not supported");
+      }
+      return change(session.user, request, rule);
     },
   };
 }
@@ -95,7 +174,7 @@ function requireKnownRoles(role: string | string[] | undefined) {
 }
 
 /** Better Auth organization hooks: the platform's rules and an Audit Event for each change. */
-function auditHooks(tx: Tx, change: Change) {
+function auditHooks(tx: Tx, change: Change, removalHooks: MemberRemovalHook[]) {
   const record = (
     organizationId: string,
     action: AuditAction,
@@ -177,7 +256,7 @@ function auditHooks(tx: Tx, change: Change) {
     afterRemoveMember: async ({ member: removed, user, organization }) => {
       // Better Auth has already removed the user from the Organization's Teams. Anything else that depends on
       // the membership goes here, in the same transaction.
-      for (const hook of memberRemovalHooks) await hook(tx, { organizationId: organization.id, userId: removed.userId });
+      for (const hook of removalHooks) await hook(tx, { organizationId: organization.id, userId: removed.userId });
       // An invitation still pending for this address would otherwise let them back in unnoticed.
       const canceled = await tx
         .update(invitation)

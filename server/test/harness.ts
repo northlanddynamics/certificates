@@ -5,6 +5,7 @@ import { Pool } from "pg";
 import { createApp, type AppDeps } from "../src/app";
 import type { Db } from "../src/db/client";
 import { CapturingMailer } from "../src/mailer";
+import type { MemberRemovalHook } from "../src/member-removal";
 import { runMigrations } from "../src/migrate";
 import { bootstrapPlatformOperator } from "../src/operator";
 
@@ -26,6 +27,8 @@ export interface Harness {
   pool: Pool;
   db: Db;
   mailer: CapturingMailer;
+  /** The hooks the app runs when a member is removed; empty unless a test adds one (and takes it out again). */
+  memberRemovalHooks: MemberRemovalHook[];
   setNow(d: Date): void;
   /** Sign up (Better Auth) and return the session cookie. */
   signUp(email: string, password: string, name?: string): Promise<string>;
@@ -52,10 +55,12 @@ function cookieFrom(res: Response): string {
 export async function createHarness(): Promise<Harness> {
   const pool = new Pool({ connectionString: TEST_DATABASE_URL });
   const mailer = new CapturingMailer();
+  const memberRemovalHooks: MemberRemovalHook[] = [];
   let now = new Date("2026-01-01T00:00:00Z");
   const deps: AppDeps = {
     pool,
     mailer,
+    memberRemovalHooks,
     clock: () => now,
     baseURL: BASE,
     secret: "test-secret-test-secret-test-secret-1234",
@@ -66,6 +71,7 @@ export async function createHarness(): Promise<Harness> {
     // Cascades through every table that references an Organization or a user.
     await pool.query(`truncate organization, "user" cascade`);
     mailer.sent.length = 0;
+    memberRemovalHooks.length = 0;
     now = new Date("2026-01-01T00:00:00Z");
   };
   await reset();
@@ -82,6 +88,7 @@ export async function createHarness(): Promise<Harness> {
     pool,
     db,
     mailer,
+    memberRemovalHooks,
     setNow: (d) => {
       now = d;
     },

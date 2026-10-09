@@ -10,6 +10,7 @@ import { managedCertificate, member, organization } from "./db/schema";
 import { createAuthorizer } from "./authorization";
 import { HttpError, OrgParam, errors, json } from "./http";
 import type { Mailer } from "./mailer";
+import type { MemberRemovalHook } from "./member-removal";
 import { createOrganizationChanges } from "./organization-changes";
 import { createOrganizations } from "./organizations";
 import { ROLE_NAMES, permissionsOf } from "./permissions";
@@ -26,6 +27,8 @@ export interface AppDeps {
   webURL?: string;
   trustedOrigins?: string[];
   secret: string;
+  /** See `OrganizationChangesDeps.memberRemovalHooks`. */
+  memberRemovalHooks?: MemberRemovalHook[];
 }
 
 export function createApp(deps: AppDeps) {
@@ -35,7 +38,15 @@ export function createApp(deps: AppDeps) {
   const auth = createAuth({ ...authConfig, db });
   const webURL = deps.webURL ?? deps.baseURL;
   const unitOfWork = createUnitOfWork({ db, mailer, clock });
-  const organizationChanges = createOrganizationChanges({ unitOfWork, authConfig, webURL });
+  const { authorize } = createAuthorizer(db);
+  const organizationChanges = createOrganizationChanges({
+    unitOfWork,
+    auth,
+    authConfig,
+    authorize,
+    webURL,
+    memberRemovalHooks: deps.memberRemovalHooks,
+  });
   const platformOrganizations = createOrganizations({ unitOfWork, webURL });
   const app = new OpenAPIHono();
 
@@ -45,33 +56,8 @@ export function createApp(deps: AppDeps) {
     return c.json({ error: "internal error" }, 500);
   });
 
-  // Better Auth's organization endpoints are served as they are, from an allowlist: reads straight from Better
-  // Auth, changes on a transaction with the audit written alongside (see organization-changes.ts). Anything not listed
-  // is not served. In particular `leave` removes a member without running Better Auth's hooks (no audit, no
-  // removal hook), and updating or deleting an Organization is not offered.
-  app.all("/api/auth/organization/*", async (c) => {
-    const endpoint = new URL(c.req.url).pathname.slice(ORGANIZATION_PATH.length);
-    if (c.req.method === "GET" && ORGANIZATION_READS.has(endpoint)) {
-      // Better Auth shows every invitation, with the invited addresses, to any member; here only to those who may invite.
-      if (endpoint === "list-invitations") {
-        const orgId = new URL(c.req.url).searchParams.get("organizationId");
-        if (!orgId) return c.json({ error: "organizationId is required" }, 400);
-        await authorize(await requireUser(c), orgId, { invitation: ["create"] });
-      }
-      return auth.handler(c.req.raw);
-    }
-    const change = c.req.method === "POST" ? ORGANIZATION_CHANGES.get(endpoint) : undefined;
-    if (!change) return c.json({ error: "not found" }, 404);
-    const session = await auth.api.getSession({ headers: c.req.raw.headers });
-    if (!session) return auth.handler(c.req.raw); // Better Auth's own 401
-    // Inviting someone already invited with `resend` extends the invitation and sends it again, returning before
-    // any hook runs, so it would go unaudited. Invite again after cancelling instead.
-    if (endpoint === "invite-member") {
-      const body = await c.req.raw.clone().json().catch(() => null);
-      if (body?.resend) return c.json({ error: "resend is not supported" }, 400);
-    }
-    return organizationChanges.handle(session.user, c.req.raw, change);
-  });
+  // Better Auth's organization endpoints, served as they are (see organization-changes.ts).
+  app.all("/api/auth/organization/*", (c) => organizationChanges.serve(c.req.raw));
   app.on(["GET", "POST"], "/api/auth/*", (c) => auth.handler(c.req.raw));
 
   async function requireUser(c: Context) {
@@ -85,8 +71,6 @@ export function createApp(deps: AppDeps) {
     if (user.role !== PLATFORM_OPERATOR_ROLE) throw new HttpError(403, "platform operator only");
     return user;
   }
-
-  const { authorize } = createAuthorizer(db);
 
   app.openapi(
     createRoute({
@@ -259,20 +243,3 @@ export function createApp(deps: AppDeps) {
 
   return { app, auth, db };
 }
-
-const ORGANIZATION_PATH = "/api/auth/organization/";
-const ORGANIZATION_READS = new Set(["list-members", "list-invitations", "list-teams", "list-team-members"]);
-/** Each changing endpoint, and whether it may remove or demote an Organization Administrator. */
-const ORGANIZATION_CHANGES = new Map<string, { administrators: boolean }>([
-  ["invite-member", { administrators: false }],
-  ["accept-invitation", { administrators: false }],
-  ["reject-invitation", { administrators: false }],
-  ["cancel-invitation", { administrators: false }],
-  ["update-member-role", { administrators: true }],
-  ["remove-member", { administrators: true }],
-  ["create-team", { administrators: false }],
-  ["update-team", { administrators: false }],
-  ["remove-team", { administrators: false }],
-  ["add-team-member", { administrators: false }],
-  ["remove-team-member", { administrators: false }],
-]);

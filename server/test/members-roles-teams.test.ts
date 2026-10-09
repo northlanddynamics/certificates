@@ -1,9 +1,8 @@
 // Better Auth's organization endpoints, served as they are (see organization-changes.ts). These tests lean on what
 // Better Auth guarantees and on the platform's additions: audit in the same transaction, serialised changes,
-// the removal hook, and the allowlist.
+// the removal hook, and the allowlist (every endpoint it serves is covered in organization-changes.test.ts).
 import { afterAll, beforeAll, beforeEach, describe, expect, test } from "bun:test";
 import { declaredPermissions, roleCan, type Permissions } from "../src/permissions";
-import { memberRemovalHooks } from "../src/member-removal";
 import { PASSWORD, createHarness, type Harness } from "./harness";
 
 let h: Harness;
@@ -369,11 +368,11 @@ describe("removing a user from the Organization", () => {
       seen.push(p);
       throw new Error("hook failed");
     };
-    memberRemovalHooks.push(hook);
+    h.memberRemovalHooks.push(hook);
     try {
       expect((await admin().remove(user.id)).status).toBe(500);
     } finally {
-      memberRemovalHooks.splice(memberRemovalHooks.indexOf(hook), 1);
+      h.memberRemovalHooks.splice(h.memberRemovalHooks.indexOf(hook), 1);
     }
     expect(seen).toEqual([{ organizationId: acme.orgId, userId: user.userId }]);
     expect((await members()).map((m) => m.user.email)).toContain("m@acme.test");

@@ -59,7 +59,7 @@ export interface Team {
 }
 
 // The organization endpoints are Better Auth's own, served under /api/auth/organization (see the allowlist in
-// server/src/app.ts). The one exception is the Teams overview, which Better Auth cannot provide.
+// server/src/organization-changes.ts). The one exception is the Teams overview, which Better Auth cannot provide.
 const BA = "/api/auth/organization";
 export const api = {
   me: () => call<Me>("/api/me"),
