@@ -23,16 +23,18 @@ const Account = z.object({
 });
 const toAccount = (row: typeof acmeAccount.$inferSelect) => ({
   id: row.id,
-  environment: row.environment as z.infer<typeof Environment>,
+  environment: row.environment,
   accountUrl: row.accountUrl,
   contactEmail: row.contactEmail,
 });
 
-/** Whatever the CA's refusal is, as the HTTP error it should be. */
-function caFailure(err: unknown, rejectedStatus: 422 | 502): never {
+/** A CA that says no (a rate limit, a refused key) is the caller's to fix, 422; one that does not answer is 502. */
+function caFailure(err: unknown): never {
   if (!(err instanceof CertificateAuthorityError)) throw err;
-  throw new HttpError(err.kind === "unreachable" ? 502 : rejectedStatus, err.message);
+  throw new HttpError(err.kind === "unreachable" ? 502 : 422, err.message);
 }
+
+const alreadyRegistered = (environment: string) => new HttpError(409, `the Organization already has a ${environment} ACME account`);
 
 /** The key as PKCS#8 PEM, or null when `pem` is not a private key we can use as an account key (RSA or EC). */
 function normalizeAccountKey(pem: string): string | null {
@@ -108,7 +110,7 @@ export function registerAcmeAccounts(ctx: {
           },
         },
       },
-      responses: { 201: json(Account, "Created"), ...errors(400, 401, 403, 404, 409, 502) },
+      responses: { 201: json(Account, "Created"), ...errors(400, 401, 403, 404, 409, 422, 502) },
     }),
     async (c) => {
       const { orgId } = c.req.valid("param");
@@ -119,9 +121,9 @@ export function registerAcmeAccounts(ctx: {
         .select({ id: acmeAccount.id })
         .from(acmeAccount)
         .where(and(eq(acmeAccount.organizationId, orgId), eq(acmeAccount.environment, environment)));
-      if (existing) throw new HttpError(409, `the Organization already has a ${environment} ACME account`);
+      if (existing) throw alreadyRegistered(environment);
 
-      const created = await ca.createAccount(environment, { contactEmail }).catch((err) => caFailure(err, 502));
+      const created = await ca.createAccount(environment, { contactEmail }).catch((err) => caFailure(err));
       try {
         const row = await unitOfWork.run(actor, async (tx, change) => {
           const secretId = await secrets.create(tx, orgId, created.accountKey);
@@ -139,7 +141,7 @@ export function registerAcmeAccounts(ctx: {
         });
         return c.json(toAccount(row), 201);
       } catch (err) {
-        if (isUniqueViolation(err)) throw new HttpError(409, `the Organization already has a ${environment} ACME account`);
+        if (isUniqueViolation(err)) throw alreadyRegistered(environment);
         throw err;
       }
     },
@@ -170,8 +172,8 @@ export function registerAcmeAccounts(ctx: {
       const accountKey = normalizeAccountKey(privateKey);
       if (!accountKey) throw new HttpError(400, "not a usable private key (PEM, RSA or EC)");
 
-      const environment = account.environment as z.infer<typeof Environment>;
-      await ca.checkAccount(environment, { accountUrl: account.accountUrl, accountKey }).catch((err) => caFailure(err, 422));
+      const { environment } = account;
+      await ca.checkAccount(environment, { accountUrl: account.accountUrl, accountKey }).catch((err) => caFailure(err));
       await unitOfWork.run(actor, async (tx, change) => {
         await secrets.replace(tx, orgId, account.secretId, accountKey);
         await change.audit({
@@ -203,7 +205,7 @@ export function registerAcmeAccounts(ctx: {
       const account = await findAccount(orgId, accountId);
       const accountKey = await secrets.open(db, orgId, account.secretId);
       try {
-        await ca.checkAccount(account.environment as z.infer<typeof Environment>, { accountUrl: account.accountUrl, accountKey });
+        await ca.checkAccount(account.environment, { accountUrl: account.accountUrl, accountKey });
         return c.json({ ok: true }, 200);
       } catch (err) {
         if (!(err instanceof CertificateAuthorityError)) throw err;
