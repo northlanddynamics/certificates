@@ -18,9 +18,19 @@ type Row = typeof dnsProvider.$inferSelect;
 export interface DnsProviders {
   /** The Organization's DNS Provider `providerId`, ready to use: the one way anything else gets at a provider and its secret. Throws when there is no such provider. */
   open(db: Db | Tx, organizationId: string, providerId: string): Promise<DnsProvider>;
+  /**
+   * The Organization's DNS Provider that publishes records at `name`, ready to use: of those whose zone contains the
+   * name, the one with the most specific zone (earliest added when two have the same). Null when none does.
+   */
+  findFor(db: Db | Tx, organizationId: string, name: string): Promise<{ id: string; name: string; zone: string; provider: DnsProvider } | null>;
 }
 
 export function createDnsProviders(secrets: Secrets): DnsProviders {
+  async function build(db: Db | Tx, row: Row) {
+    const kind = DNS_PROVIDER_KINDS[row.type];
+    return kind.create(kind.settings.parse(row.settings), await secrets.open(db, row.organizationId, row.secretId));
+  }
+
   return {
     async open(db, organizationId, providerId) {
       const [row] = await db
@@ -28,8 +38,23 @@ export function createDnsProviders(secrets: Secrets): DnsProviders {
         .from(dnsProvider)
         .where(and(eq(dnsProvider.organizationId, organizationId), eq(dnsProvider.id, providerId)));
       if (!row) throw new Error("no such DNS Provider");
-      const kind = DNS_PROVIDER_KINDS[row.type];
-      return kind.create(kind.settings.parse(row.settings), await secrets.open(db, organizationId, row.secretId));
+      return build(db, row);
+    },
+    async findFor(db, organizationId, name) {
+      const rows = await db
+        .select()
+        .from(dnsProvider)
+        .where(eq(dnsProvider.organizationId, organizationId))
+        .orderBy(asc(dnsProvider.createdAt), asc(dnsProvider.id));
+      let best: { row: Row; zone: string } | undefined;
+      for (const row of rows) {
+        const kind = DNS_PROVIDER_KINDS[row.type];
+        // A provider whose stored settings can no longer be read covers nothing.
+        const settings = kind.settings.safeParse(row.settings);
+        const zone = settings.success ? kind.zoneOf(settings.data, name) : null;
+        if (zone !== null && (!best || zone.length > best.zone.length)) best = { row, zone };
+      }
+      return best ? { id: best.row.id, name: best.row.name, zone: best.zone, provider: await build(db, best.row) } : null;
     },
   };
 }

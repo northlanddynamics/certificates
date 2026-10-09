@@ -6,13 +6,16 @@ import type { Pool } from "pg";
 import { registerAcmeAccounts } from "./acme-accounts";
 import { PLATFORM_OPERATOR_ROLE, createAuth } from "./auth";
 import type { CertificateAuthority } from "./certificate-authority";
+import { DEFAULT_DCV_CONFIG, createDcv, createTxtResolver, type DcvConfig } from "./dcv";
 import { listAudit } from "./audit";
 import { createDb } from "./db/client";
 import { createDnsProviders, registerDnsProviders } from "./dns-providers";
-import { managedCertificate, member, organization } from "./db/schema";
+import { member, organization } from "./db/schema";
 import { createAuthorizer } from "./authorization";
 import { HttpError, OrgParam, errors, json } from "./http";
+import { createIssuances } from "./issuance";
 import type { Kms } from "./kms";
+import { registerManagedCertificates } from "./managed-certificates";
 import type { Mailer } from "./mailer";
 import type { MemberRemovalHook } from "./member-removal";
 import { createOrganizationChanges } from "./organization-changes";
@@ -35,6 +38,8 @@ export interface AppDeps {
   /** Wraps each Organization's data key; see secrets.ts. */
   kms: Kms;
   certificateAuthority: CertificateAuthority;
+  /** How DCV checks that a challenge record is visible; the host's DNS resolvers, waiting up to two minutes, unless given. */
+  dcv?: Partial<DcvConfig>;
   /** See `OrganizationChangesDeps.memberRemovalHooks`. */
   memberRemovalHooks?: MemberRemovalHook[];
 }
@@ -178,29 +183,6 @@ export function createApp(deps: AppDeps) {
   app.openapi(
     createRoute({
       method: "get",
-      path: "/api/organizations/{orgId}/managed-certificates",
-      tags: ["Managed Certificates"],
-      request: { params: OrgParam },
-      responses: {
-        200: json(z.object({ items: z.array(z.object({ id: z.string() })) })),
-        ...errors(401, 404),
-      },
-    }),
-    async (c) => {
-      const { orgId } = c.req.valid("param");
-      await authorize(await requireUser(c), orgId);
-      const items = await db
-        .select({ id: managedCertificate.id })
-        .from(managedCertificate)
-        .where(eq(managedCertificate.organizationId, orgId))
-        .orderBy(asc(managedCertificate.createdAt), asc(managedCertificate.id));
-      return c.json({ items }, 200);
-    },
-  );
-
-  app.openapi(
-    createRoute({
-      method: "get",
       path: "/api/organizations/{orgId}/audit-events",
       tags: ["Audit"],
       request: { params: OrgParam },
@@ -232,7 +214,11 @@ export function createApp(deps: AppDeps) {
   registerTeamsOverview({ app, db, requireUser, authorize });
   const secrets = createSecrets(deps.kms);
   registerAcmeAccounts({ app, db, requireUser, authorize, unitOfWork, secrets, certificateAuthority: deps.certificateAuthority });
-  registerDnsProviders({ app, db, requireUser, authorize, unitOfWork, secrets, dnsProviders: createDnsProviders(secrets) });
+  const dnsProviders = createDnsProviders(secrets);
+  registerDnsProviders({ app, db, requireUser, authorize, unitOfWork, secrets, dnsProviders });
+  const dcv = createDcv(dnsProviders, { resolver: createTxtResolver(), ...DEFAULT_DCV_CONFIG, ...deps.dcv });
+  const issuances = createIssuances({ db, unitOfWork, certificateAuthority: deps.certificateAuthority, dcv, secrets });
+  registerManagedCertificates({ app, db, requireUser, authorize, unitOfWork, issuances });
 
   app.doc("/api/openapi.json", {
     openapi: "3.1.0",
@@ -252,5 +238,5 @@ export function createApp(deps: AppDeps) {
     }),
   );
 
-  return { app, auth, db };
+  return { app, auth, db, issuances };
 }

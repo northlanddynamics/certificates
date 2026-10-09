@@ -33,7 +33,7 @@ bun run typecheck
 bun run test          # Seam A: the Hono app in-process against the real Postgres (TEST_DATABASE_URL overrides the default), Pebble and BIND
 ```
 
-Pebble, Let's Encrypt's ACME test server, stands in for the CA (`docker compose up -d pebble`; `PEBBLE_DIRECTORY` overrides `https://localhost:14000/dir`). The tests trust its root, `server/test/pebble/minica.pem`.
+Pebble, Let's Encrypt's ACME test server, stands in for the CA (`docker compose up -d pebble`; `PEBBLE_DIRECTORY` overrides `https://localhost:14000/dir`). The tests trust its root, `server/test/pebble/minica.pem`. Pebble checks DNS-01 challenges against BIND (`-dnsserver bind:53` in `docker-compose.yml`), so issuing in the tests runs the real path: the platform publishes the challenge record through an RFC 2136 DNS Provider, and the CA reads it back from the same server.
 
 BIND, built from `docker/bind` (`docker compose up -d --build bind`), is the RFC 2136 DNS server that the DNS Provider tests update with TSIG-signed requests (`BIND_HOST` and `BIND_PORT` override `127.0.0.1:5354`). Its image keeps its config and zones in volumes, so after changing `docker/bind` recreate it with `docker compose up -d --build --force-recreate -V bind`.
 

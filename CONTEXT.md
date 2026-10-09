@@ -66,6 +66,10 @@ _Avoid_: enrollment setting, renewal config
 
 ### Issuance
 
+**Issuance**:
+One attempt to obtain a Certificate for a Managed Certificate: it runs DCV, has the Certificate Authority finalize the order with the CSR, and ends in a stored Certificate or the recorded cause of its failure. A Managed Certificate may have many over time, one running at most.
+_Avoid_: order (the ACME protocol's word for part of it), request, job
+
 **Certificate Authority (CA)**:
 A pluggable issuer from which the platform obtains Certificates, such as an ACME CA.
 _Avoid_: issuer, provider

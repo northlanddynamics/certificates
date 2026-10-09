@@ -36,4 +36,6 @@ export interface DnsProviderKind<Settings = any> {
   /** The write-only value, as the string the Organization supplies; refuses what could not possibly be one. */
   secret: z.ZodType<string>;
   create(settings: Settings, secret: string): DnsProvider;
+  /** The zone of this provider's `name` falls in (lower case, no trailing dot), or null when the provider cannot publish there. */
+  zoneOf(settings: Settings, name: string): string | null;
 }

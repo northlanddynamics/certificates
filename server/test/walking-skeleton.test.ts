@@ -92,7 +92,14 @@ describe("walking skeleton", () => {
     const meA = await h.api("/api/me", { cookie: a.cookie });
     expect(meA.body.organizations.map((o: any) => o.id)).toEqual([a.orgId]);
     // Rows that exist in B never leak into A's inventory.
-    await h.db.insert(managedCertificate).values({ organizationId: b.orgId });
+    await h.db.insert(managedCertificate).values({
+      organizationId: b.orgId,
+      names: ["b.test"],
+      keyAlgorithm: "ecdsa-p256",
+      keyCustody: "owner",
+      environment: "staging",
+      csr: "",
+    });
     const inv = await h.api(`/api/organizations/${a.orgId}/managed-certificates`, { cookie: a.cookie });
     expect(inv.body.items).toEqual([]);
   });

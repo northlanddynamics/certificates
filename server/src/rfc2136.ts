@@ -315,4 +315,5 @@ export const rfc2136: DnsProviderKind<Rfc2136Settings> = {
   settings: Rfc2136Settings,
   secret: TSIG_SECRET,
   create: (settings, secret) => createRfc2136(settings, secret),
+  zoneOf: ({ zone }, name) => (name === zone || name.endsWith(`.${zone}`) ? zone : null),
 };

@@ -5,6 +5,7 @@ import { Pool } from "pg";
 import { readFileSync } from "node:fs";
 import { createApp, type AppDeps } from "../src/app";
 import { createLetsEncrypt, type AcmeEnvironment } from "../src/certificate-authority";
+import { createTxtResolver, type TxtResolver } from "../src/dcv";
 import type { Db } from "../src/db/client";
 import { createLocalKms } from "../src/kms";
 import { CapturingMailer } from "../src/mailer";
@@ -52,6 +53,14 @@ export interface Harness {
   mailer: CapturingMailer;
   /** Where the CA's environments are served; every one is Pebble unless a test points one elsewhere. */
   caDirectories: Record<AcmeEnvironment, string>;
+  /** Reads TXT records straight from BIND, as the CA's DNS checks do: what is really published. */
+  bindTxt: TxtResolver;
+  /** What DCV uses to see that a challenge record is published: BIND, unless a test sets `current` to something else. */
+  dcvResolver: { current: TxtResolver };
+  /** Resolves once every Issuance that was started has ended; read outcomes through the API, this only waits. */
+  settleIssuances(): Promise<void>;
+  /** What the platform does when it starts: ends the Issuances an earlier run left running. */
+  failInterruptedIssuances(): Promise<void>;
   /** The private keys of the ACME accounts the platform created at the CA, as PEM; for tests to check they never leak. */
   createdAccountKeys: string[];
   /** The hooks the app runs when a member is removed; empty unless a test adds one (and takes it out again). */
@@ -94,7 +103,9 @@ export async function createHarness(): Promise<Harness> {
   const caDirectories: Record<AcmeEnvironment, string> = { staging: PEBBLE_DIRECTORY, production: PEBBLE_DIRECTORY };
   const createdAccountKeys: string[] = [];
   // The real ACME client against Pebble; it only notes the keys it generated.
-  const letsEncrypt = createLetsEncrypt({ directoryUrls: caDirectories, trustedCa: PEBBLE_CA });
+  const letsEncrypt = createLetsEncrypt({ directoryUrls: caDirectories, trustedCa: PEBBLE_CA, pollMs: { min: 200, max: 1000 } });
+  const bindTxt = createTxtResolver([`${BIND.server}:${BIND.port}`]);
+  const dcvResolver = { current: bindTxt };
   const deps: AppDeps = {
     pool,
     mailer,
@@ -108,13 +119,16 @@ export async function createHarness(): Promise<Harness> {
         return account;
       },
     },
+    dcv: { resolver: { lookupTxt: (name) => dcvResolver.current.lookupTxt(name) }, visibilityTimeoutMs: 1500, pollIntervalMs: 50 },
     clock: () => now,
     baseURL: BASE,
     secret: "test-secret-test-secret-test-secret-1234",
   };
-  const { app, auth, db } = createApp(deps);
+  const { app, auth, db, issuances } = createApp(deps);
   await runMigrations(pool);
   const reset = async () => {
+    await issuances.idle();
+    dcvResolver.current = bindTxt;
     // Cascades through every table that references an Organization or a user.
     await pool.query(`truncate organization, "user" cascade`);
     mailer.sent.length = 0;
@@ -138,6 +152,10 @@ export async function createHarness(): Promise<Harness> {
     db,
     mailer,
     caDirectories,
+    bindTxt,
+    dcvResolver,
+    settleIssuances: () => issuances.idle(),
+    failInterruptedIssuances: () => issuances.failInterrupted(),
     createdAccountKeys,
     memberRemovalHooks,
     setNow: (d) => {

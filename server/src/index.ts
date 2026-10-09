@@ -12,7 +12,7 @@ const localKmsKey = process.env.LOCAL_KMS_KEY;
 if (!databaseUrl || !secret || !localKmsKey) throw new Error("DATABASE_URL, AUTH_SECRET and LOCAL_KMS_KEY are required");
 
 const pool = new Pool({ connectionString: databaseUrl });
-const { app, auth, db } = createApp({
+const { app, auth, db, issuances } = createApp({
   pool,
   mailer: new ConsoleMailer(),
   clock: () => new Date(),
@@ -24,6 +24,7 @@ const { app, auth, db } = createApp({
   certificateAuthority: createLetsEncrypt(),
 });
 await runMigrations(pool);
+await issuances.failInterrupted();
 
 if (process.env.OPERATOR_EMAIL && process.env.OPERATOR_PASSWORD) {
   await bootstrapPlatformOperator(auth, db, {

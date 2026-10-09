@@ -6,6 +6,7 @@ import { Card, CardContent, CardHeader, CardTitle } from "@/components/ui/card";
 import { Input } from "@/components/ui/input";
 import { Label } from "@/components/ui/label";
 import { ApiError, api, can, type Me } from "@/lib/api";
+import { ManagedCertificates } from "./managed-certificates";
 
 export function HomePage() {
   const navigate = useNavigate();
@@ -53,7 +54,6 @@ export function HomePage() {
 }
 
 function Inventory({ org }: { org: Me["organizations"][number] }) {
-  const inventory = useQuery({ queryKey: ["inventory", org.id], queryFn: () => api.managedCertificates(org.id) });
   return (
     <Card>
       <CardHeader>
@@ -67,8 +67,7 @@ function Inventory({ org }: { org: Me["organizations"][number] }) {
         </CardTitle>
       </CardHeader>
       <CardContent>
-        {inventory.data?.items.length === 0 && <p className="text-muted-foreground">No Managed Certificates yet.</p>}
-        {inventory.data && inventory.data.items.length > 0 && <p>{inventory.data.items.length} Managed Certificates</p>}
+        <ManagedCertificates org={org} />
       </CardContent>
     </Card>
   );

@@ -14,6 +14,7 @@
   },
   "dependencies": {
     "@hono/zod-openapi": "1.6.3",
+    "@peculiar/x509": "1.14.3",
     "@scalar/hono-api-reference": "^0.12.11",
     "acme-client": "5.4.0",
     "better-auth": "1.7.7",

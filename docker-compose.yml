@@ -17,12 +17,17 @@ services:
       retries: 30
 
   # Let's Encrypt's ACME test server, the CA in tests. Its directory is https://localhost:14000/dir, served with a
-  # certificate from the minica root in server/test/pebble/minica.pem.
+  # certificate from the minica root in server/test/pebble/minica.pem. It checks DNS-01 challenges against BIND, so
+  # a record the platform publishes there through RFC 2136 is the one the CA sees.
   pebble:
     image: ghcr.io/letsencrypt/pebble:latest
-    command: -config /test/config/pebble-config.json
+    command: -config /test/config/pebble-config.json -dnsserver bind:53
+    depends_on:
+      - bind
     environment:
       PEBBLE_VA_NOSLEEP: "1"
+      # Never reuse a valid authorization: a second order for a name must prove control again, or tests that depend on that are flaky.
+      PEBBLE_AUTHZREUSE: "0"
     ports:
       - "14000:14000"
 

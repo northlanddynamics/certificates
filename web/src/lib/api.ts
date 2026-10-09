@@ -52,6 +52,25 @@ export interface PendingInvitation {
   role: string;
   expiresAt: string;
 }
+export interface Issuance {
+  id: string;
+  status: "running" | "succeeded" | "failed";
+  failure: { code: string; message: string } | null;
+}
+export interface ManagedCertificate {
+  id: string;
+  names: string[];
+  keyAlgorithm: string;
+  environment: "staging" | "production";
+  issuance: Issuance | null;
+  currentCertificate: { fingerprint: string; notAfter: string } | null;
+}
+export interface NewManagedCertificate {
+  names: string[];
+  keyAlgorithm: string;
+  csr: string;
+  environment: "staging" | "production";
+}
 export interface Team {
   id: string;
   name: string;
@@ -68,8 +87,12 @@ export const api = {
     call("/api/auth/sign-up/email", { body: { email, password, name } }),
   signOut: () => call("/api/auth/sign-out", { method: "POST", body: {} }),
   acceptInvitation: (invitationId: string) => call(`${BA}/accept-invitation`, { body: { invitationId } }),
-  managedCertificates: (orgId: string) =>
-    call<{ items: { id: string }[] }>(`/api/organizations/${orgId}/managed-certificates`),
+  managedCertificates: (orgId: string) => call<{ items: ManagedCertificate[] }>(`/api/organizations/${orgId}/managed-certificates`),
+  createManagedCertificate: (orgId: string, body: NewManagedCertificate) =>
+    call<ManagedCertificate>(`/api/organizations/${orgId}/managed-certificates`, { body }),
+  retryIssuance: (orgId: string, id: string) =>
+    call<Issuance>(`/api/organizations/${orgId}/managed-certificates/${id}/issuances`, { method: "POST", body: {} }),
+  certificateDownloadUrl: (orgId: string, id: string) => `/api/organizations/${orgId}/managed-certificates/${id}/certificate.pem`,
   platformOrganizations: () => call<{ items: { id: string; name: string; slug: string }[] }>("/api/platform/organizations"),
   createOrganization: (body: { name: string; slug: string; adminEmail: string }) =>
     call<{ id: string; invitationId: string }>("/api/platform/organizations", { body }),

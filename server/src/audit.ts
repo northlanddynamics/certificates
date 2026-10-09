@@ -21,7 +21,11 @@ export type AuditAction =
   | "dns_provider.created"
   | "dns_provider.changed"
   | "dns_provider.secret_replaced"
-  | "dns_provider.tested";
+  | "dns_provider.tested"
+  | "managed_certificate.created"
+  | "issuance.started"
+  | "issuance.succeeded"
+  | "issuance.failed";
 
 export interface AuditInput {
   organizationId: string;
