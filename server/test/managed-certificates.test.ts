@@ -262,22 +262,22 @@ describe("a CSR must match the Managed Certificate", () => {
   });
 });
 
-describe("who may create and see Managed Certificates", () => {
-  async function join(email: string, role: string, org = acmeOrg) {
-    const invited = await h.api("/api/auth/organization/invite-member", { cookie: org.cookie, body: { email, role, organizationId: org.orgId } });
-    const cookie = await h.signUp(email, PASSWORD);
-    await h.api("/api/auth/organization/accept-invitation", { cookie, body: { invitationId: invited.body.id } });
-    return h.signIn(email, PASSWORD);
-  }
+/** Someone who joins `org` in `role`, as their session cookie. */
+async function join(email: string, role: string, org = acmeOrg) {
+  const invited = await h.api("/api/auth/organization/invite-member", { cookie: org.cookie, body: { email, role, organizationId: org.orgId } });
+  const cookie = await h.signUp(email, PASSWORD);
+  await h.api("/api/auth/organization/accept-invitation", { cookie, body: { invitationId: invited.body.id } });
+  return h.signIn(email, PASSWORD);
+}
 
-  test("only an Organization Administrator creates one, and others see none", async () => {
+describe("who may create and see Managed Certificates", () => {
+  test("Members and Approvers can only propose, and see nothing of the Organization's Managed Certificates", async () => {
     await readyToIssue();
     const created = await admin().create(await request([host()]));
     await ended(created.body.id);
     for (const role of ["member", "approver"]) {
       const cookie = await join(`${role}@acme.test`, role);
       const who = certs(cookie, acmeOrg.orgId);
-      expect((await who.create(await request([host()]))).status).toBe(403);
       expect(await who.list().then((r) => [r.status, r.body.items])).toEqual([200, []]);
       expect((await who.get(created.body.id)).status).toBe(403);
       expect((await who.certificates(created.body.id)).status).toBe(403);
@@ -304,6 +304,216 @@ describe("who may create and see Managed Certificates", () => {
     expect((await viaOurs.create(await request([host()]))).status).toBe(404);
     expect((await viaOurs.download(created.body.id)).status).toBe(404);
     expect((await certs(operator, acmeOrg.orgId).list()).status).toBe(404);
+  });
+});
+
+describe("Approval", () => {
+  const queue = (cookie: string, orgId = acmeOrg.orgId) => h.api(`/api/organizations/${orgId}/approvals`, { cookie });
+  const decide = (cookie: string, id: string, verdict: "approve" | "reject", body: unknown = {}, orgId = acmeOrg.orgId) =>
+    h.api(`${base(orgId)}/${id}/${verdict}`, { cookie, body });
+  const queued = async (cookie: string) => ((await queue(cookie)).body.items as { id: string }[]).map((i) => i.id);
+  const actions = async () => (await auditOf()).map((e) => e.action);
+
+  let member: string;
+  let approver: string;
+  beforeEach(async () => {
+    member = await join("member@acme.test", "member");
+    approver = await join("approver@acme.test", "approver");
+  });
+
+  /** A Member proposes a Managed Certificate for a name of its own. */
+  async function propose(cookie = member, names = [host()]) {
+    const res = await certs(cookie, acmeOrg.orgId).create(await request(names));
+    expect(res.status).toBe(201);
+    return res.body as { id: string; names: string[] };
+  }
+
+  test("a proposal waits for Approval with no Issuance and no Certificates, and is audited", async () => {
+    await readyToIssue();
+    const name = host();
+    const body = await request([name]);
+    const proposed = await certs(member, acmeOrg.orgId).create(body);
+
+    expect(proposed.status).toBe(201);
+    expect(proposed.body).toMatchObject({
+      names: [name],
+      keyAlgorithm: "ecdsa-p256",
+      keyCustody: "owner",
+      approval: { status: "pending", proposedBy: { email: "member@acme.test" }, decidedBy: null, decidedAt: null, reason: null },
+      issuance: null,
+      currentCertificate: null,
+    });
+    await h.settleIssuances();
+    const after = await certs(member, acmeOrg.orgId).get(proposed.body.id);
+    expect(after.body).toMatchObject({ approval: { status: "pending" }, issuance: null, currentCertificate: null });
+    expect((await certs(member, acmeOrg.orgId).certificates(proposed.body.id)).body.items).toEqual([]);
+    expect((await certs(member, acmeOrg.orgId).download(proposed.body.id)).status).toBe(404);
+    expect(await actions()).toContain("managed_certificate.proposed");
+    expect(await actions()).not.toContain("issuance.started");
+    const event = (await auditOf()).find((e) => e.action === "managed_certificate.proposed")!;
+    expect(event).toMatchObject({ actor: { email: "member@acme.test" }, target: { type: "managed_certificate", id: proposed.body.id }, detail: { names: [name] } });
+  });
+
+  test("a proposal is checked like a creation: the CSR must be for the algorithm and the names", async () => {
+    const who = certs(member, acmeOrg.orgId);
+    expect((await who.create(await request([host()], "ecdsa-p256", { csrNames: [host()] }))).status).toBe(422);
+    expect((await who.create({ ...(await request([host()], "ecdsa-p384")), keyAlgorithm: "ecdsa-p256" })).status).toBe(422);
+    expect((await who.create(await request(["bad_name.example.com"]))).status).toBe(400);
+    expect((await who.create({ ...(await request([host()])), csr: "not a csr" })).status).toBe(400);
+    expect((await who.list()).body.items).toEqual([]);
+    expect(await actions()).not.toContain("managed_certificate.proposed");
+  });
+
+  test("an Approver or an Organization Administrator sees the queue; a Member does not", async () => {
+    const first = await propose();
+    const second = await propose();
+    const listed = await queue(approver);
+    expect(listed.status).toBe(200);
+    expect(listed.body.items.map((i: any) => [i.id, i.approval.status, i.approval.proposedBy.email])).toEqual([
+      [first.id, "pending", "member@acme.test"],
+      [second.id, "pending", "member@acme.test"],
+    ]);
+    expect(await queued(acmeOrg.cookie)).toEqual([first.id, second.id]);
+    // Whoever proposed cannot decide, so their own proposal is not in their queue (but is in everyone else's).
+    const own = await propose(approver);
+    expect(await queued(approver)).toEqual([first.id, second.id]);
+    expect(await queued(acmeOrg.cookie)).toEqual([first.id, second.id, own.id]);
+    expect((await certs(approver, acmeOrg.orgId).list()).body.items.map((i: any) => i.id)).toEqual([own.id]);
+    expect((await queue(member)).status).toBe(403);
+    expect((await queue(globex.cookie, acmeOrg.orgId)).status).toBe(404);
+  });
+
+  test("a proposer sees their own proposals and nobody else's", async () => {
+    const mine = await propose();
+    const other = await join("other@acme.test", "member");
+    const theirs = await propose(other);
+
+    expect((await certs(member, acmeOrg.orgId).list()).body.items.map((i: any) => i.id)).toEqual([mine.id]);
+    expect((await certs(member, acmeOrg.orgId).get(mine.id)).status).toBe(200);
+    expect((await certs(member, acmeOrg.orgId).get(theirs.id)).status).toBe(403);
+    expect((await certs(member, acmeOrg.orgId).certificates(theirs.id)).status).toBe(403);
+    expect((await certs(other, acmeOrg.orgId).list()).body.items.map((i: any) => i.id)).toEqual([theirs.id]);
+  });
+
+  test("approving starts issuance without anything more from the proposer, and is audited", async () => {
+    await readyToIssue();
+    const proposal = await propose();
+
+    const approved = await decide(approver, proposal.id, "approve", { reason: "known service" });
+    expect(approved.status).toBe(200);
+    expect(approved.body).toMatchObject({
+      approval: { status: "approved", proposedBy: { email: "member@acme.test" }, decidedBy: { email: "approver@acme.test" }, decidedAt: expect.any(String), reason: "known service" },
+      issuance: { status: "running" },
+    });
+    expect(await queued(approver)).toEqual([]);
+
+    const issued = await ended(proposal.id, certs(member, acmeOrg.orgId));
+    expect(issued.issuance).toMatchObject({ status: "succeeded", failure: null });
+    expect(issued.currentCertificate.names).toEqual(proposal.names);
+    // The proposer can fetch what was issued.
+    expect((await certs(member, acmeOrg.orgId).download(proposal.id)).status).toBe(200);
+    expect((await certs(member, acmeOrg.orgId).certificates(proposal.id)).body.items).toHaveLength(1);
+
+    const events = (await auditOf()).filter((e) => e.target.id === proposal.id);
+    expect(events.map((e) => e.action)).toEqual(["managed_certificate.proposed", "managed_certificate.approved", "issuance.started", "issuance.succeeded"]);
+    expect(events[1]).toMatchObject({ actor: { email: "approver@acme.test" }, detail: { reason: "known service", proposedBy: "member@acme.test" } });
+  });
+
+  test("an Organization Administrator can approve too, without giving a reason", async () => {
+    await readyToIssue();
+    const proposal = await propose();
+    const approved = await decide(acmeOrg.cookie, proposal.id, "approve");
+    expect(approved.status).toBe(200);
+    expect(approved.body.approval).toMatchObject({ status: "approved", reason: null, decidedBy: { email: "admin@acme.test" } });
+    expect((await ended(proposal.id)).issuance.status).toBe("succeeded");
+  });
+
+  test("a rejection needs a reason, is visible to the proposer, and issues nothing", async () => {
+    await readyToIssue();
+    const proposal = await propose();
+
+    for (const body of [{}, { reason: "" }, { reason: "   " }]) {
+      expect((await decide(approver, proposal.id, "reject", body)).status).toBe(400);
+    }
+    expect((await queued(approver))).toEqual([proposal.id]);
+
+    const rejected = await decide(approver, proposal.id, "reject", { reason: "that name belongs to another team" });
+    expect(rejected.status).toBe(200);
+    expect(rejected.body.approval).toMatchObject({ status: "rejected", decidedBy: { email: "approver@acme.test" }, reason: "that name belongs to another team" });
+    expect(await queued(approver)).toEqual([]);
+
+    await h.settleIssuances();
+    const seen = await certs(member, acmeOrg.orgId).get(proposal.id);
+    expect(seen.body).toMatchObject({ approval: { status: "rejected", reason: "that name belongs to another team" }, issuance: null, currentCertificate: null });
+    expect((await certs(member, acmeOrg.orgId).list()).body.items[0].approval.status).toBe("rejected");
+    expect(await actions()).not.toContain("issuance.started");
+    const event = (await auditOf()).find((e) => e.action === "managed_certificate.rejected")!;
+    expect(event).toMatchObject({ actor: { email: "approver@acme.test" }, target: { id: proposal.id }, detail: { reason: "that name belongs to another team" } });
+    // A rejected proposal is not issued by trying again.
+    expect((await certs(acmeOrg.cookie, acmeOrg.orgId).retry(proposal.id)).status).toBe(409);
+  });
+
+  test("a decision is final, and a proposal approved twice at once is issued once", async () => {
+    await readyToIssue();
+    const proposal = await propose();
+    const both = await Promise.all([decide(approver, proposal.id, "approve"), decide(acmeOrg.cookie, proposal.id, "approve")]);
+    expect(both.map((r) => r.status).sort()).toEqual([200, 409]);
+    await h.settleIssuances();
+    expect((await actions()).filter((a) => a === "issuance.started")).toHaveLength(1);
+    expect((await decide(approver, proposal.id, "reject", { reason: "too late" })).status).toBe(409);
+    expect((await decide(approver, proposal.id, "approve")).status).toBe(409);
+    expect((await certs(acmeOrg.cookie, acmeOrg.orgId).get(proposal.id)).body.approval.status).toBe("approved");
+  });
+
+  test("Members cannot approve or reject, and an Approver cannot decide their own proposal", async () => {
+    const proposal = await propose();
+    expect((await decide(member, proposal.id, "approve")).status).toBe(403);
+    expect((await decide(member, proposal.id, "reject", { reason: "no" })).status).toBe(403);
+
+    const own = await propose(approver);
+    expect((await decide(approver, own.id, "approve")).status).toBe(403);
+    expect((await decide(approver, own.id, "reject", { reason: "no" })).status).toBe(403);
+    // Someone else decides it.
+    expect((await decide(acmeOrg.cookie, own.id, "reject", { reason: "no" })).status).toBe(200);
+    expect((await certs(acmeOrg.cookie, acmeOrg.orgId).get(proposal.id)).body.approval.status).toBe("pending");
+    expect(await actions()).not.toContain("managed_certificate.approved");
+  });
+
+  test("an Organization Administrator's own Managed Certificates never enter the queue", async () => {
+    await readyToIssue();
+    const created = await admin().create(await request([host()]));
+    expect(created.status).toBe(201);
+    expect(created.body.approval).toMatchObject({ status: "not_required", proposedBy: null, decidedBy: null });
+    expect(created.body.issuance.status).toBe("running");
+    expect(await queued(acmeOrg.cookie)).toEqual([]);
+    expect(await queued(approver)).toEqual([]);
+    await ended(created.body.id);
+    expect(await actions()).not.toContain("managed_certificate.proposed");
+    // Nor is there anything to decide.
+    expect((await decide(acmeOrg.cookie, created.body.id, "approve")).status).toBe(409);
+  });
+
+  test("a proposal cannot be issued by trying again before it is approved", async () => {
+    const proposal = await propose();
+    expect((await certs(acmeOrg.cookie, acmeOrg.orgId).retry(proposal.id)).status).toBe(409);
+    await h.settleIssuances();
+    expect((await certs(acmeOrg.cookie, acmeOrg.orgId).get(proposal.id)).body.issuance).toBeNull();
+  });
+
+  test("another Organization's Approver cannot see or decide a proposal", async () => {
+    const proposal = await propose();
+    const theirApprover = await join("approver@globex.test", "approver", globex);
+    expect((await decide(theirApprover, proposal.id, "approve", {}, acmeOrg.orgId)).status).toBe(404);
+    expect((await decide(theirApprover, proposal.id, "approve", {}, globex.orgId)).status).toBe(404);
+    expect((await queue(theirApprover, acmeOrg.orgId)).status).toBe(404);
+    expect((await queue(theirApprover, globex.orgId)).body.items).toEqual([]);
+  });
+
+  test("what each role may do is reported by /api/me", async () => {
+    const me = async (cookie: string) => (await h.api("/api/me", { cookie })).body.organizations[0].permissions;
+    expect(await me(member)).toEqual({ managedCertificate: ["propose"] });
+    expect(await me(approver)).toEqual({ managedCertificate: ["propose"], approval: ["read", "decide"] });
+    expect((await me(acmeOrg.cookie)).approval).toEqual(["read", "decide"]);
   });
 });
 

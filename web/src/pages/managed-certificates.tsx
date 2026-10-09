@@ -16,6 +16,8 @@ const selectClass = "h-9 rounded-md border border-input bg-transparent px-2 text
 
 /** What a Managed Certificate's latest Issuance has come to, in words. */
 function status(m: ManagedCertificate) {
+  if (m.approval.status === "pending") return "Awaiting Approval";
+  if (m.approval.status === "rejected") return "Rejected";
   if (m.issuance?.status === "running") return "Issuing…";
   if (m.issuance?.status === "failed") return "Issuance failed";
   return m.currentCertificate ? `Issued, valid until ${new Date(m.currentCertificate.notAfter).toLocaleDateString()}` : "Not issued";
@@ -29,7 +31,11 @@ export function ManagedCertificates({ org }: { org: Me["organizations"][number] 
     // Issuance runs in the background: look again until none is running.
     refetchInterval: (query) => (query.state.data?.items.some((m) => m.issuance?.status === "running") ? 2000 : false),
   });
-  const refresh = () => queryClient.invalidateQueries({ queryKey: ["inventory", org.id] });
+  // A change to one may change the other: a proposal joins the queue, a decision leaves it.
+  const refresh = () => {
+    void queryClient.invalidateQueries({ queryKey: ["approvals", org.id] });
+    return queryClient.invalidateQueries({ queryKey: ["inventory", org.id] });
+  };
   const retry = useMutation({ mutationFn: (id: string) => api.retryIssuance(org.id, id), onSuccess: refresh });
   const items = inventory.data?.items ?? [];
 
@@ -43,6 +49,11 @@ export function ManagedCertificates({ org }: { org: Me["organizations"][number] 
             <span className="text-muted-foreground">
               {m.keyAlgorithm}, {m.environment}: {status(m)}
             </span>
+            {m.approval.status === "rejected" && (
+              <span className="text-destructive">
+                Rejected by {m.approval.decidedBy?.email}: {m.approval.reason}
+              </span>
+            )}
             {m.issuance?.failure && (
               <span className="text-destructive">
                 {m.issuance.failure.message}
@@ -64,7 +75,60 @@ export function ManagedCertificates({ org }: { org: Me["organizations"][number] 
         ))}
       </ul>
       {retry.error && <p className="text-sm text-destructive">{retry.error.message}</p>}
-      {can(org, "managedCertificate", "create") && <NewManagedCertificate org={org} onCreated={refresh} />}
+      {can(org, "approval", "read") && <ApprovalQueue org={org} onDecided={refresh} />}
+      {(can(org, "managedCertificate", "create") || can(org, "managedCertificate", "propose")) && (
+        <NewManagedCertificate org={org} onCreated={refresh} />
+      )}
+    </div>
+  );
+}
+
+function ApprovalQueue({ org, onDecided: decided }: { org: Me["organizations"][number]; onDecided: () => void }) {
+  const queue = useQuery({ queryKey: ["approvals", org.id], queryFn: () => api.approvalQueue(org.id) });
+  const approve = useMutation({ mutationFn: (id: string) => api.approve(org.id, id), onSuccess: decided });
+  const reject = useMutation({
+    mutationFn: ({ id, reason }: { id: string; reason: string }) => api.reject(org.id, id, reason),
+    onSuccess: decided,
+  });
+  const [reasons, setReasons] = useState<Record<string, string>>({});
+  const items = queue.data?.items ?? [];
+  const error = approve.error ?? reject.error;
+
+  return (
+    <div className="flex flex-col gap-3">
+      <h3 className="font-medium">Awaiting Approval</h3>
+      {queue.data && items.length === 0 && <p className="text-sm text-muted-foreground">Nothing is waiting for Approval.</p>}
+      <ul className="flex flex-col gap-3 text-sm">
+        {items.map((m) => (
+          <li key={m.id} className="flex flex-col gap-2 rounded-md border p-3">
+            <span className="font-medium">{m.names.join(", ")}</span>
+            <span className="text-muted-foreground">
+              {m.keyAlgorithm}, {m.environment}, proposed by {m.approval.proposedBy?.email}
+            </span>
+            <Textarea
+              aria-label={`Reason for ${m.names.join(", ")}`}
+              placeholder="Reason (required to reject)"
+              rows={2}
+              value={reasons[m.id] ?? ""}
+              onChange={(e) => setReasons({ ...reasons, [m.id]: e.target.value })}
+            />
+            <span className="flex gap-2">
+              <Button size="sm" disabled={approve.isPending || reject.isPending} onClick={() => approve.mutate(m.id)}>
+                Approve
+              </Button>
+              <Button
+                size="sm"
+                variant="outline"
+                disabled={approve.isPending || reject.isPending || !(reasons[m.id] ?? "").trim()}
+                onClick={() => reject.mutate({ id: m.id, reason: reasons[m.id]! })}
+              >
+                Reject
+              </Button>
+            </span>
+          </li>
+        ))}
+      </ul>
+      {error && <p className="text-sm text-destructive">{error.message}</p>}
     </div>
   );
 }
@@ -74,6 +138,7 @@ function NewManagedCertificate({ org, onCreated }: { org: Me["organizations"][nu
   const [keyAlgorithm, setKeyAlgorithm] = useState("ecdsa-p256");
   const [environment, setEnvironment] = useState<"staging" | "production">("staging");
   const [csr, setCsr] = useState("");
+  const direct = can(org, "managedCertificate", "create");
   const create = useMutation({
     mutationFn: () => api.createManagedCertificate(org.id, { names: names.split(/[\s,]+/).filter(Boolean), keyAlgorithm, csr, environment }),
     onSuccess: () => {
@@ -91,7 +156,8 @@ function NewManagedCertificate({ org, onCreated }: { org: Me["organizations"][nu
         create.mutate();
       }}
     >
-      <h3 className="font-medium">New Managed Certificate</h3>
+      <h3 className="font-medium">{direct ? "New Managed Certificate" : "Propose a Managed Certificate"}</h3>
+      {!direct && <p className="text-sm text-muted-foreground">An Approver must approve it before any Certificate is issued.</p>}
       <div className="flex flex-col gap-2">
         <Label htmlFor={`names-${org.id}`}>Names (one per line; wildcards as *.example.com)</Label>
         <Textarea id={`names-${org.id}`} value={names} onChange={(e) => setNames(e.target.value)} required />
@@ -126,7 +192,7 @@ function NewManagedCertificate({ org, onCreated }: { org: Me["organizations"][nu
       </div>
       {create.error && <p className="text-sm text-destructive">{create.error.message}</p>}
       <Button type="submit" disabled={create.isPending}>
-        Create and issue
+        {direct ? "Create and issue" : "Propose"}
       </Button>
     </form>
   );

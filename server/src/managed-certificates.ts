@@ -1,8 +1,11 @@
 // An Organization's Managed Certificates: created by an Organization Administrator with names, a key algorithm and a
 // CSR (Key Custody: Owner), issued in the background (issuance.ts), and downloaded once a Certificate exists. The
-// platform never sees the private key (ADR 0002): the CSR proves the Owner holds it.
+// platform never sees the private key (ADR 0002): the CSR proves the Owner holds it. Anyone else proposes one instead;
+// it waits in the Approval queue (approval.ts) and its Issuance starts when an Approver approves it.
 import { OpenAPIHono, createRoute, z } from "@hono/zod-openapi";
-import { and, asc, desc, eq, inArray } from "drizzle-orm";
+import type { Context } from "hono";
+import { and, asc, desc, eq, inArray, ne } from "drizzle-orm";
+import { APPROVAL_STATUSES } from "./approval";
 import type { Authorizer } from "./authorization";
 import { ACME_ENVIRONMENTS } from "./certificate-authority";
 import { CsrError, KEY_ALGORITHMS, parseCsr } from "./csr";
@@ -42,6 +45,16 @@ const Certificate = z.object({
   issuedAt: z.string(),
 });
 
+const Person = z.object({ id: z.string(), email: z.string() });
+
+const Approval = z.object({
+  status: z.enum(APPROVAL_STATUSES).openapi({ description: "`not_required` for one an Organization Administrator created." }),
+  proposedBy: Person.nullable(),
+  decidedBy: Person.nullable(),
+  decidedAt: z.string().nullable(),
+  reason: z.string().nullable().openapi({ description: "What the Approver said; always present for a rejection." }),
+});
+
 const ManagedCertificate = z.object({
   id: z.string(),
   names: z.array(z.string()),
@@ -49,6 +62,7 @@ const ManagedCertificate = z.object({
   keyCustody: z.enum(["owner"]),
   environment: z.enum(ACME_ENVIRONMENTS),
   createdAt: z.string(),
+  approval: Approval,
   issuance: Issuance.nullable().openapi({ description: "The latest attempt to issue a Certificate." }),
   currentCertificate: Certificate.nullable().openapi({ description: "The most recently issued Certificate." }),
 });
@@ -94,6 +108,18 @@ export function registerManagedCertificates(ctx: {
     return row;
   }
 
+  /**
+   * The Managed Certificate the caller may see: any in the Organization for those who may read them, and for the
+   * rest only what they proposed themselves (a proposer follows their proposal through Approval and Issuance).
+   */
+  async function findReadable(actor: Actor, orgId: string, id: string) {
+    const { role } = await authorize(actor, orgId);
+    if (roleCan(role, { managedCertificate: ["read"] })) return findManagedCertificate(orgId, id);
+    const mc = await findManagedCertificate(orgId, id).catch(() => null);
+    if (!mc || mc.proposedById !== actor.id) throw new HttpError(403, "not permitted");
+    return mc;
+  }
+
   /** The Managed Certificate's Certificates, the most recently stored first: the first is the current one. */
   const certificatesOf = (orgId: string, managedCertificateId: string) =>
     db
@@ -126,6 +152,13 @@ export function registerManagedCertificates(ctx: {
         keyCustody: row.keyCustody,
         environment: row.environment,
         createdAt: row.createdAt.toISOString(),
+        approval: {
+          status: row.approvalStatus,
+          proposedBy: row.proposedById && row.proposedByEmail ? { id: row.proposedById, email: row.proposedByEmail } : null,
+          decidedBy: row.decidedById && row.decidedByEmail ? { id: row.decidedById, email: row.decidedByEmail } : null,
+          decidedAt: row.decidedAt?.toISOString() ?? null,
+          reason: row.decisionReason,
+        },
         issuance: latest ? toIssuance(latest) : null,
         currentCertificate: current ? toCertificate(current) : null,
       };
@@ -138,18 +171,20 @@ export function registerManagedCertificates(ctx: {
       path: "/api/organizations/{orgId}/managed-certificates",
       tags: ["Managed Certificates"],
       summary: "The Managed Certificates the caller may see",
-      description: "Everyone in the Organization may ask; those who may not read Managed Certificates are shown none.",
+      description:
+        "Everyone in the Organization may ask; those who may not read Managed Certificates are shown only the ones they proposed.",
       request: { params: OrgParam },
       responses: { 200: json(z.object({ items: z.array(ManagedCertificate) })), ...errors(401, 404) },
     }),
     async (c) => {
       const { orgId } = c.req.valid("param");
-      const { role } = await authorize(await requireUser(c), orgId);
-      if (!roleCan(role, { managedCertificate: ["read"] })) return c.json({ items: [] }, 200);
+      const actor = await requireUser(c);
+      const { role } = await authorize(actor, orgId);
+      const ofOrganization = eq(managedCertificate.organizationId, orgId);
       const rows = await db
         .select()
         .from(managedCertificate)
-        .where(eq(managedCertificate.organizationId, orgId))
+        .where(roleCan(role, { managedCertificate: ["read"] }) ? ofOrganization : and(ofOrganization, eq(managedCertificate.proposedById, actor.id)))
         .orderBy(asc(managedCertificate.createdAt), asc(managedCertificate.id));
       return c.json({ items: await withState(rows) }, 200);
     },
@@ -160,9 +195,10 @@ export function registerManagedCertificates(ctx: {
       method: "post",
       path: "/api/organizations/{orgId}/managed-certificates",
       tags: ["Managed Certificates"],
-      summary: "Create a Managed Certificate and start issuing its first Certificate",
+      summary: "Create a Managed Certificate and start issuing its first Certificate, or propose one for Approval",
       description:
         "The Owner keeps the private key and submits a CSR for it. The CSR must be for the key algorithm given and ask for exactly the names given. " +
+        "An Organization Administrator creates it outright and Issuance starts at once; anyone else proposes it, and it waits for an Approver to approve it, which starts Issuance. " +
         "Issuance runs in the background: the response shows it running, and the Managed Certificate shows the Certificate or the cause of the failure when it ends. " +
         "Staging is the default environment.",
       request: {
@@ -180,13 +216,16 @@ export function registerManagedCertificates(ctx: {
           },
         },
       },
-      responses: { 201: json(ManagedCertificate, "Created, with its first Issuance running"), ...errors(400, 401, 403, 404, 422) },
+      responses: { 201: json(ManagedCertificate, "Created with its first Issuance running, or proposed and awaiting Approval"), ...errors(400, 401, 403, 404, 422) },
     }),
     async (c) => {
       const { orgId } = c.req.valid("param");
       const body = c.req.valid("json");
       const actor = await requireUser(c);
-      await authorize(actor, orgId, { managedCertificate: ["create"] });
+      const { role } = await authorize(actor, orgId);
+      // Who may create outright needs no Approval; everyone else must be allowed to propose.
+      const needsApproval = !roleCan(role, { managedCertificate: ["create"] });
+      if (needsApproval) await authorize(actor, orgId, { managedCertificate: ["propose"] });
 
       const normalized = normalizeNames(body.names);
       if ("invalid" in normalized) throw new HttpError(400, `"${normalized.invalid}" cannot be a name to issue for`);
@@ -211,17 +250,19 @@ export function registerManagedCertificates(ctx: {
             keyCustody: "owner",
             environment: body.environment,
             csr: body.csr,
+            ...(needsApproval && { approvalStatus: "pending", proposedById: actor.id, proposedByEmail: actor.email }),
           })
           .returning();
         await change.audit({
           organizationId: orgId,
-          action: "managed_certificate.created",
+          action: needsApproval ? "managed_certificate.proposed" : "managed_certificate.created",
           target: { type: "managed_certificate", id: row!.id },
           detail: { names: normalized.names, keyAlgorithm: body.keyAlgorithm, keyCustody: "owner", environment: body.environment, csrFingerprint: csr.fingerprint },
         });
-        return { row: row!, issuanceId: await issuances.begin(tx, change, actor, row!) };
+        // A proposal is issued only once approved.
+        return { row: row!, issuanceId: needsApproval ? null : await issuances.begin(tx, change, actor, row!) };
       });
-      issuances.start(created.issuanceId);
+      if (created.issuanceId) issuances.start(created.issuanceId);
       return c.json((await withState([created.row]))[0]!, 201);
     },
   );
@@ -236,8 +277,7 @@ export function registerManagedCertificates(ctx: {
     }),
     async (c) => {
       const { orgId, id } = c.req.valid("param");
-      await authorize(await requireUser(c), orgId, { managedCertificate: ["read"] });
-      return c.json((await withState([await findManagedCertificate(orgId, id)]))[0]!, 200);
+      return c.json((await withState([await findReadable(await requireUser(c), orgId, id)]))[0]!, 200);
     },
   );
 
@@ -256,6 +296,9 @@ export function registerManagedCertificates(ctx: {
       const actor = await requireUser(c);
       await authorize(actor, orgId, { managedCertificate: ["issue"] });
       const mc = await findManagedCertificate(orgId, id);
+      if (mc.approvalStatus === "pending" || mc.approvalStatus === "rejected") {
+        throw new HttpError(409, `the Managed Certificate is ${mc.approvalStatus === "pending" ? "awaiting Approval" : "rejected"}, so it cannot be issued`);
+      }
       let issuanceId: string;
       try {
         issuanceId = await unitOfWork.run(actor, (tx, change) => issuances.begin(tx, change, actor, mc));
@@ -272,6 +315,103 @@ export function registerManagedCertificates(ctx: {
   app.openapi(
     createRoute({
       method: "get",
+      path: "/api/organizations/{orgId}/approvals",
+      tags: ["Approval"],
+      summary: "The Approval queue: proposed Managed Certificates the caller may decide, the oldest first",
+      description: "A proposal is decided by someone other than who proposed it, so the caller's own proposals are not in their queue.",
+      request: { params: OrgParam },
+      responses: { 200: json(z.object({ items: z.array(ManagedCertificate) })), ...errors(401, 403, 404) },
+    }),
+    async (c) => {
+      const { orgId } = c.req.valid("param");
+      const actor = await requireUser(c);
+      await authorize(actor, orgId, { approval: ["read"] });
+      const rows = await db
+        .select()
+        .from(managedCertificate)
+        .where(
+          and(
+            eq(managedCertificate.organizationId, orgId),
+            eq(managedCertificate.approvalStatus, "pending"),
+            ne(managedCertificate.proposedById, actor.id),
+          ),
+        )
+        .orderBy(asc(managedCertificate.createdAt), asc(managedCertificate.id));
+      return c.json({ items: await withState(rows) }, 200);
+    },
+  );
+
+  /**
+   * Records an Approver's decision on a pending proposal. Whoever proposed cannot decide it, and a decision is final:
+   * the update takes only a proposal still pending, so of two decisions made at once, one wins and the other is refused.
+   * Approving starts the Issuance on the same transaction.
+   */
+  async function decide(c: Context, orgId: string, id: string, decision: "approved" | "rejected", reason: string | null) {
+    const actor = await requireUser(c);
+    await authorize(actor, orgId, { approval: ["decide"] });
+    const mc = await findManagedCertificate(orgId, id);
+    if (mc.proposedById === actor.id) throw new HttpError(403, "a proposal must be decided by someone other than who proposed it");
+    if (mc.approvalStatus !== "pending") throw new HttpError(409, "this Managed Certificate is not awaiting Approval");
+
+    const issuanceId = await unitOfWork.run(actor, async (tx, change) => {
+      const decided = await tx
+        .update(managedCertificate)
+        .set({ approvalStatus: decision, decidedById: actor.id, decidedByEmail: actor.email, decidedAt: change.occurredAt, decisionReason: reason })
+        .where(and(eq(managedCertificate.id, mc.id), eq(managedCertificate.organizationId, orgId), eq(managedCertificate.approvalStatus, "pending")))
+        .returning({ id: managedCertificate.id });
+      if (decided.length === 0) throw new HttpError(409, "this Managed Certificate is not awaiting Approval");
+      await change.audit({
+        organizationId: orgId,
+        action: decision === "approved" ? "managed_certificate.approved" : "managed_certificate.rejected",
+        target: { type: "managed_certificate", id: mc.id },
+        detail: { names: mc.names, reason, proposedBy: mc.proposedByEmail },
+      });
+      return decision === "approved" ? issuances.begin(tx, change, actor, mc) : null;
+    });
+    if (issuanceId) issuances.start(issuanceId);
+    return (await withState([await findManagedCertificate(orgId, id)]))[0]!;
+  }
+
+  app.openapi(
+    createRoute({
+      method: "post",
+      path: "/api/organizations/{orgId}/managed-certificates/{id}/approve",
+      tags: ["Approval"],
+      summary: "Approve a proposed Managed Certificate, which starts its Issuance",
+      description: "The proposer need do nothing more. Nobody decides their own proposal, and a decision is final.",
+      request: {
+        params: ManagedCertificateParams,
+        body: { content: { "application/json": { schema: z.object({ reason: z.string().trim().max(1000).optional() }) } } },
+      },
+      responses: { 200: json(ManagedCertificate, "Approved, with its first Issuance running"), ...errors(400, 401, 403, 404, 409) },
+    }),
+    async (c) => {
+      const { orgId, id } = c.req.valid("param");
+      return c.json(await decide(c, orgId, id, "approved", c.req.valid("json").reason || null), 200);
+    },
+  );
+
+  app.openapi(
+    createRoute({
+      method: "post",
+      path: "/api/organizations/{orgId}/managed-certificates/{id}/reject",
+      tags: ["Approval"],
+      summary: "Reject a proposed Managed Certificate, with the reason the proposer will see",
+      request: {
+        params: ManagedCertificateParams,
+        body: { content: { "application/json": { schema: z.object({ reason: z.string().trim().min(1).max(1000) }) } } },
+      },
+      responses: { 200: json(ManagedCertificate, "Rejected"), ...errors(400, 401, 403, 404, 409) },
+    }),
+    async (c) => {
+      const { orgId, id } = c.req.valid("param");
+      return c.json(await decide(c, orgId, id, "rejected", c.req.valid("json").reason), 200);
+    },
+  );
+
+  app.openapi(
+    createRoute({
+      method: "get",
       path: "/api/organizations/{orgId}/managed-certificates/{id}/certificates",
       tags: ["Managed Certificates"],
       summary: "Every Certificate issued for the Managed Certificate, the newest first",
@@ -280,8 +420,7 @@ export function registerManagedCertificates(ctx: {
     }),
     async (c) => {
       const { orgId, id } = c.req.valid("param");
-      await authorize(await requireUser(c), orgId, { managedCertificate: ["read"] });
-      const mc = await findManagedCertificate(orgId, id);
+      const mc = await findReadable(await requireUser(c), orgId, id);
       return c.json({ items: (await certificatesOf(orgId, mc.id)).map(toCertificate) }, 200);
     },
   );
@@ -301,8 +440,7 @@ export function registerManagedCertificates(ctx: {
     }),
     async (c) => {
       const { orgId, id } = c.req.valid("param");
-      await authorize(await requireUser(c), orgId, { managedCertificate: ["read"] });
-      const mc = await findManagedCertificate(orgId, id);
+      const mc = await findReadable(await requireUser(c), orgId, id);
       const [current] = await certificatesOf(orgId, mc.id);
       if (!current) throw new HttpError(404, "no Certificate has been issued for this Managed Certificate yet");
       const filename = `${mc.names[0]!.replace(/^\*\./, "wildcard.")}.pem`;

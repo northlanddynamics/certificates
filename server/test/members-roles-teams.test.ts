@@ -73,9 +73,10 @@ describe("what the caller may do", () => {
     expect(adminMe.organizations[0].permissions.invitation).toEqual(["create", "cancel"]);
     expect(adminMe.organizations[0].permissions.audit).toEqual(["read"]);
 
-    for (const cookie of [memberCookie, approverCookie]) {
-      expect((await h.api("/api/me", { cookie })).body.organizations[0].permissions).toEqual({});
-    }
+    // Approvers and Members hold only what is granted them on purpose (see permissions.ts).
+    const permissionsOf = async (cookie: string) => (await h.api("/api/me", { cookie })).body.organizations[0].permissions;
+    expect(await permissionsOf(memberCookie)).toEqual({ managedCertificate: ["propose"] });
+    expect(await permissionsOf(approverCookie)).toEqual({ managedCertificate: ["propose"], approval: ["read", "decide"] });
   });
 });
 
@@ -516,7 +517,8 @@ describe("authorization", () => {
     expect(h.mailer.sent).toHaveLength(mailBefore);
   });
 
-  test("an Organization Administrator holds every declared permission; no other role holds any", () => {
+  test("an Organization Administrator holds every declared permission; Approvers and Members only those granted them; Better Auth's own role names none", () => {
+    const granted: Record<string, string[]> = { approver: ["managedCertificate.propose", "approval.read", "approval.decide"], member: ["managedCertificate.propose"] };
     const declared = declaredPermissions();
     // The permissions the platform's own routes and Better Auth's endpoints ask about stay declared.
     expect(declared.invitation).toContain("create");
@@ -526,7 +528,8 @@ describe("authorization", () => {
       for (const action of actions as string[]) {
         const p = { [resource]: [action] } as Permissions;
         expect(roleCan("organization-administrator", p)).toBe(true);
-        for (const other of ["approver", "member", "owner", "admin"]) expect(roleCan(other, p)).toBe(false);
+        for (const other of ["approver", "member"]) expect(roleCan(other, p)).toBe(granted[other]!.includes(`${resource}.${action}`));
+        for (const other of ["owner", "admin"]) expect(roleCan(other, p)).toBe(false);
       }
     }
   });

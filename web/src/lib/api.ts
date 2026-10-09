@@ -57,11 +57,19 @@ export interface Issuance {
   status: "running" | "succeeded" | "failed";
   failure: { code: string; message: string } | null;
 }
+export interface Approval {
+  status: "not_required" | "pending" | "approved" | "rejected";
+  proposedBy: { id: string; email: string } | null;
+  decidedBy: { id: string; email: string } | null;
+  decidedAt: string | null;
+  reason: string | null;
+}
 export interface ManagedCertificate {
   id: string;
   names: string[];
   keyAlgorithm: string;
   environment: "staging" | "production";
+  approval: Approval;
   issuance: Issuance | null;
   currentCertificate: { fingerprint: string; notAfter: string } | null;
 }
@@ -90,6 +98,11 @@ export const api = {
   managedCertificates: (orgId: string) => call<{ items: ManagedCertificate[] }>(`/api/organizations/${orgId}/managed-certificates`),
   createManagedCertificate: (orgId: string, body: NewManagedCertificate) =>
     call<ManagedCertificate>(`/api/organizations/${orgId}/managed-certificates`, { body }),
+  approvalQueue: (orgId: string) => call<{ items: ManagedCertificate[] }>(`/api/organizations/${orgId}/approvals`),
+  approve: (orgId: string, id: string, reason?: string) =>
+    call<ManagedCertificate>(`/api/organizations/${orgId}/managed-certificates/${id}/approve`, { body: { reason } }),
+  reject: (orgId: string, id: string, reason: string) =>
+    call<ManagedCertificate>(`/api/organizations/${orgId}/managed-certificates/${id}/reject`, { body: { reason } }),
   retryIssuance: (orgId: string, id: string) =>
     call<Issuance>(`/api/organizations/${orgId}/managed-certificates/${id}/issuances`, { method: "POST", body: {} }),
   certificateDownloadUrl: (orgId: string, id: string) => `/api/organizations/${orgId}/managed-certificates/${id}/certificate.pem`,

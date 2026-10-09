@@ -10,7 +10,7 @@ export const APPROVER_ROLE = "approver";
 export const MEMBER_ROLE = "member";
 
 // Every permission there is. The organization, member, invitation and team resources are the ones Better Auth's
-// organization plugin checks itself; `audit`, `acmeAccount`, `dnsProvider` and `managedCertificate` are ours.
+// organization plugin checks itself; `audit`, `acmeAccount`, `dnsProvider`, `managedCertificate` and `approval` are ours.
 const statements = {
   organization: ["update", "delete"],
   member: ["create", "update", "delete"],
@@ -19,7 +19,9 @@ const statements = {
   audit: ["read"],
   acmeAccount: ["read", "create", "update", "test"],
   dnsProvider: ["read", "create", "update", "test"],
-  managedCertificate: ["read", "create", "issue"],
+  // `create` makes a Managed Certificate outright; `propose` asks for one that waits for Approval.
+  managedCertificate: ["read", "create", "propose", "issue"],
+  approval: ["read", "decide"],
 } as const;
 
 export type Permissions = { [R in keyof typeof statements]?: (typeof statements)[R][number][] };
@@ -27,11 +29,12 @@ export type Permissions = { [R in keyof typeof statements]?: (typeof statements)
 export const ac = createAccessControl(statements);
 
 // An Organization Administrator has full control, so holds every declared permission, including any declared
-// later. Approvers and Members hold none until one is granted to them here on purpose.
+// later. Approvers and Members hold only what is granted to them here on purpose: both may propose a Managed
+// Certificate, and only an Approver sees the Approval queue and decides.
 export const orgRoles = {
   [ORG_ADMIN_ROLE]: ac.newRole(statements),
-  [APPROVER_ROLE]: ac.newRole({}),
-  [MEMBER_ROLE]: ac.newRole({}),
+  [APPROVER_ROLE]: ac.newRole({ managedCertificate: ["propose"], approval: ["read", "decide"] }),
+  [MEMBER_ROLE]: ac.newRole({ managedCertificate: ["propose"] }),
 };
 
 const roleOf = (name: string) => (Object.hasOwn(orgRoles, name) ? orgRoles[name as keyof typeof orgRoles] : undefined);

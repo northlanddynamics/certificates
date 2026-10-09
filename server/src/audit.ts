@@ -23,6 +23,9 @@ export type AuditAction =
   | "dns_provider.secret_replaced"
   | "dns_provider.tested"
   | "managed_certificate.created"
+  | "managed_certificate.proposed"
+  | "managed_certificate.approved"
+  | "managed_certificate.rejected"
   | "issuance.started"
   | "issuance.succeeded"
   | "issuance.failed";

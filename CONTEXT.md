@@ -48,6 +48,10 @@ _Avoid_: key mode, key ownership
 An Approver's authorization of a Managed Certificate's names; required when a non-administrator creates a Managed Certificate or changes its names, but never for Renewal or for changes made by an Organization Administrator. While a name change is pending Approval, Renewal continues with the last approved names.
 _Avoid_: sign-off, authorization
 
+**Proposal**:
+A Managed Certificate that someone who may not create one outright has asked for: it waits for Approval with no Certificates and no Issuance, and is either approved, which starts its Issuance, or rejected with a reason, which ends it. Whoever proposed it cannot decide it.
+_Avoid_: request, draft, pending certificate
+
 **Archive**:
 Soft deletion of a Managed Certificate: it stops renewing and deploying, but it and its Certificates and history are retained. Archiving never revokes.
 _Avoid_: delete, remove, decommission
