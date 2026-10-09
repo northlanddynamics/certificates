@@ -1,3 +1,6 @@
+// Better Auth's organization endpoints, served as they are (see unit-of-work.ts). These tests lean on what
+// Better Auth guarantees and on the platform's additions: audit in the same transaction, serialised changes,
+// the removal hook, and the allowlist.
 import { afterAll, beforeAll, beforeEach, describe, expect, test } from "bun:test";
 import type { Permissions } from "../src/auth";
 import { roleCan } from "../src/authorization";
@@ -20,240 +23,270 @@ afterAll(async () => {
   await h.close();
 });
 
-const org = (path: string, orgId = acme.orgId) => `/api/organizations/${orgId}${path}`;
+const BA = "/api/auth/organization";
+const as = (cookie: string, orgId = acme.orgId) => ({
+  invite: (email: string, role: string) => h.api(`${BA}/invite-member`, { cookie, body: { email, role, organizationId: orgId } }),
+  cancelInvitation: (invitationId: string) => h.api(`${BA}/cancel-invitation`, { cookie, body: { invitationId } }),
+  accept: (invitationId: string) => h.api(`${BA}/accept-invitation`, { cookie, body: { invitationId } }),
+  invitations: () => h.api(`${BA}/list-invitations?organizationId=${orgId}`, { cookie }),
+  members: () => h.api(`${BA}/list-members?organizationId=${orgId}`, { cookie }),
+  setRole: (memberId: string, role: string) => h.api(`${BA}/update-member-role`, { cookie, body: { memberId, role, organizationId: orgId } }),
+  remove: (memberId: string) => h.api(`${BA}/remove-member`, { cookie, body: { memberIdOrEmail: memberId, organizationId: orgId } }),
+  createTeam: (name: string) => h.api(`${BA}/create-team`, { cookie, body: { name, organizationId: orgId } }),
+  renameTeam: (teamId: string, name: string) =>
+    h.api(`${BA}/update-team`, { cookie, body: { teamId, data: { name, organizationId: orgId } } }),
+  deleteTeam: (teamId: string) => h.api(`${BA}/remove-team`, { cookie, body: { teamId, organizationId: orgId } }),
+  addToTeam: (teamId: string, userId: string) => h.api(`${BA}/add-team-member`, { cookie, body: { teamId, userId, organizationId: orgId } }),
+  removeFromTeam: (teamId: string, userId: string) =>
+    h.api(`${BA}/remove-team-member`, { cookie, body: { teamId, userId, organizationId: orgId } }),
+  teams: () => h.api(`${BA}/list-teams?organizationId=${orgId}`, { cookie }),
+  overview: () => h.api(`/api/organizations/${orgId}/teams`, { cookie }),
+  inventory: () => h.api(`/api/organizations/${orgId}/managed-certificates`, { cookie }),
+  audit: async () => (await h.api(`/api/organizations/${orgId}/audit-events`, { cookie })).body?.items ?? [],
+});
+const admin = () => as(acme.cookie);
+const denied = (res: { status: number }) => expect(res.status).toBeWithin(400, 500);
 
-/** The admin invites `email` with `role`; the invitee signs up, accepts and signs in. */
+/** The administrator invites `email` with `role`; the invitee signs up, accepts and signs in. */
 async function join(email: string, role: string, orgId = acme.orgId, adminCookie = acme.cookie) {
-  const invited = await h.api(org("/invitations", orgId), { cookie: adminCookie, body: { email, role } });
-  expect(invited.status).toBe(201);
+  const invited = await as(adminCookie, orgId).invite(email, role);
+  expect(invited.status).toBe(200);
   const cookie = await h.signUp(email, PASSWORD);
-  const accepted = await h.api(`/api/invitations/${invited.body.id}/accept`, { cookie, method: "POST" });
-  expect(accepted.status).toBe(200);
+  expect((await as(cookie).accept(invited.body.id)).status).toBe(200);
   return h.signIn(email, PASSWORD);
 }
 
+type Member = { id: string; userId: string; role: string; user: { email: string } };
 async function members(cookie = acme.cookie, orgId = acme.orgId) {
-  const res = await h.api(org("/members", orgId), { cookie });
+  const res = await as(cookie, orgId).members();
   expect(res.status).toBe(200);
-  return res.body.items as { id: string; userId: string; email: string; role: string }[];
+  return res.body.members as Member[];
 }
-const memberOf = async (email: string) => (await members()).find((m) => m.email === email)!;
-const auditActions = async () =>
-  (await h.api(org("/audit-events"), { cookie: acme.cookie })).body.items.map((e: any) => e.action) as string[];
+const memberOf = async (email: string) => (await members()).find((m) => m.user.email === email)!;
+const auditActions = async () => (await admin().audit()).map((e: any) => e.action) as string[];
 
 describe("invitations", () => {
   test("an administrator invites users as Member, Approver or Organization Administrator", async () => {
     for (const role of ["member", "approver", "organization-administrator"]) {
       const email = `${role}@acme.test`;
-      const res = await h.api(org("/invitations"), { cookie: acme.cookie, body: { email, role } });
-      expect(res.status).toBe(201);
+      const res = await admin().invite(email, role);
+      expect(res.status).toBe(200);
       expect(h.mailer.sent.at(-1)!.to).toBe(email);
       expect(h.mailer.sent.at(-1)!.text).toContain(res.body.id);
 
       const cookie = await h.signUp(email, PASSWORD);
-      await h.api(`/api/invitations/${res.body.id}/accept`, { cookie, method: "POST" });
-      const me = await h.api("/api/me", { cookie });
-      expect(me.body.organizations[0].role).toBe(role);
+      await as(cookie).accept(res.body.id);
+      expect((await h.api("/api/me", { cookie })).body.organizations[0].role).toBe(role);
     }
   });
 
   test("only the three roles can be assigned, and 'owner' is not one of them", async () => {
-    for (const role of ["owner", "admin", ""]) {
-      const res = await h.api(org("/invitations"), { cookie: acme.cookie, body: { email: "x@acme.test", role } });
-      expect(res.status).toBe(400);
+    const mailBefore = h.mailer.sent.length;
+    for (const role of ["owner", "admin", "nonsense", "member,owner"]) {
+      denied(await admin().invite("x@acme.test", role));
     }
+    expect(h.mailer.sent).toHaveLength(mailBefore);
   });
 
-  test("only an Organization Administrator can invite, list or cancel invitations", async () => {
+  test("only an Organization Administrator can invite or cancel invitations; a refused change leaves no trace", async () => {
     const memberCookie = await join("m@acme.test", "member");
     const approverCookie = await join("a@acme.test", "approver");
-    const pending = await h.api(org("/invitations"), { cookie: acme.cookie, body: { email: "new@acme.test", role: "member" } });
+    const pending = await admin().invite("new@acme.test", "member");
+    const before = h.mailer.sent.length;
+    const auditBefore = (await auditActions()).length;
     for (const cookie of [memberCookie, approverCookie]) {
-      expect((await h.api(org("/invitations"), { cookie, body: { email: "n@acme.test", role: "member" } })).status).toBe(403);
-      expect((await h.api(org("/invitations"), { cookie })).status).toBe(403);
-      expect((await h.api(org(`/invitations/${pending.body.id}`), { cookie, method: "DELETE" })).status).toBe(403);
+      expect((await as(cookie).invite("n@acme.test", "member")).status).toBe(403);
+      denied(await as(cookie).cancelInvitation(pending.body.id));
     }
+    expect(h.mailer.sent).toHaveLength(before);
+    expect(await auditActions()).toHaveLength(auditBefore);
   });
 
-  test("inviting an existing member, or someone already invited, is a conflict", async () => {
+  test("inviting an existing member, or someone already invited, is refused", async () => {
     await join("m@acme.test", "member");
-    const again = await h.api(org("/invitations"), { cookie: acme.cookie, body: { email: "M@acme.test", role: "approver" } });
-    expect(again.status).toBe(409);
-    const first = await h.api(org("/invitations"), { cookie: acme.cookie, body: { email: "p@acme.test", role: "member" } });
-    expect(first.status).toBe(201);
-    const second = await h.api(org("/invitations"), { cookie: acme.cookie, body: { email: "p@acme.test", role: "member" } });
-    expect(second.status).toBe(409);
+    expect((await admin().invite("M@acme.test", "approver")).status).toBe(400);
+    expect((await admin().invite("p@acme.test", "member")).status).toBe(200);
+    expect((await admin().invite("p@acme.test", "member")).status).toBe(400);
   });
 
-  test("pending invitations are listed; a cancelled one can no longer be accepted", async () => {
-    const inv = await h.api(org("/invitations"), { cookie: acme.cookie, body: { email: "p@acme.test", role: "approver" } });
-    const list = await h.api(org("/invitations"), { cookie: acme.cookie });
-    expect(list.body.items).toEqual([{ id: inv.body.id, email: "p@acme.test", role: "approver", expiresAt: expect.any(String) }]);
+  test("an invitation can be cancelled while pending, and then cannot be accepted; a spent one cannot be cancelled", async () => {
+    const inv = await admin().invite("p@acme.test", "approver");
+    const pending = (await admin().invitations()).body.filter((i: any) => i.status === "pending");
+    expect(pending.map((i: any) => [i.id, i.email, i.role])).toEqual([[inv.body.id, "p@acme.test", "approver"]]);
 
-    expect((await h.api(org(`/invitations/${inv.body.id}`), { cookie: acme.cookie, method: "DELETE" })).status).toBe(204);
-    expect((await h.api(org("/invitations"), { cookie: acme.cookie })).body.items).toEqual([]);
+    expect((await admin().cancelInvitation(inv.body.id)).status).toBe(200);
     const cookie = await h.signUp("p@acme.test", PASSWORD);
-    expect((await h.api(`/api/invitations/${inv.body.id}/accept`, { cookie, method: "POST" })).status).toBe(404);
+    expect((await as(cookie).accept(inv.body.id)).status).toBe(400);
     expect(await auditActions()).toContain("invitation.canceled");
+
+    const spent = await admin().invite("q@acme.test", "member");
+    const qCookie = await h.signUp("q@acme.test", PASSWORD);
+    await as(qCookie).accept(spent.body.id);
+    denied(await admin().cancelInvitation(spent.body.id));
+    expect((await h.pool.query(`select status from invitation where id = $1`, [spent.body.id])).rows[0].status).toBe("accepted");
   });
 
-  test("an invitation cannot be created or cancelled across Organizations", async () => {
+  test("an invitation cannot be created, listed or cancelled across Organizations", async () => {
     const other = await h.createOrgWithAdmin(operator, "other", "admin@other.test");
-    const res = await h.api(org("/invitations", other.orgId), { cookie: acme.cookie, body: { email: "x@a.test", role: "member" } });
-    expect(res.status).toBe(404);
-    const inv = await h.api(org("/invitations", other.orgId), { cookie: other.cookie, body: { email: "x@a.test", role: "member" } });
-    const cancel = await h.api(org(`/invitations/${inv.body.id}`), { cookie: acme.cookie, method: "DELETE" });
-    expect(cancel.status).toBe(404);
+    expect((await as(acme.cookie, other.orgId).invite("x@a.test", "member")).status).toBeGreaterThanOrEqual(400);
+    expect((await as(acme.cookie, other.orgId).invitations()).status).toBe(403);
+    const inv = await as(other.cookie, other.orgId).invite("x@a.test", "member");
+    denied(await admin().cancelInvitation(inv.body.id));
+    expect((await h.pool.query(`select status from invitation where id = $1`, [inv.body.id])).rows[0].status).toBe("pending");
+  });
+
+  test("an invitation can be rejected by its recipient, and is audited", async () => {
+    const inv = await admin().invite("p@acme.test", "member");
+    const cookie = await h.signUp("p@acme.test", PASSWORD);
+    expect((await h.api(`${BA}/reject-invitation`, { cookie, body: { invitationId: inv.body.id } })).status).toBe(200);
+    expect(await auditActions()).toContain("invitation.rejected");
   });
 });
 
 describe("roles", () => {
   test("an Organization Administrator changes a member's role, and the change takes effect at once", async () => {
     const cookie = await join("m@acme.test", "member");
-    expect((await h.api(org("/invitations"), { cookie, body: { email: "n@acme.test", role: "member" } })).status).toBe(403);
+    expect((await as(cookie).invite("n@acme.test", "member")).status).toBe(403);
 
     const target = await memberOf("m@acme.test");
-    const res = await h.api(org(`/members/${target.id}`), { cookie: acme.cookie, method: "PATCH", body: { role: "organization-administrator" } });
-    expect(res.status).toBe(200);
-    expect(res.body.role).toBe("organization-administrator");
-    expect((await h.api(org("/invitations"), { cookie, body: { email: "n@acme.test", role: "member" } })).status).toBe(201);
+    expect((await admin().setRole(target.id, "organization-administrator")).status).toBe(200);
+    expect((await memberOf("m@acme.test")).role).toBe("organization-administrator");
+    expect((await as(cookie).invite("n@acme.test", "member")).status).toBe(200);
   });
 
   test("only an Organization Administrator can change roles", async () => {
     const memberCookie = await join("m@acme.test", "member");
     const approverCookie = await join("a@acme.test", "approver");
-    const admin = await memberOf("admin@acme.test");
+    const adminMember = await memberOf("admin@acme.test");
     const target = await memberOf("m@acme.test");
     for (const cookie of [memberCookie, approverCookie]) {
-      for (const id of [admin.id, target.id]) {
-        const res = await h.api(org(`/members/${id}`), { cookie, method: "PATCH", body: { role: "organization-administrator" } });
-        expect(res.status).toBe(403);
-      }
+      for (const id of [adminMember.id, target.id]) denied(await as(cookie).setRole(id, "organization-administrator"));
     }
     expect((await memberOf("m@acme.test")).role).toBe("member");
+    expect((await memberOf("admin@acme.test")).role).toBe("organization-administrator");
   });
 
   test("an invalid role is rejected", async () => {
     const target = await memberOf("admin@acme.test");
-    const res = await h.api(org(`/members/${target.id}`), { cookie: acme.cookie, method: "PATCH", body: { role: "owner" } });
-    expect(res.status).toBe(400);
+    for (const role of ["owner", "admin"]) denied(await admin().setRole(target.id, role));
+    expect((await memberOf("admin@acme.test")).role).toBe("organization-administrator");
   });
 
   test("the last Organization Administrator cannot be demoted or removed", async () => {
     const self = await memberOf("admin@acme.test");
-    const demote = await h.api(org(`/members/${self.id}`), { cookie: acme.cookie, method: "PATCH", body: { role: "member" } });
-    expect(demote.status).toBe(409);
-    const remove = await h.api(org(`/members/${self.id}`), { cookie: acme.cookie, method: "DELETE" });
-    expect(remove.status).toBe(409);
+    denied(await admin().setRole(self.id, "member"));
+    denied(await admin().remove(self.id));
+    expect((await memberOf("admin@acme.test")).role).toBe("organization-administrator");
 
     await join("second@acme.test", "organization-administrator");
-    const ok = await h.api(org(`/members/${self.id}`), { cookie: acme.cookie, method: "PATCH", body: { role: "member" } });
-    expect(ok.status).toBe(200);
+    expect((await admin().setRole(self.id, "member")).status).toBe(200);
   });
 
-  test("a member of another Organization cannot be reached", async () => {
+  test("a member of another Organization cannot be changed or removed", async () => {
     const other = await h.createOrgWithAdmin(operator, "other", "admin@other.test");
     const theirs = (await members(other.cookie, other.orgId))[0]!;
-    const res = await h.api(org(`/members/${theirs.id}`), { cookie: acme.cookie, method: "PATCH", body: { role: "member" } });
-    expect(res.status).toBe(404);
-    expect((await h.api(org(`/members/${theirs.id}`), { cookie: acme.cookie, method: "DELETE" })).status).toBe(404);
+    denied(await admin().setRole(theirs.id, "member"));
+    denied(await admin().remove(theirs.id));
     expect((await members(other.cookie, other.orgId))[0]!.role).toBe("organization-administrator");
   });
 
-  test("any member can read the member list", async () => {
+  test("any member can read the member list, and only their own Organization's", async () => {
     const cookie = await join("m@acme.test", "member");
-    expect((await members(cookie)).map((m) => m.email).sort()).toEqual(["admin@acme.test", "m@acme.test"]);
+    expect((await members(cookie)).map((m) => m.user.email).sort()).toEqual(["admin@acme.test", "m@acme.test"]);
+    const other = await h.createOrgWithAdmin(operator, "other", "admin@other.test");
+    expect((await as(cookie, other.orgId).members()).status).toBe(403);
   });
 
   test("role changes are audited with the old and new role", async () => {
     await join("m@acme.test", "member");
     const target = await memberOf("m@acme.test");
-    await h.api(org(`/members/${target.id}`), { cookie: acme.cookie, method: "PATCH", body: { role: "approver" } });
-    const events = (await h.api(org("/audit-events"), { cookie: acme.cookie })).body.items;
-    const event = events.find((e: any) => e.action === "member.role_changed");
+    await admin().setRole(target.id, "approver");
+    const event = (await admin().audit()).find((e: any) => e.action === "member.role_changed");
     expect(event).toMatchObject({
       actor: { email: "admin@acme.test" },
       target: { type: "member", id: target.id },
       detail: { email: "m@acme.test", from: "member", to: "approver" },
     });
     // Setting the role it already has changes nothing and is not audited.
-    await h.api(org(`/members/${target.id}`), { cookie: acme.cookie, method: "PATCH", body: { role: "approver" } });
+    await admin().setRole(target.id, "approver");
     expect((await auditActions()).filter((a) => a === "member.role_changed")).toHaveLength(1);
   });
 });
 
 describe("Teams", () => {
-  const createTeam = async (name: string, cookie = acme.cookie, orgId = acme.orgId) =>
-    h.api(org("/teams", orgId), { cookie, body: { name } });
+  const createTeam = async (name: string, cookie = acme.cookie, orgId = acme.orgId) => as(cookie, orgId).createTeam(name);
 
   test("an administrator creates, renames and deletes Teams", async () => {
     const created = await createTeam("Platform");
-    expect(created.status).toBe(201);
+    expect(created.status).toBe(200);
     const id = created.body.id;
-    expect((await h.api(org(`/teams/${id}`), { cookie: acme.cookie, method: "PATCH", body: { name: "Infra" } })).status).toBe(200);
-    const list = await h.api(org("/teams"), { cookie: acme.cookie });
-    expect(list.body.items).toEqual([{ id, name: "Infra", members: [] }]);
-    expect((await h.api(org(`/teams/${id}`), { cookie: acme.cookie, method: "DELETE" })).status).toBe(204);
-    expect((await h.api(org("/teams"), { cookie: acme.cookie })).body.items).toEqual([]);
-    expect(await auditActions()).toEqual(
-      expect.arrayContaining(["team.created", "team.renamed", "team.deleted"]),
-    );
+    expect((await admin().renameTeam(id, "Infra")).status).toBe(200);
+    expect((await admin().overview()).body.items).toEqual([{ id, name: "Infra", members: [] }]);
+    expect((await admin().deleteTeam(id)).status).toBe(200);
+    expect((await admin().overview()).body.items).toEqual([]);
+    expect(await auditActions()).toEqual(expect.arrayContaining(["team.created", "team.renamed", "team.deleted"]));
+    const renamed = (await admin().audit()).find((e: any) => e.action === "team.renamed");
+    expect(renamed.detail).toEqual({ from: "Platform", to: "Infra" });
   });
 
   test("only administrators change Teams; every member can read them", async () => {
-    const created = await createTeam("Platform");
-    const id = created.body.id;
+    const id = (await createTeam("Platform")).body.id;
     const memberCookie = await join("m@acme.test", "member");
     const approverCookie = await join("a@acme.test", "approver");
     const user = await memberOf("m@acme.test");
     for (const cookie of [memberCookie, approverCookie]) {
-      expect((await createTeam("Nope", cookie)).status).toBe(403);
-      expect((await h.api(org(`/teams/${id}`), { cookie, method: "PATCH", body: { name: "Nope" } })).status).toBe(403);
-      expect((await h.api(org(`/teams/${id}`), { cookie, method: "DELETE" })).status).toBe(403);
-      expect((await h.api(org(`/teams/${id}/members`), { cookie, body: { userId: user.userId } })).status).toBe(403);
-      expect((await h.api(org(`/teams/${id}/members/${user.userId}`), { cookie, method: "DELETE" })).status).toBe(403);
-      expect((await h.api(org("/teams"), { cookie })).body.items).toHaveLength(1);
+      const them = as(cookie);
+      expect((await them.createTeam("Nope")).status).toBe(403);
+      denied(await them.renameTeam(id, "Nope"));
+      denied(await them.deleteTeam(id));
+      denied(await them.addToTeam(id, user.userId));
+      denied(await them.removeFromTeam(id, user.userId));
+      expect((await them.teams()).body).toHaveLength(1);
+      expect((await them.overview()).body.items).toHaveLength(1);
     }
   });
 
-  test("Team names are unique within an Organization, not across them", async () => {
+  test("Team names are unique within an Organization, ignoring case, but not across them", async () => {
     await createTeam("Platform");
-    expect((await createTeam("platform")).status).toBe(409);
+    denied(await createTeam("platform"));
     const second = await createTeam("Security");
-    const rename = await h.api(org(`/teams/${second.body.id}`), { cookie: acme.cookie, method: "PATCH", body: { name: "PLATFORM" } });
-    expect(rename.status).toBe(409);
+    denied(await admin().renameTeam(second.body.id, "PLATFORM"));
+    expect((await admin().overview()).body.items.map((t: any) => t.name)).toEqual(["Platform", "Security"]);
     const other = await h.createOrgWithAdmin(operator, "other", "admin@other.test");
-    expect((await createTeam("Platform", other.cookie, other.orgId)).status).toBe(201);
+    expect((await createTeam("Platform", other.cookie, other.orgId)).status).toBe(200);
   });
 
   test("users are added to and removed from a Team; only Organization members can be added", async () => {
     const team = (await createTeam("Platform")).body.id;
     await join("m@acme.test", "member");
     const user = await memberOf("m@acme.test");
-    const add = await h.api(org(`/teams/${team}/members`), { cookie: acme.cookie, body: { userId: user.userId } });
-    expect(add.status).toBe(204);
+    expect((await admin().addToTeam(team, user.userId)).status).toBe(200);
     // Adding someone who is already in the Team changes nothing, and is not audited again.
-    expect((await h.api(org(`/teams/${team}/members`), { cookie: acme.cookie, body: { userId: user.userId } })).status).toBe(204);
+    expect((await admin().addToTeam(team, user.userId)).status).toBe(200);
     expect((await auditActions()).filter((a) => a === "team.member_added")).toHaveLength(1);
-    const listed = (await h.api(org("/teams"), { cookie: acme.cookie })).body.items[0];
-    expect(listed.members).toEqual([{ userId: user.userId, email: "m@acme.test" }]);
+    expect((await admin().overview()).body.items[0].members).toEqual([{ userId: user.userId, email: "m@acme.test" }]);
 
     const outsider = await h.createOrgWithAdmin(operator, "other", "admin@other.test");
     const outsiderId = (await members(outsider.cookie, outsider.orgId))[0]!.userId;
-    expect((await h.api(org(`/teams/${team}/members`), { cookie: acme.cookie, body: { userId: outsiderId } })).status).toBe(404);
+    denied(await admin().addToTeam(team, outsiderId));
 
-    expect((await h.api(org(`/teams/${team}/members/${user.userId}`), { cookie: acme.cookie, method: "DELETE" })).status).toBe(204);
-    expect((await h.api(org(`/teams/${team}/members/${user.userId}`), { cookie: acme.cookie, method: "DELETE" })).status).toBe(404);
-    expect((await h.api(org("/teams"), { cookie: acme.cookie })).body.items[0].members).toEqual([]);
-    expect(await auditActions()).toEqual(expect.arrayContaining(["team.member_added", "team.member_removed"]));
+    expect((await admin().removeFromTeam(team, user.userId)).status).toBe(200);
+    expect((await admin().overview()).body.items[0].members).toEqual([]);
+    expect(await auditActions()).toContain("team.member_removed");
   });
 
   test("a Team of another Organization cannot be reached", async () => {
     const other = await h.createOrgWithAdmin(operator, "other", "admin@other.test");
     const theirs = (await createTeam("Theirs", other.cookie, other.orgId)).body.id;
-    expect((await h.api(org(`/teams/${theirs}`), { cookie: acme.cookie, method: "PATCH", body: { name: "Mine" } })).status).toBe(404);
-    expect((await h.api(org(`/teams/${theirs}`), { cookie: acme.cookie, method: "DELETE" })).status).toBe(404);
-    expect((await h.api(org("/teams", other.orgId), { cookie: acme.cookie })).status).toBe(404);
+    denied(await admin().renameTeam(theirs, "Mine"));
+    denied(await admin().deleteTeam(theirs));
+    expect((await as(acme.cookie, other.orgId).overview()).status).toBe(404);
+    expect((await as(other.cookie, other.orgId).overview()).body.items.map((t: any) => t.name)).toEqual(["Theirs"]);
+  });
+
+  test("an Organization's last Team can be deleted", async () => {
+    const id = (await createTeam("Only")).body.id;
+    expect((await admin().deleteTeam(id)).status).toBe(200);
   });
 });
 
@@ -261,41 +294,45 @@ describe("removing a user from the Organization", () => {
   test("revokes their access, drops them from every Team, and is audited", async () => {
     const cookie = await join("m@acme.test", "member");
     const user = await memberOf("m@acme.test");
-    const t1 = (await h.api(org("/teams"), { cookie: acme.cookie, body: { name: "One" } })).body.id;
-    const t2 = (await h.api(org("/teams"), { cookie: acme.cookie, body: { name: "Two" } })).body.id;
-    for (const t of [t1, t2]) await h.api(org(`/teams/${t}/members`), { cookie: acme.cookie, body: { userId: user.userId } });
+    const t1 = (await admin().createTeam("One")).body.id;
+    const t2 = (await admin().createTeam("Two")).body.id;
+    for (const t of [t1, t2]) await admin().addToTeam(t, user.userId);
 
-    expect((await h.api(org("/managed-certificates"), { cookie })).status).toBe(200);
-    const res = await h.api(org(`/members/${user.id}`), { cookie: acme.cookie, method: "DELETE" });
-    expect(res.status).toBe(204);
+    expect(await as(cookie).inventory().then((r) => r.status)).toBe(200);
+    expect((await admin().remove(user.id)).status).toBe(200);
 
-    expect((await h.api(org("/managed-certificates"), { cookie })).status).toBe(404);
+    expect((await as(cookie).inventory()).status).toBe(404);
     expect((await h.api("/api/me", { cookie })).body.organizations).toEqual([]);
-    const teams = (await h.api(org("/teams"), { cookie: acme.cookie })).body.items;
-    expect(teams.flatMap((t: any) => t.members)).toEqual([]);
-    expect((await members()).map((m) => m.email)).toEqual(["admin@acme.test"]);
-    const event = (await h.api(org("/audit-events"), { cookie: acme.cookie })).body.items.find((e: any) => e.action === "member.removed");
-    expect(event).toMatchObject({ target: { type: "member", id: user.id }, detail: { email: "m@acme.test", role: "member", teamIds: expect.arrayContaining([t1, t2]) } });
+    expect((await admin().overview()).body.items.flatMap((t: any) => t.members)).toEqual([]);
+    expect((await members()).map((m) => m.user.email)).toEqual(["admin@acme.test"]);
+    const event = (await admin().audit()).find((e: any) => e.action === "member.removed");
+    expect(event).toMatchObject({
+      target: { type: "member", id: user.id },
+      detail: { email: "m@acme.test", role: "member", teamIds: expect.arrayContaining([t1, t2]) },
+    });
   });
 
   test("removal affects only the one Organization", async () => {
     const other = await h.createOrgWithAdmin(operator, "other", "admin@other.test");
     const cookie = await join("m@acme.test", "member");
-    const invited = await h.api(org("/invitations", other.orgId), { cookie: other.cookie, body: { email: "m@acme.test", role: "approver" } });
-    await h.api(`/api/invitations/${invited.body.id}/accept`, { cookie, method: "POST" });
+    const invited = await as(other.cookie, other.orgId).invite("m@acme.test", "approver");
+    await as(cookie).accept(invited.body.id);
     const user = await memberOf("m@acme.test");
-    await h.api(org(`/members/${user.id}`), { cookie: acme.cookie, method: "DELETE" });
-    expect((await h.api(org("/managed-certificates"), { cookie })).status).toBe(404);
-    expect((await h.api("/api/me", { cookie })).status).toBe(200);
+    await admin().remove(user.id);
+    expect((await as(cookie).inventory()).status).toBe(404);
+    expect((await as(cookie, other.orgId).inventory()).status).toBe(200);
   });
 
   test("only an Organization Administrator can remove users", async () => {
     const memberCookie = await join("m@acme.test", "member");
     const approverCookie = await join("a@acme.test", "approver");
-    const admin = await memberOf("admin@acme.test");
+    const adminMember = await memberOf("admin@acme.test");
+    const target = await memberOf("m@acme.test");
     for (const cookie of [memberCookie, approverCookie]) {
-      expect((await h.api(org(`/members/${admin.id}`), { cookie, method: "DELETE" })).status).toBe(403);
+      denied(await as(cookie).remove(adminMember.id));
+      denied(await as(cookie).remove(target.id));
     }
+    expect(await members()).toHaveLength(3);
   });
 
   test("the removal hook runs in the same transaction: if it fails, nothing is removed or audited", async () => {
@@ -308,13 +345,12 @@ describe("removing a user from the Organization", () => {
     };
     memberRemovalHooks.push(hook);
     try {
-      const res = await h.api(org(`/members/${user.id}`), { cookie: acme.cookie, method: "DELETE" });
-      expect(res.status).toBe(500);
+      expect((await admin().remove(user.id)).status).toBe(500);
     } finally {
       memberRemovalHooks.splice(memberRemovalHooks.indexOf(hook), 1);
     }
     expect(seen).toEqual([{ organizationId: acme.orgId, userId: user.userId }]);
-    expect((await members()).map((m) => m.email)).toContain("m@acme.test");
+    expect((await members()).map((m) => m.user.email)).toContain("m@acme.test");
     expect(await auditActions()).not.toContain("member.removed");
   });
 });
@@ -329,14 +365,25 @@ describe("races and leftovers", () => {
     try {
       await other.query("begin");
       await other.query(`update member set role = 'member' where id = $1`, [secondMember.id]);
-      const inFlight = h.api(org("/invitations"), { cookie: second, body: { email: "late@acme.test", role: "member" } });
+      const inFlight = as(second).invite("late@acme.test", "member");
       await Bun.sleep(150); // the invitation request is now waiting on the demotion
       await other.query("commit");
       expect((await inFlight).status).toBe(403);
     } finally {
       other.release();
     }
-    expect((await h.api(org("/invitations"), { cookie: acme.cookie })).body.items).toEqual([]);
+    expect((await admin().invitations()).body.map((i: any) => i.email)).not.toContain("late@acme.test");
+  });
+
+  test("two administrators demoting each other at once cannot leave the Organization with none", async () => {
+    const second = await join("second@acme.test", "organization-administrator");
+    const first = await memberOf("admin@acme.test");
+    const secondMember = await memberOf("second@acme.test");
+    const results = await Promise.all([as(acme.cookie).setRole(secondMember.id, "member"), as(second).setRole(first.id, "member")]);
+    // One wins; the other finds itself demoted (or, in the other order, finds it would leave none).
+    expect(results.map((r) => r.status).filter((st) => st === 200)).toHaveLength(1);
+    const roles = (await members()).map((m) => m.role);
+    expect(roles.filter((r) => r === "organization-administrator")).toHaveLength(1);
   });
 
   test("a user cannot be a member of an Organization twice, whatever the application checked", async () => {
@@ -351,7 +398,7 @@ describe("races and leftovers", () => {
   });
 
   test("accepting an invitation retires other pending invitations to the same address", async () => {
-    const first = await h.api(org("/invitations"), { cookie: acme.cookie, body: { email: "p@acme.test", role: "member" } });
+    const first = await admin().invite("p@acme.test", "member");
     // A second one that raced the first past the duplicate check.
     const second = crypto.randomUUID();
     await h.pool.query(
@@ -360,8 +407,8 @@ describe("races and leftovers", () => {
       [second, first.body.id],
     );
     const cookie = await h.signUp("p@acme.test", PASSWORD);
-    expect((await h.api(`/api/invitations/${first.body.id}/accept`, { cookie, method: "POST" })).status).toBe(200);
-    expect((await h.api(org("/invitations"), { cookie: acme.cookie })).body.items).toEqual([]);
+    expect((await as(cookie).accept(first.body.id)).status).toBe(200);
+    expect((await admin().invitations()).body.filter((i: any) => i.status === "pending")).toEqual([]);
     expect((await h.pool.query(`select status from invitation where id = $1`, [second])).rows[0].status).toBe("canceled");
   });
 
@@ -374,23 +421,32 @@ describe("races and leftovers", () => {
        values ($1, $2, 'm@acme.test', 'approver', 'pending', now() + interval '1 day', now(), (select id from "user" where email = 'admin@acme.test'))`,
       [stale, acme.orgId],
     );
-    await h.api(org(`/members/${user.id}`), { cookie: acme.cookie, method: "DELETE" });
+    await admin().remove(user.id);
     expect((await h.pool.query(`select status from invitation where id = $1`, [stale])).rows[0].status).toBe("canceled");
-    const event = (await h.api(org("/audit-events"), { cookie: acme.cookie })).body.items.find((e: any) => e.action === "member.removed");
+    const event = (await admin().audit()).find((e: any) => e.action === "member.removed");
     expect(event.detail.canceledInvitationIds).toEqual([stale]);
   });
 });
 
 describe("authorization", () => {
-  test("Better Auth's own organization endpoints are not exposed; they would bypass audit and the removal hook", async () => {
+  test("only the allowlisted Better Auth organization endpoints are served", async () => {
     await join("m@acme.test", "member");
     const target = await memberOf("m@acme.test");
-    const res = await h.api("/api/auth/organization/update-member-role", {
-      cookie: acme.cookie,
-      body: { memberId: target.id, role: "organization-administrator", organizationId: acme.orgId },
-    });
-    expect(res.status).toBe(404);
-    expect((await memberOf("m@acme.test")).role).toBe("member");
+    // `leave` and Organization updates and deletion bypass the platform's hooks or are not offered.
+    for (const [endpoint, body] of [
+      ["leave", { organizationId: acme.orgId }],
+      ["update", { data: { name: "Hijacked" }, organizationId: acme.orgId }],
+      ["delete", { organizationId: acme.orgId }],
+      ["create", { name: "Mine", slug: "mine" }],
+      ["set-active", { organizationId: acme.orgId }],
+      ["create-role", { role: "x", organizationId: acme.orgId }],
+    ] as const) {
+      expect((await h.api(`${BA}/${endpoint}`, { cookie: acme.cookie, body })).status).toBe(404);
+    }
+    expect((await h.api(`${BA}/constructor`, { cookie: acme.cookie, body: {} })).status).toBe(404);
+    expect((await members()).map((m) => m.id)).toContain(target.id);
+    const org = await h.pool.query(`select name from organization where id = $1`, [acme.orgId]);
+    expect(org.rows[0].name).toBe("Org acme");
   });
 
   test("only Organization Administrators hold the administrative permissions", () => {

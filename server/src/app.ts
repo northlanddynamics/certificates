@@ -3,7 +3,6 @@ import { Scalar } from "@scalar/hono-api-reference";
 import { and, asc, eq } from "drizzle-orm";
 import type { Context } from "hono";
 import type { Pool } from "pg";
-import { APIError } from "better-auth/api";
 import { INVITATION_EXPIRES_IN_SECONDS, ORG_ADMIN_ROLE, PLATFORM_OPERATOR_ROLE, createAuth } from "./auth";
 import { listAudit, recordAudit } from "./audit";
 import { createDb } from "./db/client";
@@ -11,7 +10,7 @@ import { invitation, managedCertificate, member, organization } from "./db/schem
 import { createAuthorizer } from "./authorization";
 import { HttpError, OrgParam, errors, isUniqueViolation, json } from "./http";
 import type { Mailer } from "./mailer";
-import { registerOrganizationRoutes } from "./organization-routes";
+import { registerTeamsOverview } from "./teams-overview";
 import { createUnitOfWork } from "./unit-of-work";
 
 export interface AppDeps {
@@ -37,20 +36,23 @@ export function createApp(deps: AppDeps) {
 
   app.onError((err, c) => {
     if (err instanceof HttpError) return c.json({ error: err.message }, err.status);
-    if (err instanceof APIError) {
-      const status = betterAuthStatus(err);
-      if (status) return c.json({ error: err.message }, status);
-    }
-    // A unique index (one membership per user, one Team name per Organization) lost a race or caught a repeat.
-    if (isUniqueViolation(err)) return c.json({ error: "already exists" }, 409);
     console.error(err);
     return c.json({ error: "internal error" }, 500);
   });
 
-  // Organization state (invitations, roles, Teams, removals) changes only through the platform API, where
-  // it is authorized, audited and run through the removal hooks. Better Auth's own organization endpoints
-  // would bypass all three, so they are not exposed.
-  app.all("/api/auth/organization/*", (c) => c.json({ error: "not found" }, 404));
+  // Better Auth's organization endpoints are served as they are, from an allowlist: reads straight from Better
+  // Auth, changes on a transaction with the audit written alongside (see unit-of-work.ts). Anything not listed
+  // is not served. In particular `leave` removes a member without running Better Auth's hooks (no audit, no
+  // removal hook), and updating or deleting an Organization is not offered.
+  app.all("/api/auth/organization/*", async (c) => {
+    const endpoint = new URL(c.req.url).pathname.slice(ORGANIZATION_PATH.length);
+    if (c.req.method === "GET" && ORGANIZATION_READS.has(endpoint)) return auth.handler(c.req.raw);
+    const change = c.req.method === "POST" ? ORGANIZATION_CHANGES.get(endpoint) : undefined;
+    if (!change) return c.json({ error: "not found" }, 404);
+    const session = await auth.api.getSession({ headers: c.req.raw.headers });
+    if (!session) return auth.handler(c.req.raw); // Better Auth's own 401
+    return unitOfWork.handle(session.user, c.req.raw, change);
+  });
   app.on(["GET", "POST"], "/api/auth/*", (c) => auth.handler(c.req.raw));
 
   async function requireUser(c: Context) {
@@ -157,27 +159,6 @@ export function createApp(deps: AppDeps) {
 
   app.openapi(
     createRoute({
-      method: "post",
-      path: "/api/invitations/{id}/accept",
-      tags: ["Identity"],
-      request: { params: z.object({ id: z.string().openapi({ param: { name: "id", in: "path" } }) }) },
-      responses: {
-        200: json(z.object({ organizationId: z.string(), role: z.string() })),
-        ...errors(401, 403, 404, 409),
-      },
-    }),
-    async (c) => {
-      const user = await requireUser(c);
-      const { id } = c.req.valid("param");
-      const { member: joined } = await unitOfWork.run(user, (a) =>
-        a.api.acceptInvitation({ body: { invitationId: id }, headers: c.req.raw.headers }),
-      );
-      return c.json({ organizationId: joined.organizationId, role: joined.role }, 200);
-    },
-  );
-
-  app.openapi(
-    createRoute({
       method: "get",
       path: "/api/me",
       tags: ["Identity"],
@@ -263,7 +244,7 @@ export function createApp(deps: AppDeps) {
     },
   );
 
-  registerOrganizationRoutes({ app, db, auth, unitOfWork, requireUser, authorize });
+  registerTeamsOverview({ app, db, requireUser, authorize });
 
   app.doc("/api/openapi.json", {
     openapi: "3.1.0",
@@ -286,19 +267,19 @@ export function createApp(deps: AppDeps) {
   return { app, auth, db };
 }
 
-/** The HTTP status for a Better Auth error: its own, except that conflicts and missing things say so. */
-function betterAuthStatus(err: APIError): 401 | 403 | 404 | 409 | 400 | null {
-  const code = (err.body as { code?: string } | undefined)?.code ?? "";
-  if (/ALREADY_A_MEMBER|ALREADY_INVITED|ONLY_OWNER|WITHOUT_AN_OWNER/.test(code)) return 409;
-  if (/NOT_FOUND|NOT_A_MEMBER/.test(code)) return 404;
-  switch (err.statusCode) {
-    case 400:
-    case 401:
-    case 403:
-    case 404:
-    case 409:
-      return err.statusCode;
-    default:
-      return null;
-  }
-}
+const ORGANIZATION_PATH = "/api/auth/organization/";
+const ORGANIZATION_READS = new Set(["list-members", "list-invitations", "list-teams", "list-team-members"]);
+/** Each changing endpoint, and whether it may remove or demote an Organization Administrator. */
+const ORGANIZATION_CHANGES = new Map<string, { administrators: boolean }>([
+  ["invite-member", { administrators: false }],
+  ["accept-invitation", { administrators: false }],
+  ["reject-invitation", { administrators: false }],
+  ["cancel-invitation", { administrators: false }],
+  ["update-member-role", { administrators: true }],
+  ["remove-member", { administrators: true }],
+  ["create-team", { administrators: false }],
+  ["update-team", { administrators: false }],
+  ["remove-team", { administrators: false }],
+  ["add-team-member", { administrators: false }],
+  ["remove-team-member", { administrators: false }],
+]);

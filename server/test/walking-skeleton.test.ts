@@ -61,13 +61,14 @@ describe("walking skeleton", () => {
       cookie: operator,
       body: { name: "Acme", slug: "acme", adminEmail: "admin@acme.test" },
     });
-    const url = `/api/invitations/${created.body.invitationId}/accept`;
+    const url = "/api/auth/organization/accept-invitation";
+    const body = { invitationId: created.body.invitationId };
     const wrong = await h.signUp("intruder@evil.test", PASSWORD);
-    expect((await h.api(url, { cookie: wrong, method: "POST" })).status).toBe(403);
+    expect((await h.api(url, { cookie: wrong, body })).status).toBe(403);
 
     const right = await h.signUp("admin@acme.test", PASSWORD);
-    expect((await h.api(url, { cookie: right, method: "POST" })).status).toBe(200);
-    expect((await h.api(url, { cookie: right, method: "POST" })).status).toBe(404); // spent: Better Auth calls it not found
+    expect((await h.api(url, { cookie: right, body })).status).toBe(200);
+    expect((await h.api(url, { cookie: right, body })).status).toBe(400); // spent: Better Auth calls it not found
 
     // Only the one successful acceptance (plus the Organization's creation) was audited.
     const admin = await h.signIn("admin@acme.test", PASSWORD);
@@ -144,7 +145,6 @@ describe("walking skeleton", () => {
     expect(Object.keys(res.body.paths)).toEqual(
       expect.arrayContaining([
         "/api/platform/organizations",
-        "/api/invitations/{id}/accept",
         "/api/me",
         "/api/organizations/{orgId}/managed-certificates",
         "/api/organizations/{orgId}/audit-events",

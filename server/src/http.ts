@@ -22,7 +22,6 @@ export const errors = (...codes: ErrorStatus[]) =>
   );
 
 export const OrgParam = z.object({ orgId: z.string().openapi({ param: { name: "orgId", in: "path" } }) });
-export const pathParam = (name: string) => z.string().openapi({ param: { name, in: "path" } });
 export const json = <T extends z.ZodType>(schema: T, description = "OK") => ({
   description,
   content: { "application/json": { schema } },

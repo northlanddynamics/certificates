@@ -120,9 +120,9 @@ export async function createHarness(): Promise<Harness> {
       });
       if (created.status !== 201) throw new Error(`create organization failed: ${created.status}`);
       const adminCookie = await harness.signUp(adminEmail, PASSWORD);
-      const accepted = await harness.api(`/api/invitations/${created.body.invitationId}/accept`, {
+      const accepted = await harness.api("/api/auth/organization/accept-invitation", {
         cookie: adminCookie,
-        method: "POST",
+        body: { invitationId: created.body.invitationId },
       });
       if (accepted.status !== 200) throw new Error(`accept failed: ${accepted.status}`);
       return { orgId: created.body.id, cookie: await harness.signIn(adminEmail, PASSWORD), invitationId: created.body.invitationId };

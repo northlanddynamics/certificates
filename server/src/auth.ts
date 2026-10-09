@@ -80,6 +80,8 @@ export function createAuth({ db, baseURL, secret, trustedOrigins = [], organizat
         membershipLimit: 10_000,
         invitationLimit: 10_000,
         invitationExpiresIn: INVITATION_EXPIRES_IN_SECONDS,
+        // Deleting an Organization is not a thing the platform offers, and its data (audit log) must outlive it.
+        disableOrganizationDeletion: true,
         // requireEmailVerificationOnInvitation stays off until sign-up verifies email (see ticket 28).
         teams: {
           enabled: true,
