@@ -15,7 +15,7 @@ import type { Tx } from "./db/client";
 import { invitation, member, team, teamMember } from "./db/schema";
 import { HttpError } from "./http";
 import { invitationEmail } from "./invitation-email";
-import type { MemberRemovalHook } from "./member-removal";
+import type { MemberRemovalHook, TeamRemovalHook } from "./member-removal";
 import { ORG_ADMIN_ROLE, isKnownRole, type Permissions } from "./permissions";
 import type { Actor, Change, UnitOfWork } from "./unit-of-work";
 
@@ -59,10 +59,12 @@ export interface OrganizationChangesDeps {
   webURL: string;
   /**
    * Run, in the transaction that removes a user from an Organization, for whatever depends on the user's membership
-   * (Teams are cleaned up by Better Auth itself; Managed Certificate Owners and Subscribers will register here
-   * once they exist). A throwing hook rolls the removal and its Audit Event back.
+   * (Teams are cleaned up by Better Auth itself; Managed Certificate Owners register here, and Subscribers will).
+   * A throwing hook rolls the removal and its Audit Event back.
    */
   memberRemovalHooks?: MemberRemovalHook[];
+  /** Run, in the transaction that deletes a Team and before it is deleted, for whatever refers to the Team. */
+  teamRemovalHooks?: TeamRemovalHook[];
 }
 
 export interface OrganizationChanges {
@@ -83,7 +85,7 @@ class Refused extends Error {
 const refusal = (status: number, error: string) => Response.json({ error }, { status });
 
 export function createOrganizationChanges(deps: OrganizationChangesDeps): OrganizationChanges {
-  const { unitOfWork, auth, authConfig, authorize, webURL, memberRemovalHooks = [] } = deps;
+  const { unitOfWork, auth, authConfig, authorize, webURL, memberRemovalHooks = [], teamRemovalHooks = [] } = deps;
 
   /**
    * `administrators`: the change may remove or demote an Organization Administrator. Better Auth refuses to leave
@@ -99,7 +101,7 @@ export function createOrganizationChanges(deps: OrganizationChangesDeps): Organi
           ...authConfig,
           db: tx,
           organization: {
-            organizationHooks: auditHooks(tx, change, memberRemovalHooks),
+            organizationHooks: auditHooks(tx, change, { member: memberRemovalHooks, team: teamRemovalHooks }),
             sendInvitationEmail: async ({ id, email, organization }) =>
               change.mail(invitationEmail(webURL, { to: email, invitationId: id, organizationName: organization.name })),
           },
@@ -174,7 +176,7 @@ function requireKnownRoles(role: string | string[] | undefined) {
 }
 
 /** Better Auth organization hooks: the platform's rules and an Audit Event for each change. */
-function auditHooks(tx: Tx, change: Change, removalHooks: MemberRemovalHook[]) {
+function auditHooks(tx: Tx, change: Change, removalHooks: { member: MemberRemovalHook[]; team: TeamRemovalHook[] }) {
   const record = (
     organizationId: string,
     action: AuditAction,
@@ -256,7 +258,7 @@ function auditHooks(tx: Tx, change: Change, removalHooks: MemberRemovalHook[]) {
     afterRemoveMember: async ({ member: removed, user, organization }) => {
       // Better Auth has already removed the user from the Organization's Teams. Anything else that depends on
       // the membership goes here, in the same transaction.
-      for (const hook of removalHooks) await hook(tx, { organizationId: organization.id, userId: removed.userId });
+      for (const hook of removalHooks.member) await hook(tx, { organizationId: organization.id, userId: removed.userId }, change);
       // An invitation still pending for this address would otherwise let them back in unnoticed.
       const canceled = await tx
         .update(invitation)
@@ -299,6 +301,9 @@ function auditHooks(tx: Tx, change: Change, removalHooks: MemberRemovalHook[]) {
     afterUpdateTeam: async ({ team: t, organization }) => {
       if (!t || t.name === teamNameBeforeRename) return;
       await record(organization.id, "team.renamed", { type: "team", id: t.id }, { from: teamNameBeforeRename, to: t.name });
+    },
+    beforeDeleteTeam: async ({ team: t, organization }) => {
+      for (const hook of removalHooks.team) await hook(tx, { organizationId: organization.id, teamId: t.id, teamName: t.name }, change);
     },
     afterDeleteTeam: async ({ team: t, organization }) => {
       await record(organization.id, "team.deleted", { type: "team", id: t.id }, { name: t.name });

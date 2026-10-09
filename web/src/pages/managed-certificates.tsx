@@ -3,7 +3,18 @@ import { useState, type FormEvent } from "react";
 import { Button } from "@/components/ui/button";
 import { Label } from "@/components/ui/label";
 import { Textarea } from "@/components/ui/textarea";
-import { api, can, type ManagedCertificate, type Me } from "@/lib/api";
+import {
+  api,
+  can,
+  ownerFromKey,
+  ownerKey,
+  ownerLabel,
+  type HistoryEntry,
+  type InventoryFilters,
+  type ManagedCertificate,
+  type Me,
+  type OwnerRef,
+} from "@/lib/api";
 
 const KEY_ALGORITHMS = [
   ["ecdsa-p256", "ECDSA P-256"],
@@ -23,11 +34,20 @@ function status(m: ManagedCertificate) {
   return m.currentCertificate ? `Issued, valid until ${new Date(m.currentCertificate.notAfter).toLocaleDateString()}` : "Not issued";
 }
 
+const FILTERS: [keyof Omit<InventoryFilters, "keyCustody">, string][] = [
+  ["expiringSoon", "Expiring soon"],
+  ["pendingApproval", "Awaiting Approval"],
+  ["noOwners", "No Owners"],
+  ["archived", "Archived"],
+];
+
 export function ManagedCertificates({ org }: { org: Me["organizations"][number] }) {
   const queryClient = useQueryClient();
+  const [filters, setFilters] = useState<InventoryFilters>({});
+  const me = useQuery({ queryKey: ["me"], queryFn: api.me });
   const inventory = useQuery({
-    queryKey: ["inventory", org.id],
-    queryFn: () => api.managedCertificates(org.id),
+    queryKey: ["inventory", org.id, filters],
+    queryFn: () => api.managedCertificates(org.id, filters),
     // Issuance runs in the background: look again until none is running.
     refetchInterval: (query) => (query.state.data?.items.some((m) => m.issuance?.status === "running") ? 2000 : false),
   });
@@ -41,7 +61,31 @@ export function ManagedCertificates({ org }: { org: Me["organizations"][number] 
 
   return (
     <div className="flex flex-col gap-4">
-      {inventory.data && items.length === 0 && <p className="text-muted-foreground">No Managed Certificates yet.</p>}
+      <fieldset className="flex flex-wrap items-center gap-x-4 gap-y-2 text-sm">
+        <legend className="sr-only">Filter the inventory</legend>
+        {FILTERS.map(([name, label]) => (
+          <label key={name} className="flex items-center gap-1">
+            <input type="checkbox" checked={Boolean(filters[name])} onChange={(e) => setFilters({ ...filters, [name]: e.target.checked || undefined })} />
+            {label}
+          </label>
+        ))}
+        <label className="flex items-center gap-1">
+          Key Custody
+          <select
+            className={selectClass}
+            value={filters.keyCustody ?? ""}
+            onChange={(e) => setFilters({ ...filters, keyCustody: (e.target.value || undefined) as InventoryFilters["keyCustody"] })}
+          >
+            <option value="">Any</option>
+            <option value="owner">Owner</option>
+          </select>
+        </label>
+      </fieldset>
+      {inventory.data && items.length === 0 && (
+        <p className="text-muted-foreground">
+          {Object.values(filters).some(Boolean) ? "No Managed Certificates match." : can(org, "managedCertificate", "read") ? "No Managed Certificates yet." : "You do not own any Managed Certificates yet."}
+        </p>
+      )}
       <ul className="flex flex-col gap-3 text-sm">
         {items.map((m) => (
           <li key={m.id} className="flex flex-col gap-1 rounded-md border p-3">
@@ -59,6 +103,7 @@ export function ManagedCertificates({ org }: { org: Me["organizations"][number] 
                 {m.issuance.failure.message}
               </span>
             )}
+            <Owners org={org} m={m} userId={me.data?.user.id} onChanged={refresh} />
             <span className="flex gap-3">
               {m.currentCertificate && (
                 <a className="underline" href={api.certificateDownloadUrl(org.id, m.id)}>
@@ -71,6 +116,7 @@ export function ManagedCertificates({ org }: { org: Me["organizations"][number] 
                 </Button>
               )}
             </span>
+            <History org={org} m={m} />
           </li>
         ))}
       </ul>
@@ -80,6 +126,90 @@ export function ManagedCertificates({ org }: { org: Me["organizations"][number] 
         <NewManagedCertificate org={org} onCreated={refresh} />
       )}
     </div>
+  );
+}
+
+/** Who owns a Managed Certificate, and, for those who may change that, the means to. */
+function Owners({ org, m, userId, onChanged }: { org: Me["organizations"][number]; m: ManagedCertificate; userId?: string; onChanged: () => void }) {
+  // The server decides; this only keeps the controls from those who surely may not (a Team's members may, too).
+  const mayChange = can(org, "managedCertificate", "changeOwners") || m.owners.some((o) => o.type === "user" && o.id === userId);
+  const add = useMutation({ mutationFn: (owner: OwnerRef) => api.addOwner(org.id, m.id, owner), onSuccess: onChanged });
+  const remove = useMutation({ mutationFn: (owner: OwnerRef) => api.removeOwner(org.id, m.id, owner), onSuccess: onChanged });
+  const people = useQuery({ queryKey: ["members", org.id], queryFn: () => api.members(org.id), enabled: mayChange });
+  const teams = useQuery({ queryKey: ["teams", org.id], queryFn: () => api.teams(org.id), enabled: mayChange });
+  const taken = new Set(m.owners.map(ownerKey));
+  const [choice, setChoice] = useState("");
+  const error = add.error ?? remove.error;
+
+  return (
+    <div className="flex flex-col gap-1">
+      <span className="flex flex-wrap items-center gap-x-3 gap-y-1">
+        <span className="text-muted-foreground">Owners:</span>
+        {m.owners.length === 0 && <span>none</span>}
+        {m.owners.map((o) => (
+          <span key={ownerKey(o)} className="flex items-center gap-1">
+            {ownerLabel(o)}
+            {mayChange && (
+              <Button variant="link" size="sm" className="h-auto p-0" aria-label={`Remove ${ownerLabel(o)} as an Owner`} disabled={remove.isPending} onClick={() => remove.mutate(o)}>
+                Remove
+              </Button>
+            )}
+          </span>
+        ))}
+      </span>
+      {mayChange && (
+        <form
+          className="flex items-center gap-2"
+          onSubmit={(e: FormEvent) => {
+            e.preventDefault();
+            if (choice) add.mutate(ownerFromKey(choice), { onSuccess: () => setChoice("") });
+          }}
+        >
+          <select aria-label={`Add an Owner of ${m.names.join(", ")}`} className={selectClass} value={choice} onChange={(e) => setChoice(e.target.value)}>
+            <option value="">Add an Owner…</option>
+            {teams.data?.items.filter((t) => !taken.has(`team:${t.id}`)).map((t) => (
+              <option key={t.id} value={`team:${t.id}`}>
+                {t.name} (Team)
+              </option>
+            ))}
+            {people.data?.items.filter((p) => !taken.has(`user:${p.userId}`)).map((p) => (
+              <option key={p.userId} value={`user:${p.userId}`}>
+                {p.email}
+              </option>
+            ))}
+          </select>
+          <Button type="submit" size="sm" variant="outline" disabled={!choice || add.isPending}>
+            Add
+          </Button>
+        </form>
+      )}
+      {error && <span className="text-destructive">{error.message}</span>}
+    </div>
+  );
+}
+
+const HISTORY_WORDS = { created: "Created", proposed: "Proposed", approved: "Approved", rejected: "Rejected" } as const;
+const historyLine = (e: HistoryEntry) =>
+  e.kind === "certificate_issued"
+    ? `Certificate issued, valid until ${new Date(e.certificate.notAfter).toLocaleDateString()} (${e.certificate.fingerprint.slice(0, 16)}…)`
+    : `${HISTORY_WORDS[e.kind]}${e.actor ? ` by ${e.actor.email}` : ""}${e.reason ? `: ${e.reason}` : ""}`;
+
+/** How a Managed Certificate got to where it is: its Approvals and Certificates, oldest first; fetched when opened. */
+function History({ org, m }: { org: Me["organizations"][number]; m: ManagedCertificate }) {
+  const [open, setOpen] = useState(false);
+  const history = useQuery({ queryKey: ["history", org.id, m.id, m.currentCertificate?.fingerprint, m.approval.status], queryFn: () => api.history(org.id, m.id), enabled: open });
+  return (
+    <details onToggle={(e) => setOpen(e.currentTarget.open)}>
+      <summary className="cursor-pointer text-muted-foreground">History</summary>
+      <ol className="mt-1 flex flex-col gap-1">
+        {history.data?.items.map((e, i) => (
+          <li key={`${e.at}-${i}`}>
+            <span className="text-muted-foreground">{new Date(e.at).toLocaleString()}</span> {historyLine(e)}
+          </li>
+        ))}
+        {history.error && <li className="text-destructive">{history.error.message}</li>}
+      </ol>
+    </details>
   );
 }
 
@@ -138,12 +268,23 @@ function NewManagedCertificate({ org, onCreated }: { org: Me["organizations"][nu
   const [keyAlgorithm, setKeyAlgorithm] = useState("ecdsa-p256");
   const [environment, setEnvironment] = useState<"staging" | "production">("staging");
   const [csr, setCsr] = useState("");
+  const [owners, setOwners] = useState<string[]>([]);
+  const people = useQuery({ queryKey: ["members", org.id], queryFn: () => api.members(org.id) });
+  const teams = useQuery({ queryKey: ["teams", org.id], queryFn: () => api.teams(org.id) });
   const direct = can(org, "managedCertificate", "create");
   const create = useMutation({
-    mutationFn: () => api.createManagedCertificate(org.id, { names: names.split(/[\s,]+/).filter(Boolean), keyAlgorithm, csr, environment }),
+    mutationFn: () =>
+      api.createManagedCertificate(org.id, {
+        names: names.split(/[\s,]+/).filter(Boolean),
+        keyAlgorithm,
+        csr,
+        environment,
+        owners: owners.map(ownerFromKey),
+      }),
     onSuccess: () => {
       setNames("");
       setCsr("");
+      setOwners([]);
       onCreated();
     },
   });
@@ -189,6 +330,27 @@ function NewManagedCertificate({ org, onCreated }: { org: Me["organizations"][nu
       <div className="flex flex-col gap-2">
         <Label htmlFor={`csr-${org.id}`}>CSR (PEM, for a key you keep; it must ask for exactly these names)</Label>
         <Textarea id={`csr-${org.id}`} className="font-mono text-xs" rows={6} value={csr} onChange={(e) => setCsr(e.target.value)} required />
+      </div>
+      <div className="flex flex-col gap-2">
+        <Label htmlFor={`owners-${org.id}`}>Owners (optional; the users and Teams accountable for it)</Label>
+        <select
+          id={`owners-${org.id}`}
+          multiple
+          className="rounded-md border border-input bg-transparent px-2 py-1 text-sm"
+          value={owners}
+          onChange={(e) => setOwners([...e.currentTarget.selectedOptions].map((o) => o.value))}
+        >
+          {teams.data?.items.map((t) => (
+            <option key={t.id} value={`team:${t.id}`}>
+              {t.name} (Team)
+            </option>
+          ))}
+          {people.data?.items.map((p) => (
+            <option key={p.userId} value={`user:${p.userId}`}>
+              {p.email}
+            </option>
+          ))}
+        </select>
       </div>
       {create.error && <p className="text-sm text-destructive">{create.error.message}</p>}
       <Button type="submit" disabled={create.isPending}>

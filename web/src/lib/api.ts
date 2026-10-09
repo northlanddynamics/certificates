@@ -64,11 +64,29 @@ export interface Approval {
   decidedAt: string | null;
   reason: string | null;
 }
+export type Owner = { type: "user"; id: string; email: string } | { type: "team"; id: string; name: string };
+export type OwnerRef = { type: Owner["type"]; id: string };
+/** An owner as one string, for a form control's value, and back. */
+export const ownerKey = (o: OwnerRef) => `${o.type}:${o.id}`;
+export const ownerFromKey = (key: string): OwnerRef => ({ type: key.startsWith("team:") ? "team" : "user", id: key.slice(key.indexOf(":") + 1) });
+export const ownerLabel = (o: Owner) => (o.type === "user" ? o.email : `${o.name} (Team)`);
+/** The inventory's filters; each narrows what is listed, and they combine. */
+export interface InventoryFilters {
+  expiringSoon?: boolean;
+  pendingApproval?: boolean;
+  noOwners?: boolean;
+  archived?: boolean;
+  keyCustody?: "owner";
+}
+export type HistoryEntry =
+  | { kind: "created" | "proposed" | "approved" | "rejected"; at: string; actor: { id: string; email: string } | null; reason: string | null }
+  | { kind: "certificate_issued"; at: string; certificate: { fingerprint: string; notBefore: string; notAfter: string; names: string[] } };
 export interface ManagedCertificate {
   id: string;
   names: string[];
   keyAlgorithm: string;
   environment: "staging" | "production";
+  owners: Owner[];
   approval: Approval;
   issuance: Issuance | null;
   currentCertificate: { fingerprint: string; notAfter: string } | null;
@@ -78,6 +96,7 @@ export interface NewManagedCertificate {
   keyAlgorithm: string;
   csr: string;
   environment: "staging" | "production";
+  owners?: OwnerRef[];
 }
 export interface Team {
   id: string;
@@ -95,7 +114,15 @@ export const api = {
     call("/api/auth/sign-up/email", { body: { email, password, name } }),
   signOut: () => call("/api/auth/sign-out", { method: "POST", body: {} }),
   acceptInvitation: (invitationId: string) => call(`${BA}/accept-invitation`, { body: { invitationId } }),
-  managedCertificates: (orgId: string) => call<{ items: ManagedCertificate[] }>(`/api/organizations/${orgId}/managed-certificates`),
+  managedCertificates: (orgId: string, filters: InventoryFilters = {}) => {
+    const query = new URLSearchParams(Object.entries(filters).filter(([, v]) => v).map(([k, v]) => [k, v === true ? "true" : String(v)]));
+    return call<{ items: ManagedCertificate[] }>(`/api/organizations/${orgId}/managed-certificates${query.size ? `?${query}` : ""}`);
+  },
+  addOwner: (orgId: string, id: string, owner: OwnerRef) =>
+    call<ManagedCertificate>(`/api/organizations/${orgId}/managed-certificates/${id}/owners`, { body: owner }),
+  removeOwner: (orgId: string, id: string, owner: OwnerRef) =>
+    call<ManagedCertificate>(`/api/organizations/${orgId}/managed-certificates/${id}/owners/${owner.type}/${encodeURIComponent(owner.id)}`, { method: "DELETE" }),
+  history: (orgId: string, id: string) => call<{ items: HistoryEntry[] }>(`/api/organizations/${orgId}/managed-certificates/${id}/history`),
   createManagedCertificate: (orgId: string, body: NewManagedCertificate) =>
     call<ManagedCertificate>(`/api/organizations/${orgId}/managed-certificates`, { body }),
   approvalQueue: (orgId: string) => call<{ items: ManagedCertificate[] }>(`/api/organizations/${orgId}/approvals`),

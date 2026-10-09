@@ -26,6 +26,8 @@ export type AuditAction =
   | "managed_certificate.proposed"
   | "managed_certificate.approved"
   | "managed_certificate.rejected"
+  | "managed_certificate.owner_added"
+  | "managed_certificate.owner_removed"
   | "issuance.started"
   | "issuance.succeeded"
   | "issuance.failed";

@@ -15,7 +15,7 @@ A named group of users within an Organization.
 _Avoid_: group, department
 
 **Owner**:
-An optional user or Team accountable for a Managed Certificate, who can renew it. A Managed Certificate may have none.
+An optional user or Team accountable for a Managed Certificate, who can renew it, change who its Owners are, and, if a Member, see it: a Member sees only the Managed Certificates they own (directly or through a Team) or proposed, while Approvers and Organization Administrators see them all. A Managed Certificate may have none. Whoever leaves the Organization, or the Team that is deleted, stops being one.
 _Avoid_: contact, assignee, requester (when meaning the ongoing responsible party)
 
 **Platform Operator**:

@@ -1,22 +1,29 @@
 // An Organization's Managed Certificates: created by an Organization Administrator with names, a key algorithm and a
 // CSR (Key Custody: Owner), issued in the background (issuance.ts), and downloaded once a Certificate exists. The
 // platform never sees the private key (ADR 0002): the CSR proves the Owner holds it. Anyone else proposes one instead;
-// it waits in the Approval queue (approval.ts) and its Issuance starts when an Approver approves it.
+// it waits in the Approval queue (approval.ts) and its Issuance starts when an Approver approves it. It may have
+// Owners (owners.ts), who with Approvers and Organization Administrators are the ones who see it: an Approver or an
+// Administrator sees them all, a Member only what they own or proposed.
 import { OpenAPIHono, createRoute, z } from "@hono/zod-openapi";
 import type { Context } from "hono";
-import { and, asc, desc, eq, inArray, ne } from "drizzle-orm";
+import { and, asc, desc, eq, inArray, ne, or, type SQL } from "drizzle-orm";
 import { APPROVAL_STATUSES } from "./approval";
 import type { Authorizer } from "./authorization";
 import { ACME_ENVIRONMENTS } from "./certificate-authority";
 import { CsrError, KEY_ALGORITHMS, parseCsr } from "./csr";
 import type { Db } from "./db/client";
 import { certificate, issuance, managedCertificate } from "./db/schema";
+import { HISTORY_KINDS, historyOf } from "./history";
 import { HttpError, OrgParam, errors, isUniqueViolation, json } from "./http";
+import { InventoryQuery, inventoryCondition } from "./inventory-filters";
 import { ISSUANCE_FAILURE_CODES } from "./issuance-failure";
 import type { Issuances } from "./issuance";
 import { MAX_NAMES, normalizeNames, sameNames } from "./names";
+import { OwnerRef, OWNER_TYPES, addOwner, isOwner, ownedByUser, ownersOf, removeOwner } from "./owners";
 import { roleCan } from "./permissions";
 import type { Actor, UnitOfWork } from "./unit-of-work";
+
+const MAX_OWNERS = 50;
 
 const ManagedCertificateParams = OrgParam.extend({ id: z.string().openapi({ param: { name: "id", in: "path" } }) });
 
@@ -55,6 +62,11 @@ const Approval = z.object({
   reason: z.string().nullable().openapi({ description: "What the Approver said; always present for a rejection." }),
 });
 
+const Owner = z.discriminatedUnion("type", [
+  z.object({ type: z.literal("user"), id: z.string(), email: z.string() }),
+  z.object({ type: z.literal("team"), id: z.string(), name: z.string() }),
+]);
+
 const ManagedCertificate = z.object({
   id: z.string(),
   names: z.array(z.string()),
@@ -62,10 +74,21 @@ const ManagedCertificate = z.object({
   keyCustody: z.enum(["owner"]),
   environment: z.enum(ACME_ENVIRONMENTS),
   createdAt: z.string(),
+  owners: z.array(Owner).openapi({ description: "Users and Teams accountable for it, in the order they were added; none is allowed." }),
   approval: Approval,
   issuance: Issuance.nullable().openapi({ description: "The latest attempt to issue a Certificate." }),
   currentCertificate: Certificate.nullable().openapi({ description: "The most recently issued Certificate." }),
 });
+
+const HistoryEntry = z.discriminatedUnion("kind", [
+  z.object({
+    kind: z.enum(Object.values(HISTORY_KINDS) as [string, ...string[]]),
+    at: z.string(),
+    actor: Person.nullable(),
+    reason: z.string().nullable().openapi({ description: "What the Approver said, for a decision." }),
+  }),
+  z.object({ kind: z.literal("certificate_issued"), at: z.string(), certificate: Certificate }),
+]);
 
 type ManagedCertificateRow = typeof managedCertificate.$inferSelect;
 const toIssuance = (row: typeof issuance.$inferSelect) => ({
@@ -96,8 +119,9 @@ export function registerManagedCertificates(ctx: {
   authorize: Authorizer["authorize"];
   unitOfWork: UnitOfWork;
   issuances: Issuances;
+  clock: () => Date;
 }) {
-  const { app, db, requireUser, authorize, unitOfWork, issuances } = ctx;
+  const { app, db, requireUser, authorize, unitOfWork, issuances, clock } = ctx;
 
   async function findManagedCertificate(orgId: string, id: string) {
     // Not a UUID can't be a Managed Certificate; asking Postgres would only raise a type error.
@@ -109,14 +133,34 @@ export function registerManagedCertificates(ctx: {
   }
 
   /**
-   * The Managed Certificate the caller may see: any in the Organization for those who may read them, and for the
-   * rest only what they proposed themselves (a proposer follows their proposal through Approval and Issuance).
+   * Which Managed Certificates of the Organization the caller sees: all of them for those who may read them, and for
+   * the rest what they own (directly or through a Team) and what they proposed themselves (a proposer follows their
+   * proposal through Approval and Issuance).
    */
+  const visibleTo = (role: string, actor: Actor, orgId: string): SQL => {
+    const ofOrganization = eq(managedCertificate.organizationId, orgId);
+    if (roleCan(role, { managedCertificate: ["read"] })) return ofOrganization;
+    return and(ofOrganization, or(eq(managedCertificate.proposedById, actor.id), ownedByUser(orgId, actor.id)))!;
+  };
+
+  /** The Managed Certificate the caller may see. One they may not is refused (403) whether or not it exists. */
   async function findReadable(actor: Actor, orgId: string, id: string) {
     const { role } = await authorize(actor, orgId);
     if (roleCan(role, { managedCertificate: ["read"] })) return findManagedCertificate(orgId, id);
-    const mc = await findManagedCertificate(orgId, id).catch(() => null);
-    if (!mc || mc.proposedById !== actor.id) throw new HttpError(403, "not permitted");
+    const [row] = z.uuid().safeParse(id).success
+      ? await db.select().from(managedCertificate).where(and(eq(managedCertificate.id, id), visibleTo(role, actor, orgId)))
+      : [];
+    if (!row) throw new HttpError(403, "not permitted");
+    return row;
+  }
+
+  /** The Managed Certificate the caller may change the Owners of: Organization Administrators, and its Owners. */
+  async function findOwnable(actor: Actor, orgId: string, id: string) {
+    const mc = await findReadable(actor, orgId, id);
+    const { role } = await authorize(actor, orgId);
+    if (!roleCan(role, { managedCertificate: ["changeOwners"] }) && !(await isOwner(db, orgId, mc.id, actor.id))) {
+      throw new HttpError(403, "only an Owner or an Organization Administrator may change a Managed Certificate's Owners");
+    }
     return mc;
   }
 
@@ -142,6 +186,7 @@ export function registerManagedCertificates(ctx: {
       .from(certificate)
       .where(inArray(certificate.managedCertificateId, ids))
       .orderBy(certificate.managedCertificateId, desc(certificate.createdAt), desc(certificate.id));
+    const owners = await ownersOf(db, ids);
     return rows.map((row) => {
       const latest = latestIssuances.find((i) => i.managedCertificateId === row.id);
       const current = currentCertificates.find((c) => c.managedCertificateId === row.id);
@@ -152,6 +197,7 @@ export function registerManagedCertificates(ctx: {
         keyCustody: row.keyCustody,
         environment: row.environment,
         createdAt: row.createdAt.toISOString(),
+        owners: owners.get(row.id) ?? [],
         approval: {
           status: row.approvalStatus,
           proposedBy: row.proposedById && row.proposedByEmail ? { id: row.proposedById, email: row.proposedByEmail } : null,
@@ -170,21 +216,21 @@ export function registerManagedCertificates(ctx: {
       method: "get",
       path: "/api/organizations/{orgId}/managed-certificates",
       tags: ["Managed Certificates"],
-      summary: "The Managed Certificates the caller may see",
+      summary: "The inventory: the Managed Certificates the caller may see",
       description:
-        "Everyone in the Organization may ask; those who may not read Managed Certificates are shown only the ones they proposed.",
-      request: { params: OrgParam },
-      responses: { 200: json(z.object({ items: z.array(ManagedCertificate) })), ...errors(401, 404) },
+        "Everyone in the Organization may ask. Organization Administrators and Approvers see every Managed Certificate; anyone else sees those they own, directly or through a Team, and those they proposed. " +
+        "Archived ones are left out unless `archived` is given. The filters combine, and narrow what the caller sees.",
+      request: { params: OrgParam, query: InventoryQuery },
+      responses: { 200: json(z.object({ items: z.array(ManagedCertificate) })), ...errors(400, 401, 404) },
     }),
     async (c) => {
       const { orgId } = c.req.valid("param");
       const actor = await requireUser(c);
       const { role } = await authorize(actor, orgId);
-      const ofOrganization = eq(managedCertificate.organizationId, orgId);
       const rows = await db
         .select()
         .from(managedCertificate)
-        .where(roleCan(role, { managedCertificate: ["read"] }) ? ofOrganization : and(ofOrganization, eq(managedCertificate.proposedById, actor.id)))
+        .where(and(visibleTo(role, actor, orgId), inventoryCondition(c.req.valid("query"), clock())))
         .orderBy(asc(managedCertificate.createdAt), asc(managedCertificate.id));
       return c.json({ items: await withState(rows) }, 200);
     },
@@ -211,6 +257,7 @@ export function registerManagedCertificates(ctx: {
                 keyAlgorithm: z.enum(KEY_ALGORITHMS),
                 csr: z.string().min(1).openapi({ description: "PEM." }),
                 environment: z.enum(ACME_ENVIRONMENTS).default("staging").openapi({ description: "Which of the Organization's ACME accounts to issue through." }),
+                owners: z.array(OwnerRef).max(MAX_OWNERS).default([]).openapi({ description: "Users and Teams of the Organization accountable for it; none is allowed." }),
               }),
             },
           },
@@ -259,6 +306,8 @@ export function registerManagedCertificates(ctx: {
           target: { type: "managed_certificate", id: row!.id },
           detail: { names: normalized.names, keyAlgorithm: body.keyAlgorithm, keyCustody: "owner", environment: body.environment, csrFingerprint: csr.fingerprint },
         });
+        // Whoever creates or proposes may name the Owners at the same time; each is audited as added (naming one twice adds it once).
+        for (const ref of body.owners) await addOwner(tx, change, orgId, row!.id, ref);
         // A proposal is issued only once approved.
         return { row: row!, issuanceId: needsApproval ? null : await issuances.begin(tx, change, actor, row!) };
       });
@@ -309,6 +358,68 @@ export function registerManagedCertificates(ctx: {
       issuances.start(issuanceId);
       const [row] = await db.select().from(issuance).where(eq(issuance.id, issuanceId));
       return c.json(toIssuance(row!), 202);
+    },
+  );
+
+  app.openapi(
+    createRoute({
+      method: "post",
+      path: "/api/organizations/{orgId}/managed-certificates/{id}/owners",
+      tags: ["Owners"],
+      summary: "Add an Owner: a user or a Team of the Organization",
+      description: "Organization Administrators and the Managed Certificate's own Owners may. Naming one who already is an Owner changes nothing.",
+      request: { params: ManagedCertificateParams, body: { content: { "application/json": { schema: OwnerRef } } } },
+      responses: { 200: json(ManagedCertificate, "The Managed Certificate with its Owners"), ...errors(400, 401, 403, 404, 422) },
+    }),
+    async (c) => {
+      const { orgId, id } = c.req.valid("param");
+      const ref = c.req.valid("json");
+      const actor = await requireUser(c);
+      const mc = await findOwnable(actor, orgId, id);
+      await unitOfWork.run(actor, (tx, change) => addOwner(tx, change, orgId, mc.id, ref));
+      return c.json((await withState([mc]))[0]!, 200);
+    },
+  );
+
+  app.openapi(
+    createRoute({
+      method: "delete",
+      path: "/api/organizations/{orgId}/managed-certificates/{id}/owners/{type}/{ownerId}",
+      tags: ["Owners"],
+      summary: "Remove an Owner",
+      description: "Organization Administrators and the Managed Certificate's own Owners may. It may be left with none.",
+      request: {
+        params: ManagedCertificateParams.extend({
+          type: z.enum(OWNER_TYPES).openapi({ param: { name: "type", in: "path" } }),
+          ownerId: z.string().openapi({ param: { name: "ownerId", in: "path" } }),
+        }),
+      },
+      responses: { 200: json(ManagedCertificate, "The Managed Certificate with its Owners"), ...errors(400, 401, 403, 404) },
+    }),
+    async (c) => {
+      const { orgId, id, type, ownerId } = c.req.valid("param");
+      const actor = await requireUser(c);
+      const mc = await findOwnable(actor, orgId, id);
+      await unitOfWork.run(actor, (tx, change) => removeOwner(tx, change, orgId, mc.id, { type, id: ownerId }));
+      return c.json((await withState([mc]))[0]!, 200);
+    },
+  );
+
+  app.openapi(
+    createRoute({
+      method: "get",
+      path: "/api/organizations/{orgId}/managed-certificates/{id}/history",
+      tags: ["Managed Certificates"],
+      summary: "How the Managed Certificate got to its current state, oldest first",
+      description: "Its creation or proposal, its Approvals and the Certificates issued for it.",
+      request: { params: ManagedCertificateParams },
+      responses: { 200: json(z.object({ items: z.array(HistoryEntry) })), ...errors(401, 403, 404) },
+    }),
+    async (c) => {
+      const { orgId, id } = c.req.valid("param");
+      const mc = await findReadable(await requireUser(c), orgId, id);
+      const entries = await historyOf(db, orgId, mc.id);
+      return c.json({ items: entries.map((e) => (e.kind === "certificate_issued" ? { ...e, certificate: toCertificate(e.certificate) } : e)) }, 200);
     },
   );
 

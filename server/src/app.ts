@@ -18,6 +18,7 @@ import type { Kms } from "./kms";
 import { registerManagedCertificates } from "./managed-certificates";
 import type { Mailer } from "./mailer";
 import type { MemberRemovalHook } from "./member-removal";
+import { removeTeamFromOwners, removeUserFromOwners } from "./owners";
 import { createOrganizationChanges } from "./organization-changes";
 import { createOrganizations } from "./organizations";
 import { ROLE_NAMES, permissionsOf } from "./permissions";
@@ -58,7 +59,14 @@ export function createApp(deps: AppDeps) {
     authConfig,
     authorize,
     webURL,
-    memberRemovalHooks: deps.memberRemovalHooks,
+    memberRemovalHooks: [
+      removeUserFromOwners,
+      // The host's own (a test adds one while the app runs), so they are looked at when a member is removed.
+      async (tx, removed, change) => {
+        for (const hook of deps.memberRemovalHooks ?? []) await hook(tx, removed, change);
+      },
+    ],
+    teamRemovalHooks: [removeTeamFromOwners],
   });
   const platformOrganizations = createOrganizations({ unitOfWork, webURL });
   const app = new OpenAPIHono();
@@ -218,7 +226,7 @@ export function createApp(deps: AppDeps) {
   registerDnsProviders({ app, db, requireUser, authorize, unitOfWork, secrets, dnsProviders });
   const dcv = createDcv(dnsProviders, { resolver: createTxtResolver(), ...DEFAULT_DCV_CONFIG, ...deps.dcv });
   const issuances = createIssuances({ db, unitOfWork, certificateAuthority: deps.certificateAuthority, dcv, secrets });
-  registerManagedCertificates({ app, db, requireUser, authorize, unitOfWork, issuances });
+  registerManagedCertificates({ app, db, requireUser, authorize, unitOfWork, issuances, clock });
 
   app.doc("/api/openapi.json", {
     openapi: "3.1.0",

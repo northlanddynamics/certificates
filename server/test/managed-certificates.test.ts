@@ -271,20 +271,29 @@ async function join(email: string, role: string, org = acmeOrg) {
 }
 
 describe("who may create and see Managed Certificates", () => {
-  test("Members and Approvers can only propose, and see nothing of the Organization's Managed Certificates", async () => {
+  test("a Member can only propose, and sees nothing of the Organization's Managed Certificates they do not own", async () => {
     await readyToIssue();
     const created = await admin().create(await request([host()]));
     await ended(created.body.id);
-    for (const role of ["member", "approver"]) {
-      const cookie = await join(`${role}@acme.test`, role);
-      const who = certs(cookie, acmeOrg.orgId);
-      expect(await who.list().then((r) => [r.status, r.body.items])).toEqual([200, []]);
-      expect((await who.get(created.body.id)).status).toBe(403);
-      expect((await who.certificates(created.body.id)).status).toBe(403);
-      expect((await who.download(created.body.id)).status).toBe(403);
-      expect((await who.retry(created.body.id)).status).toBe(403);
-    }
+    const cookie = await join("member@acme.test", "member");
+    const who = certs(cookie, acmeOrg.orgId);
+    expect(await who.list().then((r) => [r.status, r.body.items])).toEqual([200, []]);
+    expect((await who.get(created.body.id)).status).toBe(403);
+    expect((await who.certificates(created.body.id)).status).toBe(403);
+    expect((await who.download(created.body.id)).status).toBe(403);
+    expect((await who.retry(created.body.id)).status).toBe(403);
     expect((await admin().list()).body.items).toHaveLength(1);
+  });
+
+  test("an Approver sees every Managed Certificate, but cannot issue (owners-visibility.test.ts covers visibility)", async () => {
+    await readyToIssue();
+    const created = await admin().create(await request([host()]));
+    await ended(created.body.id);
+    const who = certs(await join("approver@acme.test", "approver"), acmeOrg.orgId);
+    expect((await who.list()).body.items).toHaveLength(1);
+    expect((await who.get(created.body.id)).status).toBe(200);
+    expect((await who.download(created.body.id)).status).toBe(200);
+    expect((await who.retry(created.body.id)).status).toBe(403);
   });
 
   test("an Organization never sees another's Managed Certificates, and a stranger sees nothing of the Organization", async () => {
@@ -378,7 +387,7 @@ describe("Approval", () => {
     const own = await propose(approver);
     expect(await queued(approver)).toEqual([first.id, second.id]);
     expect(await queued(acmeOrg.cookie)).toEqual([first.id, second.id, own.id]);
-    expect((await certs(approver, acmeOrg.orgId).list()).body.items.map((i: any) => i.id)).toEqual([own.id]);
+    expect((await certs(approver, acmeOrg.orgId).list()).body.items.map((i: any) => i.id)).toEqual([first.id, second.id, own.id]);
     expect((await queue(member)).status).toBe(403);
     expect((await queue(globex.cookie, acmeOrg.orgId)).status).toBe(404);
   });
@@ -512,7 +521,7 @@ describe("Approval", () => {
   test("what each role may do is reported by /api/me", async () => {
     const me = async (cookie: string) => (await h.api("/api/me", { cookie })).body.organizations[0].permissions;
     expect(await me(member)).toEqual({ managedCertificate: ["propose"] });
-    expect(await me(approver)).toEqual({ managedCertificate: ["propose"], approval: ["read", "decide"] });
+    expect(await me(approver)).toEqual({ managedCertificate: ["read", "propose"], approval: ["read", "decide"] });
     expect((await me(acmeOrg.cookie)).approval).toEqual(["read", "decide"]);
   });
 });

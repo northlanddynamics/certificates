@@ -19,8 +19,10 @@ const statements = {
   audit: ["read"],
   acmeAccount: ["read", "create", "update", "test"],
   dnsProvider: ["read", "create", "update", "test"],
-  // `create` makes a Managed Certificate outright; `propose` asks for one that waits for Approval.
-  managedCertificate: ["read", "create", "propose", "issue"],
+  // `read` sees every Managed Certificate in the Organization (anyone else sees only what they own or proposed);
+  // `create` makes one outright; `propose` asks for one that waits for Approval; `changeOwners` changes whose it is
+  // (its Owners may do that too, whatever their role).
+  managedCertificate: ["read", "create", "propose", "issue", "changeOwners"],
   approval: ["read", "decide"],
 } as const;
 
@@ -30,10 +32,11 @@ export const ac = createAccessControl(statements);
 
 // An Organization Administrator has full control, so holds every declared permission, including any declared
 // later. Approvers and Members hold only what is granted to them here on purpose: both may propose a Managed
-// Certificate, and only an Approver sees the Approval queue and decides.
+// Certificate, only an Approver sees the Approval queue and decides, and an Approver sees every Managed Certificate
+// to decide knowingly while a Member sees only their own.
 export const orgRoles = {
   [ORG_ADMIN_ROLE]: ac.newRole(statements),
-  [APPROVER_ROLE]: ac.newRole({ managedCertificate: ["propose"], approval: ["read", "decide"] }),
+  [APPROVER_ROLE]: ac.newRole({ managedCertificate: ["read", "propose"], approval: ["read", "decide"] }),
   [MEMBER_ROLE]: ac.newRole({ managedCertificate: ["propose"] }),
 };
 
