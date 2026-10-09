@@ -11,7 +11,15 @@ import { bootstrapPlatformOperator } from "../src/operator";
 export const TEST_DATABASE_URL =
   process.env.TEST_DATABASE_URL ?? "postgres://postgres:postgres@localhost:5433/certs_test";
 
+export const PASSWORD = "correct-horse-battery-staple";
+
 const BASE = "http://localhost";
+
+export interface OrgAdmin {
+  orgId: string;
+  cookie: string;
+  invitationId: string;
+}
 
 export interface Harness {
   app: ReturnType<typeof createApp>["app"];
@@ -27,6 +35,8 @@ export interface Harness {
     path: string,
     opts?: { method?: string; body?: unknown; cookie?: string },
   ): Promise<{ status: number; body: any }>;
+  /** Operator creates an Organization; its first administrator accepts the invitation and signs in. */
+  createOrgWithAdmin(operatorCookie: string, slug: string, adminEmail: string): Promise<OrgAdmin>;
   /** Empty every table and reset captured mail and the clock. */
   reset(): Promise<void>;
   close(): Promise<void>;
@@ -67,7 +77,7 @@ export async function createHarness(): Promise<Harness> {
       body: JSON.stringify(body),
     });
 
-  return {
+  const harness: Harness = {
     app,
     pool,
     db,
@@ -103,7 +113,22 @@ export async function createHarness(): Promise<Harness> {
       const text = await res.text();
       return { status: res.status, body: text ? JSON.parse(text) : null };
     },
+    async createOrgWithAdmin(operatorCookie, slug, adminEmail) {
+      const created = await harness.api("/api/platform/organizations", {
+        cookie: operatorCookie,
+        body: { name: `Org ${slug}`, slug, adminEmail },
+      });
+      if (created.status !== 201) throw new Error(`create organization failed: ${created.status}`);
+      const adminCookie = await harness.signUp(adminEmail, PASSWORD);
+      const accepted = await harness.api(`/api/invitations/${created.body.invitationId}/accept`, {
+        cookie: adminCookie,
+        method: "POST",
+      });
+      if (accepted.status !== 200) throw new Error(`accept failed: ${accepted.status}`);
+      return { orgId: created.body.id, cookie: await harness.signIn(adminEmail, PASSWORD), invitationId: created.body.invitationId };
+    },
     reset,
     close: () => pool.end(),
   };
+  return harness;
 }

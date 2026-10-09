@@ -52,12 +52,19 @@ export function HomePage() {
   );
 }
 
-function Inventory({ org }: { org: { id: string; name: string } }) {
+function Inventory({ org }: { org: { id: string; name: string; role: string } }) {
   const inventory = useQuery({ queryKey: ["inventory", org.id], queryFn: () => api.managedCertificates(org.id) });
   return (
     <Card>
       <CardHeader>
-        <CardTitle>{org.name}: Managed Certificates</CardTitle>
+        <CardTitle className="flex items-center justify-between">
+          {org.name}: Managed Certificates
+          {org.role === "organization-administrator" && (
+            <Link to="/organizations/$orgId/people" params={{ orgId: org.id }} className="text-sm font-normal underline">
+              People and Teams
+            </Link>
+          )}
+        </CardTitle>
       </CardHeader>
       <CardContent>
         {inventory.data?.items.length === 0 && <p className="text-muted-foreground">No Managed Certificates yet.</p>}

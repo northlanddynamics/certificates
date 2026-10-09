@@ -15,6 +15,13 @@
       "when": 1791550290227,
       "tag": "0001_audit_event_append_only",
       "breakpoints": true
+    },
+    {
+      "idx": 2,
+      "version": "7",
+      "when": 1791552245417,
+      "tag": "0002_team_name_unique_per_organization",
+      "breakpoints": true
     }
   ]
 }

@@ -1,6 +1,6 @@
 import { afterAll, beforeAll, beforeEach, describe, expect, test } from "bun:test";
 import { managedCertificate } from "../src/db/schema";
-import { createHarness, type Harness } from "./harness";
+import { PASSWORD, createHarness, type Harness } from "./harness";
 
 let h: Harness;
 beforeAll(async () => {
@@ -13,24 +13,8 @@ afterAll(async () => {
   await h.close();
 });
 
-const PASSWORD = "correct-horse-battery-staple";
-
-/** Operator creates an Organization; its first administrator accepts and signs in. */
-async function createOrgWithAdmin(operatorCookie: string, slug: string, adminEmail: string) {
-  const created = await h.api("/api/platform/organizations", {
-    cookie: operatorCookie,
-    body: { name: `Org ${slug}`, slug, adminEmail },
-  });
-  expect(created.status).toBe(201);
-  const adminCookie = await h.signUp(adminEmail, PASSWORD);
-  const accepted = await h.api(`/api/invitations/${created.body.invitationId}/accept`, {
-    cookie: adminCookie,
-    method: "POST",
-  });
-  expect(accepted.status).toBe(200);
-  const signedIn = await h.signIn(adminEmail, PASSWORD);
-  return { orgId: created.body.id as string, cookie: signedIn, invitationId: created.body.invitationId as string };
-}
+const createOrgWithAdmin = (operatorCookie: string, slug: string, adminEmail: string) =>
+  h.createOrgWithAdmin(operatorCookie, slug, adminEmail);
 
 describe("walking skeleton", () => {
   test("operator creates an Organization and invites its first administrator by email", async () => {

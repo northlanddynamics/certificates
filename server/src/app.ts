@@ -7,7 +7,11 @@ import { ORG_ADMIN_ROLE, PLATFORM_OPERATOR_ROLE, createAuth } from "./auth";
 import { listAudit, recordAudit } from "./audit";
 import { createDb } from "./db/client";
 import { invitation, managedCertificate, member, organization } from "./db/schema";
+import { INVITATION_TTL_MS } from "./invitations";
+import { createAuthorizer } from "./authorization";
+import { HttpError, OrgParam, errors, isUniqueViolation, json } from "./http";
 import type { Mailer } from "./mailer";
+import { registerOrganizationRoutes } from "./organization-routes";
 
 export interface AppDeps {
   pool: Pool;
@@ -21,35 +25,6 @@ export interface AppDeps {
   secret: string;
 }
 
-type ErrorStatus = 401 | 403 | 404 | 409;
-
-class HttpError extends Error {
-  constructor(
-    readonly status: ErrorStatus,
-    message: string,
-  ) {
-    super(message);
-  }
-}
-
-const UNIQUE_VIOLATION = "23505";
-// Drizzle wraps driver errors; the Postgres error code is on the cause.
-const isUniqueViolation = (err: any) => (err?.cause?.code ?? err?.code) === UNIQUE_VIOLATION;
-
-const ErrorBody = z.object({ error: z.string() });
-const errors = (...codes: ErrorStatus[]) =>
-  Object.fromEntries(
-    codes.map((c) => [c, { description: "Error", content: { "application/json": { schema: ErrorBody } } }]),
-  );
-
-const OrgParam = z.object({ orgId: z.string().openapi({ param: { name: "orgId", in: "path" } }) });
-const json = <T extends z.ZodType>(schema: T, description = "OK") => ({
-  description,
-  content: { "application/json": { schema } },
-});
-
-const INVITATION_TTL_MS = 7 * 24 * 3600 * 1000;
-
 export function createApp(deps: AppDeps) {
   const { pool, mailer, clock } = deps;
   const db = createDb(pool);
@@ -62,6 +37,10 @@ export function createApp(deps: AppDeps) {
     return c.json({ error: "internal error" }, 500);
   });
 
+  // Organization state (invitations, roles, Teams, removals) changes only through the platform API, where
+  // it is authorized, audited and run through the removal hooks. Better Auth's own organization endpoints
+  // would bypass all three, so they are not exposed.
+  app.all("/api/auth/organization/*", (c) => c.json({ error: "not found" }, 404));
   app.on(["GET", "POST"], "/api/auth/*", (c) => auth.handler(c.req.raw));
 
   async function requireUser(c: Context) {
@@ -76,19 +55,7 @@ export function createApp(deps: AppDeps) {
     return user;
   }
 
-  /**
-   * The Organization-scoping rule: every domain route passes through here.
-   * A non-member (including a Platform Operator not invited in) gets 404, so existence is not revealed.
-   */
-  async function requireMember(c: Context, orgId: string) {
-    const user = await requireUser(c);
-    const [row] = await db
-      .select({ role: member.role })
-      .from(member)
-      .where(and(eq(member.organizationId, orgId), eq(member.userId, user.id)));
-    if (!row) throw new HttpError(404, "organization not found");
-    return { user, role: row.role };
-  }
+  const { authorize } = createAuthorizer(db);
 
   app.openapi(
     createRoute({
@@ -198,6 +165,11 @@ export function createApp(deps: AppDeps) {
         if (inv.email.toLowerCase() !== user.email.toLowerCase()) throw new HttpError(403, "invitation is for a different email");
         if (inv.status !== "pending") throw new HttpError(409, "invitation already used");
         if (inv.expiresAt < now) throw new HttpError(404, "invitation expired");
+        const [already] = await tx
+          .select({ id: member.id })
+          .from(member)
+          .where(and(eq(member.organizationId, inv.organizationId), eq(member.userId, user.id)));
+        if (already) throw new HttpError(409, "already a member of this organization");
         const role = inv.role ?? "member";
         await tx.update(invitation).set({ status: "accepted" }).where(eq(invitation.id, id));
         await tx
@@ -263,7 +235,7 @@ export function createApp(deps: AppDeps) {
     }),
     async (c) => {
       const { orgId } = c.req.valid("param");
-      await requireMember(c, orgId);
+      await authorize(await requireUser(c), orgId, "managedCertificate.list");
       const items = await db
         .select({ id: managedCertificate.id })
         .from(managedCertificate)
@@ -299,11 +271,12 @@ export function createApp(deps: AppDeps) {
     }),
     async (c) => {
       const { orgId } = c.req.valid("param");
-      const { role } = await requireMember(c, orgId);
-      if (role !== ORG_ADMIN_ROLE) throw new HttpError(403, "organization administrators only");
+      await authorize(await requireUser(c), orgId, "audit.read");
       return c.json({ items: await listAudit(db, orgId) }, 200);
     },
   );
+
+  registerOrganizationRoutes({ app, db, deps, requireUser, authorize });
 
   app.doc("/api/openapi.json", {
     openapi: "3.1.0",
