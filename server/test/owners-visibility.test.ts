@@ -33,7 +33,7 @@ const certs = (cookie: string, orgId = org.orgId) => ({
   create: (body: unknown) => h.api(base(orgId), { cookie, body }),
   get: (id: string) => h.api(`${base(orgId)}/${id}`, { cookie }),
   certificates: (id: string) => h.api(`${base(orgId)}/${id}/certificates`, { cookie }),
-  download: (id: string) => h.app.request(`http://localhost${base(orgId)}/${id}/certificate.pem`, { headers: { cookie } }),
+  download: (id: string) => h.app.request(`http://localhost${base(orgId)}/${id}/certificate`, { headers: { cookie } }),
   history: (id: string) => h.api(`${base(orgId)}/${id}/history`, { cookie }),
   addOwner: (id: string, owner: { type: string; id: string }) => h.api(`${base(orgId)}/${id}/owners`, { cookie, body: owner }),
   removeOwner: (id: string, type: string, ownerId: string) => h.api(`${base(orgId)}/${id}/owners/${type}/${ownerId}`, { cookie, method: "DELETE" }),
@@ -327,9 +327,9 @@ describe("visibility", () => {
 
   test("what each role may do is reported by /api/me", async () => {
     const me = async (cookie: string) => (await h.api("/api/me", { cookie })).body.organizations[0].permissions;
-    expect((await me(await join("member@acme.test", "member"))).managedCertificate).toEqual(["propose"]);
-    expect((await me(await join("approver@acme.test", "approver"))).managedCertificate).toEqual(["read", "propose"]);
-    expect((await me(org.cookie)).managedCertificate).toEqual(expect.arrayContaining(["read", "create", "propose", "issue", "changeOwners"]));
+    expect((await me(await join("member@acme.test", "member"))).managedCertificate).toEqual(["propose", "download"]);
+    expect((await me(await join("approver@acme.test", "approver"))).managedCertificate).toEqual(["read", "propose", "download"]);
+    expect((await me(org.cookie)).managedCertificate).toEqual(expect.arrayContaining(["read", "create", "propose", "issue", "changeOwners", "download"]));
   });
 });
 

@@ -30,6 +30,8 @@ services:
       PEBBLE_AUTHZREUSE: "0"
     ports:
       - "14000:14000"
+      # Its management interface, from which tests read the root its chains end in (/roots/0).
+      - "15000:15000"
 
   # An RFC 2136 DNS server (BIND), the DNS Provider's counterpart in tests: its zone rfc2136.test accepts dynamic updates
   # signed with the TSIG key in docker/bind/named.conf. Served on localhost:5354, TCP and UDP.

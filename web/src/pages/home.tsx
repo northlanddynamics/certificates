@@ -59,11 +59,16 @@ function Inventory({ org }: { org: Me["organizations"][number] }) {
       <CardHeader>
         <CardTitle className="flex items-center justify-between">
           {org.name}: Managed Certificates
-          {can(org, "invitation", "create") && (
-            <Link to="/organizations/$orgId/people" params={{ orgId: org.id }} className="text-sm font-normal underline">
-              People and Teams
+          <span className="flex gap-4 text-sm font-normal">
+            <Link to="/organizations/$orgId/api-keys" params={{ orgId: org.id }} className="underline">
+              API keys
             </Link>
-          )}
+            {can(org, "invitation", "create") && (
+              <Link to="/organizations/$orgId/people" params={{ orgId: org.id }} className="underline">
+                People and Teams
+              </Link>
+            )}
+          </span>
         </CardTitle>
       </CardHeader>
       <CardContent>

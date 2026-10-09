@@ -1,6 +1,7 @@
 import type { QueryClient } from "@tanstack/react-query";
 import { Outlet, createRootRouteWithContext, createRoute, createRouter } from "@tanstack/react-router";
 import { AcceptInvitationPage } from "./pages/accept-invitation";
+import { ApiKeysPage } from "./pages/api-keys";
 import { HomePage } from "./pages/home";
 import { PeoplePage } from "./pages/people";
 import { SignInPage } from "./pages/sign-in";
@@ -27,7 +28,13 @@ const peopleRoute = createRoute({
   component: PeoplePage,
 });
 
-const routeTree = rootRoute.addChildren([homeRoute, signInRoute, acceptInvitationRoute, peopleRoute]);
+const apiKeysRoute = createRoute({
+  getParentRoute: () => rootRoute,
+  path: "/organizations/$orgId/api-keys",
+  component: ApiKeysPage,
+});
+
+const routeTree = rootRoute.addChildren([homeRoute, signInRoute, acceptInvitationRoute, peopleRoute, apiKeysRoute]);
 
 export const router = createRouter({ routeTree, context: { queryClient: undefined! } });
 

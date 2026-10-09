@@ -28,6 +28,9 @@ export type AuditAction =
   | "managed_certificate.rejected"
   | "managed_certificate.owner_added"
   | "managed_certificate.owner_removed"
+  | "api_key.created"
+  | "api_key.revoked"
+  | "api_key.used"
   | "issuance.started"
   | "issuance.succeeded"
   | "issuance.failed";

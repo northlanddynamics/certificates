@@ -6,6 +6,8 @@ import { Label } from "@/components/ui/label";
 import { Select, SelectContent, SelectItem, SelectTrigger, SelectValue } from "@/components/ui/select";
 import { Textarea } from "@/components/ui/textarea";
 import {
+  EXPORT_CHAINS,
+  EXPORT_FORMATS,
   api,
   can,
   ownerFromKey,
@@ -112,17 +114,13 @@ export function ManagedCertificates({ org }: { org: Me["organizations"][number] 
             )}
             <Owners org={org} m={m} userId={me.data?.user.id} onChanged={refresh} />
             <span className="flex gap-3">
-              {m.currentCertificate && (
-                <a className="underline" href={api.certificateDownloadUrl(org.id, m.id)}>
-                  Download PEM (full chain)
-                </a>
-              )}
               {m.issuance?.status === "failed" && can(org, "managedCertificate", "issue") && (
                 <Button variant="link" size="sm" className="h-auto p-0" onClick={() => retry.mutate(m.id)}>
                   Try again
                 </Button>
               )}
             </span>
+            {m.currentCertificate && can(org, "managedCertificate", "download") && <Download org={org} m={m} />}
             <History org={org} m={m} />
           </li>
         ))}
@@ -196,6 +194,62 @@ function Owners({ org, m, userId, onChanged }: { org: Me["organizations"][number
       )}
       {error && <span className="text-destructive">{error.message}</span>}
     </div>
+  );
+}
+
+/** The "current" Certificate in the Download's choice of one: a select item cannot have an empty value. */
+const CURRENT = "current";
+
+function ChoiceSelect({ label, value, onChange, choices }: { label: string; value: string; onChange: (value: string) => void; choices: [string, string][] }) {
+  return (
+    <Select value={value} onValueChange={onChange}>
+      <SelectTrigger size="sm" aria-label={label}>
+        <SelectValue />
+      </SelectTrigger>
+      <SelectContent>
+        {choices.map(([v, text]) => (
+          <SelectItem key={v} value={v}>
+            {text}
+          </SelectItem>
+        ))}
+      </SelectContent>
+    </Select>
+  );
+}
+
+/** Downloads a Certificate of the Managed Certificate, the current one unless another is chosen, in the form chosen. */
+function Download({ org, m }: { org: Me["organizations"][number]; m: ManagedCertificate }) {
+  const [format, setFormat] = useState("pem");
+  const [chain, setChain] = useState("with-intermediates");
+  const [which, setWhich] = useState(CURRENT);
+  const [open, setOpen] = useState(false);
+  // Fetched when opened; the current one is the newest.
+  const certificates = useQuery({ queryKey: ["certificates", org.id, m.id, m.currentCertificate?.fingerprint], queryFn: () => api.certificates(org.id, m.id), enabled: open });
+  const label = m.names.join(", ");
+  return (
+    <details onToggle={(e) => setOpen(e.currentTarget.open)}>
+      <summary className="cursor-pointer underline">Download</summary>
+      <div className="mt-1 flex flex-wrap items-center gap-2">
+        <ChoiceSelect label={`Format of ${label}`} value={format} onChange={setFormat} choices={EXPORT_FORMATS} />
+        <ChoiceSelect label={`Chain of ${label}`} value={chain} onChange={setChain} choices={EXPORT_CHAINS} />
+        <Select value={which} onValueChange={setWhich}>
+          <SelectTrigger size="sm" aria-label={`Certificate of ${label}`}>
+            <SelectValue />
+          </SelectTrigger>
+          <SelectContent>
+            <SelectItem value={CURRENT}>Current Certificate</SelectItem>
+            {certificates.data?.items.slice(1).map((c) => (
+              <SelectItem key={c.id} value={c.id}>
+                Issued {new Date(c.issuedAt).toLocaleDateString()} ({c.fingerprint.slice(0, 8)})
+              </SelectItem>
+            ))}
+          </SelectContent>
+        </Select>
+        <a className="underline" href={api.certificateDownloadUrl(org.id, m.id, { format, chain }, which === CURRENT ? undefined : which)}>
+          Download
+        </a>
+      </div>
+    </details>
   );
 }
 

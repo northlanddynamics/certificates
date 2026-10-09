@@ -98,6 +98,10 @@ _Avoid_: challenge zone, ACME zone
 DCV performed through a Validation Zone, as opposed to Direct DCV, where the platform writes to the domain's authoritative zone through a DNS Provider.
 _Avoid_: CNAME validation, acme-dns
 
+**API Key**:
+A user's key for scripts and pipelines, made for one Organization. It acts as that user there, carries the permissions they held when it was made, and works only for what they may still see and do; every use is an Audit Event. A key is shown once when made and can only be revoked.
+_Avoid_: token, service account
+
 **Secret**:
 A value the platform must hold, such as an ACME Account's key or a DNS Provider's credentials, that can be replaced or tested but never read back by anyone, including Organization Administrators and impersonating Platform Operators.
 _Avoid_: credential (when meaning the stored value), password

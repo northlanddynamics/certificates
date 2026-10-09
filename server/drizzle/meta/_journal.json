@@ -71,6 +71,13 @@
       "when": 1791568562485,
       "tag": "0009_owners_and_archive",
       "breakpoints": true
+    },
+    {
+      "idx": 10,
+      "version": "7",
+      "when": 1791569851337,
+      "tag": "0010_api_keys",
+      "breakpoints": true
     }
   ]
 }

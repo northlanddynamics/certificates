@@ -46,6 +46,11 @@ export interface CertificateAuthority {
    * responder throws is thrown as it was.
    */
   issue(environment: AcmeEnvironment, account: CaAccount, request: { csr: string; responder: DnsChallengeResponder }): Promise<string>;
+  /**
+   * The root certificates (PEM) the CA's chains end in, as far as the platform knows them. A CA serves a Certificate
+   * with its intermediates and leaves the root out, so an export that includes the root takes it from here.
+   */
+  roots(environment: AcmeEnvironment): Promise<string[]>;
 }
 
 export interface LetsEncryptConfig {
@@ -53,6 +58,12 @@ export interface LetsEncryptConfig {
   directoryUrls?: Partial<Record<AcmeEnvironment, string>>;
   /** A PEM CA certificate to trust besides the system's, for a test CA with a private root such as Pebble. */
   trustedCa?: string;
+  /**
+   * The roots of each environment's chains, for exports that include the root. Production defaults to the system's
+   * trusted roots, which hold Let's Encrypt's; staging's roots are in none, so a deployment that exports staging
+   * chains with their root gives them here.
+   */
+  roots?: Partial<Record<AcmeEnvironment, () => Promise<string[]>>>;
   /** How long to wait between looks at an order or a challenge the CA is still working on (acme-client's 5 to 30 seconds unless overridden). */
   pollMs?: { min: number; max: number };
 }
@@ -62,7 +73,7 @@ const LETS_ENCRYPT_DIRECTORIES: Record<AcmeEnvironment, string> = {
   production: "https://acme-v02.api.letsencrypt.org/directory",
 };
 
-export function createLetsEncrypt({ directoryUrls = {}, trustedCa, pollMs }: LetsEncryptConfig = {}): CertificateAuthority {
+export function createLetsEncrypt({ directoryUrls = {}, trustedCa, roots = {}, pollMs }: LetsEncryptConfig = {}): CertificateAuthority {
   // acme-client makes its requests through one shared axios instance, so this is process-wide.
   if (trustedCa) acme.axios.defaults.httpsAgent = new Agent({ ca: [...rootCertificates, trustedCa] });
   const directoryUrl = (environment: AcmeEnvironment) => directoryUrls[environment] ?? LETS_ENCRYPT_DIRECTORIES[environment];
@@ -92,6 +103,9 @@ export function createLetsEncrypt({ directoryUrls = {}, trustedCa, pollMs }: Let
 
   return {
     name: "lets-encrypt",
+    async roots(environment) {
+      return roots[environment]?.() ?? (environment === "production" ? [...rootCertificates] : []);
+    },
     async createAccount(environment, { contactEmail }) {
       await reach(environment);
       const accountKey = (await acme.crypto.createPrivateEcdsaKey("P-256")).toString();

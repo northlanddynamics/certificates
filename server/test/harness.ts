@@ -23,6 +23,9 @@ const BASE = "http://localhost";
 /** Pebble, Let's Encrypt's ACME test server (`docker compose up -d pebble`), and the root its certificate is signed by. */
 export const PEBBLE_DIRECTORY = process.env.PEBBLE_DIRECTORY ?? "https://localhost:14000/dir";
 const PEBBLE_CA = readFileSync(new URL("./pebble/minica.pem", import.meta.url), "utf8");
+/** Where Pebble serves the root its chains end in; it makes a new one each time it starts. */
+export const PEBBLE_MANAGEMENT = process.env.PEBBLE_MANAGEMENT ?? "https://localhost:15000";
+const pebbleRoots = async () => [await (await fetch(`${PEBBLE_MANAGEMENT}/roots/0`, { tls: { ca: PEBBLE_CA } })).text()];
 
 /** BIND (`docker compose up -d bind`): rfc2136.test takes dynamic updates signed with this key; readonly.test takes none. */
 export const BIND = {
@@ -61,6 +64,8 @@ export interface Harness {
   settleIssuances(): Promise<void>;
   /** What the platform does when it starts: ends the Issuances an earlier run left running. */
   failInterruptedIssuances(): Promise<void>;
+  /** The roots the CA's chains end in, as an export that includes the root finds them: Pebble's, unless a test sets `current` to something else. */
+  caRoots: { current: () => Promise<string[]> };
   /** The private keys of the ACME accounts the platform created at the CA, as PEM; for tests to check they never leak. */
   createdAccountKeys: string[];
   /** The hooks the app runs when a member is removed; empty unless a test adds one (and takes it out again). */
@@ -102,8 +107,14 @@ export async function createHarness(): Promise<Harness> {
   let now = new Date("2026-01-01T00:00:00Z");
   const caDirectories: Record<AcmeEnvironment, string> = { staging: PEBBLE_DIRECTORY, production: PEBBLE_DIRECTORY };
   const createdAccountKeys: string[] = [];
+  const caRoots = { current: pebbleRoots };
   // The real ACME client against Pebble; it only notes the keys it generated.
-  const letsEncrypt = createLetsEncrypt({ directoryUrls: caDirectories, trustedCa: PEBBLE_CA, pollMs: { min: 200, max: 1000 } });
+  const letsEncrypt = createLetsEncrypt({
+    directoryUrls: caDirectories,
+    trustedCa: PEBBLE_CA,
+    roots: { staging: () => caRoots.current(), production: () => caRoots.current() },
+    pollMs: { min: 200, max: 1000 },
+  });
   const bindTxt = createTxtResolver([`${BIND.server}:${BIND.port}`]);
   const dcvResolver = { current: bindTxt };
   const deps: AppDeps = {
@@ -129,8 +140,9 @@ export async function createHarness(): Promise<Harness> {
   const reset = async () => {
     await issuances.idle();
     dcvResolver.current = bindTxt;
+    caRoots.current = pebbleRoots;
     // Cascades through every table that references an Organization or a user.
-    await pool.query(`truncate organization, "user" cascade`);
+    await pool.query(`truncate organization, "user", apikey cascade`);
     mailer.sent.length = 0;
     memberRemovalHooks.length = 0;
     createdAccountKeys.length = 0;
@@ -156,6 +168,7 @@ export async function createHarness(): Promise<Harness> {
     dcvResolver,
     settleIssuances: () => issuances.idle(),
     failInterruptedIssuances: () => issuances.failInterrupted(),
+    caRoots,
     createdAccountKeys,
     memberRemovalHooks,
     setNow: (d) => {

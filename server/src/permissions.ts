@@ -21,8 +21,9 @@ const statements = {
   dnsProvider: ["read", "create", "update", "test"],
   // `read` sees every Managed Certificate in the Organization (anyone else sees only what they own or proposed);
   // `create` makes one outright; `propose` asks for one that waits for Approval; `changeOwners` changes whose it is
-  // (its Owners may do that too, whatever their role).
-  managedCertificate: ["read", "create", "propose", "issue", "changeOwners"],
+  // (its Owners may do that too, whatever their role); `download` exports a Certificate it may see, and is what an API key
+  // must carry to do the same.
+  managedCertificate: ["read", "create", "propose", "issue", "changeOwners", "download"],
   approval: ["read", "decide"],
 } as const;
 
@@ -36,8 +37,8 @@ export const ac = createAccessControl(statements);
 // to decide knowingly while a Member sees only their own.
 export const orgRoles = {
   [ORG_ADMIN_ROLE]: ac.newRole(statements),
-  [APPROVER_ROLE]: ac.newRole({ managedCertificate: ["read", "propose"], approval: ["read", "decide"] }),
-  [MEMBER_ROLE]: ac.newRole({ managedCertificate: ["propose"] }),
+  [APPROVER_ROLE]: ac.newRole({ managedCertificate: ["read", "propose", "download"], approval: ["read", "decide"] }),
+  [MEMBER_ROLE]: ac.newRole({ managedCertificate: ["propose", "download"] }),
 };
 
 const roleOf = (name: string) => (Object.hasOwn(orgRoles, name) ? orgRoles[name as keyof typeof orgRoles] : undefined);
@@ -50,6 +51,11 @@ export const isKnownRole = (name: string) => roleOf(name) !== undefined;
 /** Whether `role` holds every permission asked for. An unknown role holds none. */
 export function roleCan(role: string, permissions: Permissions): boolean {
   return roleOf(role)?.authorize(permissions).success ?? false;
+}
+
+/** Whether `carried`, what an API key was given, holds every permission asked for. */
+export function carries(carried: Record<string, string[]>, needed: Permissions): boolean {
+  return Object.entries(needed).every(([resource, actions]) => actions.every((action) => Object.hasOwn(carried, resource) && carried[resource]!.includes(action)));
 }
 
 /** Every permission `role` holds: what a client may ask about instead of comparing role names. */

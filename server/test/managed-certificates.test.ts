@@ -34,7 +34,7 @@ const certs = (cookie: string, orgId: string) => ({
   get: (id: string) => h.api(`${base(orgId)}/${id}`, { cookie }),
   retry: (id: string) => h.api(`${base(orgId)}/${id}/issuances`, { cookie, method: "POST", body: {} }),
   certificates: (id: string) => h.api(`${base(orgId)}/${id}/certificates`, { cookie }),
-  download: (id: string) => h.app.request(`http://localhost${base(orgId)}/${id}/certificate.pem`, { headers: { cookie } }),
+  download: (id: string) => h.app.request(`http://localhost${base(orgId)}/${id}/certificate`, { headers: { cookie } }),
 });
 const admin = () => certs(acmeOrg.cookie, acmeOrg.orgId);
 const auditOf = async (cookie = acmeOrg.cookie, orgId = acmeOrg.orgId) =>
@@ -520,8 +520,8 @@ describe("Approval", () => {
 
   test("what each role may do is reported by /api/me", async () => {
     const me = async (cookie: string) => (await h.api("/api/me", { cookie })).body.organizations[0].permissions;
-    expect(await me(member)).toEqual({ managedCertificate: ["propose"] });
-    expect(await me(approver)).toEqual({ managedCertificate: ["read", "propose"], approval: ["read", "decide"] });
+    expect(await me(member)).toEqual({ managedCertificate: ["propose", "download"] });
+    expect(await me(approver)).toEqual({ managedCertificate: ["read", "propose", "download"], approval: ["read", "decide"] });
     expect((await me(acmeOrg.cookie)).approval).toEqual(["read", "decide"]);
   });
 });

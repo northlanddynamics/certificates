@@ -91,6 +91,31 @@ export interface ManagedCertificate {
   issuance: Issuance | null;
   currentCertificate: { fingerprint: string; notAfter: string } | null;
 }
+export const EXPORT_FORMATS: [string, string][] = [
+  ["pem", "PEM"],
+  ["der", "DER"],
+  ["p7b", "PKCS#7 (P7B)"],
+];
+export const EXPORT_CHAINS: [string, string][] = [
+  ["with-intermediates", "Leaf and intermediates"],
+  ["leaf", "Leaf only"],
+  ["with-root", "Leaf, intermediates and root"],
+];
+export interface Certificate {
+  id: string;
+  fingerprint: string;
+  notBefore: string;
+  notAfter: string;
+  issuedAt: string;
+}
+export interface ApiKey {
+  id: string;
+  name: string;
+  /** The first characters of the key, to tell keys apart; the key itself is shown only when it is made. */
+  start: string | null;
+  expiresAt: string | null;
+  createdAt: string;
+}
 export interface NewManagedCertificate {
   names: string[];
   keyAlgorithm: string;
@@ -132,7 +157,14 @@ export const api = {
     call<ManagedCertificate>(`/api/organizations/${orgId}/managed-certificates/${id}/reject`, { body: { reason } }),
   retryIssuance: (orgId: string, id: string) =>
     call<Issuance>(`/api/organizations/${orgId}/managed-certificates/${id}/issuances`, { method: "POST", body: {} }),
-  certificateDownloadUrl: (orgId: string, id: string) => `/api/organizations/${orgId}/managed-certificates/${id}/certificate.pem`,
+  certificates: (orgId: string, id: string) => call<{ items: Certificate[] }>(`/api/organizations/${orgId}/managed-certificates/${id}/certificates`),
+  /** Where a Certificate downloads from: the current one, or the one with `certificateId`. */
+  certificateDownloadUrl: (orgId: string, id: string, form: { format: string; chain: string }, certificateId?: string) =>
+    `/api/organizations/${orgId}/managed-certificates/${id}/${certificateId ? `certificates/${certificateId}/download` : "certificate"}?${new URLSearchParams(form)}`,
+  apiKeys: (orgId: string) => call<{ items: ApiKey[] }>(`/api/organizations/${orgId}/api-keys`),
+  createApiKey: (orgId: string, body: { name: string; expiresInDays?: number }) =>
+    call<ApiKey & { key: string }>(`/api/organizations/${orgId}/api-keys`, { body }),
+  revokeApiKey: (orgId: string, keyId: string) => call(`/api/organizations/${orgId}/api-keys/${keyId}`, { method: "DELETE" }),
   platformOrganizations: () => call<{ items: { id: string; name: string; slug: string }[] }>("/api/platform/organizations"),
   createOrganization: (body: { name: string; slug: string; adminEmail: string }) =>
     call<{ id: string; invitationId: string }>("/api/platform/organizations", { body }),

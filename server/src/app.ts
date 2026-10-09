@@ -4,7 +4,9 @@ import { and, asc, eq } from "drizzle-orm";
 import type { Context } from "hono";
 import type { Pool } from "pg";
 import { registerAcmeAccounts } from "./acme-accounts";
+import { registerApiKeys } from "./api-keys";
 import { PLATFORM_OPERATOR_ROLE, createAuth } from "./auth";
+import { registerCertificateExport } from "./certificate-export";
 import type { CertificateAuthority } from "./certificate-authority";
 import { DEFAULT_DCV_CONFIG, createDcv, createTxtResolver, type DcvConfig } from "./dcv";
 import { listAudit } from "./audit";
@@ -232,6 +234,8 @@ export function createApp(deps: AppDeps) {
   const issuances = createIssuances({ db, unitOfWork, certificateAuthority: deps.certificateAuthority, dcv, secrets });
   const reader = createManagedCertificateReader({ db, authorize });
   registerManagedCertificates({ app, db, requireUser, authorize, unitOfWork, issuances, reader, clock });
+  const apiKeys = registerApiKeys({ app, db, auth, authConfig, requireUser, authorize, unitOfWork });
+  registerCertificateExport({ app, apiKeys, unitOfWork, reader, certificateAuthority: deps.certificateAuthority });
   registerOwnerRoutes({ app, requireUser, unitOfWork, reader });
   registerApprovals({ app, db, requireUser, authorize, unitOfWork, issuances, reader });
   registerHistory({ app, db, requireUser, reader });

@@ -1,9 +1,9 @@
 // An Organization's Managed Certificates: created by an Organization Administrator with names, a key algorithm and a
-// CSR (Key Custody: Owner), issued in the background (issuance.ts), and downloaded once a Certificate exists. The
-// platform never sees the private key (ADR 0002): the CSR proves the Owner holds it. Anyone else proposes one instead;
-// it waits in the Approval queue (approval.ts) and its Issuance starts when an Approver approves it. It may have
-// Owners (owners.ts), who with Approvers and Organization Administrators are the ones who see it (see
-// managed-certificate-reader.ts). This module serves the inventory and the Managed Certificate itself.
+// CSR (Key Custody: Owner), issued in the background (issuance.ts) and downloaded once a Certificate exists
+// (certificate-export.ts). The platform never sees the private key (ADR 0002): the CSR proves the Owner holds it.
+// Anyone else proposes one instead; it waits in the Approval queue (approval.ts) and its Issuance starts when an
+// Approver approves it. It may have Owners (owners.ts), who with Approvers and Organization Administrators are the
+// ones who see it (see managed-certificate-reader.ts). This module serves the inventory and the Managed Certificate itself.
 import { OpenAPIHono, createRoute, z } from "@hono/zod-openapi";
 import { and, asc, eq } from "drizzle-orm";
 import type { Authorizer } from "./authorization";
@@ -198,32 +198,6 @@ export function registerManagedCertificates(ctx: {
       const { orgId, id } = c.req.valid("param");
       const mc = await findReadable(await requireUser(c), orgId, id);
       return c.json({ items: (await certificatesOf(orgId, mc.id)).map(toCertificate) }, 200);
-    },
-  );
-
-  app.openapi(
-    createRoute({
-      method: "get",
-      path: "/api/organizations/{orgId}/managed-certificates/{id}/certificate.pem",
-      tags: ["Managed Certificates"],
-      summary: "Download the current Certificate as PEM, with its chain",
-      description: "The Certificate followed by the intermediates the CA served. There is no private key in it: the platform never has one.",
-      request: { params: ManagedCertificateParams },
-      responses: {
-        200: { description: "PEM", content: { "application/x-pem-file": { schema: z.string() } } },
-        ...errors(401, 403, 404),
-      },
-    }),
-    async (c) => {
-      const { orgId, id } = c.req.valid("param");
-      const mc = await findReadable(await requireUser(c), orgId, id);
-      const [current] = await certificatesOf(orgId, mc.id);
-      if (!current) throw new HttpError(404, "no Certificate has been issued for this Managed Certificate yet");
-      const filename = `${mc.names[0]!.replace(/^\*\./, "wildcard.")}.pem`;
-      return c.body(current.chainPem, 200, {
-        "content-type": "application/x-pem-file",
-        "content-disposition": `attachment; filename="${filename}"`,
-      });
     },
   );
 }
