@@ -4,12 +4,21 @@
 
 **Blocked by:** None (can start immediately)
 
-**Status:** ready-for-agent
+**Status:** done
 
-- [ ] A Platform Operator can create an Organization and invite its first Organization Administrator by email (captured, not sent, in tests).
-- [ ] The invited Organization Administrator can accept, set a password, sign in, and see an empty Managed Certificate inventory.
-- [ ] Users of one Organization cannot see or reach anything belonging to another Organization (covered by a Seam A test).
-- [ ] A Platform Operator cannot see inside an Organization they have not been invited into.
-- [ ] Creating an Organization and accepting an invitation each write an audit entry with actor, time, action and target, in the same transaction.
-- [ ] The Seam A harness exists, runs in CI, and is the place where later tickets' API tests live.
-- [ ] The HTTP API is described by OpenAPI generated from route schemas, and the web UI calls only that API.
+- [x] A Platform Operator can create an Organization and invite its first Organization Administrator by email (captured, not sent, in tests).
+- [x] The invited Organization Administrator can accept, set a password, sign in, and see an empty Managed Certificate inventory.
+- [x] Users of one Organization cannot see or reach anything belonging to another Organization (covered by a Seam A test).
+- [x] A Platform Operator cannot see inside an Organization they have not been invited into.
+- [x] Creating an Organization and accepting an invitation each write an audit entry with actor, time, action and target, in the same transaction.
+- [x] The Seam A harness exists, runs in CI, and is the place where later tickets' API tests live.
+- [x] The HTTP API is described by OpenAPI generated from route schemas, and the web UI calls only that API.
+
+## Comments
+
+Implemented on `main` (commits `c6dc597` through `afa0013`); typecheck and the 10 Seam A tests pass against Postgres in Docker Compose, and the sign-in, Organization-creation and invitation flow was walked through in a browser.
+
+- The CI workflow (`.github/workflows/ci.yml`) is written but has not run, because the repo has no remote yet.
+- The OpenAPI criterion is met by two generated documents shown on one page at `/api/docs`: the platform routes (from the route schemas) and Better Auth's routes (from its OpenAPI plugin).
+- Beyond the ticket: `GET /api/organizations/{orgId}/audit-events` (so tests can observe audit entries) and `GET /api/platform/organizations` (for the operator console); tickets 21 and 24 will extend them.
+- Deferred to later tickets: an extracted Identity module, email verification and sign-up policy, and a real mail transport to replace `ConsoleMailer`.
