@@ -59,6 +59,12 @@ export function createApp(deps: AppDeps) {
     if (!change) return c.json({ error: "not found" }, 404);
     const session = await auth.api.getSession({ headers: c.req.raw.headers });
     if (!session) return auth.handler(c.req.raw); // Better Auth's own 401
+    // Inviting someone already invited with `resend` extends the invitation and sends it again, returning before
+    // any hook runs, so it would go unaudited. Invite again after cancelling instead.
+    if (endpoint === "invite-member") {
+      const body = await c.req.raw.clone().json().catch(() => null);
+      if (body?.resend) return c.json({ error: "resend is not supported" }, 400);
+    }
     return unitOfWork.handle(session.user, c.req.raw, change);
   });
   app.on(["GET", "POST"], "/api/auth/*", (c) => auth.handler(c.req.raw));

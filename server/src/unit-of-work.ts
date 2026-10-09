@@ -138,7 +138,11 @@ function auditHooks(tx: Tx, actor: Actor, occurredAt: Date) {
   let alreadyInTeam = false;
 
   return {
-    beforeCreateInvitation: async ({ invitation: inv }) => requireKnownRoles(inv.role),
+    beforeCreateInvitation: async ({ invitation: inv }) => {
+      requireKnownRoles(inv.role);
+      // Accepting such an invitation would add the user to those Teams, which no Team hook sees, so no audit entry.
+      if (inv.teamId) throw refuse("TEAM_INVITATIONS_NOT_SUPPORTED", "Invitations do not carry Teams");
+    },
     afterCreateInvitation: async ({ invitation: inv, organization }) => {
       await record(organization.id, "invitation.created", { type: "invitation", id: inv.id }, { email: inv.email, role: inv.role });
     },

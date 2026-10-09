@@ -460,6 +460,48 @@ describe("authorization", () => {
     expect(org.rows[0].name).toBe("Org acme");
   });
 
+  test("no variant of a blocked path reaches the endpoint", async () => {
+    await join("m@acme.test", "member");
+    const memberCookie = await join("m2@acme.test", "member");
+    const before = (await members()).length;
+    for (const path of [
+      `${BA}/leave`,
+      `${BA}/leave/`,
+      "/api/auth//organization/leave",
+      "/api/auth/Organization/leave",
+      "/api/auth/organization/%6ceave",
+      "/api/auth/organization%2Fleave",
+      "/api/auth/./organization/leave",
+      "/api/auth/organization/./leave",
+      "/api/auth/organization/../organization/leave",
+    ]) {
+      const res = await h.api(path, { cookie: memberCookie, body: { organizationId: acme.orgId } });
+      expect(res.status, path).toBeWithin(400, 500);
+    }
+    expect(await members()).toHaveLength(before);
+    expect(await auditActions()).not.toContain("member.removed");
+  });
+
+  test("changes Better Auth would make without running its hooks are refused: invitations with Teams or resent", async () => {
+    const team = (await admin().createTeam("Platform")).body.id;
+    const withTeam = await h.api(`${BA}/invite-member`, {
+      cookie: acme.cookie,
+      body: { email: "t@acme.test", role: "member", organizationId: acme.orgId, teamId: team },
+    });
+    denied(withTeam);
+    const first = await admin().invite("p@acme.test", "member");
+    const expiry = async () => (await h.pool.query(`select expires_at from invitation where id = $1`, [first.body.id])).rows[0].expires_at;
+    const before = await expiry();
+    const mailBefore = h.mailer.sent.length;
+    const resent = await h.api(`${BA}/invite-member`, {
+      cookie: acme.cookie,
+      body: { email: "p@acme.test", role: "member", organizationId: acme.orgId, resend: true },
+    });
+    expect(resent.status).toBe(400);
+    expect(await expiry()).toEqual(before);
+    expect(h.mailer.sent).toHaveLength(mailBefore);
+  });
+
   test("only Organization Administrators hold the administrative permissions", () => {
     const admin = "organization-administrator";
     const administrative: Permissions[] = [
