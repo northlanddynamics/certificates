@@ -118,7 +118,7 @@ export function ManagedCertificates({ org }: { org: Me["organizations"][number] 
             <Renewal org={org} m={m} userId={me.data?.user.id} onChanged={refresh} />
             <Owners org={org} m={m} userId={me.data?.user.id} onChanged={refresh} />
             <span className="flex gap-3">
-              {m.issuance?.status === "failed" && can(org, "managedCertificate", "issue") && (
+              {m.issuance?.status === "failed" && !m.currentCertificate && can(org, "managedCertificate", "issue") && (
                 <Button variant="link" size="sm" className="h-auto p-0" onClick={() => retry.mutate(m.id)}>
                   Try again
                 </Button>

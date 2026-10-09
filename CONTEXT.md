@@ -65,7 +65,7 @@ A user, Team or notification channel that has opted in to notices about a specif
 _Avoid_: watcher, recipient, contact
 
 **Renewal Policy**:
-A Managed Certificate's own setting for whether Renewal is automatic or manual and how many days before expiry it happens at the latest; automatic Renewal happens earlier if the CA's renewal window says so.
+A Managed Certificate's own setting for whether Renewal is automatic or manual and how many days before expiry it happens at the latest, though never before a tenth of the Certificate's life has passed; automatic Renewal happens earlier if the CA's renewal window says so.
 _Avoid_: enrollment setting, renewal config
 
 ### Issuance

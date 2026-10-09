@@ -53,7 +53,7 @@ export function Renewal({ org, m, userId, onChanged }: { org: Me["organizations"
         </span>
       )}
       {m.currentCertificate && mayRenew && (
-        <span className="flex gap-3">
+        <span>
           <Button variant="link" size="sm" className="h-auto p-0" disabled={renew.isPending || m.issuance?.status === "running"} onClick={() => renew.mutate()}>
             Renew now
           </Button>

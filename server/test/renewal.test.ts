@@ -315,6 +315,18 @@ describe("manual Renewal", () => {
     expect(await certificates(id)).toHaveLength(2);
   });
 
+  test("a proposal that still awaits Approval cannot be renewed, even by its Owner", async () => {
+    await readyToIssue();
+    const owner = await join("owner@acme.test", "member");
+    const proposed = await h.api(base(), { cookie: owner, body: { ...(await request()), owners: [{ type: "user", id: await userId(owner) }] } });
+    expect(proposed.status).toBe(201);
+    const refused = await renewNow(proposed.body.id, owner);
+    expect(refused.status).toBe(409);
+    expect(refused.body.error).toContain("awaiting Approval");
+    await h.settleIssuances();
+    expect(await certificates(proposed.body.id)).toEqual([]);
+  });
+
   test("only one Renewal runs at a time", async () => {
     await readyToIssue();
     const { id } = await issued();
@@ -374,6 +386,7 @@ describe("a new CSR", () => {
     expect(refusedNames.body.error).toContain(body.names[0]);
 
     expect((await uploadCsr(id, "not a csr")).status).toBe(400);
+    expect((await uploadCsr(id, "x".repeat(70_000))).status).toBe(400);
 
     // None of them was kept: a Renewal still uses the first CSR.
     expect((await renewNow(id)).status).toBe(202);
@@ -488,6 +501,20 @@ describe("failed Renewals", () => {
     expect(await renewalFailing()).toEqual([id]);
     h.setNow(new Date(Date.parse(mc.currentCertificate.notAfter) + DAY));
     expect(await schedule()).toBe(0);
+  });
+
+  test("stays in the failing list while the retry runs", async () => {
+    await readyToIssue();
+    const { id } = await issued();
+    h.setNow(await due(id));
+    h.caDirectories.staging = "https://localhost:1/dir";
+    await schedule();
+    h.caDirectories.staging = h.caDirectories.production;
+    expect((await renewNow(id)).status).toBe(202);
+    expect((await get(id)).issuance.status).toBe("running");
+    expect(await renewalFailing()).toEqual([id]);
+    await h.settleIssuances();
+    expect(await renewalFailing()).toEqual([]);
   });
 
   test("a failed first Issuance is not a failing Renewal", async () => {

@@ -11,7 +11,6 @@ import type { IssuanceFailureCode } from "./issuance-failure";
 export const RENEWAL_MODES = ["automatic", "manual"] as const;
 export type RenewalMode = (typeof RENEWAL_MODES)[number];
 
-export const DEFAULT_RENEWAL_DAYS = 30;
 export const MAX_RENEWAL_DAYS = 365;
 
 export interface RenewalPolicy {

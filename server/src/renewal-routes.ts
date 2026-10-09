@@ -12,6 +12,9 @@ import { Issuance, ManagedCertificate, ManagedCertificateParams, RenewalPolicy, 
 import { sameNames } from "./names";
 import type { Actor, UnitOfWork } from "./unit-of-work";
 
+/** Far more than any CSR for the names a Managed Certificate may have (MAX_NAMES), so a larger body is refused before it is parsed. */
+const MAX_CSR_LENGTH = 64_000;
+
 export function registerRenewalRoutes(ctx: {
   app: OpenAPIHono;
   db: Db;
@@ -63,7 +66,7 @@ export function registerRenewalRoutes(ctx: {
       description:
         "For a key the Owner holds: a new CSR for the same key algorithm and exactly the same names. Nothing is issued now; every Renewal from the next on uses it. " +
         "Organization Administrators and the Managed Certificate's own Owners may.",
-      request: { params: ManagedCertificateParams, body: { content: { "application/json": { schema: z.object({ csr: z.string().min(1).openapi({ description: "PEM." }) }) } } } },
+      request: { params: ManagedCertificateParams, body: { content: { "application/json": { schema: z.object({ csr: z.string().min(1).max(MAX_CSR_LENGTH).openapi({ description: "PEM." }) }) } } } },
       responses: { 200: json(ManagedCertificate, "Stored"), ...errors(400, 401, 403, 404, 422) },
     }),
     async (c) => {

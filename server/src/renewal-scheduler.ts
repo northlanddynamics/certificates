@@ -54,7 +54,13 @@ export function createRenewalScheduler({ db, unitOfWork, issuances, clock }: { d
         const at = nextAttemptAt(policy, { notBefore, notAfter }, failures.get(mc.id));
         if (!at || at > now) continue;
         try {
-          const issuanceId = await unitOfWork.run(null, (tx, change) => issuances.begin(tx, change, null, mc, "scheduled"));
+          const issuanceId = await unitOfWork.run(null, async (tx, change) => {
+            // Looked at again under a lock: a change made since the pass began (a switch to manual, an archive) wins.
+            const [row] = await tx.select().from(managedCertificate).where(eq(managedCertificate.id, mc.id)).for("update");
+            if (!row || row.renewalMode !== "automatic" || row.archivedAt || !["not_required", "approved"].includes(row.approvalStatus)) return null;
+            return issuances.begin(tx, change, null, mc, "scheduled");
+          });
+          if (!issuanceId) continue;
           issuances.start(issuanceId);
           started++;
         } catch (err) {
