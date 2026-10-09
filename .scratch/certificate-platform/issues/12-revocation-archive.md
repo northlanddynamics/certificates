@@ -11,3 +11,7 @@
 - [ ] Archived Managed Certificates, their Certificates and history remain visible under the archived filter and are never hard-deleted.
 - [ ] Archiving, name changes and removing users never revoke anything.
 - [ ] Revocations and archives are audited.
+
+## Notes from ticket 11
+
+- Archiving must also discard a pending name change of the Managed Certificate: call `discardPendingNameChange(tx, change, managedCertificate, "the Managed Certificate was archived")` (server/src/name-change.ts) in the archive's transaction, after locking the Managed Certificate (`lockManagedCertificate`), and add a scenario for it. `refusalToChangeNames` already refuses new name changes of an archived one.

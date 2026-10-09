@@ -18,6 +18,8 @@ export const HISTORY_KINDS = {
   "name_change.proposed": "names_change_proposed",
   "name_change.approved": "names_change_approved",
   "name_change.rejected": "names_change_rejected",
+  "name_change.withdrawn": "names_change_withdrawn",
+  "name_change.discarded": "names_change_discarded",
   "managed_certificate.names_changed": "names_changed",
 } as const;
 type HistoryKind = (typeof HISTORY_KINDS)[keyof typeof HISTORY_KINDS];

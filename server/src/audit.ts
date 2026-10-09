@@ -34,6 +34,8 @@ export type AuditAction =
   | "name_change.proposed"
   | "name_change.approved"
   | "name_change.rejected"
+  | "name_change.withdrawn"
+  | "name_change.discarded"
   | "api_key.created"
   | "api_key.revoked"
   | "api_key.used"

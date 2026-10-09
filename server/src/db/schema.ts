@@ -5,6 +5,7 @@ import type { DnsProviderType } from "../dns-provider-kinds";
 import type { IssuanceFailureCode } from "../issuance-failure";
 import type { KeyAlgorithm, KeyCustody } from "../csr";
 import type { ApprovalStatus } from "../approval";
+import type { NameChangeStatus } from "../name-change";
 import type { RenewalMode } from "../renewal";
 import { organization, team, user } from "./auth-schema";
 
@@ -58,8 +59,9 @@ export const managedCertificate = pgTable(
 /**
  * A change of a Managed Certificate's names, with the CSR for the new names. One by a non-administrator waits for
  * Approval (`pending`) while Renewal carries on with the Managed Certificate's own names and CSR, which the change
- * replaces only when approved; a rejected one is kept as a record and changes nothing. An Organization Administrator's
- * change is applied as it is made and leaves only its Audit Event. At most one is pending for a Managed Certificate.
+ * replaces only when approved. One that is rejected, withdrawn by its proposer or discarded by the platform (its proposer
+ * left the Organization, or its Managed Certificate was archived) is kept as a record and changes nothing. An Organization
+ * Administrator's change is applied as it is made and leaves only its Audit Event. At most one is pending for a Managed Certificate.
  */
 export const nameChange = pgTable(
   "name_change",
@@ -69,13 +71,14 @@ export const nameChange = pgTable(
       .notNull()
       .references(() => organization.id),
     managedCertificateId: uuid("managed_certificate_id").notNull(),
-    status: text("status").$type<"pending" | "approved" | "rejected">().notNull(),
+    status: text("status").$type<NameChangeStatus>().notNull(),
     /** The names asked for; lower case. */
     names: text("names").array().notNull(),
     /** The CSR for `names`, which replaces the Managed Certificate's when the change is approved. */
     csr: text("csr").notNull(),
     proposedById: text("proposed_by_id").notNull(),
     proposedByEmail: text("proposed_by_email").notNull(),
+    /** Who ended it, when and why it ended: an Approver's decision, the proposer's withdrawal, or what made the platform discard it (none, then). */
     decidedById: text("decided_by_id"),
     decidedByEmail: text("decided_by_email"),
     decidedAt: timestamp("decided_at", { withTimezone: true }),
@@ -89,7 +92,7 @@ export const nameChange = pgTable(
     uniqueIndex("name_change_one_pending_per_managed_certificate")
       .on(t.managedCertificateId)
       .where(sql`${t.status} = 'pending'`),
-    check("name_change_status", sql`${t.status} in ('pending', 'approved', 'rejected')`),
+    check("name_change_status", sql`${t.status} in ('pending', 'approved', 'rejected', 'withdrawn', 'discarded')`),
   ],
 );
 

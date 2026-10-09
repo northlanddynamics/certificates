@@ -3,13 +3,13 @@
 // renewal-scheduler.ts and what is due and when in renewal.ts.
 import { OpenAPIHono, createRoute, z } from "@hono/zod-openapi";
 import { and, eq } from "drizzle-orm";
-import { CsrError, MAX_CSR_LENGTH, parseCsr } from "./csr";
+import { parseCsr } from "./csr";
 import type { Db } from "./db/client";
 import { issuance, managedCertificate } from "./db/schema";
 import { HttpError, errors, json } from "./http";
 import { refusalMessage, type Issuances } from "./issuance";
 import { Issuance, ManagedCertificate, ManagedCertificateParams, RenewalPolicy, toIssuance, type ManagedCertificateReader } from "./managed-certificate-reader";
-import { sameNames } from "./names";
+import { checkNamesAndCsr, csrField } from "./names-and-csr";
 import type { Actor, UnitOfWork } from "./unit-of-work";
 
 export function registerRenewalRoutes(ctx: {
@@ -63,7 +63,7 @@ export function registerRenewalRoutes(ctx: {
       description:
         "For a key the Owner holds: a new CSR for the same key algorithm and exactly the same names. Nothing is issued now; every Renewal from the next on uses it. " +
         "Organization Administrators and the Managed Certificate's own Owners may.",
-      request: { params: ManagedCertificateParams, body: { content: { "application/json": { schema: z.object({ csr: z.string().min(1).max(MAX_CSR_LENGTH).openapi({ description: "PEM." }) }) } } } },
+      request: { params: ManagedCertificateParams, body: { content: { "application/json": { schema: z.object({ csr: csrField }) } } } },
       responses: { 200: json(ManagedCertificate, "Stored"), ...errors(400, 401, 403, 404, 422) },
     }),
     async (c) => {
@@ -71,16 +71,7 @@ export function registerRenewalRoutes(ctx: {
       const { csr: pem } = c.req.valid("json");
       const actor = await requireUser(c);
       const mc = await findAsOwnerOr(actor, orgId, id, { managedCertificate: ["replaceCsr"] }, "only an Owner or an Organization Administrator may upload a new CSR for a Managed Certificate");
-      const csr = await parseCsr(pem).catch((err) => {
-        if (err instanceof CsrError) throw new HttpError(400, err.message);
-        throw err;
-      });
-      if (csr.keyAlgorithm !== mc.keyAlgorithm) {
-        throw new HttpError(422, `the CSR's key is ${csr.keyAlgorithm}, but the Managed Certificate's key algorithm is ${mc.keyAlgorithm}`);
-      }
-      if (!sameNames(csr.names, mc.names)) {
-        throw new HttpError(422, `the CSR must ask for exactly the names of the Managed Certificate (${mc.names.join(", ")}), but asks for ${csr.names.join(", ")}`);
-      }
+      const { csr } = await checkNamesAndCsr({ names: mc.names, csr: pem, keyAlgorithm: mc.keyAlgorithm });
       await unitOfWork.run(actor, async (tx, change) => {
         await tx
           .update(managedCertificate)

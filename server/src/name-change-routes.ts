@@ -4,13 +4,13 @@ import { OpenAPIHono, createRoute, z } from "@hono/zod-openapi";
 import type { Context } from "hono";
 import { and, eq } from "drizzle-orm";
 import type { Authorizer } from "./authorization";
-import { CsrError, MAX_CSR_LENGTH, parseCsr } from "./csr";
 import { managedCertificate, nameChange } from "./db/schema";
 import { HttpError, errors, json } from "./http";
 import type { Issuances } from "./issuance";
 import { ManagedCertificate, ManagedCertificateParams, type ManagedCertificateReader } from "./managed-certificate-reader";
-import { MAX_NAMES, normalizeNames, sameNames } from "./names";
-import { applyNames, lockManagedCertificate, pendingNameChanges, refusalToChangeNames } from "./name-change";
+import { sameNames } from "./names";
+import { checkNamesAndCsr, csrField, namesField } from "./names-and-csr";
+import { applyNames, endPendingNameChange, lockManagedCertificate, pendingNameChanges, refusalToChangeNames } from "./name-change";
 import { roleCan } from "./permissions";
 import type { Actor, UnitOfWork } from "./unit-of-work";
 
@@ -23,7 +23,7 @@ export function registerNameChangeRoutes(ctx: {
   reader: ManagedCertificateReader;
 }) {
   const { app, requireUser, authorize, unitOfWork, issuances, reader } = ctx;
-  const { findAsOwnerOr, findManagedCertificate, withState } = reader;
+  const { findAsOwnerOr, findManagedCertificate, findReadable, withState } = reader;
 
   app.openapi(
     createRoute({
@@ -40,8 +40,8 @@ export function registerNameChangeRoutes(ctx: {
           content: {
             "application/json": {
               schema: z.object({
-                names: z.array(z.string()).min(1).max(MAX_NAMES).openapi({ description: "All the names the Managed Certificate is to have; a wildcard is `*.` and a name." }),
-                csr: z.string().min(1).max(MAX_CSR_LENGTH).openapi({ description: "PEM." }),
+                names: namesField("All the names the Managed Certificate is to have."),
+                csr: csrField,
               }),
             },
           },
@@ -58,18 +58,7 @@ export function registerNameChangeRoutes(ctx: {
       // Who may change names outright needs no Approval; an Owner who may not proposes the change instead.
       const needsApproval = !roleCan(role, { managedCertificate: ["changeNames"] });
 
-      const normalized = normalizeNames(body.names);
-      if ("invalid" in normalized) throw new HttpError(400, `"${normalized.invalid}" cannot be a name to issue for`);
-      const csr = await parseCsr(body.csr).catch((err) => {
-        if (err instanceof CsrError) throw new HttpError(400, err.message);
-        throw err;
-      });
-      if (csr.keyAlgorithm !== found.keyAlgorithm) {
-        throw new HttpError(422, `the CSR's key is ${csr.keyAlgorithm}, but the Managed Certificate's key algorithm is ${found.keyAlgorithm}`);
-      }
-      if (!sameNames(csr.names, normalized.names)) {
-        throw new HttpError(422, `the CSR must ask for exactly the new names (${normalized.names.join(", ")}), but asks for ${csr.names.join(", ")}`);
-      }
+      const { names, csr } = await checkNamesAndCsr({ ...body, keyAlgorithm: found.keyAlgorithm });
 
       await unitOfWork.run(actor, async (tx, change) => {
         // Under the lock, so what is decided here is what is there: a change, an archive or an Approval racing this one has finished.
@@ -77,16 +66,16 @@ export function registerNameChangeRoutes(ctx: {
         const refusal = refusalToChangeNames(mc);
         if (refusal) throw new HttpError(409, refusal);
         if ((await pendingNameChanges(tx, [mc.id])).size > 0) throw new HttpError(409, "a name change of this Managed Certificate is already pending Approval; wait for it to be decided");
-        if (sameNames(normalized.names, mc.names)) {
+        if (sameNames(names, mc.names)) {
           throw new HttpError(422, "the Managed Certificate already has the same names; to replace only its CSR, upload a new one");
         }
-        const detail = { from: mc.names, to: normalized.names, csrFingerprint: csr.fingerprint };
+        const detail = { from: mc.names, to: names, csrFingerprint: csr.fingerprint };
         if (needsApproval) {
           await tx.insert(nameChange).values({
             organizationId: orgId,
             managedCertificateId: mc.id,
             status: "pending",
-            names: normalized.names,
+            names: names,
             csr: body.csr,
             proposedById: actor.id,
             proposedByEmail: actor.email,
@@ -94,7 +83,7 @@ export function registerNameChangeRoutes(ctx: {
           await change.audit({ organizationId: orgId, action: "name_change.proposed", target: { type: "managed_certificate", id: mc.id }, detail });
         } else {
           await change.audit({ organizationId: orgId, action: "managed_certificate.names_changed", target: { type: "managed_certificate", id: mc.id }, detail });
-          await applyNames(tx, change, actor, issuances, mc, { names: normalized.names, csr: body.csr });
+          await applyNames(tx, change, actor, issuances, mc, { names: names, csr: body.csr });
         }
       });
       return c.json((await withState([await findManagedCertificate(orgId, id)]))[0]!, 201);
@@ -120,10 +109,13 @@ export function registerNameChangeRoutes(ctx: {
         const refusal = refusalToChangeNames(mc);
         if (refusal) throw new HttpError(409, refusal);
       }
-      await tx
+      const decided = await tx
         .update(nameChange)
         .set({ status: decision, decidedById: actor.id, decidedByEmail: actor.email, decidedAt: change.occurredAt, decisionReason: reason })
-        .where(and(eq(nameChange.id, pending.id), eq(nameChange.status, "pending")));
+        .where(and(eq(nameChange.id, pending.id), eq(nameChange.status, "pending")))
+        .returning({ id: nameChange.id });
+      // Ended by someone else after it was read (a discard by the platform does not take the Managed Certificate's lock).
+      if (decided.length === 0) throw new HttpError(409, "this Managed Certificate has no name change awaiting Approval");
       await change.audit({
         organizationId: orgId,
         action: decision === "approved" ? "name_change.approved" : "name_change.rejected",
@@ -134,6 +126,35 @@ export function registerNameChangeRoutes(ctx: {
     });
     return (await withState([await findManagedCertificate(orgId, id)]))[0]!;
   }
+
+  app.openapi(
+    createRoute({
+      method: "post",
+      path: "/api/organizations/{orgId}/managed-certificates/{id}/name-change/withdraw",
+      tags: ["Name changes"],
+      summary: "Withdraw the pending name change you proposed; the Managed Certificate is otherwise unaffected",
+      description:
+        "Only whoever proposed it may; anyone else who should not see it go ahead asks an Approver to reject it. " +
+        "A change is also discarded, with the reason in its history, when its proposer leaves the Organization or its Managed Certificate is archived.",
+      request: { params: ManagedCertificateParams },
+      responses: { 200: json(ManagedCertificate, "Withdrawn"), ...errors(401, 403, 404, 409) },
+    }),
+    async (c) => {
+      const { orgId, id } = c.req.valid("param");
+      const actor = await requireUser(c);
+      await findReadable(actor, orgId, id);
+      await unitOfWork.run(actor, async (tx, change) => {
+        const mc = await lockManagedCertificate(tx, orgId, id);
+        const pending = (await pendingNameChanges(tx, [mc.id])).get(mc.id);
+        if (!pending) throw new HttpError(409, "this Managed Certificate has no name change awaiting Approval");
+        if (pending.proposedById !== actor.id) throw new HttpError(403, "only whoever proposed a name change may withdraw it");
+        if (!(await endPendingNameChange(tx, change, pending, mc.names, { status: "withdrawn", actor }))) {
+          throw new HttpError(409, "this Managed Certificate has no name change awaiting Approval");
+        }
+      });
+      return c.json((await withState([await findManagedCertificate(orgId, id)]))[0]!, 200);
+    },
+  );
 
   app.openapi(
     createRoute({

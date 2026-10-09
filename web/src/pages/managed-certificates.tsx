@@ -267,6 +267,8 @@ const HISTORY_WORDS = {
   names_change_proposed: "Name change proposed",
   names_change_approved: "Name change approved",
   names_change_rejected: "Name change rejected",
+  names_change_withdrawn: "Name change withdrawn",
+  names_change_discarded: "Name change discarded",
   names_changed: "Names changed",
 } as const;
 const historyLine = (e: HistoryEntry) =>

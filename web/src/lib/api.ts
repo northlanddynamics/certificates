@@ -87,7 +87,7 @@ export interface PendingNameChange {
 }
 export type HistoryEntry =
   | {
-      kind: "created" | "proposed" | "approved" | "rejected" | "names_change_proposed" | "names_change_approved" | "names_change_rejected" | "names_changed";
+      kind: "created" | "proposed" | "approved" | "rejected" | "names_change_proposed" | "names_change_approved" | "names_change_rejected" | "names_change_withdrawn" | "names_change_discarded" | "names_changed";
       at: string;
       actor: { id: string; email: string } | null;
       reason: string | null;
@@ -198,6 +198,8 @@ export const api = {
   /** An Organization Administrator's change applies at once; anyone else's is proposed and waits for Approval. */
   changeNames: (orgId: string, id: string, body: { names: string[]; csr: string }) =>
     call<ManagedCertificate>(`/api/organizations/${orgId}/managed-certificates/${id}/name-change`, { body }),
+  withdrawNameChange: (orgId: string, id: string) =>
+    call<ManagedCertificate>(`/api/organizations/${orgId}/managed-certificates/${id}/name-change/withdraw`, { method: "POST", body: {} }),
   approveNameChange: (orgId: string, id: string, reason?: string) =>
     call<ManagedCertificate>(`/api/organizations/${orgId}/managed-certificates/${id}/name-change/approve`, { body: { reason } }),
   rejectNameChange: (orgId: string, id: string, reason: string) =>

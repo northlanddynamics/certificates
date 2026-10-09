@@ -5,6 +5,7 @@ import { afterAll, beforeAll, beforeEach, describe, expect, setDefaultTimeout, t
 import { Pkcs10CertificateRequest } from "@peculiar/x509";
 import acme from "acme-client";
 import { X509Certificate, randomBytes } from "node:crypto";
+import { discardPendingNameChange } from "../src/name-change";
 import { BIND, PASSWORD, createHarness, type Harness } from "./harness";
 
 setDefaultTimeout(60_000);
@@ -309,6 +310,101 @@ describe("deciding a name change", () => {
     await h.settleIssuances();
     const decisions = (await auditOf()).filter((e) => e.action === "name_change.approved" || e.action === "name_change.rejected");
     expect(decisions).toHaveLength(1);
+  });
+});
+
+describe("a name change that ends without a decision", () => {
+  const withdraw = (id: string, cookie: string) => h.api(`${base()}/${id}/name-change/withdraw`, { cookie, body: {} });
+
+  test("its proposer withdraws it, and it is gone from the queue, audited and in the history", async () => {
+    const mc = await setup();
+    await propose(mc.id, await change([host()]), mc.owner);
+
+    const withdrawn = await withdraw(mc.id, mc.owner);
+
+    expect(withdrawn.status).toBe(200);
+    expect(withdrawn.body.pendingNameChange).toBeNull();
+    expect(withdrawn.body.names).toEqual(mc.names);
+    expect((await queue(mc.approver)).body.nameChanges).toEqual([]);
+    expect((await auditOf()).find((e) => e.action === "name_change.withdrawn")).toMatchObject({ actor: { email: "owner@acme.test" }, target: { id: mc.id }, detail: { from: mc.names, proposedBy: "owner@acme.test" } });
+    const history = (await h.api(`${base()}/${mc.id}/history`, { cookie: mc.owner })).body.items as { kind: string }[];
+    expect(history.map((e) => e.kind)).toContain("names_change_withdrawn");
+    // Nothing is left to decide, and another may be proposed.
+    expect((await decide(mc.id, "approve", mc.approver)).status).toBe(409);
+    expect((await withdraw(mc.id, mc.owner)).status).toBe(409);
+    expect((await propose(mc.id, await change([host()]), mc.owner)).status).toBe(201);
+  });
+
+  test("nobody else withdraws it: others decide it", async () => {
+    const mc = await setup();
+    await propose(mc.id, await change([host()]), mc.owner);
+    const coOwner = await join("co-owner@acme.test", "member");
+    await h.api(`${base()}/${mc.id}/owners`, { cookie: org.cookie, body: { type: "user", id: await userId(coOwner) } });
+
+    expect((await withdraw(mc.id, coOwner)).status).toBe(403);
+    expect((await withdraw(mc.id, mc.approver)).status).toBe(403);
+    expect((await withdraw(mc.id, org.cookie)).status).toBe(403);
+    expect((await withdraw(mc.id, globex.cookie)).status).toBe(404);
+    expect((await get(mc.id)).pendingNameChange).not.toBeNull();
+  });
+
+  test("of a withdrawal and an approval at once, one wins", async () => {
+    const mc = await setup();
+    await propose(mc.id, await change([host()]), mc.owner);
+
+    const results = await Promise.all([withdraw(mc.id, mc.owner), decide(mc.id, "approve", mc.approver)]);
+
+    expect(results.map((r) => r.status).sort()).toEqual([200, 409]);
+    await h.settleIssuances();
+    const events = (await auditOf()).map((e) => e.action);
+    expect(events.filter((a) => a === "name_change.withdrawn" || a === "name_change.approved")).toHaveLength(1);
+    expect((await get(mc.id)).names.length).toBe(1);
+  });
+
+  test("it is discarded when its proposer leaves the Organization, and the Managed Certificate is unaffected", async () => {
+    const mc = await setup();
+    await propose(mc.id, await change([host()]), mc.owner);
+    const members = (await h.api(`/api/auth/organization/list-members?organizationId=${org.orgId}`, { cookie: org.cookie })).body.members as { id: string; userId: string }[];
+    const ownerId = await userId(mc.owner);
+
+    const removed = await h.api("/api/auth/organization/remove-member", {
+      cookie: org.cookie,
+      body: { memberIdOrEmail: members.find((m) => m.userId === ownerId)!.id, organizationId: org.orgId },
+    });
+
+    expect(removed.status).toBe(200);
+    expect((await queue(mc.approver)).body.nameChanges).toEqual([]);
+    expect((await get(mc.id, org.cookie)).pendingNameChange).toBeNull();
+    expect((await get(mc.id, org.cookie)).names).toEqual(mc.names);
+    expect((await auditOf()).find((e) => e.action === "name_change.discarded")).toMatchObject({
+      actor: { email: "admin@acme.test" },
+      target: { id: mc.id },
+      detail: { from: mc.names, proposedBy: "owner@acme.test", reason: expect.stringContaining("left the Organization") },
+    });
+    expect((await decide(mc.id, "approve", mc.approver)).status).toBe(409);
+  });
+
+  test("it is discarded when its Managed Certificate is archived (the Archive's one call), and a change proposed by another is left alone", async () => {
+    const mc = await setup();
+    await propose(mc.id, await change([host()]), mc.owner);
+    // Another Managed Certificate, with a change of its own pending.
+    const second = await h.api(base(), { cookie: org.cookie, body: { ...(await request()), owners: [{ type: "user", id: await userId(mc.approver) }] } });
+    await h.settleIssuances();
+    const other = { id: second.body.id as string };
+    expect((await propose(other.id, await change([host()]), mc.approver)).status).toBe(201);
+
+    await h.unitOfWork.run({ id: await userId(org.cookie), email: "admin@acme.test" }, async (tx, c) => {
+      await discardPendingNameChange(tx, c, { id: mc.id, organizationId: org.orgId }, "the Managed Certificate was archived");
+      // Nothing pending is no error.
+      await discardPendingNameChange(tx, c, { id: mc.id, organizationId: org.orgId }, "the Managed Certificate was archived");
+    });
+
+    expect((await get(mc.id)).pendingNameChange).toBeNull();
+    expect((await get(other.id)).pendingNameChange).not.toBeNull();
+    const discarded = (await auditOf()).filter((e) => e.action === "name_change.discarded");
+    expect(discarded).toHaveLength(1);
+    expect(discarded[0]).toMatchObject({ target: { id: mc.id }, detail: { reason: "the Managed Certificate was archived" } });
+    expect((await h.api(`${base()}/${mc.id}/history`, { cookie: org.cookie })).body.items.map((e: any) => e.kind)).toContain("names_change_discarded");
   });
 });
 

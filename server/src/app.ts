@@ -21,6 +21,7 @@ import { registerApprovals } from "./approvals";
 import { registerHistory } from "./history";
 import { createManagedCertificateReader } from "./managed-certificate-reader";
 import { registerManagedCertificates } from "./managed-certificates";
+import { discardNameChangesOfRemoved } from "./name-change";
 import { registerNameChangeRoutes } from "./name-change-routes";
 import { registerOwnerRoutes } from "./owner-routes";
 import { createRenewalScheduler } from "./renewal-scheduler";
@@ -70,6 +71,7 @@ export function createApp(deps: AppDeps) {
     webURL,
     memberRemovalHooks: [
       removeUserFromOwners,
+      discardNameChangesOfRemoved,
       // The host's own (a test adds one while the app runs), so they are looked at when a member is removed.
       async (tx, removed, change) => {
         for (const hook of deps.memberRemovalHooks ?? []) await hook(tx, removed, change);

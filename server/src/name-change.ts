@@ -10,7 +10,11 @@ import type { Tx, Db } from "./db/client";
 import { managedCertificate, nameChange } from "./db/schema";
 import { HttpError } from "./http";
 import type { Issuances } from "./issuance";
+import type { MemberRemovalHook } from "./member-removal";
 import type { Actor, Change } from "./unit-of-work";
+
+/** What became of a name change: pending, decided by an Approver, or ended without a decision (withdrawn by its proposer, discarded by the platform). */
+export type NameChangeStatus = "pending" | "approved" | "rejected" | "withdrawn" | "discarded";
 
 /** A name change waiting for Approval. */
 export const PendingNameChange = z.object({
@@ -78,3 +82,61 @@ export async function applyNames(tx: Tx, change: Change, actor: Actor, issuances
     throw new Error(`the Issuance of a Managed Certificate whose names were just changed was refused: ${begun.refused}`);
   }
 }
+
+/**
+ * Ends the pending change without a decision on it, audited: withdrawn by whoever proposed it (`actor`), or discarded by
+ * the platform because what it was proposed for is gone (`reason` says what). Whoever decides it, or ends it, does so on
+ * a change that is still pending, so of two at once one wins; false for the one that finds it already ended.
+ */
+export async function endPendingNameChange(
+  tx: Tx,
+  change: Change,
+  pending: NameChangeRow,
+  currentNames: string[],
+  ending: { status: "withdrawn"; actor: Actor } | { status: "discarded"; reason: string },
+): Promise<boolean> {
+  const ended = await tx
+    .update(nameChange)
+    .set({
+      status: ending.status,
+      decidedById: "actor" in ending ? ending.actor.id : null,
+      decidedByEmail: "actor" in ending ? ending.actor.email : null,
+      decidedAt: change.occurredAt,
+      decisionReason: "reason" in ending ? ending.reason : null,
+    })
+    .where(and(eq(nameChange.id, pending.id), eq(nameChange.status, "pending")))
+    .returning({ id: nameChange.id });
+  if (ended.length === 0) return false;
+  await change.audit({
+    organizationId: pending.organizationId,
+    action: ending.status === "withdrawn" ? "name_change.withdrawn" : "name_change.discarded",
+    target: { type: "managed_certificate", id: pending.managedCertificateId },
+    detail: { from: currentNames, to: pending.names, proposedBy: pending.proposedByEmail, ...("reason" in ending && { reason: ending.reason }) },
+  });
+  return true;
+}
+
+/**
+ * For the Archive of a Managed Certificate, which calls it on its own transaction: a change that waits for Approval of
+ * names that will not be issued is discarded, with the reason given. Nothing pending is not an error.
+ */
+export async function discardPendingNameChange(tx: Tx, change: Change, mc: { id: string; organizationId: string }, reason: string) {
+  const pending = (await pendingNameChanges(tx, [mc.id])).get(mc.id);
+  if (!pending) return;
+  const [row] = await tx
+    .select({ names: managedCertificate.names })
+    .from(managedCertificate)
+    .where(and(eq(managedCertificate.id, mc.id), eq(managedCertificate.organizationId, mc.organizationId)));
+  await endPendingNameChange(tx, change, pending, row!.names, { status: "discarded", reason });
+}
+
+/** Runs when a user is removed from an Organization: what they proposed and is still waiting for Approval is discarded, as nobody is left to answer for it. */
+export const discardNameChangesOfRemoved: MemberRemovalHook = async (tx, { organizationId, userId }, change) => {
+  const rows = await tx
+    .select({ pending: nameChange, currentNames: managedCertificate.names })
+    .from(nameChange)
+    .innerJoin(managedCertificate, and(eq(managedCertificate.id, nameChange.managedCertificateId), eq(managedCertificate.organizationId, nameChange.organizationId)))
+    .where(and(eq(nameChange.organizationId, organizationId), eq(nameChange.proposedById, userId), eq(nameChange.status, "pending")))
+    .orderBy(asc(nameChange.createdAt), asc(nameChange.id));
+  for (const { pending, currentNames } of rows) await endPendingNameChange(tx, change, pending, currentNames, { status: "discarded", reason: "its proposer left the Organization" });
+};

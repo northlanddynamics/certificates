@@ -8,14 +8,14 @@ import { OpenAPIHono, createRoute, z } from "@hono/zod-openapi";
 import { and, asc, eq } from "drizzle-orm";
 import type { Authorizer } from "./authorization";
 import { ACME_ENVIRONMENTS } from "./certificate-authority";
-import { CsrError, KEY_ALGORITHMS, parseCsr } from "./csr";
+import { KEY_ALGORITHMS } from "./csr";
 import type { Db } from "./db/client";
 import { issuance, managedCertificate } from "./db/schema";
 import { HttpError, OrgParam, errors, json } from "./http";
 import { InventoryQuery, inventoryCondition } from "./inventory-filters";
 import { refusalMessage, type Issuances } from "./issuance";
 import { Certificate, Issuance, ManagedCertificate, ManagedCertificateParams, toCertificate, toIssuance, type ManagedCertificateReader } from "./managed-certificate-reader";
-import { MAX_NAMES, normalizeNames, sameNames } from "./names";
+import { checkNamesAndCsr, csrField, namesField } from "./names-and-csr";
 import { OwnerRef, addOwner } from "./owners";
 import { roleCan } from "./permissions";
 import type { Actor, UnitOfWork } from "./unit-of-work";
@@ -77,9 +77,9 @@ export function registerManagedCertificates(ctx: {
           content: {
             "application/json": {
               schema: z.object({
-                names: z.array(z.string()).min(1).max(MAX_NAMES).openapi({ description: "DNS names; a wildcard is `*.` and a name." }),
+                names: namesField("The DNS names to issue for."),
                 keyAlgorithm: z.enum(KEY_ALGORITHMS),
-                csr: z.string().min(1).openapi({ description: "PEM." }),
+                csr: csrField,
                 environment: z.enum(ACME_ENVIRONMENTS).default("staging").openapi({ description: "Which of the Organization's ACME accounts to issue through." }),
                 owners: z.array(OwnerRef).max(MAX_OWNERS).default([]).openapi({ description: "Users and Teams of the Organization accountable for it; none is allowed." }),
               }),
@@ -98,25 +98,14 @@ export function registerManagedCertificates(ctx: {
       const needsApproval = !roleCan(role, { managedCertificate: ["create"] });
       if (needsApproval) await authorize(actor, orgId, { managedCertificate: ["propose"] });
 
-      const normalized = normalizeNames(body.names);
-      if ("invalid" in normalized) throw new HttpError(400, `"${normalized.invalid}" cannot be a name to issue for`);
-      const csr = await parseCsr(body.csr).catch((err) => {
-        if (err instanceof CsrError) throw new HttpError(400, err.message);
-        throw err;
-      });
-      if (csr.keyAlgorithm !== body.keyAlgorithm) {
-        throw new HttpError(422, `the CSR's key is ${csr.keyAlgorithm}, but the Managed Certificate's key algorithm is ${body.keyAlgorithm}`);
-      }
-      if (!sameNames(csr.names, normalized.names)) {
-        throw new HttpError(422, `the CSR must ask for exactly the names being issued (${normalized.names.join(", ")}), but asks for ${csr.names.join(", ")}`);
-      }
+      const { names, csr } = await checkNamesAndCsr(body);
 
       const created = await unitOfWork.run(actor, async (tx, change) => {
         const [row] = await tx
           .insert(managedCertificate)
           .values({
             organizationId: orgId,
-            names: normalized.names,
+            names,
             keyAlgorithm: body.keyAlgorithm,
             keyCustody: "owner",
             environment: body.environment,
@@ -128,7 +117,7 @@ export function registerManagedCertificates(ctx: {
           organizationId: orgId,
           action: needsApproval ? "managed_certificate.proposed" : "managed_certificate.created",
           target: { type: "managed_certificate", id: row!.id },
-          detail: { names: normalized.names, keyAlgorithm: body.keyAlgorithm, keyCustody: "owner", environment: body.environment, csrFingerprint: csr.fingerprint },
+          detail: { names, keyAlgorithm: body.keyAlgorithm, keyCustody: "owner", environment: body.environment, csrFingerprint: csr.fingerprint },
         });
         // Whoever creates or proposes may name the Owners at the same time; each is audited as added (naming one twice adds it once).
         for (const ref of body.owners) await addOwner(tx, change, orgId, row!.id, ref);

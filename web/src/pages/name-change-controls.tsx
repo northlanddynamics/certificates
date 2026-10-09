@@ -22,12 +22,21 @@ export function NameChange({ org, m, userId, onChanged }: { org: Me["organizatio
     },
   });
 
+  const withdraw = useMutation({ mutationFn: () => api.withdrawNameChange(org.id, m.id), onSuccess: onChanged });
+
   if (!m.pendingNameChange && !mayChange) return null;
   return (
     <div className="flex flex-col gap-1">
       {m.pendingNameChange && (
         <span className="text-muted-foreground">
           Name change awaiting Approval, proposed by {m.pendingNameChange.proposedBy.email}: {m.pendingNameChange.names.join(", ")}. Renewal continues with the names above.
+        </span>
+      )}
+      {m.pendingNameChange?.proposedBy.id === userId && (
+        <span>
+          <Button variant="link" size="sm" className="h-auto p-0" disabled={withdraw.isPending} onClick={() => withdraw.mutate()}>
+            Withdraw the name change
+          </Button>
         </span>
       )}
       {mayChange && !m.pendingNameChange && (
@@ -57,7 +66,7 @@ export function NameChange({ org, m, userId, onChanged }: { org: Me["organizatio
           </form>
         </details>
       )}
-      {change.error && <span className="text-destructive">{change.error.message}</span>}
+      {(change.error ?? withdraw.error) && <span className="text-destructive">{(change.error ?? withdraw.error)!.message}</span>}
     </div>
   );
 }

@@ -1,0 +1,2 @@
+ALTER TABLE "name_change" DROP CONSTRAINT "name_change_status";--> statement-breakpoint
+ALTER TABLE "name_change" ADD CONSTRAINT "name_change_status" CHECK ("name_change"."status" in ('pending', 'approved', 'rejected', 'withdrawn', 'discarded'));
