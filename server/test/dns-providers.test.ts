@@ -128,6 +128,20 @@ describe("testing the connection", () => {
   });
 });
 
+describe("a provider that cannot be used at all", () => {
+  test("is reported by the test, and audited like any other result", async () => {
+    const { body } = await admin().create();
+    // Settings that no longer parse, as after a release that tightened them.
+    await h.pool.query(`update dns_provider set settings = '{"server": 7}'::jsonb where id = $1`, [body.id]);
+
+    const tested = await admin().test(body.id);
+    expect(tested.status).toBe(200);
+    expect(tested.body).toEqual({ ok: false, error: expect.any(String) });
+    const events = (await h.api(`/api/organizations/${acmeOrg.orgId}/audit-events`, { cookie: acmeOrg.cookie })).body.items;
+    expect(events.at(-1)).toMatchObject({ action: "dns_provider.tested", detail: { ok: false } });
+  });
+});
+
 describe("changing a DNS Provider", () => {
   test("settings and name change, the secret stays, and the test then reflects the change", async () => {
     const { body } = await admin().create(rfc2136({ settings: { zone: BIND.readonlyZone } }));

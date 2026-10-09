@@ -242,8 +242,13 @@ export function registerDnsProviders(ctx: {
       await authorize(actor, orgId, { dnsProvider: ["test"] });
       const existing = await findProvider(orgId, providerId);
       // The DNS server is asked outside any transaction: only the record of the test is written in one.
-      const outcome: { ok: true } | { ok: false; error: string } = await (await dnsProviders.open(db, orgId, existing.id))
-        .testConnection()
+      const outcome: { ok: true } | { ok: false; error: string } = await dnsProviders
+        .open(db, orgId, existing.id)
+        .then(
+          (provider) => provider.testConnection(),
+          // Stored settings or a secret that can no longer be used are as much a failed test as a server that says no.
+          () => Promise.reject(new DnsProviderError("rejected", "the stored settings or secret cannot be used; change the settings or replace the secret")),
+        )
         .then(
           () => ({ ok: true as const }),
           (err) => {

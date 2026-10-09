@@ -22,3 +22,10 @@ Implemented on `main`; typecheck and the full Seam A suite pass against Postgres
 - The protocol is spoken directly (DNS UPDATE and TSIG, hmac-sha1/256/384/512 and md5) over TCP, and every reply must be correctly signed or the update counts as failed. Tests run against a real BIND (`docker/bind`), whose keys cover each algorithm. Not supported: GSS-TSIG (Windows secure dynamic updates) and UDP.
 - Known: the platform connects to whatever `server` and `port` an administrator enters, and "test connection" tells them whether it answered. For a hosted platform that makes an Organization Administrator able to probe the platform's own network. Not addressed here; relayed providers (16) move internal DNS behind an Agent, and egress restrictions belong with deployment (26).
 - Known: CI (`.github/workflows/ci.yml`) provides only Postgres, so the Pebble tests from 03 and these BIND tests do not run there yet.
+
+Review: stored settings or a secret that can no longer be used are now a failed, audited test rather than a 500, and any TSIG error code a server returns is reported. Left as they are, for the tickets that need them:
+
+- Windows secure dynamic updates use GSS-TSIG, which is not built, so story 40 is met for BIND and any server that takes TSIG-signed updates but not for Windows DNS with secure updates.
+- The interface has no "which names does this provider cover" accessor; 05 and 13 will need one (the settings carry a `zone` today, as plain data).
+- "The same provider code" on an Agent (16) means a Go port of the DNS UPDATE and TSIG code; what the two share is the data shape (kind, settings, secret) and the BIND-backed tests as the behaviour to match. `DnsProviderError.kind` will need a value for "no relay Agent online".
+- The connection test uses `_acme-challenge.<zone>`: a server whose policy allows only specific names, or where that name is a CNAME, fails the test although real challenges might work. If the update was applied but its reply lost, a test record can stay behind.

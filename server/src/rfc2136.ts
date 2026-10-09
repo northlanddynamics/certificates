@@ -264,6 +264,7 @@ export function createRfc2136(settings: Rfc2136Settings, secret: string, { timeo
       throw rejected(`the server rejected the TSIG signature (BADSIG): the key's secret or algorithm differs from the server's`);
     if (tsigError === "BADTIME")
       throw rejected(`the server rejected the TSIG time (BADTIME): the platform's clock and the server's are more than ${FUDGE_SECONDS / 60} minutes apart`);
+    if (reply.tsig?.error) throw rejected(`the server rejected the TSIG signature (error code ${reply.tsig.error})`);
     if (!reply.tsig) {
       if (reply.rcode === 0) throw rejected(`the server's reply was not signed with the TSIG key, so it cannot be trusted`);
     } else if (!replyIsAuthentic(key, raw, reply, request.mac, Math.floor(Date.now() / 1000))) {
