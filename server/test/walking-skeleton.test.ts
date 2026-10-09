@@ -1,4 +1,5 @@
 import { afterAll, beforeAll, beforeEach, describe, expect, test } from "bun:test";
+import { managedCertificate } from "../src/db/schema";
 import { createHarness, type Harness } from "./harness";
 
 let h: Harness;
@@ -100,7 +101,7 @@ describe("walking skeleton", () => {
     const meA = await h.api("/api/me", { cookie: a.cookie });
     expect(meA.body.organizations.map((o: any) => o.id)).toEqual([a.orgId]);
     // Rows that exist in B never leak into A's inventory.
-    await h.pool.query(`insert into managed_certificate (organization_id) values ($1)`, [b.orgId]);
+    await h.db.insert(managedCertificate).values({ organizationId: b.orgId });
     const inv = await h.api(`/api/organizations/${a.orgId}/managed-certificates`, { cookie: a.cookie });
     expect(inv.body.items).toEqual([]);
   });

@@ -3,6 +3,7 @@
 // (email is captured, the clock is injectable). Later tickets' API tests live here.
 import { Pool } from "pg";
 import { createApp, type AppDeps } from "../src/app";
+import type { Db } from "../src/db/client";
 import { CapturingMailer } from "../src/mailer";
 import { runMigrations } from "../src/migrate";
 import { bootstrapPlatformOperator } from "../src/operator";
@@ -15,6 +16,7 @@ const BASE = "http://localhost";
 export interface Harness {
   app: ReturnType<typeof createApp>["app"];
   pool: Pool;
+  db: Db;
   mailer: CapturingMailer;
   setNow(d: Date): void;
   /** Sign up (Better Auth) and return the session cookie. */
@@ -48,12 +50,11 @@ export async function createHarness(): Promise<Harness> {
     baseURL: BASE,
     secret: "test-secret-test-secret-test-secret-1234",
   };
-  const { app, auth } = createApp(deps);
-  await runMigrations(pool, auth.options);
+  const { app, auth, db } = createApp(deps);
+  await runMigrations(pool);
   const reset = async () => {
-    await pool.query(
-      `truncate audit_event, managed_certificate, invitation, member, session, account, verification, organization, "user" cascade`,
-    );
+    // Cascades through every table that references an Organization or a user.
+    await pool.query(`truncate organization, "user" cascade`);
     mailer.sent.length = 0;
     now = new Date("2026-01-01T00:00:00Z");
   };
@@ -69,6 +70,7 @@ export async function createHarness(): Promise<Harness> {
   return {
     app,
     pool,
+    db,
     mailer,
     setNow: (d) => {
       now = d;
@@ -84,7 +86,7 @@ export async function createHarness(): Promise<Harness> {
       return cookieFrom(res);
     },
     async createOperator(email, password) {
-      await bootstrapPlatformOperator(auth, pool, { email, password, name: "Operator" });
+      await bootstrapPlatformOperator(auth, db, { email, password, name: "Operator" });
       const res = await post("/api/auth/sign-in/email", { email, password });
       return cookieFrom(res);
     },

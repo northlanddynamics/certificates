@@ -1,53 +1,31 @@
-import { getMigrations } from "better-auth/db/migration";
-import { readdir, readFile } from "node:fs/promises";
+import { migrate } from "drizzle-orm/node-postgres/migrator";
 import { join } from "node:path";
 import { Pool } from "pg";
-import { createAuth } from "./auth";
+import { createDb } from "./db/client";
 
 /** Serialises concurrent migration runs (e.g. several app instances starting together). */
 const MIGRATION_LOCK_ID = 7731001;
-const MIGRATIONS_DIR = join(import.meta.dir, "..", "migrations");
+const MIGRATIONS_FOLDER = join(import.meta.dir, "..", "drizzle");
 
 /**
- * Applies Better Auth's schema (identity, organizations, invitations), then the
- * platform's own numbered SQL migrations. Safe to run repeatedly.
+ * Applies the SQL migrations in server/drizzle, which drizzle-kit generates from
+ * server/src/db/schema.ts (itself including the schema the Better Auth CLI generates).
+ * Safe to run repeatedly.
  */
-export async function runMigrations(pool: Pool, authOptions: Parameters<typeof getMigrations>[0]) {
-  const { runMigrations: runAuthMigrations } = await getMigrations(authOptions);
-  await runAuthMigrations();
-
-  await pool.query(
-    `create table if not exists schema_migration (name text primary key, applied_at timestamptz not null default now())`,
-  );
-  const files = (await readdir(MIGRATIONS_DIR)).filter((f) => f.endsWith(".sql")).sort();
-  for (const file of files) {
-    const client = await pool.connect();
-    try {
-      await client.query(`select pg_advisory_lock(${MIGRATION_LOCK_ID})`);
-      const done = await client.query(`select 1 from schema_migration where name = $1`, [file]);
-      if (done.rowCount) continue;
-      await client.query("begin");
-      await client.query(await readFile(join(MIGRATIONS_DIR, file), "utf8"));
-      await client.query(`insert into schema_migration (name) values ($1)`, [file]);
-      await client.query("commit");
-    } catch (err) {
-      await client.query("rollback").catch(() => {});
-      throw err;
-    } finally {
-      await client.query(`select pg_advisory_unlock(${MIGRATION_LOCK_ID})`).catch(() => {});
-      client.release();
-    }
+export async function runMigrations(pool: Pool) {
+  const lock = await pool.connect();
+  try {
+    await lock.query(`select pg_advisory_lock(${MIGRATION_LOCK_ID})`);
+    await migrate(createDb(pool), { migrationsFolder: MIGRATIONS_FOLDER });
+  } finally {
+    await lock.query(`select pg_advisory_unlock(${MIGRATION_LOCK_ID})`).catch(() => {});
+    lock.release();
   }
 }
 
 if (import.meta.main) {
   const pool = new Pool({ connectionString: process.env.DATABASE_URL });
-  const auth = createAuth({
-    pool,
-    baseURL: process.env.BASE_URL ?? "http://localhost:3000",
-    secret: process.env.AUTH_SECRET ?? "migrate-only",
-  });
-  await runMigrations(pool, auth.options);
+  await runMigrations(pool);
   await pool.end();
   console.log("migrations applied");
 }

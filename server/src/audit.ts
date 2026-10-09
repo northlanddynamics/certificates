@@ -1,6 +1,6 @@
-import type { Pool, PoolClient } from "pg";
-
-type Queryable = Pool | PoolClient;
+import { asc, eq } from "drizzle-orm";
+import type { Db, Tx } from "./db/client";
+import { auditEvent } from "./db/schema";
 
 export interface AuditInput {
   organizationId: string;
@@ -11,27 +11,32 @@ export interface AuditInput {
   detail?: Record<string, unknown>;
 }
 
-/** Call with the transaction's client so the entry commits or rolls back with the change it records. */
-export async function recordAudit(db: Queryable, e: AuditInput) {
-  await db.query(
-    `insert into audit_event (organization_id, occurred_at, actor_id, actor_email, action, target_type, target_id, detail)
-     values ($1, $2, $3, $4, $5, $6, $7, $8)`,
-    [e.organizationId, e.occurredAt, e.actor.id, e.actor.email, e.action, e.target.type, e.target.id ?? null, e.detail ?? {}],
-  );
+/** Call with the transaction handle so the entry commits or rolls back with the change it records. */
+export async function recordAudit(db: Db | Tx, e: AuditInput) {
+  await db.insert(auditEvent).values({
+    organizationId: e.organizationId,
+    occurredAt: e.occurredAt,
+    actorId: e.actor.id,
+    actorEmail: e.actor.email,
+    action: e.action,
+    targetType: e.target.type,
+    targetId: e.target.id ?? null,
+    detail: e.detail ?? {},
+  });
 }
 
-export async function listAudit(db: Queryable, organizationId: string) {
-  const { rows } = await db.query(
-    `select id, occurred_at, actor_id, actor_email, action, target_type, target_id, detail
-       from audit_event where organization_id = $1 order by id`,
-    [organizationId],
-  );
+export async function listAudit(db: Db, organizationId: string) {
+  const rows = await db
+    .select()
+    .from(auditEvent)
+    .where(eq(auditEvent.organizationId, organizationId))
+    .orderBy(asc(auditEvent.id));
   return rows.map((r) => ({
     id: String(r.id),
-    occurredAt: (r.occurred_at as Date).toISOString(),
-    actor: { id: r.actor_id as string | null, email: r.actor_email as string | null },
-    action: r.action as string,
-    target: { type: r.target_type as string, id: r.target_id as string | null },
-    detail: r.detail as Record<string, unknown>,
+    occurredAt: r.occurredAt.toISOString(),
+    actor: { id: r.actorId, email: r.actorEmail },
+    action: r.action,
+    target: { type: r.targetType, id: r.targetId },
+    detail: r.detail,
   }));
 }

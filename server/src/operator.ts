@@ -1,15 +1,16 @@
-import type { Pool } from "pg";
+import { eq } from "drizzle-orm";
 import { PLATFORM_OPERATOR_ROLE, type Auth } from "./auth";
+import type { Db } from "./db/client";
+import { user } from "./db/schema";
 
 /** Creates (or promotes) a Platform Operator. Run at install time; also used by tests. */
 export async function bootstrapPlatformOperator(
   auth: Auth,
-  pool: Pool,
+  db: Db,
   input: { email: string; password: string; name: string },
 ) {
-  const existing = await pool.query(`select id from "user" where email = $1`, [input.email.toLowerCase()]);
-  if (!existing.rowCount) {
-    await auth.api.signUpEmail({ body: input });
-  }
-  await pool.query(`update "user" set role = $2 where email = $1`, [input.email.toLowerCase(), PLATFORM_OPERATOR_ROLE]);
+  const email = input.email.toLowerCase();
+  const [existing] = await db.select({ id: user.id }).from(user).where(eq(user.email, email));
+  if (!existing) await auth.api.signUpEmail({ body: input });
+  await db.update(user).set({ role: PLATFORM_OPERATOR_ROLE }).where(eq(user.email, email));
 }

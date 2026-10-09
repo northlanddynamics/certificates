@@ -9,17 +9,17 @@ const secret = process.env.AUTH_SECRET;
 if (!databaseUrl || !secret) throw new Error("DATABASE_URL and AUTH_SECRET are required");
 
 const pool = new Pool({ connectionString: databaseUrl });
-const { app, auth } = createApp({
+const { app, auth, db } = createApp({
   pool,
   mailer: new ConsoleMailer(),
   clock: () => new Date(),
   baseURL: process.env.BASE_URL ?? "http://localhost:3000",
   secret,
 });
-await runMigrations(pool, auth.options);
+await runMigrations(pool);
 
 if (process.env.OPERATOR_EMAIL && process.env.OPERATOR_PASSWORD) {
-  await bootstrapPlatformOperator(auth, pool, {
+  await bootstrapPlatformOperator(auth, db, {
     email: process.env.OPERATOR_EMAIL,
     password: process.env.OPERATOR_PASSWORD,
     name: "Platform Operator",

@@ -16,6 +16,14 @@ bun run dev:web                    # UI on :5173, proxies /api to :3000
 
 Invitation emails are printed to the server console in development.
 
+## Database schema
+
+Drizzle ORM is the data layer; Better Auth uses it through its Drizzle adapter.
+
+- Better Auth's tables come from its CLI: after changing plugins in `server/src/auth.ts`, run `bun run auth:generate` (writes `server/src/db/auth-schema.ts`; do not edit it by hand).
+- The platform's own tables are in `server/src/db/schema.ts`.
+- `bun run db:generate` turns the schema into a SQL migration in `server/drizzle/` (add `--custom` for hand-written SQL such as triggers). Migrations are applied on server start, or with `bun run migrate`.
+
 ## Check
 
 ```bash
