@@ -167,4 +167,17 @@ describe("walking skeleton", () => {
       ]),
     );
   });
+
+  test("one API reference page shows the platform routes and Better Auth's own routes", async () => {
+    const auth = await h.api("/api/auth/open-api/generate-schema");
+    expect(auth.status).toBe(200);
+    expect(Object.keys(auth.body.paths)).toEqual(expect.arrayContaining(["/sign-in/email", "/sign-up/email"]));
+
+    const res = await h.app.request("http://localhost/api/docs");
+    expect(res.status).toBe(200);
+    expect(res.headers.get("content-type")).toContain("text/html");
+    const html = await res.text();
+    expect(html).toContain("/api/openapi.json");
+    expect(html).toContain("/api/auth/open-api/generate-schema");
+  });
 });

@@ -1,5 +1,5 @@
 import { betterAuth } from "better-auth";
-import { admin, organization } from "better-auth/plugins";
+import { admin, openAPI, organization } from "better-auth/plugins";
 import { createAccessControl } from "better-auth/plugins/access";
 import { adminAc, userAc } from "better-auth/plugins/admin/access";
 import { drizzleAdapter } from "better-auth/adapters/drizzle";
@@ -51,6 +51,9 @@ export function createAuth({ db, baseURL, secret, trustedOrigins = [] }: AuthCon
     trustedOrigins: [baseURL, ...trustedOrigins],
     emailAndPassword: { enabled: true, autoSignIn: true, minPasswordLength: 12 },
     plugins: [
+      // Documents Better Auth's own routes at /api/auth/open-api/generate-schema; the combined
+      // reference page is served by the platform API at /api/docs (see app.ts).
+      openAPI({ disableDefaultReference: true }),
       admin({
         adminRoles: [PLATFORM_OPERATOR_ROLE],
         defaultRole: "user",
