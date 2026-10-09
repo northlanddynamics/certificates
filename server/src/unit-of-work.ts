@@ -26,10 +26,11 @@ export interface UnitOfWork {
   /**
    * Runs `work` on a transaction and returns what it returns. Anything it throws rolls back its writes and its
    * Audit Events, and is rethrown. Queued mail is sent after the commit; a mail failure is logged and never hides
-   * the commit from the caller. The unit of work takes no locks: a change that must serialise with others takes
-   * its own, as the first thing it does on the transaction.
+   * the commit from the caller. The actor is none only for a change made by an Organization's API key. The unit of
+   * work takes no locks: a change that must serialise with others takes its own, as the first thing it does on the
+   * transaction.
    */
-  run<T>(actor: Actor, work: (tx: Tx, change: Change) => Promise<T>): Promise<T>;
+  run<T>(actor: Actor | null, work: (tx: Tx, change: Change) => Promise<T>): Promise<T>;
 }
 
 export interface UnitOfWorkDeps {

@@ -110,7 +110,11 @@ export interface Certificate {
 }
 export interface ApiKey {
   id: string;
+  /** A user's key is its person's; an Organization's belongs to the Organization and outlives whoever made it. */
+  type: "user" | "organization";
   name: string;
+  /** Who made an Organization's key. */
+  createdBy: { id: string; email: string } | null;
   /** The first characters of the key, to tell keys apart; the key itself is shown only when it is made. */
   start: string | null;
   expiresAt: string | null;
@@ -162,7 +166,7 @@ export const api = {
   certificateDownloadUrl: (orgId: string, id: string, form: { format: string; chain: string }, certificateId?: string) =>
     `/api/organizations/${orgId}/managed-certificates/${id}/${certificateId ? `certificates/${certificateId}/download` : "certificate"}?${new URLSearchParams(form)}`,
   apiKeys: (orgId: string) => call<{ items: ApiKey[] }>(`/api/organizations/${orgId}/api-keys`),
-  createApiKey: (orgId: string, body: { name: string; expiresInDays?: number }) =>
+  createApiKey: (orgId: string, body: { name: string; type: ApiKey["type"]; expiresInDays?: number }) =>
     call<ApiKey & { key: string }>(`/api/organizations/${orgId}/api-keys`, { body }),
   revokeApiKey: (orgId: string, keyId: string) => call(`/api/organizations/${orgId}/api-keys/${keyId}`, { method: "DELETE" }),
   platformOrganizations: () => call<{ items: { id: string; name: string; slug: string }[] }>("/api/platform/organizations"),

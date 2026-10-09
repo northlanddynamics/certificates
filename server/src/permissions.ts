@@ -10,7 +10,7 @@ export const APPROVER_ROLE = "approver";
 export const MEMBER_ROLE = "member";
 
 // Every permission there is. The organization, member, invitation and team resources are the ones Better Auth's
-// organization plugin checks itself; `audit`, `acmeAccount`, `dnsProvider`, `managedCertificate` and `approval` are ours.
+// organization plugin checks itself; `audit`, `acmeAccount`, `dnsProvider`, `managedCertificate`, `approval` and `apiKey` are ours (the last is the plugin's too).
 const statements = {
   organization: ["update", "delete"],
   member: ["create", "update", "delete"],
@@ -25,6 +25,8 @@ const statements = {
   // must carry to do the same.
   managedCertificate: ["read", "create", "propose", "issue", "changeOwners", "download"],
   approval: ["read", "decide"],
+  // The Organization's own API keys (a user's keys need none): the organization plugin asks for these names.
+  apiKey: ["create", "read", "update", "delete"],
 } as const;
 
 export type Permissions = { [R in keyof typeof statements]?: (typeof statements)[R][number][] };

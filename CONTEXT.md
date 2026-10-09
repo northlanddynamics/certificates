@@ -99,7 +99,7 @@ DCV performed through a Validation Zone, as opposed to Direct DCV, where the pla
 _Avoid_: CNAME validation, acme-dns
 
 **API Key**:
-A user's key for scripts and pipelines, made for one Organization. It acts as that user there, carries the permissions they held when it was made, and works only for what they may still see and do; every use is an Audit Event. A key is shown once when made and can only be revoked.
+A key for scripts and pipelines, made for one Organization and shown once when made; it can only be revoked. A user's key acts as the user who made it: it carries the permissions they held then, works only for what they may still see and do, and dies with their membership. An Organization's key, which only Organization Administrators make and revoke, belongs to the Organization, sees all its Managed Certificates and outlives whoever made it. Every use is an Audit Event.
 _Avoid_: token, service account
 
 **Secret**:

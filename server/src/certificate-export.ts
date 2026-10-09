@@ -1,7 +1,7 @@
 // Downloads of a Managed Certificate's Certificates: the current one or any earlier one, as PEM, DER or PKCS#7 with
-// the leaf alone, with its intermediates or with the root too (export.ts). A person signed in or the API key of one
-// (api-keys.ts) may ask; either sees only what that person may see. There is no private key in any of it: the
-// platform never has one (ADR 0002).
+// the leaf alone, with its intermediates or with the root too (export.ts). A person signed in or an API key
+// (api-keys.ts) may ask. A person, or a user's key, sees only what that person may see; an Organization's key sees the
+// Organization's. There is no private key in any of it: the platform never has one (ADR 0002).
 import { OpenAPIHono, createRoute, z } from "@hono/zod-openapi";
 import type { ApiKeys } from "./api-keys";
 import type { CertificateAuthority } from "./certificate-authority";
@@ -38,7 +38,8 @@ export function registerCertificateExport(ctx: {
   async function serve(c: any, orgId: string, id: string, certificateId: string | undefined, { format, chain }: z.infer<typeof ExportQuery>) {
     const caller = await apiKeys.callerOf(c);
     await apiKeys.authorizeCaller(caller, orgId, { managedCertificate: ["download"] });
-    const mc = await reader.findReadable(caller.user, orgId, id);
+    // A person sees what they may; an Organization's key, which is no one, sees the whole Organization.
+    const mc = caller.user ? await reader.findReadable(caller.user, orgId, id) : await reader.findManagedCertificate(orgId, id);
     const certificates = await reader.certificatesOf(orgId, mc.id);
     // The newest is the current one. A Certificate that is not of this Managed Certificate, or not a Certificate, is not found.
     const wanted = certificateId ? certificates.find((row) => row.id === certificateId) : certificates[0];
@@ -57,7 +58,16 @@ export function registerCertificateExport(ctx: {
           organizationId: orgId,
           action: "api_key.used",
           target: { type: "managed_certificate", id: mc.id },
-          detail: { apiKeyId: key.id, apiKeyName: key.name, certificateId: wanted.id, format, chain },
+          detail: {
+            apiKeyId: key.id,
+            apiKeyName: key.name,
+            apiKeyType: key.type,
+            // An Organization's key acts as no one, so who made it is what leads back to a person.
+            ...(key.createdBy && { createdBy: key.createdBy }),
+            certificateId: wanted.id,
+            format,
+            chain,
+          },
         }),
       );
     }

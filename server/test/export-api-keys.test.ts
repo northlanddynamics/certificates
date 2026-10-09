@@ -416,3 +416,153 @@ describe("API keys", () => {
     expect((await listKeys(approver)).body.items[0].permissions).toEqual(made.permissions);
   });
 });
+
+describe("Organization API keys", () => {
+  const createKey = (cookie: string, body: unknown = { name: "ci", type: "organization" }, orgId = org.orgId) => h.api(keysPath(orgId), { cookie, body });
+  const listKeys = (cookie: string, orgId = org.orgId) => h.api(keysPath(orgId), { cookie });
+  const revokeKey = (cookie: string, keyId: string, orgId = org.orgId) => h.api(`${keysPath(orgId)}/${keyId}`, { cookie, method: "DELETE" });
+  /** A second Organization Administrator, so the first can leave. */
+  const secondAdmin = () => join("second@acme.test", "organization-administrator");
+
+  test("an Organization Administrator makes one; it belongs to the Organization and carries only downloads", async () => {
+    const made = await createKey(org.cookie, { name: "pipeline", type: "organization" });
+    expect(made.status).toBe(201);
+    const { id, key } = made.body as { id: string; key: string };
+    expect(key).toStartWith("cpo_");
+    expect(made.body).toMatchObject({ type: "organization", name: "pipeline", permissions: { managedCertificate: ["download"] }, createdBy: { email: "admin@acme.test" } });
+    expect(Object.keys(made.body.permissions)).toEqual(["managedCertificate"]);
+
+    // Every Organization Administrator sees it, with the person's own keys; nobody else does.
+    const mine = await createKey(org.cookie, { name: "mine" });
+    const other = await secondAdmin();
+    expect((await listKeys(other)).body.items.map((k: any) => [k.name, k.type])).toEqual([["pipeline", "organization"]]);
+    expect((await listKeys(org.cookie)).body.items.map((k: any) => [k.name, k.type])).toEqual([["pipeline", "organization"], ["mine", "user"]]);
+    expect(JSON.stringify((await listKeys(other)).body)).not.toContain(key);
+    expect(mine.body.type).toBe("user");
+    const member = await join("member@acme.test", "member");
+    expect((await listKeys(member)).body.items).toEqual([]);
+    expect((await listKeys(await join("approver@acme.test", "approver"))).body.items).toEqual([]);
+    expect(id).toBeString();
+  });
+
+  test("only Organization Administrators make them, and only for their own Organization", async () => {
+    for (const role of ["member", "approver"]) {
+      const who = await join(`${role}@acme.test`, role);
+      expect((await createKey(who)).status).toBe(403);
+      // A user's key is still theirs to make.
+      expect((await createKey(who, { name: "own", type: "user" })).status).toBe(201);
+    }
+    expect((await createKey(org.cookie, { name: "x", type: "organization" }, globex.orgId)).status).toBe(404);
+    expect((await createKey(org.cookie, { name: "x", type: "robot" })).status).toBe(400);
+    // Left out, a key is a user's.
+    expect((await createKey(org.cookie, { name: "plain" })).body.type).toBe("user");
+  });
+
+  test("it downloads any Managed Certificate of the Organization, in any form, and nothing of another", async () => {
+    await readyToIssue();
+    await readyToIssue(globex);
+    const member = await join("member@acme.test", "member");
+    const owned = await issued(org, [{ type: "user", id: await userId(member) }]);
+    const unowned = await issued(org, [], 1);
+    const elsewhere = await issued(globex);
+    const key = (await createKey(org.cookie)).body.key as string;
+
+    for (const mc of [owned, unowned]) {
+      for (const format of FORMATS) {
+        for (const chain of CHAINS) {
+          const query = `?format=${format}&chain=${chain}`;
+          const viaKey = await download({ apiKey: key }, org.orgId, mc.id, query);
+          const viaAdmin = await download(asAdmin, org.orgId, mc.id, query);
+          expect(viaKey.status).toBe(200);
+          expect(new Uint8Array(await viaKey.arrayBuffer())).toEqual(new Uint8Array(await viaAdmin.arrayBuffer()));
+        }
+      }
+    }
+    expect((await download({ apiKey: key }, org.orgId, unowned.id, "?format=der", unowned.certificates[1]!.id)).status).toBe(200);
+    expect((await download({ apiKey: key }, org.orgId, unowned.id, "", owned.certificates[0]!.id)).status).toBe(404);
+    expect((await download({ apiKey: key }, org.orgId, crypto.randomUUID())).status).toBe(404);
+    expect((await download({ apiKey: key }, globex.orgId, elsewhere.id)).status).toBe(404);
+  });
+
+  test("it opens nothing but downloads", async () => {
+    const key = (await createKey(org.cookie)).body.key as string;
+    const call = (path: string, init: RequestInit = {}) => h.app.request(`http://localhost${path}`, { ...init, headers: { "x-api-key": key, "content-type": "application/json", origin: "http://localhost" } });
+    expect((await call(base())).status).toBe(401);
+    expect((await call("/api/me")).status).toBe(401);
+    expect((await call(keysPath())).status).toBe(401);
+    expect((await call(keysPath(), { method: "POST", body: JSON.stringify({ name: "more", type: "organization" }) })).status).toBe(401);
+  });
+
+  test("it outlives the person who made it", async () => {
+    await readyToIssue();
+    const mc = await issued();
+    const maker = await secondAdmin();
+    const makerId = await userId(maker);
+    const key = (await createKey(maker)).body.key as string;
+    expect((await download({ apiKey: key }, org.orgId, mc.id)).status).toBe(200);
+
+    // Banned, then removed from the Organization: the key is the Organization's, not theirs.
+    await h.pool.query(`update "user" set banned = true where id = $1`, [makerId]);
+    expect((await download({ apiKey: key }, org.orgId, mc.id)).status).toBe(200);
+    const members = (await h.api(`/api/auth/organization/list-members?organizationId=${org.orgId}`, { cookie: org.cookie })).body.members as { id: string; userId: string }[];
+    const removed = await h.api("/api/auth/organization/remove-member", { cookie: org.cookie, body: { memberIdOrEmail: members.find((m) => m.userId === makerId)!.id, organizationId: org.orgId } });
+    expect(removed.status).toBe(200);
+    expect((await download({ apiKey: key }, org.orgId, mc.id)).status).toBe(200);
+    // Still listed, and still says who made it.
+    expect((await listKeys(org.cookie)).body.items[0]).toMatchObject({ type: "organization", createdBy: { email: "second@acme.test" } });
+  });
+
+  test("any Organization Administrator revokes it, and no one else", async () => {
+    await readyToIssue();
+    const mc = await issued();
+    const other = await secondAdmin();
+    const made = (await createKey(org.cookie)).body;
+    const member = await join("member@acme.test", "member");
+    const approver = await join("approver@acme.test", "approver");
+
+    expect((await revokeKey(member, made.id)).status).toBe(404);
+    expect((await revokeKey(approver, made.id)).status).toBe(404);
+    expect((await download({ apiKey: made.key }, org.orgId, mc.id)).status).toBe(200);
+    expect((await revokeKey(other, made.id)).status).toBe(200);
+    expect((await download({ apiKey: made.key }, org.orgId, mc.id)).status).toBe(401);
+    expect((await listKeys(org.cookie)).body.items).toEqual([]);
+    expect((await revokeKey(org.cookie, made.id)).status).toBe(404);
+    // A user's key of someone else is still not an administrator's to revoke.
+    const alices = (await createKey(member, { name: "alice's", type: "user" })).body;
+    expect((await revokeKey(org.cookie, alices.id)).status).toBe(404);
+  });
+
+  test("making, using and revoking it are audited: by the person, and by the key, who is no one", async () => {
+    await readyToIssue();
+    const mc = await issued();
+    const other = await secondAdmin();
+    const otherId = await userId(other);
+    const adminId = await userId(org.cookie);
+    const made = (await createKey(org.cookie, { name: "ci", type: "organization" })).body;
+    const before = (await auditOf()).length;
+    await download({ apiKey: made.key }, org.orgId, mc.id, "?format=p7b&chain=leaf");
+    await revokeKey(other, made.id);
+
+    const events = await auditOf();
+    expect(events.find((e) => e.action === "api_key.created")).toMatchObject({
+      actor: { id: adminId, email: "admin@acme.test" },
+      target: { type: "api_key", id: made.id },
+      detail: { name: "ci", type: "organization", permissions: { managedCertificate: ["download"] } },
+    });
+    const used = events.slice(before).filter((e) => e.action === "api_key.used");
+    expect(used).toHaveLength(1);
+    expect(used[0]).toMatchObject({
+      actor: { id: null, email: null },
+      target: { type: "managed_certificate", id: mc.id },
+      detail: { apiKeyId: made.id, apiKeyName: "ci", apiKeyType: "organization", createdBy: { id: adminId, email: "admin@acme.test" }, format: "p7b", chain: "leaf" },
+    });
+    expect(events.at(-1)).toMatchObject({ action: "api_key.revoked", actor: { id: otherId }, target: { type: "api_key", id: made.id }, detail: { name: "ci", type: "organization" } });
+    expect(JSON.stringify(events)).not.toContain(made.key);
+  });
+
+  test("a key's name may be as long as the API says", async () => {
+    const name = "n".repeat(100);
+    for (const type of ["user", "organization"]) expect((await createKey(org.cookie, { name, type })).status).toBe(201);
+    expect((await createKey(org.cookie, { name: "n".repeat(101), type: "user" })).status).toBe(400);
+  });
+});

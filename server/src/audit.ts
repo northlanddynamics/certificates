@@ -38,7 +38,8 @@ export type AuditAction =
 export interface AuditInput {
   organizationId: string;
   occurredAt: Date;
-  actor: { id: string; email: string };
+  /** Whoever made the change; none when an Organization's API key did. */
+  actor: { id: string; email: string } | null;
   action: AuditAction;
   target: { type: string; id?: string };
   detail?: Record<string, unknown>;
@@ -49,8 +50,8 @@ export async function recordAudit(db: Db | Tx, e: AuditInput) {
   await db.insert(auditEvent).values({
     organizationId: e.organizationId,
     occurredAt: e.occurredAt,
-    actorId: e.actor.id,
-    actorEmail: e.actor.email,
+    actorId: e.actor?.id ?? null,
+    actorEmail: e.actor?.email ?? null,
     action: e.action,
     targetType: e.target.type,
     targetId: e.target.id ?? null,
