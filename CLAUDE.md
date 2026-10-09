@@ -16,7 +16,9 @@ Single-context: `CONTEXT.md` and `docs/adr/` at the repo root. See `docs/agents/
 
 ### shadcn/ui components
 
-Add shadcn/ui components only through the CLI, run from `web/`: `bunx --bun shadcn@latest add <component name>`. Never hand-write or copy-paste a component into `web/src/components/ui/`. You can also use the `shadcn` skill. 
+You can use the `shadcn` skill for all component questions. 
+
+Add shadcn/ui components only through the CLI, run from `web/`: `bunx --bun shadcn@latest add <component name>`. Never hand-write or copy-paste a component into `web/src/components/ui/`. 
 
 ## Authentication
 
