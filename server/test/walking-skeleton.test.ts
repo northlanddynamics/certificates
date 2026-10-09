@@ -106,7 +106,7 @@ describe("walking skeleton", () => {
     expect(list.body.items).toEqual([{ id: a.orgId, name: "Org a", slug: "a" }]);
   });
 
-  test("creating an Organization and accepting an invitation each write an audit entry", async () => {
+  test("creating an Organization and accepting an invitation each write an Audit Event", async () => {
     h.setNow(new Date("2026-03-01T10:00:00Z"));
     const operator = await h.createOperator("op@platform.test", PASSWORD);
     const { orgId, cookie } = await createOrgWithAdmin(operator, "acme", "admin@acme.test");
@@ -124,7 +124,7 @@ describe("walking skeleton", () => {
     ]);
   });
 
-  test("a failed state change leaves no audit entry, and audit entries cannot be altered", async () => {
+  test("a failed state change leaves no Audit Event, and Audit Events cannot be altered", async () => {
     const operator = await h.createOperator("op@platform.test", PASSWORD);
     const first = await h.api("/api/platform/organizations", {
       cookie: operator,

@@ -3,14 +3,16 @@ import { Scalar } from "@scalar/hono-api-reference";
 import { and, asc, eq } from "drizzle-orm";
 import type { Context } from "hono";
 import type { Pool } from "pg";
-import { INVITATION_EXPIRES_IN_SECONDS, PLATFORM_OPERATOR_ROLE, createAuth } from "./auth";
-import { listAudit, recordAudit } from "./audit";
+import { PLATFORM_OPERATOR_ROLE, createAuth } from "./auth";
+import { listAudit } from "./audit";
 import { createDb } from "./db/client";
-import { invitation, managedCertificate, member, organization } from "./db/schema";
+import { managedCertificate, member, organization } from "./db/schema";
 import { createAuthorizer } from "./authorization";
-import { HttpError, OrgParam, errors, isUniqueViolation, json } from "./http";
+import { HttpError, OrgParam, errors, json } from "./http";
 import type { Mailer } from "./mailer";
-import { ORG_ADMIN_ROLE, ROLE_NAMES, permissionsOf } from "./permissions";
+import { createOrganizationChanges } from "./organization-changes";
+import { createOrganizations } from "./organizations";
+import { ROLE_NAMES, permissionsOf } from "./permissions";
 import { registerTeamsOverview } from "./teams-overview";
 import { createUnitOfWork } from "./unit-of-work";
 
@@ -32,7 +34,9 @@ export function createApp(deps: AppDeps) {
   const authConfig = { baseURL: deps.baseURL, secret: deps.secret, trustedOrigins: deps.trustedOrigins };
   const auth = createAuth({ ...authConfig, db });
   const webURL = deps.webURL ?? deps.baseURL;
-  const unitOfWork = createUnitOfWork({ db, authConfig, mailer, clock, webURL });
+  const unitOfWork = createUnitOfWork({ db, mailer, clock });
+  const organizationChanges = createOrganizationChanges({ unitOfWork, authConfig, webURL });
+  const platformOrganizations = createOrganizations({ unitOfWork, webURL });
   const app = new OpenAPIHono();
 
   app.onError((err, c) => {
@@ -42,7 +46,7 @@ export function createApp(deps: AppDeps) {
   });
 
   // Better Auth's organization endpoints are served as they are, from an allowlist: reads straight from Better
-  // Auth, changes on a transaction with the audit written alongside (see unit-of-work.ts). Anything not listed
+  // Auth, changes on a transaction with the audit written alongside (see organization-changes.ts). Anything not listed
   // is not served. In particular `leave` removes a member without running Better Auth's hooks (no audit, no
   // removal hook), and updating or deleting an Organization is not offered.
   app.all("/api/auth/organization/*", async (c) => {
@@ -66,7 +70,7 @@ export function createApp(deps: AppDeps) {
       const body = await c.req.raw.clone().json().catch(() => null);
       if (body?.resend) return c.json({ error: "resend is not supported" }, 400);
     }
-    return unitOfWork.handle(session.user, c.req.raw, change);
+    return organizationChanges.handle(session.user, c.req.raw, change);
   });
   app.on(["GET", "POST"], "/api/auth/*", (c) => auth.handler(c.req.raw));
 
@@ -109,46 +113,8 @@ export function createApp(deps: AppDeps) {
     }),
     async (c) => {
       const operator = await requireOperator(c);
-      const { name, slug, adminEmail } = c.req.valid("json");
-      const now = clock();
-      const orgId = crypto.randomUUID();
-      const invitationId = crypto.randomUUID();
-      try {
-        await db.transaction(async (tx) => {
-          await tx.insert(organization).values({ id: orgId, name, slug, createdAt: now });
-          await tx.insert(invitation).values({
-            id: invitationId,
-            organizationId: orgId,
-            email: adminEmail.toLowerCase(),
-            role: ORG_ADMIN_ROLE,
-            status: "pending",
-            // Better Auth judges expiry against the real time, not `clock`.
-            expiresAt: new Date(Date.now() + INVITATION_EXPIRES_IN_SECONDS * 1000),
-            createdAt: now,
-            inviterId: operator.id,
-          });
-          await recordAudit(tx, {
-            organizationId: orgId,
-            occurredAt: now,
-            actor: operator,
-            action: "organization.created",
-            target: { type: "organization", id: orgId },
-            detail: { slug, firstAdministrator: adminEmail.toLowerCase() },
-          });
-        });
-      } catch (err) {
-        if (isUniqueViolation(err)) throw new HttpError(409, "slug already in use");
-        throw err;
-      }
-      // The Organization and invitation are committed; a mail failure must not hide that from the caller.
-      await mailer
-        .send({
-          to: adminEmail,
-          subject: `You are invited to administer ${name}`,
-          text: `Accept your invitation: ${webURL}/accept-invitation/${invitationId}`,
-        })
-        .catch((err) => console.error("invitation email failed", err));
-      return c.json({ id: orgId, invitationId }, 201);
+      const created = await platformOrganizations.create(operator, c.req.valid("json"));
+      return c.json(created, 201);
     },
   );
 

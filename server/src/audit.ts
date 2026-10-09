@@ -2,11 +2,26 @@ import { asc, eq } from "drizzle-orm";
 import type { Db, Tx } from "./db/client";
 import { auditEvent } from "./db/schema";
 
+/** Every action an Audit Event can record. A new kind of change adds its name here. */
+export type AuditAction =
+  | "organization.created"
+  | "invitation.created"
+  | "invitation.accepted"
+  | "invitation.rejected"
+  | "invitation.canceled"
+  | "member.role_changed"
+  | "member.removed"
+  | "team.created"
+  | "team.renamed"
+  | "team.deleted"
+  | "team.member_added"
+  | "team.member_removed";
+
 export interface AuditInput {
   organizationId: string;
   occurredAt: Date;
   actor: { id: string; email: string };
-  action: string;
+  action: AuditAction;
   target: { type: string; id?: string };
   detail?: Record<string, unknown>;
 }

@@ -1,4 +1,4 @@
-// Better Auth's organization endpoints, served as they are (see unit-of-work.ts). These tests lean on what
+// Better Auth's organization endpoints, served as they are (see organization-changes.ts). These tests lean on what
 // Better Auth guarantees and on the platform's additions: audit in the same transaction, serialised changes,
 // the removal hook, and the allowlist.
 import { afterAll, beforeAll, beforeEach, describe, expect, test } from "bun:test";

@@ -110,6 +110,12 @@ _Avoid_: client, daemon, connector, relay
 The one-time binding of a newly installed Agent to an Organization using a single-use token.
 _Avoid_: enrollment (reserved for Enrollment Profiles), onboarding
 
+### Audit
+
+**Audit Event**:
+One record in an Organization's append-only audit log: who did what to which target, and when. Written together with the change it records, so a change that does not happen leaves none.
+_Avoid_: audit entry, audit record, log line
+
 ### Device certificates (future)
 
 **Private CA**:

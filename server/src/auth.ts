@@ -17,7 +17,7 @@ export interface AuthConfig {
   secret: string;
   /** Extra origins allowed to call the auth endpoints from a browser (e.g. the Vite dev server). */
   trustedOrigins?: string[];
-  /** Hooks and mail for the organization plugin; set on the per-transaction instance (see unit-of-work.ts). */
+  /** Hooks and mail for the organization plugin; set on the per-transaction instance (see organization-changes.ts). */
   organization?: Pick<OrganizationOptions, "organizationHooks" | "sendInvitationEmail">;
 }
 
