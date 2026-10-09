@@ -23,15 +23,22 @@ async function call<T>(path: string, init?: { method?: string; body?: unknown })
 
 export interface Me {
   user: { id: string; email: string; name: string; isPlatformOperator: boolean };
-  organizations: { id: string; name: string; slug: string; role: string }[];
+  organizations: { id: string; name: string; slug: string; role: string; permissions: Record<string, string[]> }[];
+  /** The roles the server accepts when assigning one. */
+  roles: string[];
 }
 
-export type OrgRole = "member" | "approver" | "organization-administrator";
-export const ROLE_LABELS: Record<OrgRole, string> = {
+/** Whether the caller may do `action` on `resource` in `org`, as the server reports it. */
+export const can = (org: Me["organizations"][number], resource: string, action: string) =>
+  org.permissions[resource]?.includes(action) ?? false;
+
+// How roles are worded; which roles exist is the server's to say (Me.roles).
+const ROLE_LABELS: Record<string, string> = {
   member: "Member",
   approver: "Approver",
   "organization-administrator": "Organization Administrator",
 };
+export const roleLabel = (role: string) => ROLE_LABELS[role] ?? role;
 export interface OrgMember {
   id: string;
   userId: string;
@@ -72,7 +79,7 @@ export const api = {
     );
     return { items: res.members.map((m): OrgMember => ({ id: m.id, userId: m.userId, email: m.user.email, name: m.user.name, role: m.role })) };
   },
-  changeRole: (orgId: string, memberId: string, role: OrgRole) =>
+  changeRole: (orgId: string, memberId: string, role: string) =>
     call(`${BA}/update-member-role`, { body: { memberId, role, organizationId: orgId } }),
   removeMember: (orgId: string, memberId: string) =>
     call(`${BA}/remove-member`, { body: { memberIdOrEmail: memberId, organizationId: orgId } }),
@@ -84,7 +91,7 @@ export const api = {
     const items = all.filter((i) => i.status === "pending" && Date.parse(i.expiresAt) > now);
     return { items: items.map((i): PendingInvitation => ({ id: i.id, email: i.email, role: i.role, expiresAt: i.expiresAt })) };
   },
-  invite: (orgId: string, email: string, role: OrgRole) => call(`${BA}/invite-member`, { body: { email, role, organizationId: orgId } }),
+  invite: (orgId: string, email: string, role: string) => call(`${BA}/invite-member`, { body: { email, role, organizationId: orgId } }),
   cancelInvitation: (_orgId: string, invitationId: string) => call(`${BA}/cancel-invitation`, { body: { invitationId } }),
   teams: (orgId: string) => call<{ items: Team[] }>(`/api/organizations/${orgId}/teams`),
   createTeam: (orgId: string, name: string) => call(`${BA}/create-team`, { body: { name, organizationId: orgId } }),

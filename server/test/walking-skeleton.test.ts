@@ -48,7 +48,13 @@ describe("walking skeleton", () => {
 
     const me = await h.api("/api/me", { cookie });
     expect(me.body.organizations).toEqual([
-      { id: orgId, name: "Org acme", slug: "acme", role: "organization-administrator" },
+      {
+        id: orgId,
+        name: "Org acme",
+        slug: "acme",
+        role: "organization-administrator",
+        permissions: expect.objectContaining({ invitation: ["create", "cancel"] }),
+      },
     ]);
     const inventory = await h.api(`/api/organizations/${orgId}/managed-certificates`, { cookie });
     expect(inventory.status).toBe(200);

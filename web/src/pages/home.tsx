@@ -5,7 +5,7 @@ import { Button } from "@/components/ui/button";
 import { Card, CardContent, CardHeader, CardTitle } from "@/components/ui/card";
 import { Input } from "@/components/ui/input";
 import { Label } from "@/components/ui/label";
-import { ApiError, api } from "@/lib/api";
+import { ApiError, api, can, type Me } from "@/lib/api";
 
 export function HomePage() {
   const navigate = useNavigate();
@@ -52,14 +52,14 @@ export function HomePage() {
   );
 }
 
-function Inventory({ org }: { org: { id: string; name: string; role: string } }) {
+function Inventory({ org }: { org: Me["organizations"][number] }) {
   const inventory = useQuery({ queryKey: ["inventory", org.id], queryFn: () => api.managedCertificates(org.id) });
   return (
     <Card>
       <CardHeader>
         <CardTitle className="flex items-center justify-between">
           {org.name}: Managed Certificates
-          {org.role === "organization-administrator" && (
+          {can(org, "invitation", "create") && (
             <Link to="/organizations/$orgId/people" params={{ orgId: org.id }} className="text-sm font-normal underline">
               People and Teams
             </Link>

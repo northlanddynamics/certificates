@@ -1,43 +1,10 @@
 import { betterAuth } from "better-auth";
 import { admin, openAPI, organization } from "better-auth/plugins";
 import type { OrganizationOptions } from "better-auth/plugins";
-import { createAccessControl } from "better-auth/plugins/access";
 import { adminAc, userAc } from "better-auth/plugins/admin/access";
 import { drizzleAdapter } from "better-auth/adapters/drizzle";
 import type { NodePgDatabase } from "drizzle-orm/node-postgres";
-
-// Organization roles. Better Auth's default "owner" role is deliberately absent:
-// "Owner" is a domain term for the party accountable for a Managed Certificate.
-export const ORG_ADMIN_ROLE = "organization-administrator";
-export const APPROVER_ROLE = "approver";
-export const MEMBER_ROLE = "member";
-
-// Permission statements. The organization, member, invitation and team resources are the ones Better Auth's
-// organization plugin checks itself; `audit` is ours. This is the only place roles are given permissions:
-// Better Auth's endpoints and our own `authorize` (authorization.ts) both read these roles.
-const statements = {
-  organization: ["update", "delete"],
-  member: ["create", "update", "delete"],
-  invitation: ["create", "cancel"],
-  team: ["create", "update", "delete"],
-  audit: ["read"],
-} as const;
-
-export type Permissions = { [R in keyof typeof statements]?: (typeof statements)[R][number][] };
-
-const ac = createAccessControl(statements);
-
-export const orgRoles = {
-  [ORG_ADMIN_ROLE]: ac.newRole({
-    organization: ["update", "delete"],
-    member: ["create", "update", "delete"],
-    invitation: ["create", "cancel"],
-    team: ["create", "update", "delete"],
-    audit: ["read"],
-  }),
-  [APPROVER_ROLE]: ac.newRole({ organization: [], member: [], invitation: [], team: [], audit: [] }),
-  [MEMBER_ROLE]: ac.newRole({ organization: [], member: [], invitation: [], team: [], audit: [] }),
-};
+import { ORG_ADMIN_ROLE, ac, orgRoles } from "./permissions";
 
 export const INVITATION_EXPIRES_IN_SECONDS = 7 * 24 * 3600;
 

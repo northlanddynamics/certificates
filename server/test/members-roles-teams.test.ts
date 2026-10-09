@@ -2,8 +2,7 @@
 // Better Auth guarantees and on the platform's additions: audit in the same transaction, serialised changes,
 // the removal hook, and the allowlist.
 import { afterAll, beforeAll, beforeEach, describe, expect, test } from "bun:test";
-import type { Permissions } from "../src/auth";
-import { roleCan } from "../src/authorization";
+import { declaredPermissions, roleCan, type Permissions } from "../src/permissions";
 import { memberRemovalHooks } from "../src/member-removal";
 import { PASSWORD, createHarness, type Harness } from "./harness";
 
@@ -64,6 +63,22 @@ async function members(cookie = acme.cookie, orgId = acme.orgId) {
 }
 const memberOf = async (email: string) => (await members()).find((m) => m.user.email === email)!;
 const auditActions = async () => (await admin().audit()).map((e: any) => e.action) as string[];
+
+describe("what the caller may do", () => {
+  test("/api/me reports each Organization's permissions for the caller, and the roles the server accepts", async () => {
+    const memberCookie = await join("m@acme.test", "member");
+    const approverCookie = await join("a@acme.test", "approver");
+
+    const adminMe = (await h.api("/api/me", { cookie: acme.cookie })).body;
+    expect(adminMe.roles.sort()).toEqual(["approver", "member", "organization-administrator"]);
+    expect(adminMe.organizations[0].permissions.invitation).toEqual(["create", "cancel"]);
+    expect(adminMe.organizations[0].permissions.audit).toEqual(["read"]);
+
+    for (const cookie of [memberCookie, approverCookie]) {
+      expect((await h.api("/api/me", { cookie })).body.organizations[0].permissions).toEqual({});
+    }
+  });
+});
 
 describe("invitations", () => {
   test("an administrator invites users as Member, Approver or Organization Administrator", async () => {
@@ -502,23 +517,18 @@ describe("authorization", () => {
     expect(h.mailer.sent).toHaveLength(mailBefore);
   });
 
-  test("only Organization Administrators hold the administrative permissions", () => {
-    const admin = "organization-administrator";
-    const administrative: Permissions[] = [
-      { invitation: ["create"] },
-      { invitation: ["cancel"] },
-      { member: ["update"] },
-      { member: ["delete"] },
-      { team: ["create"] },
-      { team: ["update"] },
-      { team: ["delete"] },
-      { audit: ["read"] },
-    ];
-    for (const p of administrative) {
-      expect(roleCan(admin, p)).toBe(true);
-      expect(roleCan("approver", p)).toBe(false);
-      expect(roleCan("member", p)).toBe(false);
-      expect(roleCan("owner", p)).toBe(false);
+  test("an Organization Administrator holds every declared permission; no other role holds any", () => {
+    const declared = declaredPermissions();
+    // The permissions the platform's own routes and Better Auth's endpoints ask about stay declared.
+    expect(declared.invitation).toContain("create");
+    expect(declared.audit).toContain("read");
+
+    for (const [resource, actions] of Object.entries(declared)) {
+      for (const action of actions as string[]) {
+        const p = { [resource]: [action] } as Permissions;
+        expect(roleCan("organization-administrator", p)).toBe(true);
+        for (const other of ["approver", "member", "owner", "admin"]) expect(roleCan(other, p)).toBe(false);
+      }
     }
   });
 });

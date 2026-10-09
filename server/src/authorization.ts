@@ -1,14 +1,8 @@
 import { and, eq } from "drizzle-orm";
-import { orgRoles, type Permissions } from "./auth";
 import type { Db } from "./db/client";
 import { member } from "./db/schema";
 import { HttpError } from "./http";
-
-/** Whether `role` holds every permission asked for. Roles and their permissions are defined in auth.ts. */
-export function roleCan(role: string, permissions: Permissions): boolean {
-  const r = (orgRoles as Record<string, (typeof orgRoles)[keyof typeof orgRoles] | undefined>)[role];
-  return r ? r.authorize(permissions).success : false;
-}
+import { roleCan, type Permissions } from "./permissions";
 
 export interface Authorizer {
   /**

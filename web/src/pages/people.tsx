@@ -5,9 +5,8 @@ import { Button } from "@/components/ui/button";
 import { Card, CardContent, CardHeader, CardTitle } from "@/components/ui/card";
 import { Input } from "@/components/ui/input";
 import { Label } from "@/components/ui/label";
-import { ROLE_LABELS, api, type OrgRole, type Team } from "@/lib/api";
+import { api, roleLabel, type Team } from "@/lib/api";
 
-const ROLES = Object.keys(ROLE_LABELS) as OrgRole[];
 const selectClass = "h-9 rounded-md border border-input bg-transparent px-2 text-sm";
 
 /** Mutation that refetches the given query keys on success and shows its error. */
@@ -42,10 +41,11 @@ export function PeoplePage() {
 function MembersCard({ orgId }: { orgId: string }) {
   const members = useQuery({ queryKey: ["members", orgId], queryFn: () => api.members(orgId) });
   const invitations = useQuery({ queryKey: ["invitations", orgId], queryFn: () => api.invitations(orgId) });
+  const roles = useQuery({ queryKey: ["me"], queryFn: api.me, select: (me) => me.roles }).data ?? [];
   const [email, setEmail] = useState("");
-  const [role, setRole] = useState<OrgRole>("member");
+  const [role, setRole] = useState("member");
   const invite = useAction(() => api.invite(orgId, email, role), ["invitations"], () => setEmail(""));
-  const changeRole = useAction((a: { id: string; role: OrgRole }) => api.changeRole(orgId, a.id, a.role), ["members"]);
+  const changeRole = useAction((a: { id: string; role: string }) => api.changeRole(orgId, a.id, a.role), ["members"]);
   const remove = useAction((id: string) => api.removeMember(orgId, id), ["members", "teams"]);
   const cancel = useAction((id: string) => api.cancelInvitation(orgId, id), ["invitations"]);
 
@@ -64,11 +64,11 @@ function MembersCard({ orgId }: { orgId: string }) {
                   aria-label={`Role of ${m.email}`}
                   className={selectClass}
                   value={m.role}
-                  onChange={(e) => changeRole.mutate({ id: m.id, role: e.target.value as OrgRole })}
+                  onChange={(e) => changeRole.mutate({ id: m.id, role: e.target.value })}
                 >
-                  {ROLES.map((r) => (
+                  {roles.map((r) => (
                     <option key={r} value={r}>
-                      {ROLE_LABELS[r]}
+                      {roleLabel(r)}
                     </option>
                   ))}
                 </select>
@@ -88,7 +88,7 @@ function MembersCard({ orgId }: { orgId: string }) {
               {invitations.data.items.map((i) => (
                 <li key={i.id} className="flex items-center justify-between gap-2">
                   <span>
-                    {i.email} <span className="text-muted-foreground">({ROLE_LABELS[i.role as OrgRole] ?? i.role})</span>
+                    {i.email} <span className="text-muted-foreground">({roleLabel(i.role)})</span>
                   </span>
                   <Button variant="outline" size="sm" onClick={() => cancel.mutate(i.id)}>
                     Cancel
@@ -112,10 +112,10 @@ function MembersCard({ orgId }: { orgId: string }) {
           </div>
           <div className="flex flex-col gap-2">
             <Label htmlFor="invite-role">Role</Label>
-            <select id="invite-role" className={selectClass} value={role} onChange={(e) => setRole(e.target.value as OrgRole)}>
-              {ROLES.map((r) => (
+            <select id="invite-role" className={selectClass} value={role} onChange={(e) => setRole(e.target.value)}>
+              {roles.map((r) => (
                 <option key={r} value={r}>
-                  {ROLE_LABELS[r]}
+                  {roleLabel(r)}
                 </option>
               ))}
             </select>

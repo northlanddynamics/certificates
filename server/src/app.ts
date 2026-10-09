@@ -3,13 +3,14 @@ import { Scalar } from "@scalar/hono-api-reference";
 import { and, asc, eq } from "drizzle-orm";
 import type { Context } from "hono";
 import type { Pool } from "pg";
-import { INVITATION_EXPIRES_IN_SECONDS, ORG_ADMIN_ROLE, PLATFORM_OPERATOR_ROLE, createAuth } from "./auth";
+import { INVITATION_EXPIRES_IN_SECONDS, PLATFORM_OPERATOR_ROLE, createAuth } from "./auth";
 import { listAudit, recordAudit } from "./audit";
 import { createDb } from "./db/client";
 import { invitation, managedCertificate, member, organization } from "./db/schema";
 import { createAuthorizer } from "./authorization";
 import { HttpError, OrgParam, errors, isUniqueViolation, json } from "./http";
 import type { Mailer } from "./mailer";
+import { ORG_ADMIN_ROLE, ROLE_NAMES, permissionsOf } from "./permissions";
 import { registerTeamsOverview } from "./teams-overview";
 import { createUnitOfWork } from "./unit-of-work";
 
@@ -180,7 +181,18 @@ export function createApp(deps: AppDeps) {
         200: json(
           z.object({
             user: z.object({ id: z.string(), email: z.string(), name: z.string(), isPlatformOperator: z.boolean() }),
-            organizations: z.array(z.object({ id: z.string(), name: z.string(), slug: z.string(), role: z.string() })),
+            organizations: z.array(
+              z.object({
+                id: z.string(),
+                name: z.string(),
+                slug: z.string(),
+                role: z.string(),
+                // What the caller may do there, so clients ask "may I?" instead of comparing role names.
+                permissions: z.record(z.string(), z.array(z.string())),
+              }),
+            ),
+            // The roles the platform accepts when assigning one.
+            roles: z.array(z.string()),
           }),
         ),
         ...errors(401),
@@ -197,7 +209,8 @@ export function createApp(deps: AppDeps) {
       return c.json(
         {
           user: { id: user.id, email: user.email, name: user.name, isPlatformOperator: user.role === PLATFORM_OPERATOR_ROLE },
-          organizations,
+          organizations: organizations.map((o) => ({ ...o, permissions: permissionsOf(o.role) })),
+          roles: ROLE_NAMES,
         },
         200,
       );

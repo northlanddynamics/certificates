@@ -4,12 +4,13 @@
 // and its audit entry commit or roll back together" true for everything it does.
 import { APIError } from "better-auth/api";
 import { and, asc, eq, inArray, ne, sql } from "drizzle-orm";
-import { ORG_ADMIN_ROLE, createAuth, orgRoles, type Auth, type AuthConfig } from "./auth";
+import { createAuth, type Auth, type AuthConfig } from "./auth";
 import { recordAudit } from "./audit";
 import type { Db, Tx } from "./db/client";
 import { invitation, member, team, teamMember } from "./db/schema";
 import { memberRemovalHooks } from "./member-removal";
 import type { Mailer } from "./mailer";
+import { ORG_ADMIN_ROLE, isKnownRole } from "./permissions";
 
 export type Actor = { id: string; email: string };
 
@@ -104,7 +105,7 @@ const refuse = (code: string, message: string) => new APIError("BAD_REQUEST", { 
  */
 function requireKnownRoles(role: string | string[] | undefined) {
   const roles = (Array.isArray(role) ? role : [role ?? ""]).flatMap((r) => r.split(",")).map((r) => r.trim());
-  if (roles.length === 0 || roles.some((r) => !Object.hasOwn(orgRoles, r))) {
+  if (roles.length === 0 || roles.some((r) => !isKnownRole(r))) {
     throw refuse("ROLE_NOT_FOUND", "Role not found");
   }
 }
