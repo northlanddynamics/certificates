@@ -85,16 +85,42 @@ export interface PendingNameChange {
   proposedBy: { id: string; email: string };
   proposedAt: string;
 }
+/** That the CA was told to revoke a Certificate, by whom and why. */
+export interface Revocation {
+  reason: string;
+  revokedAt: string;
+  revokedBy: { id: string; email: string };
+}
+/** The reasons a Certificate may be revoked for (RFC 5280), by the name the server takes. */
+export const REVOCATION_REASONS: [string, string][] = [
+  ["keyCompromise", "Key compromise"],
+  ["superseded", "Superseded"],
+  ["cessationOfOperation", "Cessation of operation"],
+  ["unspecified", "Unspecified"],
+];
+export const revocationReasonLabel = (reason: string) => REVOCATION_REASONS.find(([value]) => value === reason)?.[1] ?? reason;
 export type HistoryEntry =
   | {
-      kind: "created" | "proposed" | "approved" | "rejected" | "names_change_proposed" | "names_change_approved" | "names_change_rejected" | "names_change_withdrawn" | "names_change_discarded" | "names_changed";
+      kind:
+        | "created"
+        | "proposed"
+        | "approved"
+        | "rejected"
+        | "names_change_proposed"
+        | "names_change_approved"
+        | "names_change_rejected"
+        | "names_change_withdrawn"
+        | "names_change_discarded"
+        | "names_changed"
+        | "archived"
+        | "certificate_revoked";
       at: string;
       actor: { id: string; email: string } | null;
       reason: string | null;
       /** The names before and after, for a name change. */
       names: { from: string[]; to: string[] } | null;
     }
-  | { kind: "certificate_issued"; at: string; certificate: { fingerprint: string; notBefore: string; notAfter: string; names: string[] } };
+  | { kind: "certificate_issued"; at: string; certificate: { fingerprint: string; notBefore: string; notAfter: string; names: string[]; revocation: Revocation | null } };
 export interface RenewalPolicy {
   mode: "automatic" | "manual";
   daysBeforeExpiry: number;
@@ -115,13 +141,15 @@ export interface ManagedCertificate {
   names: string[];
   keyAlgorithm: string;
   environment: "staging" | "production";
+  /** When it was archived: it then neither issues, renews nor deploys. */
+  archivedAt: string | null;
   owners: Owner[];
   approval: Approval;
   /** Until it is approved, Renewal uses `names`. */
   pendingNameChange: PendingNameChange | null;
   renewal: Renewal;
   issuance: Issuance | null;
-  currentCertificate: { fingerprint: string; notAfter: string } | null;
+  currentCertificate: { id: string; fingerprint: string; notAfter: string; revocation: Revocation | null } | null;
 }
 export interface QueuedNameChange extends PendingNameChange {
   managedCertificateId: string;
@@ -143,6 +171,7 @@ export interface Certificate {
   notBefore: string;
   notAfter: string;
   issuedAt: string;
+  revocation: Revocation | null;
 }
 export interface ApiKey {
   id: string;
@@ -212,6 +241,10 @@ export const api = {
     call<Issuance>(`/api/organizations/${orgId}/managed-certificates/${id}/renewals`, { method: "POST", body: {} }),
   uploadCsr: (orgId: string, id: string, csr: string) =>
     call<ManagedCertificate>(`/api/organizations/${orgId}/managed-certificates/${id}/csr`, { body: { csr } }),
+  archive: (orgId: string, id: string) =>
+    call<ManagedCertificate>(`/api/organizations/${orgId}/managed-certificates/${id}/archive`, { method: "POST", body: {} }),
+  revokeCertificate: (orgId: string, id: string, certificateId: string, reason: string) =>
+    call<Certificate>(`/api/organizations/${orgId}/managed-certificates/${id}/certificates/${certificateId}/revocation`, { body: { reason } }),
   certificates: (orgId: string, id: string) => call<{ items: Certificate[] }>(`/api/organizations/${orgId}/managed-certificates/${id}/certificates`),
   /** Where a Certificate downloads from: the current one, or the one with `certificateId`. */
   certificateDownloadUrl: (orgId: string, id: string, form: { format: string; chain: string }, certificateId?: string) =>

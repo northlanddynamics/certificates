@@ -2,12 +2,12 @@
 // on name changes are in name-change-routes.ts.
 import { OpenAPIHono, createRoute, z } from "@hono/zod-openapi";
 import type { Context } from "hono";
-import { and, asc, eq, ne } from "drizzle-orm";
+import { and, asc, eq, isNull, ne } from "drizzle-orm";
 import type { Authorizer } from "./authorization";
 import type { Db } from "./db/client";
 import { managedCertificate } from "./db/schema";
 import { OrgParam, HttpError, errors, json } from "./http";
-import type { Issuances } from "./issuance";
+import { refusalMessage, type Issuances } from "./issuance";
 import { ManagedCertificate, ManagedCertificateParams, type ManagedCertificateReader } from "./managed-certificate-reader";
 import { PendingNameChange, pendingNameChangesOf, toPendingNameChange } from "./name-change";
 import type { Actor, UnitOfWork } from "./unit-of-work";
@@ -55,6 +55,8 @@ export function registerApprovals(ctx: {
           and(
             eq(managedCertificate.organizationId, orgId),
             eq(managedCertificate.approvalStatus, "pending"),
+            // An archived proposal cannot be approved, so is not asked for.
+            isNull(managedCertificate.archivedAt),
             ne(managedCertificate.proposedById, actor.id),
           ),
         )
@@ -94,7 +96,8 @@ export function registerApprovals(ctx: {
       });
       if (decision === "approved") {
         const begun = await issuances.begin(tx, change, actor, mc, "issue");
-        if ("refused" in begun) throw new Error(`the Issuance of a Managed Certificate just approved was refused: ${begun.refused}`);
+        // Only an archive can refuse it now (archived since the proposal was made); the approval is rolled back with it.
+        if ("refused" in begun) throw new HttpError(409, refusalMessage(begun.refused, "issue"));
       }
     });
     return (await withState([await findManagedCertificate(orgId, id)]))[0]!;

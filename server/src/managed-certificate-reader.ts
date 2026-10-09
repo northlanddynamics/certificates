@@ -16,6 +16,7 @@ import { isOwner, ownedByUser, ownersOf } from "./owners";
 import { roleCan, type Permissions } from "./permissions";
 import { MAX_RENEWAL_DAYS, RENEWAL_MODES, failuresOf, nextAttemptAt, renewalDue } from "./renewal";
 import { informationOf } from "./renewal-information";
+import { Revocation, revocationsOf, toRevocation, type RevocationRow } from "./revocation";
 import type { Actor } from "./unit-of-work";
 
 export const ManagedCertificateParams = OrgParam.extend({ id: z.string().openapi({ param: { name: "id", in: "path" } }) });
@@ -43,6 +44,7 @@ export const Certificate = z.object({
   environment: z.enum(ACME_ENVIRONMENTS),
   acmeAccountId: z.string(),
   issuedAt: z.string(),
+  revocation: Revocation.nullable().openapi({ description: "Set once the CA has been told to revoke it, by whom and why." }),
 });
 
 export const RenewalPolicy = z.object({
@@ -94,6 +96,7 @@ export const ManagedCertificate = z.object({
   keyCustody: z.enum(["owner"]),
   environment: z.enum(ACME_ENVIRONMENTS),
   createdAt: z.string(),
+  archivedAt: z.string().nullable().openapi({ description: "When it was archived: it then neither issues, renews nor deploys, and is listed only when archived ones are asked for." }),
   owners: z.array(Owner).openapi({ description: "Users and Teams accountable for it, in the order they were added; none is allowed." }),
   approval: Approval,
   pendingNameChange: PendingNameChange.nullable().openapi({ description: "A change of its names waiting for Approval; until it is approved, Renewal uses the names above." }),
@@ -111,7 +114,7 @@ export const toIssuance = (row: typeof issuance.$inferSelect) => ({
   failure: row.failureCode && row.failureMessage ? { code: row.failureCode, message: row.failureMessage } : null,
   certificateId: row.certificateId,
 });
-export const toCertificate = (row: typeof certificate.$inferSelect) => ({
+export const toCertificate = (row: typeof certificate.$inferSelect, revocation: RevocationRow | undefined) => ({
   id: row.id,
   fingerprint: row.fingerprint,
   serial: row.serial,
@@ -122,6 +125,7 @@ export const toCertificate = (row: typeof certificate.$inferSelect) => ({
   environment: row.environment,
   acmeAccountId: row.acmeAccountId,
   issuedAt: row.issuedAt.toISOString(),
+  revocation: revocation ? toRevocation(revocation) : null,
 });
 
 export function createManagedCertificateReader({ db, authorize }: { db: Db; authorize: Authorizer["authorize"] }) {
@@ -197,6 +201,7 @@ export function createManagedCertificateReader({ db, authorize }: { db: Db; auth
     const failures = await failuresOf(db, ids);
     const nameChanges = await pendingNameChanges(db, ids);
     const information = await informationOf(db, currentCertificates.map((c) => c.id));
+    const revocations = await revocationsOf(db, currentCertificates.map((c) => c.id));
     return rows.map((row) => {
       const latest = latestIssuances.find((i) => i.managedCertificateId === row.id);
       const current = currentCertificates.find((c) => c.managedCertificateId === row.id);
@@ -213,6 +218,7 @@ export function createManagedCertificateReader({ db, authorize }: { db: Db; auth
         keyCustody: row.keyCustody,
         environment: row.environment,
         createdAt: row.createdAt.toISOString(),
+        archivedAt: row.archivedAt?.toISOString() ?? null,
         owners: owners.get(row.id) ?? [],
         approval: {
           status: row.approvalStatus,
@@ -243,7 +249,7 @@ export function createManagedCertificateReader({ db, authorize }: { db: Db; auth
             : null,
         },
         issuance: latest ? toIssuance(latest) : null,
-        currentCertificate: current ? toCertificate(current) : null,
+        currentCertificate: current ? toCertificate(current, revocations.get(current.id)) : null,
       };
     });
   }

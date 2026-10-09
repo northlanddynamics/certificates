@@ -1,6 +1,6 @@
 import { bigint, check, customType, integer, foreignKey, index, jsonb, pgTable, text, timestamp, unique, uniqueIndex, uuid } from "drizzle-orm/pg-core";
 import { sql } from "drizzle-orm";
-import type { AcmeEnvironment } from "../certificate-authority";
+import type { AcmeEnvironment, RevocationReason } from "../certificate-authority";
 import type { DnsProviderType } from "../dns-provider-kinds";
 import type { IssuanceFailureCode } from "../issuance-failure";
 import type { KeyAlgorithm, KeyCustody } from "../csr";
@@ -302,4 +302,30 @@ export const renewalInfo = pgTable(
     nextCheckAt: timestamp("next_check_at", { withTimezone: true }).notNull(),
   },
   (t) => [check("renewal_info_window", sql`(${t.windowStart} is null) = (${t.windowEnd} is null)`)],
+);
+
+/**
+ * That a Certificate was revoked at its CA, by whom and why. Kept apart from the Certificate, which is immutable; a
+ * Certificate is revoked at most once and has a row here only once the CA has said it is. Nothing creates one but a
+ * person's revocation: archiving, name changes and removing users never revoke.
+ */
+export const certificateRevocation = pgTable(
+  "certificate_revocation",
+  {
+    certificateId: uuid("certificate_id")
+      .primaryKey()
+      .references(() => certificate.id),
+    organizationId: text("organization_id")
+      .notNull()
+      .references(() => organization.id),
+    /** The name of the RFC 5280 reason the CA was given. */
+    reason: text("reason").$type<RevocationReason>().notNull(),
+    revokedById: text("revoked_by_id").notNull(),
+    revokedByEmail: text("revoked_by_email").notNull(),
+    revokedAt: timestamp("revoked_at", { withTimezone: true }).notNull(),
+  },
+  (t) => [
+    index("certificate_revocation_org_idx").on(t.organizationId),
+    check("certificate_revocation_reason", sql`${t.reason} in ('unspecified', 'keyCompromise', 'superseded', 'cessationOfOperation')`),
+  ],
 );

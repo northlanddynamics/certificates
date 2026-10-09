@@ -1,6 +1,6 @@
 // The Certificate Authority interface Issuance uses, with Let's Encrypt (production and staging) as its only
 // implementation. It holds no state: callers pass in the account they act as. It knows about accounts and about
-// obtaining a Certificate for a CSR; revocation joins it with the ticket that needs it.
+// obtaining a Certificate for a CSR and revoking one.
 import { AuthorityKeyIdentifierExtension, X509Certificate } from "@peculiar/x509";
 import acme from "acme-client";
 import { Agent } from "node:https";
@@ -8,6 +8,14 @@ import { rootCertificates } from "node:tls";
 
 export const ACME_ENVIRONMENTS = ["staging", "production"] as const;
 export type AcmeEnvironment = (typeof ACME_ENVIRONMENTS)[number];
+
+/**
+ * Why a Certificate is revoked, by the name of its RFC 5280 reason code (section 5.3.1). These are the reasons an ACME CA
+ * takes from a subscriber that Let's Encrypt honours; the others (a CA's or an attribute authority's compromise, a hold)
+ * are not a subscriber's to give, and `affiliationChanged` and `privilegeWithdrawn` it refuses.
+ */
+export const REVOCATION_REASONS = { unspecified: 0, keyCompromise: 1, superseded: 4, cessationOfOperation: 5 } as const;
+export type RevocationReason = keyof typeof REVOCATION_REASONS;
 
 export class CertificateAuthorityError extends Error {
   constructor(
@@ -57,6 +65,12 @@ export interface CertificateAuthority {
    * again without.
    */
   issue(environment: AcmeEnvironment, account: CaAccount, request: { csr: string; responder: DnsChallengeResponder; replaces?: string }): Promise<string>;
+  /**
+   * Tells the CA to revoke the Certificate (PEM, its chain or the leaf alone) for `request.reason`, acting as the account
+   * that obtained it. Resolves once the CA has revoked it; throws a CertificateAuthorityError when the CA says no (it is
+   * revoked already, or not this account's) or does not answer.
+   */
+  revoke(environment: AcmeEnvironment, account: CaAccount, request: { certificate: string; reason: RevocationReason }): Promise<void>;
   /**
    * What the CA's ARI says about the Certificate (PEM, its chain or the leaf alone); null when the CA offers none, or
    * does not know the Certificate. Throws a CertificateAuthorityError when the CA does not answer.
@@ -189,6 +203,17 @@ export function createLetsEncrypt({ directoryUrls = {}, trustedCa, roots = {}, p
       const end = new Date(body?.suggestedWindow?.end ?? NaN);
       if (Number.isNaN(start.getTime()) || Number.isNaN(end.getTime())) throw new CertificateAuthorityError("rejected", `the ${environment} CA's renewal information has no suggested window`);
       return { window: { start, end }, retryAfterMs: retryAfterMs(res.headers.get("retry-after")) };
+    },
+    async revoke(environment, account, { certificate, reason }) {
+      await reach(environment);
+      const leaf = certificate.match(/-----BEGIN CERTIFICATE-----[^-]+-----END CERTIFICATE-----/)?.[0];
+      if (!leaf) throw new CertificateAuthorityError("rejected", "there is no certificate to revoke");
+      try {
+        await clientFor(environment, account).revokeCertificate(leaf, { reason: REVOCATION_REASONS[reason] });
+      } catch (err: any) {
+        if (err?.isAxiosError && !err.response) throw unreachable(environment, err);
+        throw rejected(err);
+      }
     },
     async issue(environment, account, { csr, responder, replaces }) {
       const directory = await reach(environment);

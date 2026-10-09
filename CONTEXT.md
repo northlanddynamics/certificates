@@ -57,8 +57,12 @@ A Managed Certificate's names replaced by others, together with a CSR for the ne
 _Avoid_: rename, reissue (when meaning the change of names rather than the Issuance that follows)
 
 **Archive**:
-Soft deletion of a Managed Certificate: it stops issuing, renewing and deploying, but it and its Certificates and history are retained. Archiving never revokes.
+Soft deletion of a Managed Certificate by an Organization Administrator, not even its Owners: it stops issuing, renewing and deploying, and discards a name change waiting for Approval, but it and its Certificates and history are retained. Archiving never revokes.
 _Avoid_: delete, remove, decommission
+
+**Revocation**:
+Telling the Certificate Authority to distrust one Certificate, with an RFC 5280 reason, which an Owner of its Managed Certificate or an Organization Administrator may do, even once it is archived. The platform records it only once the CA has revoked the Certificate, and nothing else revokes: not Archive, not a name change, not removing a user. It issues no replacement.
+_Avoid_: cancel, kill, invalidate
 
 **Renewal**:
 Issuing a new Certificate for a Managed Certificate that already has one, under names that are already approved; whether an Issuance is a Renewal follows from the Managed Certificate having a Certificate, not from who asked.

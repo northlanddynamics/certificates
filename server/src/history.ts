@@ -7,6 +7,7 @@ import type { Db } from "./db/client";
 import { auditEvent, certificate } from "./db/schema";
 import { errors, json } from "./http";
 import { Certificate, ManagedCertificateParams, Person, toCertificate, type ManagedCertificateReader } from "./managed-certificate-reader";
+import { revocationsOf, type RevocationRow } from "./revocation";
 import type { Actor } from "./unit-of-work";
 
 /** The Audit Event actions that are part of a Managed Certificate's history, and what each is called there. */
@@ -21,6 +22,8 @@ export const HISTORY_KINDS = {
   "name_change.withdrawn": "names_change_withdrawn",
   "name_change.discarded": "names_change_discarded",
   "managed_certificate.names_changed": "names_changed",
+  "managed_certificate.archived": "archived",
+  "certificate.revoked": "certificate_revoked",
 } as const;
 type HistoryKind = (typeof HISTORY_KINDS)[keyof typeof HISTORY_KINDS];
 
@@ -33,7 +36,7 @@ type HistoryEvent = {
   /** The names before and after, for a name change. */
   names: { from: string[]; to: string[] } | null;
 };
-type HistoryCertificate = { kind: "certificate_issued"; at: string; certificate: typeof certificate.$inferSelect };
+type HistoryCertificate = { kind: "certificate_issued"; at: string; certificate: typeof certificate.$inferSelect; revocation: RevocationRow | undefined };
 
 const isNames = (value: unknown): value is string[] => Array.isArray(value) && value.every((name) => typeof name === "string");
 
@@ -55,6 +58,7 @@ export async function historyOf(db: Db, organizationId: string, managedCertifica
     .from(certificate)
     .where(and(eq(certificate.organizationId, organizationId), eq(certificate.managedCertificateId, managedCertificateId)))
     .orderBy(asc(certificate.createdAt), asc(certificate.id));
+  const revocations = await revocationsOf(db, certificates.map((c) => c.id));
   const entries = [
     ...events.map(
       (e): HistoryEvent => ({
@@ -65,7 +69,7 @@ export async function historyOf(db: Db, organizationId: string, managedCertifica
         names: isNames(e.detail.from) && isNames(e.detail.to) ? { from: e.detail.from, to: e.detail.to } : null,
       }),
     ),
-    ...certificates.map((c): HistoryCertificate => ({ kind: "certificate_issued", at: c.issuedAt.toISOString(), certificate: c })),
+    ...certificates.map((c): HistoryCertificate => ({ kind: "certificate_issued", at: c.issuedAt.toISOString(), certificate: c, revocation: revocations.get(c.id) })),
   ];
   // Stable, so of two things at the same moment an Audit Event stays before the Certificate it led to.
   return entries.sort((a, b) => Date.parse(a.at) - Date.parse(b.at));
@@ -76,7 +80,7 @@ const HistoryEntry = z.discriminatedUnion("kind", [
     kind: z.enum(Object.values(HISTORY_KINDS) as [string, ...string[]]),
     at: z.string(),
     actor: Person.nullable(),
-    reason: z.string().nullable().openapi({ description: "What the Approver said, for a decision." }),
+    reason: z.string().nullable().openapi({ description: "What the Approver said, for a decision; the RFC 5280 reason, for a revocation." }),
     names: z.object({ from: z.array(z.string()), to: z.array(z.string()) }).nullable().openapi({ description: "The names before and after, for a name change." }),
   }),
   z.object({ kind: z.literal("certificate_issued"), at: z.string(), certificate: Certificate }),
@@ -97,7 +101,7 @@ export function registerHistory(ctx: {
       path: "/api/organizations/{orgId}/managed-certificates/{id}/history",
       tags: ["Managed Certificates"],
       summary: "How the Managed Certificate got to its current state, oldest first",
-      description: "Its creation or proposal, its Approvals, its name changes and the Certificates issued for it.",
+      description: "Its creation or proposal, its Approvals, its name changes, the Certificates issued for it, their revocations and its Archive.",
       request: { params: ManagedCertificateParams },
       responses: { 200: json(z.object({ items: z.array(HistoryEntry) })), ...errors(401, 403, 404) },
     }),
@@ -105,7 +109,7 @@ export function registerHistory(ctx: {
       const { orgId, id } = c.req.valid("param");
       const mc = await findReadable(await requireUser(c), orgId, id);
       const entries = await historyOf(db, orgId, mc.id);
-      return c.json({ items: entries.map((e) => (e.kind === "certificate_issued" ? { ...e, certificate: toCertificate(e.certificate) } : e)) }, 200);
+      return c.json({ items: entries.map((e) => (e.kind === "certificate_issued" ? { kind: e.kind, at: e.at, certificate: toCertificate(e.certificate, e.revocation) } : e)) }, 200);
     },
   );
 }

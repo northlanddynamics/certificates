@@ -133,6 +133,7 @@ describe("issuing the first Certificate", () => {
       environment: "staging",
       acmeAccountId: account.id,
       issuedAt: expect.any(String),
+      revocation: null,
     });
     expect(leaf.subjectAltName).toBe(`DNS:${name}`);
     // It is for the key the Owner holds: the one in the CSR.

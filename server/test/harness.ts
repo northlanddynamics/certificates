@@ -4,7 +4,7 @@
 import { Pool } from "pg";
 import { readFileSync } from "node:fs";
 import { createApp, type AppDeps } from "../src/app";
-import { CertificateAuthorityError, createLetsEncrypt, type AcmeEnvironment } from "../src/certificate-authority";
+import { CertificateAuthorityError, createLetsEncrypt, type AcmeEnvironment, type RevocationReason } from "../src/certificate-authority";
 import { createTxtResolver, type TxtResolver } from "../src/dcv";
 import type { Db } from "../src/db/client";
 import type { Issuances } from "../src/issuance";
@@ -75,6 +75,8 @@ export interface Harness {
    * Certificates (PEM) it was asked about, `replaces` what each order was placed to replace, and `failing` makes asking fail, and `replacing` names another Certificate (PEM) for orders to replace.
    */
   ari: { enabled: boolean; asked: string[]; replaces: (string | undefined)[]; failing: boolean; replacing?: string };
+  /** What the CA was told to revoke, in order: the Certificate (PEM) and the reason. Nothing but a revocation by a person may ever add to it. */
+  revocations: { certificate: string; reason: RevocationReason }[];
   /** Has Pebble answer ARI for the Certificate (PEM, or its chain) with this window instead of its own; the CA's `Retry-After` is Pebble's six hours. */
   setPebbleWindow(certificate: string, window: { start: Date; end: Date }): Promise<void>;
   /** What the platform does when it starts: ends the Issuances an earlier run left running. */
@@ -124,6 +126,7 @@ export async function createHarness(): Promise<Harness> {
   const createdAccountKeys: string[] = [];
   const caRoots = { current: pebbleRoots };
   const ari: Harness["ari"] = { enabled: false, asked: [], replaces: [], failing: false };
+  const revocations: Harness["revocations"] = [];
   // The real ACME client against Pebble; it only notes the keys it generated.
   const letsEncrypt = createLetsEncrypt({
     directoryUrls: caDirectories,
@@ -150,6 +153,10 @@ export async function createHarness(): Promise<Harness> {
         ari.replaces.push(replaces);
         return letsEncrypt.issue(environment, account, { ...request, replaces });
       },
+      async revoke(environment, account, request) {
+        await letsEncrypt.revoke(environment, account, request);
+        revocations.push(request);
+      },
       async renewalInfo(environment, certificate) {
         ari.asked.push(certificate);
         if (ari.failing) throw new CertificateAuthorityError("unreachable", "could not reach the CA for its renewal information");
@@ -168,7 +175,7 @@ export async function createHarness(): Promise<Harness> {
     dcvResolver.current = bindTxt;
     caRoots.current = pebbleRoots;
     Object.assign(ari, { enabled: false, failing: false, replacing: undefined });
-    ari.asked.length = ari.replaces.length = 0;
+    ari.asked.length = ari.replaces.length = revocations.length = 0;
     // Cascades through every table that references an Organization or a user.
     await pool.query(`truncate organization, "user", apikey cascade`);
     mailer.sent.length = 0;
@@ -199,6 +206,7 @@ export async function createHarness(): Promise<Harness> {
     settleIssuances: () => issuances.idle(),
     runRenewalScheduler: () => renewals.tick(),
     ari,
+    revocations,
     async setPebbleWindow(certificate, window) {
       const leaf = certificate.match(/-----BEGIN CERTIFICATE-----[^-]+-----END CERTIFICATE-----/)![0];
       const res = await fetch(`${PEBBLE_MANAGEMENT}/set-renewal-info/`, {

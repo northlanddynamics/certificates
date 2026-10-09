@@ -31,6 +31,8 @@ export type AuditAction =
   | "managed_certificate.renewal_policy_changed"
   | "managed_certificate.csr_uploaded"
   | "managed_certificate.names_changed"
+  | "managed_certificate.archived"
+  | "certificate.revoked"
   | "name_change.proposed"
   | "name_change.approved"
   | "name_change.rejected"

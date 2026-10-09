@@ -18,6 +18,7 @@ import { Certificate, Issuance, ManagedCertificate, ManagedCertificateParams, to
 import { checkNamesAndCsr, csrField, namesField } from "./names-and-csr";
 import { OwnerRef, addOwner } from "./owners";
 import { roleCan } from "./permissions";
+import { revocationsOf } from "./revocation";
 import type { Actor, UnitOfWork } from "./unit-of-work";
 
 const MAX_OWNERS = 50;
@@ -180,7 +181,9 @@ export function registerManagedCertificates(ctx: {
     async (c) => {
       const { orgId, id } = c.req.valid("param");
       const mc = await findReadable(await requireUser(c), orgId, id);
-      return c.json({ items: (await certificatesOf(orgId, mc.id)).map(toCertificate) }, 200);
+      const rows = await certificatesOf(orgId, mc.id);
+      const revocations = await revocationsOf(db, rows.map((row) => row.id));
+      return c.json({ items: rows.map((row) => toCertificate(row, revocations.get(row.id))) }, 200);
     },
   );
 }

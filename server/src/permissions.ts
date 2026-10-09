@@ -23,8 +23,10 @@ const statements = {
   // `create` makes one outright; `propose` asks for one that waits for Approval; `changeOwners` changes whose it is
   // (its Owners may do that too, whatever their role, as they may `renew` it now, `setRenewalPolicy`, `replaceCsr` and
   // `proposeNameChange`); `changeNames` changes its names outright, where a proposed name change waits for Approval;
-  // `download` exports a Certificate it may see, and is what an API key must carry to do the same.
-  managedCertificate: ["read", "create", "propose", "issue", "changeOwners", "renew", "setRenewalPolicy", "replaceCsr", "proposeNameChange", "changeNames", "download"],
+  // `download` exports a Certificate it may see, and is what an API key must carry to do the same; `revoke` tells the CA
+  // to distrust a Certificate (its Owners may, whatever their role) and `archive` retires the Managed Certificate (only
+  // those who hold it may, so not its Owners).
+  managedCertificate: ["read", "create", "propose", "issue", "changeOwners", "renew", "setRenewalPolicy", "replaceCsr", "proposeNameChange", "changeNames", "download", "revoke", "archive"],
   approval: ["read", "decide"],
   // The Organization's own API keys (a user's keys need none): the organization plugin asks for these names.
   apiKey: ["create", "read", "update", "delete"],

@@ -7,6 +7,7 @@ import { Select, SelectContent, SelectItem, SelectTrigger, SelectValue } from "@
 import { Textarea } from "@/components/ui/textarea";
 import { NameChange } from "./name-change-controls";
 import { Renewal } from "./renewal-controls";
+import { Archive, Revoke, revokedLine } from "./revocation-controls";
 import {
   EXPORT_CHAINS,
   EXPORT_FORMATS,
@@ -32,6 +33,7 @@ const KEY_ALGORITHMS: [string, string][] = [
 
 /** What a Managed Certificate's latest Issuance has come to, in words. */
 function status(m: ManagedCertificate) {
+  if (m.archivedAt) return "Archived";
   if (m.approval.status === "pending") return "Awaiting Approval";
   if (m.approval.status === "rejected") return "Rejected";
   if (m.issuance?.status === "running") return m.currentCertificate ? "Renewing…" : "Issuing…";
@@ -111,16 +113,20 @@ export function ManagedCertificates({ org }: { org: Me["organizations"][number] 
                 Rejected by {m.approval.decidedBy?.email}: {m.approval.reason}
               </span>
             )}
+            {m.currentCertificate?.revocation && <span className="text-destructive">Current Certificate: {revokedLine(m.currentCertificate.revocation)}</span>}
             {m.issuance?.failure && (
               <span className="text-destructive">
                 {m.issuance.failure.message}
               </span>
             )}
-            <NameChange org={org} m={m} userId={me.data?.user.id} onChanged={refresh} />
-            <Renewal org={org} m={m} userId={me.data?.user.id} onChanged={refresh} />
+            {/* An archived one neither renews nor changes names, so offers neither. */}
+            {!m.archivedAt && <NameChange org={org} m={m} userId={me.data?.user.id} onChanged={refresh} />}
+            {!m.archivedAt && <Renewal org={org} m={m} userId={me.data?.user.id} onChanged={refresh} />}
             <Owners org={org} m={m} userId={me.data?.user.id} onChanged={refresh} />
+            <Revoke org={org} m={m} userId={me.data?.user.id} onChanged={refresh} />
+            <Archive org={org} m={m} onChanged={refresh} />
             <span className="flex gap-3">
-              {m.issuance?.status === "failed" && !m.currentCertificate && can(org, "managedCertificate", "issue") && (
+              {!m.archivedAt && m.issuance?.status === "failed" && !m.currentCertificate && can(org, "managedCertificate", "issue") && (
                 <Button variant="link" size="sm" className="h-auto p-0" onClick={() => retry.mutate(m.id)}>
                   Try again
                 </Button>
@@ -270,16 +276,18 @@ const HISTORY_WORDS = {
   names_change_withdrawn: "Name change withdrawn",
   names_change_discarded: "Name change discarded",
   names_changed: "Names changed",
+  archived: "Archived",
+  certificate_revoked: "Certificate revoked",
 } as const;
 const historyLine = (e: HistoryEntry) =>
   e.kind === "certificate_issued"
-    ? `Certificate issued, valid until ${new Date(e.certificate.notAfter).toLocaleDateString()} (${e.certificate.fingerprint.slice(0, 16)}…)`
+    ? `Certificate issued, valid until ${new Date(e.certificate.notAfter).toLocaleDateString()} (${e.certificate.fingerprint.slice(0, 16)}…)${e.certificate.revocation ? ", since revoked" : ""}`
     : `${HISTORY_WORDS[e.kind]}${e.actor ? ` by ${e.actor.email}` : ""}${e.names ? ` (${e.names.from.join(", ")} to ${e.names.to.join(", ")})` : ""}${e.reason ? `: ${e.reason}` : ""}`;
 
 /** How a Managed Certificate got to where it is: its Approvals and Certificates, oldest first; fetched when opened. */
 function History({ org, m }: { org: Me["organizations"][number]; m: ManagedCertificate }) {
   const [open, setOpen] = useState(false);
-  const history = useQuery({ queryKey: ["history", org.id, m.id, m.currentCertificate?.fingerprint, m.approval.status, m.names, m.pendingNameChange?.proposedAt], queryFn: () => api.history(org.id, m.id), enabled: open });
+  const history = useQuery({ queryKey: ["history", org.id, m.id, m.currentCertificate?.fingerprint, m.currentCertificate?.revocation?.revokedAt, m.archivedAt, m.approval.status, m.names, m.pendingNameChange?.proposedAt], queryFn: () => api.history(org.id, m.id), enabled: open });
   return (
     <details onToggle={(e) => setOpen(e.currentTarget.open)}>
       <summary className="cursor-pointer text-muted-foreground">History</summary>

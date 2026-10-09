@@ -18,6 +18,7 @@ import { HttpError, OrgParam, errors, json } from "./http";
 import { createIssuances } from "./issuance";
 import type { Kms } from "./kms";
 import { registerApprovals } from "./approvals";
+import { registerArchiveRoutes } from "./archive-routes";
 import { registerHistory } from "./history";
 import { createManagedCertificateReader } from "./managed-certificate-reader";
 import { registerManagedCertificates } from "./managed-certificates";
@@ -26,6 +27,7 @@ import { registerNameChangeRoutes } from "./name-change-routes";
 import { registerOwnerRoutes } from "./owner-routes";
 import { createRenewalScheduler } from "./renewal-scheduler";
 import { registerRenewalRoutes } from "./renewal-routes";
+import { registerRevocationRoutes } from "./revocation-routes";
 import type { Mailer } from "./mailer";
 import type { MemberRemovalHook } from "./member-removal";
 import { removeTeamFromOwners, removeUserFromOwners } from "./owners";
@@ -246,6 +248,8 @@ export function createApp(deps: AppDeps) {
   const renewals = createRenewalScheduler({ db, unitOfWork, issuances, certificateAuthority: deps.certificateAuthority, clock });
   registerNameChangeRoutes({ app, requireUser, authorize, unitOfWork, issuances, reader });
   registerApprovals({ app, db, requireUser, authorize, unitOfWork, issuances, reader });
+  registerArchiveRoutes({ app, requireUser, authorize, unitOfWork, reader });
+  registerRevocationRoutes({ app, db, requireUser, unitOfWork, reader, secrets, certificateAuthority: deps.certificateAuthority });
   registerHistory({ app, db, requireUser, reader });
 
   app.doc("/api/openapi.json", {
