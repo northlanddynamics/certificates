@@ -1,12 +1,15 @@
 import { Pool } from "pg";
 import { createApp } from "./app";
+import { createLetsEncrypt } from "./certificate-authority";
+import { createLocalKms } from "./kms";
 import { ConsoleMailer } from "./mailer";
 import { runMigrations } from "./migrate";
 import { bootstrapPlatformOperator } from "./operator";
 
 const databaseUrl = process.env.DATABASE_URL;
 const secret = process.env.AUTH_SECRET;
-if (!databaseUrl || !secret) throw new Error("DATABASE_URL and AUTH_SECRET are required");
+const localKmsKey = process.env.LOCAL_KMS_KEY;
+if (!databaseUrl || !secret || !localKmsKey) throw new Error("DATABASE_URL, AUTH_SECRET and LOCAL_KMS_KEY are required");
 
 const pool = new Pool({ connectionString: databaseUrl });
 const { app, auth, db } = createApp({
@@ -17,6 +20,8 @@ const { app, auth, db } = createApp({
   webURL: process.env.WEB_URL,
   trustedOrigins: process.env.TRUSTED_ORIGINS?.split(",").map((o) => o.trim()).filter(Boolean),
   secret,
+  kms: createLocalKms(localKmsKey),
+  certificateAuthority: createLetsEncrypt(),
 });
 await runMigrations(pool);
 

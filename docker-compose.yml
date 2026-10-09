@@ -16,5 +16,15 @@ services:
       timeout: 3s
       retries: 30
 
+  # Let's Encrypt's ACME test server, the CA in tests. Its directory is https://localhost:14000/dir, served with a
+  # certificate from the minica root in server/test/pebble/minica.pem.
+  pebble:
+    image: ghcr.io/letsencrypt/pebble:latest
+    command: -config /test/config/pebble-config.json
+    environment:
+      PEBBLE_VA_NOSLEEP: "1"
+    ports:
+      - "14000:14000"
+
 volumes:
   pgdata:

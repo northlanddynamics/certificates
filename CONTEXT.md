@@ -70,6 +70,10 @@ _Avoid_: enrollment setting, renewal config
 A pluggable issuer from which the platform obtains Certificates, such as an ACME CA.
 _Avoid_: issuer, provider
 
+**ACME Account**:
+An Organization's own account with a Certificate Authority, in its staging or production environment. Its key is a Secret.
+_Avoid_: CA account, registration
+
 **Domain Control Validation (DCV)**:
 Proof, demanded by a Certificate Authority, that the requester controls a domain name before a certificate naming it is issued.
 _Avoid_: domain verification, challenge (when meaning the whole process)
@@ -85,6 +89,10 @@ _Avoid_: challenge zone, ACME zone
 **Delegated DCV**:
 DCV performed through a Validation Zone, as opposed to Direct DCV, where the platform writes to the domain's authoritative zone through a DNS Provider.
 _Avoid_: CNAME validation, acme-dns
+
+**Secret**:
+A value the platform must hold, such as an ACME Account's key or a DNS Provider's credentials, that can be replaced or tested but never read back by anyone, including Organization Administrators and impersonating Platform Operators.
+_Avoid_: credential (when meaning the stored value), password
 
 ### Deployment
 

@@ -15,7 +15,9 @@ export type AuditAction =
   | "team.renamed"
   | "team.deleted"
   | "team.member_added"
-  | "team.member_removed";
+  | "team.member_removed"
+  | "acme_account.created"
+  | "acme_account.key_replaced";
 
 export interface AuditInput {
   organizationId: string;

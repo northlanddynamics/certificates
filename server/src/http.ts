@@ -1,6 +1,6 @@
 import { z } from "@hono/zod-openapi";
 
-export type ErrorStatus = 401 | 403 | 404 | 409;
+export type ErrorStatus = 400 | 401 | 403 | 404 | 409 | 422 | 502;
 
 export class HttpError extends Error {
   constructor(

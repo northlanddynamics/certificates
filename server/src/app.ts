@@ -3,17 +3,21 @@ import { Scalar } from "@scalar/hono-api-reference";
 import { and, asc, eq } from "drizzle-orm";
 import type { Context } from "hono";
 import type { Pool } from "pg";
+import { registerAcmeAccounts } from "./acme-accounts";
 import { PLATFORM_OPERATOR_ROLE, createAuth } from "./auth";
+import type { CertificateAuthority } from "./certificate-authority";
 import { listAudit } from "./audit";
 import { createDb } from "./db/client";
 import { managedCertificate, member, organization } from "./db/schema";
 import { createAuthorizer } from "./authorization";
 import { HttpError, OrgParam, errors, json } from "./http";
+import type { Kms } from "./kms";
 import type { Mailer } from "./mailer";
 import type { MemberRemovalHook } from "./member-removal";
 import { createOrganizationChanges } from "./organization-changes";
 import { createOrganizations } from "./organizations";
 import { ROLE_NAMES, permissionsOf } from "./permissions";
+import { createSecrets } from "./secrets";
 import { registerTeamsOverview } from "./teams-overview";
 import { createUnitOfWork } from "./unit-of-work";
 
@@ -27,6 +31,9 @@ export interface AppDeps {
   webURL?: string;
   trustedOrigins?: string[];
   secret: string;
+  /** Wraps each Organization's data key; see secrets.ts. */
+  kms: Kms;
+  certificateAuthority: CertificateAuthority;
   /** See `OrganizationChangesDeps.memberRemovalHooks`. */
   memberRemovalHooks?: MemberRemovalHook[];
 }
@@ -222,6 +229,15 @@ export function createApp(deps: AppDeps) {
   );
 
   registerTeamsOverview({ app, db, requireUser, authorize });
+  registerAcmeAccounts({
+    app,
+    db,
+    requireUser,
+    authorize,
+    unitOfWork,
+    secrets: createSecrets(deps.kms),
+    certificateAuthority: deps.certificateAuthority,
+  });
 
   app.doc("/api/openapi.json", {
     openapi: "3.1.0",

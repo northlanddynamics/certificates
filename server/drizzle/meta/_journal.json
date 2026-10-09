@@ -29,6 +29,13 @@
       "when": 1791553481597,
       "tag": "0003_member_unique_per_organization",
       "breakpoints": true
+    },
+    {
+      "idx": 4,
+      "version": "7",
+      "when": 1791557603239,
+      "tag": "0004_secrets_and_acme_accounts",
+      "breakpoints": true
     }
   ]
 }

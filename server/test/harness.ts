@@ -2,8 +2,11 @@
 // with Better Auth running for real. Only the outside world is replaced
 // (email is captured, the clock is injectable). Later tickets' API tests live here.
 import { Pool } from "pg";
+import { readFileSync } from "node:fs";
 import { createApp, type AppDeps } from "../src/app";
+import { createLetsEncrypt, type AcmeEnvironment } from "../src/certificate-authority";
 import type { Db } from "../src/db/client";
+import { createLocalKms } from "../src/kms";
 import { CapturingMailer } from "../src/mailer";
 import type { MemberRemovalHook } from "../src/member-removal";
 import { runMigrations } from "../src/migrate";
@@ -16,6 +19,10 @@ export const PASSWORD = "correct-horse-battery-staple";
 
 const BASE = "http://localhost";
 
+/** Pebble, Let's Encrypt's ACME test server (`docker compose up -d pebble`), and the root its certificate is signed by. */
+export const PEBBLE_DIRECTORY = process.env.PEBBLE_DIRECTORY ?? "https://localhost:14000/dir";
+const PEBBLE_CA = readFileSync(new URL("./pebble/minica.pem", import.meta.url), "utf8");
+
 export interface OrgAdmin {
   orgId: string;
   cookie: string;
@@ -27,6 +34,10 @@ export interface Harness {
   pool: Pool;
   db: Db;
   mailer: CapturingMailer;
+  /** Where the CA's environments are served; every one is Pebble unless a test points one elsewhere. */
+  caDirectories: Record<AcmeEnvironment, string>;
+  /** The private keys of the ACME accounts the platform created at the CA, as PEM; for tests to check they never leak. */
+  createdAccountKeys: string[];
   /** The hooks the app runs when a member is removed; empty unless a test adds one (and takes it out again). */
   memberRemovalHooks: MemberRemovalHook[];
   setNow(d: Date): void;
@@ -37,7 +48,7 @@ export interface Harness {
   api(
     path: string,
     opts?: { method?: string; body?: unknown; cookie?: string },
-  ): Promise<{ status: number; body: any }>;
+  ): Promise<{ status: number; body: any; cookie: string }>;
   /** Operator creates an Organization; its first administrator accepts the invitation and signs in. */
   createOrgWithAdmin(operatorCookie: string, slug: string, adminEmail: string): Promise<OrgAdmin>;
   /** Empty every table and reset captured mail and the clock. */
@@ -45,11 +56,18 @@ export interface Harness {
   close(): Promise<void>;
 }
 
+/** The cookies a browser would hold after `res`: a later Set-Cookie of a name replaces an earlier one, and an empty value clears it. */
 function cookieFrom(res: Response): string {
-  return res.headers
-    .getSetCookie()
-    .map((c) => c.split(";")[0])
-    .join("; ");
+  const jar = new Map<string, string>();
+  for (const setCookie of res.headers.getSetCookie()) {
+    const [pair = ""] = setCookie.split(";");
+    const at = pair.indexOf("=");
+    const name = pair.slice(0, at);
+    const value = pair.slice(at + 1);
+    if (value) jar.set(name, value);
+    else jar.delete(name);
+  }
+  return [...jar].map(([name, value]) => `${name}=${value}`).join("; ");
 }
 
 export async function createHarness(): Promise<Harness> {
@@ -57,10 +75,23 @@ export async function createHarness(): Promise<Harness> {
   const mailer = new CapturingMailer();
   const memberRemovalHooks: MemberRemovalHook[] = [];
   let now = new Date("2026-01-01T00:00:00Z");
+  const caDirectories: Record<AcmeEnvironment, string> = { staging: PEBBLE_DIRECTORY, production: PEBBLE_DIRECTORY };
+  const createdAccountKeys: string[] = [];
+  // The real ACME client against Pebble; it only notes the keys it generated.
+  const letsEncrypt = createLetsEncrypt({ directoryUrls: caDirectories, trustedCa: PEBBLE_CA });
   const deps: AppDeps = {
     pool,
     mailer,
     memberRemovalHooks,
+    kms: createLocalKms(Buffer.alloc(32, 1).toString("base64")),
+    certificateAuthority: {
+      ...letsEncrypt,
+      async createAccount(environment, input) {
+        const account = await letsEncrypt.createAccount(environment, input);
+        createdAccountKeys.push(account.accountKey);
+        return account;
+      },
+    },
     clock: () => now,
     baseURL: BASE,
     secret: "test-secret-test-secret-test-secret-1234",
@@ -72,6 +103,8 @@ export async function createHarness(): Promise<Harness> {
     await pool.query(`truncate organization, "user" cascade`);
     mailer.sent.length = 0;
     memberRemovalHooks.length = 0;
+    createdAccountKeys.length = 0;
+    caDirectories.staging = caDirectories.production = PEBBLE_DIRECTORY;
     now = new Date("2026-01-01T00:00:00Z");
   };
   await reset();
@@ -88,6 +121,8 @@ export async function createHarness(): Promise<Harness> {
     pool,
     db,
     mailer,
+    caDirectories,
+    createdAccountKeys,
     memberRemovalHooks,
     setNow: (d) => {
       now = d;
@@ -118,7 +153,7 @@ export async function createHarness(): Promise<Harness> {
         body: opts.body ? JSON.stringify(opts.body) : undefined,
       });
       const text = await res.text();
-      return { status: res.status, body: text ? JSON.parse(text) : null };
+      return { status: res.status, body: text ? JSON.parse(text) : null, cookie: cookieFrom(res) };
     },
     async createOrgWithAdmin(operatorCookie, slug, adminEmail) {
       const created = await harness.api("/api/platform/organizations", {
