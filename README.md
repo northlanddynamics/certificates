@@ -11,7 +11,7 @@ export DATABASE_URL=postgres://postgres:postgres@localhost:5433/certs
 export AUTH_SECRET=$(openssl rand -hex 32)
 export OPERATOR_EMAIL=operator@example.com OPERATOR_PASSWORD='a-long-password'   # creates the Platform Operator
 bun run dev:server                 # API on :3000, applies migrations on start
-bun run dev:web                    # UI on :5173, proxies /api to :3000
+bun run dev:web                    # UI on :5173 (the web/ workspace), proxies /api to :3000
 ```
 
 Invitation emails are printed to the server console in development.
@@ -32,3 +32,13 @@ bun run test          # Seam A: the Hono app in-process against the real Postgre
 ```
 
 API contract: `GET /api/openapi.json`. Identity routes under `/api/auth/*` belong to Better Auth.
+
+## UI components
+
+shadcn/ui components are added only through its CLI, from the `web/` workspace:
+
+```bash
+cd web && bunx --bun shadcn@latest add <component name>
+```
+
+The root `package.json` pins `express` to 5.2.1 (`overrides`) because the published `express@5.3.0` tarball was missing when this was set up, which broke the CLI's install. Remove the override once 5.3.0 installs again.

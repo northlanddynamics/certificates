@@ -4,43 +4,33 @@
   "type": "module",
   "scripts": {
     "dev:server": "bun --watch server/src/index.ts",
-    "dev:web": "vite --config web/vite.config.ts",
+    "dev:web": "bun run --cwd web dev",
     "migrate": "bun server/src/migrate.ts",
     "auth:generate": "bunx --bun auth generate --config server/src/auth-cli.ts --output server/src/db/auth-schema.ts -y",
     "db:generate": "bunx --bun drizzle-kit generate",
     "typecheck": "tsc --noEmit -p server/tsconfig.json && tsc --noEmit -p web/tsconfig.json",
     "test": "bun test server/test",
-    "build:web": "vite build --config web/vite.config.ts"
+    "build:web": "bun run --cwd web build"
   },
   "dependencies": {
     "@hono/zod-openapi": "1.6.3",
-    "@radix-ui/react-label": "^2.1.16",
-    "@radix-ui/react-slot": "^1.4.0",
-    "@tanstack/react-query": "5.104.1",
-    "@tanstack/react-router": "1.170.41",
     "better-auth": "1.7.7",
-    "class-variance-authority": "^0.7.1",
-    "clsx": "^2.1.1",
     "drizzle-orm": "0.45.4",
     "hono": "4.13.13",
     "pg": "8.23.1",
-    "react": "19.3.0",
-    "react-dom": "19.3.0",
-    "tailwind-merge": "^3.7.0",
     "zod": "4.6.5"
   },
   "devDependencies": {
-    "@tailwindcss/vite": "4.3.3",
-    "@tanstack/router-plugin": "1.168.42",
     "@types/bun": "1.4.2",
     "@types/pg": "8.23.1",
-    "@types/react": "19.3.0",
-    "@types/react-dom": "19.3.0",
-    "@vitejs/plugin-react": "6.1.2",
     "auth": "1.7.7",
     "drizzle-kit": "0.31.11",
-    "tailwindcss": "4.3.3",
-    "typescript": "5",
-    "vite": "8.3.4"
-  }
+    "typescript": "5"
+  },
+  "overrides": {
+    "express": "5.2.1"
+  },
+  "workspaces": [
+    "web"
+  ]
 }
