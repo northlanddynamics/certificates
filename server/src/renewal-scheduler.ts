@@ -3,12 +3,14 @@
 // is due, and what to wait for after a failure, are read from the Managed Certificates and their Issuances, so a pass
 // that is repeated, or run by two platform instances at once, starts a Renewal once (a Managed Certificate has at most
 // one Issuance running). Its time is the clock it is given, so tests control it.
-import { and, desc, eq, inArray, isNull, sql } from "drizzle-orm";
+import { and, eq, inArray, isNull, or, sql } from "drizzle-orm";
+import type { CertificateAuthority } from "./certificate-authority";
 import type { Db } from "./db/client";
-import { certificate, issuance, managedCertificate } from "./db/schema";
+import { issuance, managedCertificate, renewalInfo } from "./db/schema";
 import { isUniqueViolation } from "./http";
 import type { Issuances } from "./issuance";
-import { failuresOf, nextAttemptAt } from "./renewal";
+import { currentCertificates, failuresOf, nextAttemptAt } from "./renewal";
+import { refreshRenewalInfo, informationOf } from "./renewal-information";
 import type { UnitOfWork } from "./unit-of-work";
 
 export interface RenewalScheduler {
@@ -16,42 +18,53 @@ export interface RenewalScheduler {
   tick(): Promise<number>;
 }
 
-export function createRenewalScheduler({ db, unitOfWork, issuances, clock }: { db: Db; unitOfWork: UnitOfWork; issuances: Issuances; clock: () => Date }): RenewalScheduler {
-  /** Each Managed Certificate's most recent Certificate. */
-  const current = db
-    .selectDistinctOn([certificate.managedCertificateId], {
-      managedCertificateId: certificate.managedCertificateId,
-      notBefore: certificate.notBefore,
-      notAfter: certificate.notAfter,
-    })
-    .from(certificate)
-    .orderBy(certificate.managedCertificateId, desc(certificate.createdAt), desc(certificate.id))
-    .as("current");
+export function createRenewalScheduler({
+  db,
+  unitOfWork,
+  issuances,
+  certificateAuthority,
+  clock,
+}: {
+  db: Db;
+  unitOfWork: UnitOfWork;
+  issuances: Issuances;
+  certificateAuthority: CertificateAuthority;
+  clock: () => Date;
+}): RenewalScheduler {
+  const current = currentCertificates(db);
 
   return {
     async tick() {
       const now = clock();
-      // Automatic, live, approved, with a Certificate to renew and none being issued. The days rule is checked in
-      // the database (in seconds, as a day interval would follow the session's time zone through a clock change) to leave out most of them; the rest of what makes one due (nextAttemptAt) is checked here.
+      // The CA's windows first, so that a Renewal it has just asked for is seen by this pass.
+      await refreshRenewalInfo({ db, certificateAuthority, now });
+      // Automatic, live, approved, with a Certificate to renew and none being issued. The days rule, or the start of the
+      // CA's window, is checked in the database (the days in seconds, as a day interval would follow the session's time
+      // zone through a clock change) to leave out most of them; the rest of what makes one due (nextAttemptAt) is checked here.
       const candidates = await db
-        .select({ managedCertificate, notBefore: current.notBefore, notAfter: current.notAfter })
+        .select({ managedCertificate, certificate: { id: current.id, fingerprint: current.fingerprint, notBefore: current.notBefore, notAfter: current.notAfter } })
         .from(managedCertificate)
         .innerJoin(current, eq(current.managedCertificateId, managedCertificate.id))
+        .leftJoin(renewalInfo, eq(renewalInfo.certificateId, current.id))
         .where(
           and(
             eq(managedCertificate.renewalMode, "automatic"),
             isNull(managedCertificate.archivedAt),
             inArray(managedCertificate.approvalStatus, ["not_required", "approved"]),
-            sql`${current.notAfter} - make_interval(secs => ${managedCertificate.renewalDaysBeforeExpiry} * 86400) <= ${now}`,
+            or(
+              sql`${current.notAfter} - make_interval(secs => ${managedCertificate.renewalDaysBeforeExpiry} * 86400) <= ${now}`,
+              sql`${renewalInfo.windowStart} <= ${now}`,
+            ),
             sql`not exists (select 1 from ${issuance} where ${issuance.managedCertificateId} = ${managedCertificate.id} and ${issuance.status} = 'running')`,
           ),
         );
       const failures = await failuresOf(db, candidates.map((c) => c.managedCertificate.id));
+      const information = await informationOf(db, candidates.map((c) => c.certificate.id));
 
       let started = 0;
-      for (const { managedCertificate: mc, notBefore, notAfter } of candidates) {
+      for (const { managedCertificate: mc, certificate } of candidates) {
         const policy = { mode: mc.renewalMode, daysBeforeExpiry: mc.renewalDaysBeforeExpiry };
-        const at = nextAttemptAt(policy, { notBefore, notAfter }, failures.get(mc.id));
+        const at = nextAttemptAt(policy, certificate, failures.get(mc.id), information.get(certificate.id)?.window ?? null);
         if (!at || at > now) continue;
         try {
           const issuanceId = await unitOfWork.run(null, async (tx, change) => {

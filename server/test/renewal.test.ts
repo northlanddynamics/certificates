@@ -5,7 +5,8 @@ import { afterAll, beforeAll, beforeEach, describe, expect, setDefaultTimeout, t
 import { Pkcs10CertificateRequest } from "@peculiar/x509";
 import acme from "acme-client";
 import { X509Certificate, randomBytes } from "node:crypto";
-import { BIND, PASSWORD, createHarness, type Harness } from "./harness";
+import { certificateId } from "../src/certificate-authority";
+import { BIND, PASSWORD, PEBBLE_DIRECTORY, createHarness, type Harness } from "./harness";
 
 setDefaultTimeout(60_000);
 
@@ -541,5 +542,174 @@ describe("failed Renewals", () => {
     await schedule();
     expect(await renewalFailing()).toEqual([id]);
     expect(await renewalFailing(globex.cookie, globex.orgId)).toEqual([]);
+  });
+});
+
+describe("ACME Renewal Information", () => {
+  beforeEach(() => {
+    h.ari.enabled = true;
+  });
+
+  const HOUR = 3_600_000;
+  /**
+   * The days before expiry these tests set: one, so that the window Pebble suggests (a day either side of two thirds
+   * into the Certificate's life) comes before them for a Certificate of any life of a few days or more.
+   */
+  const ARI_DAYS = 1;
+  const at = (iso: string) => new Date(Date.parse(iso));
+  const windowOf = async (id: string) => {
+    const ari = (await get(id)).renewal.ari;
+    return ari?.window ? { start: at(ari.window.start), end: at(ari.window.end) } : null;
+  };
+  /** A Managed Certificate with its first Certificate and the moment its life has begun, a day in, and the CA has been asked about it. */
+  async function started(days = ARI_DAYS) {
+    await readyToIssue();
+    const { id, body } = await issued({ days });
+    const first = (await get(id)).currentCertificate;
+    const pem = await downloaded(id);
+    const t0 = new Date(Date.parse(first.notBefore) + DAY);
+    h.setNow(t0);
+    expect(await schedule()).toBe(0);
+    return { id, body, first, pem, t0 };
+  }
+
+  test("the scheduler asks the CA about the current Certificate and shows the window it suggests", async () => {
+    const { id, pem, t0 } = await started();
+    expect(h.ari.asked).toHaveLength(1);
+    expect(certificateId(h.ari.asked[0]!)).toBe(certificateId(pem));
+    const mc = await get(id);
+    const window = (await windowOf(id))!;
+    // Pebble suggests a day either side of two thirds into the Certificate's life.
+    expect(window.start.getTime()).toBeGreaterThan(t0.getTime());
+    expect(window.end.getTime() - window.start.getTime()).toBeLessThanOrEqual(2 * DAY);
+    expect(mc.renewal.ari.checkedAt).toBe(t0.toISOString());
+    // It is due within that window, and so before the policy's days, which come at the end.
+    expect(Date.parse(mc.renewal.dueAt)).toBeGreaterThanOrEqual(window.start.getTime());
+    expect(Date.parse(mc.renewal.dueAt)).toBeLessThanOrEqual(window.end.getTime());
+    expect(mc.renewal.dueBecause).toBe("ari");
+  });
+
+  test("renews within the window when that comes before the days before expiry, and not before", async () => {
+    const { id, first, pem } = await started();
+    const window = (await windowOf(id))!;
+    h.setNow(new Date(window.start.getTime() - HOUR));
+    expect(await schedule()).toBe(0);
+    expect(await certificates(id)).toHaveLength(1);
+
+    // However the moment is chosen within the window, the end of it has passed.
+    h.setNow(window.end);
+    // The days before expiry are not before the window's end (Pebble's ends on them): it is the window that made it due.
+    expect(Date.parse(first.notAfter) - ARI_DAYS * DAY).toBeGreaterThanOrEqual(window.end.getTime());
+    expect(await schedule()).toBe(1);
+    const mc = await get(id);
+    expect(mc.issuance).toMatchObject({ status: "succeeded" });
+    expect(mc.currentCertificate.fingerprint).not.toBe(first.fingerprint);
+
+    // The Renewal is recorded as the scheduler's, and the CA was told which Certificate it replaces (the first Issuance replaced none).
+    expect(h.ari.replaces.map((r) => r && certificateId(r))).toEqual([undefined, certificateId(pem)]);
+    expect((await auditOf()).find((e) => e.action === "issuance.started" && e.detail.renewal === "scheduled")).toBeDefined();
+  });
+
+  test("the CA treats the Renewal as the replacement of the Certificate it names", async () => {
+    const { id, pem, body } = await started();
+    h.setNow((await windowOf(id))!.end);
+    expect(await schedule()).toBe(1);
+    expect((await get(id)).issuance.status).toBe("succeeded");
+
+    // Pebble has marked the first Certificate replaced, so a second order for it is refused.
+    const accounts = await h.api(`/api/organizations/${org.orgId}/acme-accounts`, { cookie: org.cookie });
+    const client = new acme.Client({ directoryUrl: PEBBLE_DIRECTORY, accountKey: h.createdAccountKeys[0]!, accountUrl: accounts.body.items[0].accountUrl });
+    await expect(client.createOrder({ identifiers: body.names.map((value: string) => ({ type: "dns", value })), replaces: certificateId(pem) } as any)).rejects.toThrow(/replacement/i);
+  });
+
+  test("renews at the days before expiry when the window comes after them", async () => {
+    const { id, first, t0 } = await started();
+    const notAfter = at(first.notAfter);
+    await h.setPebbleWindow(await downloaded(id), { start: new Date(notAfter.getTime() - HOUR), end: notAfter });
+    // The CA is asked again once its Retry-After has passed.
+    h.setNow(new Date(t0.getTime() + 7 * HOUR));
+    expect(await schedule()).toBe(0);
+    expect(await windowOf(id)).toEqual({ start: new Date(notAfter.getTime() - HOUR), end: notAfter });
+
+    h.setNow(await daysBeforeExpiry(id, ARI_DAYS + 1));
+    expect(await schedule()).toBe(0);
+    expect((await get(id)).renewal.dueBecause).toBe("policy");
+    h.setNow(await daysBeforeExpiry(id, ARI_DAYS));
+    expect(await schedule()).toBe(1);
+    expect(await certificates(id)).toHaveLength(2);
+  });
+
+  test("when the CA moves the window earlier, Renewal is rescheduled earlier, but only once its Retry-After has passed", async () => {
+    const { id, pem, t0 } = await started();
+    const before = (await get(id)).renewal.dueAt;
+    // As when it is about to revoke the Certificate: renew right away.
+    await h.setPebbleWindow(pem, { start: new Date(t0.getTime() - 2 * HOUR), end: new Date(t0.getTime() - HOUR) });
+
+    // The CA asked to be asked again in six hours: until then the scheduler goes by what it was told.
+    h.setNow(new Date(t0.getTime() + 5 * HOUR));
+    expect(await schedule()).toBe(0);
+    expect(h.ari.asked).toHaveLength(1);
+    expect((await get(id)).renewal.dueAt).toBe(before);
+
+    h.setNow(new Date(t0.getTime() + 6 * HOUR));
+    expect(await schedule()).toBe(1);
+    expect(h.ari.asked).toHaveLength(2);
+    expect(await certificates(id)).toHaveLength(2);
+    expect((await get(id)).issuance.status).toBe("succeeded");
+  });
+
+  test("a window already moved earlier shows as the reason and the time before the Renewal is made", async () => {
+    const { id, pem, t0 } = await started();
+    await h.setPebbleWindow(pem, { start: new Date(t0.getTime() + 8 * HOUR), end: new Date(t0.getTime() + 9 * HOUR) });
+    h.setNow(new Date(t0.getTime() + 6 * HOUR));
+    expect(await schedule()).toBe(0);
+    const mc = await get(id);
+    expect(mc.renewal.dueBecause).toBe("ari");
+    expect(Date.parse(mc.renewal.dueAt)).toBeGreaterThanOrEqual(t0.getTime() + 8 * HOUR);
+    expect(Date.parse(mc.renewal.dueAt)).toBeLessThanOrEqual(t0.getTime() + 9 * HOUR);
+  });
+
+  test("when the CA offers no ARI, only the days before expiry apply", async () => {
+    await readyToIssue();
+    h.ari.enabled = false;
+    const { id } = await issued({ days: ARI_DAYS });
+    const first = (await get(id)).currentCertificate;
+    // Where Pebble's window would be: no Renewal there.
+    h.setNow(new Date(Date.parse(first.notBefore) + 0.7 * (Date.parse(first.notAfter) - Date.parse(first.notBefore))));
+    expect(await schedule()).toBe(0);
+    const mc = await get(id);
+    expect(mc.renewal.ari).toMatchObject({ window: null });
+    expect(mc.renewal.dueBecause).toBe("policy");
+    h.setNow(await daysBeforeExpiry(id, ARI_DAYS));
+    expect(await schedule()).toBe(1);
+    expect(await certificates(id)).toHaveLength(2);
+  });
+
+  test("a CA that cannot be asked does not stop the Renewal the days call for, and is not asked every pass", async () => {
+    await readyToIssue();
+    h.ari.failing = true;
+    const { id } = await issued({ days: ARI_DAYS });
+    const t0 = new Date(Date.parse((await get(id)).currentCertificate.notBefore) + DAY);
+    h.setNow(t0);
+    expect(await schedule()).toBe(0);
+    expect(h.ari.asked).toHaveLength(1);
+    h.setNow(new Date(t0.getTime() + 60_000));
+    expect(await schedule()).toBe(0);
+    expect(h.ari.asked).toHaveLength(1);
+    expect((await get(id)).renewal.ari).toMatchObject({ window: null, checkedAt: null });
+
+    h.setNow(await daysBeforeExpiry(id, ARI_DAYS));
+    expect(await schedule()).toBe(1);
+    expect(await certificates(id)).toHaveLength(2);
+  });
+
+  test("a manual Managed Certificate is not asked about and is not renewed by the window", async () => {
+    await readyToIssue();
+    const { id } = await issued();
+    await setPolicy(id, { mode: "manual", daysBeforeExpiry: DUE_DAYS });
+    h.setNow(await daysBeforeExpiry(id, 1));
+    expect(await schedule()).toBe(0);
+    expect(h.ari.asked).toHaveLength(0);
+    expect((await get(id)).renewal.dueAt).toBeNull();
   });
 });

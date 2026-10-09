@@ -11,10 +11,13 @@ const when = (iso: string) => new Date(iso).toLocaleString();
 
 /** What the Renewal Policy comes to for this Managed Certificate, in words: when it renews, or why it is not. */
 function summary(m: ManagedCertificate) {
-  const { policy, dueAt, failing } = m.renewal;
+  const { policy, dueAt, dueBecause, failing } = m.renewal;
   if (policy.mode === "manual") return "Renewed by hand only";
   const days = `${policy.daysBeforeExpiry} day${policy.daysBeforeExpiry === 1 ? "" : "s"} before expiry`;
-  return dueAt ? `Renews automatically ${days}, from ${when(failing?.nextAttemptAt ?? dueAt)}` : `Renews automatically ${days}`;
+  if (!dueAt) return `Renews automatically ${days}`;
+  // The CA's own window, when it is the one that is due first, is the reason to name.
+  const why = dueBecause === "ari" ? "when the CA suggests" : days;
+  return `Renews automatically ${why}, from ${when(failing?.nextAttemptAt ?? dueAt)}`;
 }
 
 /** A Managed Certificate's Renewal: its policy, how it is going, and for those who may, the means to change the policy, renew now and upload a new CSR. */

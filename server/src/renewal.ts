@@ -2,10 +2,12 @@
 // scheduler renews a Managed Certificate (automatic) or only a person does (manual), and how many days before its
 // current Certificate ends it is due. A failed Renewal is tried again after a delay that doubles each time up to a
 // ceiling; how many have failed is read from the Issuances since the last that succeeded, so there is no counter to
-// get out of step. The scheduler (renewal-scheduler.ts) and the API's view of a Managed Certificate share this.
-import { and, asc, eq, inArray, sql } from "drizzle-orm";
+// get out of step. An automatic Renewal is due at the earlier of the policy's days and a time within the window the CA's
+// ACME Renewal Information (ARI) suggests. The scheduler (renewal-scheduler.ts) and the API's view of a Managed
+// Certificate share this.
+import { and, asc, desc, eq, inArray, sql } from "drizzle-orm";
 import type { Db } from "./db/client";
-import { issuance } from "./db/schema";
+import { certificate, issuance } from "./db/schema";
 import type { IssuanceFailureCode } from "./issuance-failure";
 
 export const RENEWAL_MODES = ["automatic", "manual"] as const;
@@ -33,6 +35,40 @@ export function dueAt(certificate: { notBefore: Date; notAfter: Date }, daysBefo
   const lived = certificate.notAfter.getTime() - certificate.notBefore.getTime();
   const byPolicy = certificate.notAfter.getTime() - daysBeforeExpiry * 86_400_000;
   return new Date(Math.max(byPolicy, certificate.notBefore.getTime() + lived * EARLIEST_DUE_FRACTION));
+}
+
+/** The window of time the CA suggests renewing a Certificate in. */
+export interface RenewalWindow {
+  start: Date;
+  end: Date;
+}
+
+/** What makes a Certificate due: the Renewal Policy's days, or the time chosen within the CA's window. */
+export type DueBecause = "policy" | "ari";
+
+/**
+ * A time within the CA's window for the Certificate: a point in it that its fingerprint decides, so that it is the same
+ * on every pass and differs between Certificates, which spreads the Renewals the CA suggests for a whole window.
+ */
+export function timeWithin(window: RenewalWindow, fingerprint: string): Date {
+  const fraction = parseInt(fingerprint.slice(0, 8), 16) / 0x1_0000_0000;
+  return new Date(window.start.getTime() + Math.floor(fraction * (window.end.getTime() - window.start.getTime())));
+}
+
+/**
+ * When an automatic Renewal is due, and why: the policy's days (not before a tenth of the Certificate's life) or the
+ * time chosen within the CA's window, whichever comes first. The CA's window is not held to the tenth: a CA that asks
+ * for a Renewal early has a reason, such as a revocation to come.
+ */
+export function renewalDue(
+  current: { notBefore: Date; notAfter: Date; fingerprint: string },
+  daysBeforeExpiry: number,
+  window: RenewalWindow | null,
+): { at: Date; because: DueBecause } {
+  const byPolicy = dueAt(current, daysBeforeExpiry);
+  if (!window) return { at: byPolicy, because: "policy" };
+  const byWindow = timeWithin(window, current.fingerprint);
+  return byWindow < byPolicy ? { at: byWindow, because: "ari" } : { at: byPolicy, because: "policy" };
 }
 
 /** The Renewals that have failed since a Managed Certificate's last Certificate was issued. */
@@ -67,9 +103,31 @@ export async function failuresOf(db: Db, managedCertificateIds: string[]): Promi
 }
 
 /** The earliest the scheduler will try to renew: when it is due, and when the backoff after its last failure has passed. None for a manual Managed Certificate, which only a person renews. */
-export function nextAttemptAt(policy: RenewalPolicy, current: { notBefore: Date; notAfter: Date } | null, failed: RenewalFailures | undefined): Date | null {
+export function nextAttemptAt(
+  policy: RenewalPolicy,
+  current: { notBefore: Date; notAfter: Date; fingerprint: string } | null,
+  failed: RenewalFailures | undefined,
+  window: RenewalWindow | null,
+): Date | null {
   if (policy.mode !== "automatic" || !current) return null;
-  const due = dueAt(current, policy.daysBeforeExpiry);
+  const { at: due } = renewalDue(current, policy.daysBeforeExpiry, window);
   if (!failed) return due;
   return new Date(Math.max(due.getTime(), failed.last.at.getTime() + retryDelayMs(failed.failures)));
 }
+
+/** Each Managed Certificate's most recent Certificate, as a subquery to join. */
+export const currentCertificates = (db: Db) =>
+  db
+    .selectDistinctOn([certificate.managedCertificateId], {
+      id: certificate.id,
+      organizationId: certificate.organizationId,
+      managedCertificateId: certificate.managedCertificateId,
+      fingerprint: certificate.fingerprint,
+      notBefore: certificate.notBefore,
+      notAfter: certificate.notAfter,
+      environment: certificate.environment,
+      chainPem: certificate.chainPem,
+    })
+    .from(certificate)
+    .orderBy(certificate.managedCertificateId, desc(certificate.createdAt), desc(certificate.id))
+    .as("current");

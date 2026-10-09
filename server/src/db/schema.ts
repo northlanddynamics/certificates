@@ -239,3 +239,26 @@ export const certificate = pgTable(
     foreignKey({ columns: [t.managedCertificateId, t.organizationId], foreignColumns: [managedCertificate.id, managedCertificate.organizationId] }),
   ],
 );
+
+/**
+ * What the CA's ACME Renewal Information last said about a Certificate, and when to ask again. The Certificate stays as
+ * it was issued; this is what the scheduler has learned about it since. No window means the CA offered none.
+ */
+export const renewalInfo = pgTable(
+  "renewal_info",
+  {
+    certificateId: uuid("certificate_id")
+      .primaryKey()
+      .references(() => certificate.id),
+    organizationId: text("organization_id")
+      .notNull()
+      .references(() => organization.id),
+    windowStart: timestamp("window_start", { withTimezone: true }),
+    windowEnd: timestamp("window_end", { withTimezone: true }),
+    /** When the CA last answered; none if it never has. */
+    checkedAt: timestamp("checked_at", { withTimezone: true }),
+    /** Not asked again before this: the CA's Retry-After, or a wait the platform chose. */
+    nextCheckAt: timestamp("next_check_at", { withTimezone: true }).notNull(),
+  },
+  (t) => [check("renewal_info_window", sql`(${t.windowStart} is null) = (${t.windowEnd} is null)`)],
+);

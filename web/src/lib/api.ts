@@ -90,6 +90,10 @@ export interface Renewal {
   policy: RenewalPolicy;
   /** When the scheduler will renew it; none for a manual one or one with no Certificate yet. */
   dueAt: string | null;
+  /** What makes it due then: its days before expiry, or the CA's suggested window (ARI). */
+  dueBecause: "policy" | "ari" | null;
+  /** What the CA's ARI last said about the current Certificate. */
+  ari: { window: { start: string; end: string } | null; checkedAt: string | null; nextCheckAt: string } | null;
   /** Set while the latest Renewal has failed. */
   failing: { failures: number; lastFailure: { code: string; message: string; at: string }; nextAttemptAt: string | null } | null;
 }

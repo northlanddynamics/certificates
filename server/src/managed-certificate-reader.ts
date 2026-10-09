@@ -13,7 +13,8 @@ import { HttpError, OrgParam } from "./http";
 import { ISSUANCE_FAILURE_CODES } from "./issuance-failure";
 import { isOwner, ownedByUser, ownersOf } from "./owners";
 import { roleCan, type Permissions } from "./permissions";
-import { MAX_RENEWAL_DAYS, RENEWAL_MODES, dueAt, failuresOf, nextAttemptAt } from "./renewal";
+import { MAX_RENEWAL_DAYS, RENEWAL_MODES, failuresOf, nextAttemptAt, renewalDue } from "./renewal";
+import { informationOf } from "./renewal-information";
 import type { Actor } from "./unit-of-work";
 
 export const ManagedCertificateParams = OrgParam.extend({ id: z.string().openapi({ param: { name: "id", in: "path" } }) });
@@ -50,7 +51,16 @@ export const RenewalPolicy = z.object({
 
 export const Renewal = z.object({
   policy: RenewalPolicy,
-  dueAt: z.string().nullable().openapi({ description: "When the scheduler will renew it; none for a manual one or one with no Certificate yet." }),
+  dueAt: z.string().nullable().openapi({ description: "When the scheduler will renew it, the earlier of its days before expiry and a time within the CA's ARI window; none for a manual one or one with no Certificate yet." }),
+  dueBecause: z.enum(["policy", "ari"]).nullable().openapi({ description: "What makes it due then: `policy`, its days before expiry, or `ari`, the CA's suggested window." }),
+  ari: z
+    .object({
+      window: z.object({ start: z.string(), end: z.string() }).nullable().openapi({ description: "The window the CA suggests renewing in; none if it offers no ARI, or has not said." }),
+      checkedAt: z.string().nullable().openapi({ description: "When the CA last answered; none if it has not." }),
+      nextCheckAt: z.string().openapi({ description: "When the CA will be asked again (its Retry-After)." }),
+    })
+    .nullable()
+    .openapi({ description: "What the CA's ACME Renewal Information last said about the current Certificate; none for a manual one, or until the scheduler has asked." }),
   failing: z
     .object({
       failures: z.number().int().openapi({ description: "How many Renewals have failed since the current Certificate was issued." }),
@@ -183,12 +193,15 @@ export function createManagedCertificateReader({ db, authorize }: { db: Db; auth
       .orderBy(certificate.managedCertificateId, desc(certificate.createdAt), desc(certificate.id));
     const owners = await ownersOf(db, ids);
     const failures = await failuresOf(db, ids);
+    const information = await informationOf(db, currentCertificates.map((c) => c.id));
     return rows.map((row) => {
       const latest = latestIssuances.find((i) => i.managedCertificateId === row.id);
       const current = currentCertificates.find((c) => c.managedCertificateId === row.id);
       const policy = { mode: row.renewalMode, daysBeforeExpiry: row.renewalDaysBeforeExpiry };
       // A failed first Issuance is not a failing Renewal: there is no Certificate yet to renew.
       const failed = current ? failures.get(row.id) : undefined;
+      const ari = current ? information.get(current.id) : undefined;
+      const due = policy.mode === "automatic" && current ? renewalDue(current, policy.daysBeforeExpiry, ari?.window ?? null) : null;
       return {
         id: row.id,
         names: row.names,
@@ -206,12 +219,21 @@ export function createManagedCertificateReader({ db, authorize }: { db: Db; auth
         },
         renewal: {
           policy,
-          dueAt: policy.mode === "automatic" && current ? dueAt(current, policy.daysBeforeExpiry).toISOString() : null,
+          dueAt: due?.at.toISOString() ?? null,
+          dueBecause: due?.because ?? null,
+          ari:
+            policy.mode === "automatic" && ari
+              ? {
+                  window: ari.window && { start: ari.window.start.toISOString(), end: ari.window.end.toISOString() },
+                  checkedAt: ari.checkedAt?.toISOString() ?? null,
+                  nextCheckAt: ari.nextCheckAt.toISOString(),
+                }
+              : null,
           failing: failed
             ? {
                 failures: failed.failures,
                 lastFailure: { code: failed.last.code, message: failed.last.message, at: failed.last.at.toISOString() },
-                nextAttemptAt: nextAttemptAt(policy, current!, failed)?.toISOString() ?? null,
+                nextAttemptAt: nextAttemptAt(policy, current!, failed, ari?.window ?? null)?.toISOString() ?? null,
               }
             : null,
         },

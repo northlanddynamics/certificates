@@ -3,7 +3,7 @@
 // request should wait): it does DCV through the Organization's DNS Provider, has the CA finalize the order with the
 // CSR, and ends by storing the Certificate, or with the cause of its failure. Either end is one audited change.
 import { X509Certificate, createHash } from "node:crypto";
-import { and, eq } from "drizzle-orm";
+import { and, desc, eq } from "drizzle-orm";
 import { CertificateAuthorityError, type CertificateAuthority } from "./certificate-authority";
 import { parseCsr } from "./csr";
 import type { Dcv } from "./dcv";
@@ -133,7 +133,14 @@ export function createIssuances({ db, unitOfWork, certificateAuthority: ca, dcv,
       accountId = account.id;
 
       const accountKey = await secrets.open(db, row.organizationId, account.secretId);
-      chainPem = await ca.issue(mc.environment, { accountUrl: account.accountUrl, accountKey }, { csr: mc.csr, responder });
+      // An Issuance of a Managed Certificate that has a Certificate is its Renewal, and names the Certificate it replaces so a CA with ARI can tell.
+      const [replaced] = await db
+        .select({ chainPem: certificate.chainPem })
+        .from(certificate)
+        .where(and(eq(certificate.organizationId, row.organizationId), eq(certificate.managedCertificateId, mc.id)))
+        .orderBy(desc(certificate.createdAt), desc(certificate.id))
+        .limit(1);
+      chainPem = await ca.issue(mc.environment, { accountUrl: account.accountUrl, accountKey }, { csr: mc.csr, responder, replaces: replaced?.chainPem });
     } catch (err) {
       return fail(row, failureOf(err), responder.leftovers());
     }

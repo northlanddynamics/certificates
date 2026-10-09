@@ -4,7 +4,7 @@
 import { Pool } from "pg";
 import { readFileSync } from "node:fs";
 import { createApp, type AppDeps } from "../src/app";
-import { createLetsEncrypt, type AcmeEnvironment } from "../src/certificate-authority";
+import { CertificateAuthorityError, createLetsEncrypt, type AcmeEnvironment } from "../src/certificate-authority";
 import { createTxtResolver, type TxtResolver } from "../src/dcv";
 import type { Db } from "../src/db/client";
 import { createLocalKms } from "../src/kms";
@@ -64,6 +64,14 @@ export interface Harness {
   settleIssuances(): Promise<void>;
   /** One pass of the Renewal scheduler at the harness's clock: starts the Renewals that are due and returns how many. Settle the Issuances to see their outcome. */
   runRenewalScheduler(): Promise<number>;
+  /**
+   * The CA as the platform sees it, for the ARI tests: `enabled` is whether it answers ARI (off by default, so that
+   * Pebble's own window, two thirds into a Certificate's life, does not decide the other tests' Renewals), `asked` the
+   * Certificates (PEM) it was asked about, `replaces` what each order was placed to replace, and `failing` makes asking fail.
+   */
+  ari: { enabled: boolean; asked: string[]; replaces: (string | undefined)[]; failing: boolean };
+  /** Has Pebble answer ARI for the Certificate (PEM, or its chain) with this window instead of its own; the CA's `Retry-After` is Pebble's six hours. */
+  setPebbleWindow(certificate: string, window: { start: Date; end: Date }): Promise<void>;
   /** What the platform does when it starts: ends the Issuances an earlier run left running. */
   failInterruptedIssuances(): Promise<void>;
   /** The roots the CA's chains end in, as an export that includes the root finds them: Pebble's, unless a test sets `current` to something else. */
@@ -110,6 +118,7 @@ export async function createHarness(): Promise<Harness> {
   const caDirectories: Record<AcmeEnvironment, string> = { staging: PEBBLE_DIRECTORY, production: PEBBLE_DIRECTORY };
   const createdAccountKeys: string[] = [];
   const caRoots = { current: pebbleRoots };
+  const ari: Harness["ari"] = { enabled: false, asked: [], replaces: [], failing: false };
   // The real ACME client against Pebble; it only notes the keys it generated.
   const letsEncrypt = createLetsEncrypt({
     directoryUrls: caDirectories,
@@ -131,6 +140,15 @@ export async function createHarness(): Promise<Harness> {
         createdAccountKeys.push(account.accountKey);
         return account;
       },
+      async issue(environment, account, request) {
+        ari.replaces.push(request.replaces);
+        return letsEncrypt.issue(environment, account, request);
+      },
+      async renewalInfo(environment, certificate) {
+        ari.asked.push(certificate);
+        if (ari.failing) throw new CertificateAuthorityError("unreachable", "could not reach the CA for its renewal information");
+        return ari.enabled ? letsEncrypt.renewalInfo(environment, certificate) : null;
+      },
     },
     dcv: { resolver: { lookupTxt: (name) => dcvResolver.current.lookupTxt(name) }, visibilityTimeoutMs: 1500, pollIntervalMs: 50 },
     clock: () => now,
@@ -143,6 +161,8 @@ export async function createHarness(): Promise<Harness> {
     await issuances.idle();
     dcvResolver.current = bindTxt;
     caRoots.current = pebbleRoots;
+    Object.assign(ari, { enabled: false, failing: false });
+    ari.asked.length = ari.replaces.length = 0;
     // Cascades through every table that references an Organization or a user.
     await pool.query(`truncate organization, "user", apikey cascade`);
     mailer.sent.length = 0;
@@ -170,6 +190,16 @@ export async function createHarness(): Promise<Harness> {
     dcvResolver,
     settleIssuances: () => issuances.idle(),
     runRenewalScheduler: () => renewals.tick(),
+    ari,
+    async setPebbleWindow(certificate, window) {
+      const leaf = certificate.match(/-----BEGIN CERTIFICATE-----[^-]+-----END CERTIFICATE-----/)![0];
+      const res = await fetch(`${PEBBLE_MANAGEMENT}/set-renewal-info/`, {
+        method: "POST",
+        body: JSON.stringify({ Certificate: leaf, ARIResponse: JSON.stringify({ suggestedWindow: { start: window.start.toISOString(), end: window.end.toISOString() } }) }),
+        tls: { ca: PEBBLE_CA },
+      });
+      if (!res.ok) throw new Error(`Pebble would not set the renewal information: ${res.status} ${await res.text()}`);
+    },
     failInterruptedIssuances: () => issuances.failInterrupted(),
     caRoots,
     createdAccountKeys,

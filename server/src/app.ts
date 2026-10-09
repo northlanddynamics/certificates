@@ -240,7 +240,7 @@ export function createApp(deps: AppDeps) {
   registerCertificateExport({ app, apiKeys, unitOfWork, reader, certificateAuthority: deps.certificateAuthority });
   registerOwnerRoutes({ app, requireUser, unitOfWork, reader });
   registerRenewalRoutes({ app, db, requireUser, unitOfWork, issuances, reader });
-  const renewals = createRenewalScheduler({ db, unitOfWork, issuances, clock });
+  const renewals = createRenewalScheduler({ db, unitOfWork, issuances, certificateAuthority: deps.certificateAuthority, clock });
   registerApprovals({ app, db, requireUser, authorize, unitOfWork, issuances, reader });
   registerHistory({ app, db, requireUser, reader });
 
