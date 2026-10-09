@@ -622,6 +622,19 @@ describe("ACME Renewal Information", () => {
     await expect(client.createOrder({ identifiers: body.names.map((value: string) => ({ type: "dns", value })), replaces: certificateId(pem) } as any)).rejects.toThrow(/replacement/i);
   });
 
+  test("a CA that will not take an order for a Certificate already replaced still gets the Renewal, placed without it", async () => {
+    const { id, pem } = await started();
+    h.setNow((await windowOf(id))!.end);
+    expect(await schedule()).toBe(1);
+    expect(await certificates(id)).toHaveLength(2);
+    // Pebble now holds the first Certificate as replaced; an order that names it again is refused.
+    h.ari.replacing = pem;
+    expect((await renewNow(id)).status).toBe(202);
+    await h.settleIssuances();
+    expect((await get(id)).issuance).toMatchObject({ status: "succeeded", failure: null });
+    expect(await certificates(id)).toHaveLength(3);
+  });
+
   test("renews at the days before expiry when the window comes after them", async () => {
     const { id, first, t0 } = await started();
     const notAfter = at(first.notAfter);

@@ -67,9 +67,9 @@ export interface Harness {
   /**
    * The CA as the platform sees it, for the ARI tests: `enabled` is whether it answers ARI (off by default, so that
    * Pebble's own window, two thirds into a Certificate's life, does not decide the other tests' Renewals), `asked` the
-   * Certificates (PEM) it was asked about, `replaces` what each order was placed to replace, and `failing` makes asking fail.
+   * Certificates (PEM) it was asked about, `replaces` what each order was placed to replace, and `failing` makes asking fail, and `replacing` names another Certificate (PEM) for orders to replace.
    */
-  ari: { enabled: boolean; asked: string[]; replaces: (string | undefined)[]; failing: boolean };
+  ari: { enabled: boolean; asked: string[]; replaces: (string | undefined)[]; failing: boolean; replacing?: string };
   /** Has Pebble answer ARI for the Certificate (PEM, or its chain) with this window instead of its own; the CA's `Retry-After` is Pebble's six hours. */
   setPebbleWindow(certificate: string, window: { start: Date; end: Date }): Promise<void>;
   /** What the platform does when it starts: ends the Issuances an earlier run left running. */
@@ -141,8 +141,9 @@ export async function createHarness(): Promise<Harness> {
         return account;
       },
       async issue(environment, account, request) {
-        ari.replaces.push(request.replaces);
-        return letsEncrypt.issue(environment, account, request);
+        const replaces = ari.replacing ?? request.replaces;
+        ari.replaces.push(replaces);
+        return letsEncrypt.issue(environment, account, { ...request, replaces });
       },
       async renewalInfo(environment, certificate) {
         ari.asked.push(certificate);
@@ -161,7 +162,7 @@ export async function createHarness(): Promise<Harness> {
     await issuances.idle();
     dcvResolver.current = bindTxt;
     caRoots.current = pebbleRoots;
-    Object.assign(ari, { enabled: false, failing: false });
+    Object.assign(ari, { enabled: false, failing: false, replacing: undefined });
     ari.asked.length = ari.replaces.length = 0;
     // Cascades through every table that references an Organization or a user.
     await pool.query(`truncate organization, "user", apikey cascade`);

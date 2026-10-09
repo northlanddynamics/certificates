@@ -103,6 +103,9 @@ export function certificateId(pem: string): string {
   return `${Buffer.from(keyId, "hex").toString("base64url")}.${Buffer.from(serial, "hex").toString("base64url")}`;
 }
 
+/** What a CA says when it will not take an order for the Certificate it names as replaced: it was replaced already, is not known, or is not this account's. */
+const REPLACES_REFUSAL = /replace|certid|\bARI\b|given certificate/i;
+
 /** A Retry-After header as milliseconds: seconds, or a date. */
 function retryAfterMs(header: string | null): number | null {
   if (!header) return null;
@@ -192,11 +195,27 @@ export function createLetsEncrypt({ directoryUrls = {}, trustedCa, roots = {}, p
       const client = clientFor(environment, account);
       // Only a CA that offers ARI is told what an order replaces.
       if (replaces && directory.renewalInfo) {
-        // acme-client's auto mode takes no extra order fields, so the order it places is given the one it needs; an order
-        // the CA will not take for it (the Certificate is not known there, or already replaced) is placed without.
-        const place = client.createOrder.bind(client);
-        const replacedId = certificateId(replaces);
-        client.createOrder = (data) => place({ ...data, replaces: replacedId } as typeof data).catch(() => place(data));
+        // acme-client's auto mode takes no extra order fields, so the order it places is given the one it needs. A Renewal
+        // must not fail for want of it: when the Certificate's identifier cannot be worked out, or the CA says no to the
+        // order for a reason that is about the replacement (already replaced, not known there), the order is placed without.
+        let replacedId: string | undefined;
+        try {
+          replacedId = certificateId(replaces);
+        } catch {
+          // Not a Certificate ARI can name (no authority key identifier): an ordinary order.
+        }
+        if (replacedId) {
+          const place = client.createOrder.bind(client);
+          client.createOrder = async (data) => {
+            try {
+              return await place({ ...data, replaces: replacedId } as typeof data);
+            } catch (err: any) {
+              // A refused connection, a rate limit or the like is not about the replacement, and a second order would only add to it.
+              if (!(err instanceof Error) || ((err as any).isAxiosError && !(err as any).response) || !REPLACES_REFUSAL.test(err.message)) throw err;
+              return place(data);
+            }
+          };
+        }
       }
       // acme-client rethrows what a challenge callback throws, so those are told apart from the CA's own errors here.
       const fromResponder = new Set<unknown>();
