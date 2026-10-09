@@ -3,15 +3,16 @@ import { Scalar } from "@scalar/hono-api-reference";
 import { and, asc, eq } from "drizzle-orm";
 import type { Context } from "hono";
 import type { Pool } from "pg";
-import { ORG_ADMIN_ROLE, PLATFORM_OPERATOR_ROLE, createAuth } from "./auth";
+import { APIError } from "better-auth/api";
+import { INVITATION_EXPIRES_IN_SECONDS, ORG_ADMIN_ROLE, PLATFORM_OPERATOR_ROLE, createAuth } from "./auth";
 import { listAudit, recordAudit } from "./audit";
 import { createDb } from "./db/client";
 import { invitation, managedCertificate, member, organization } from "./db/schema";
-import { INVITATION_TTL_MS } from "./invitations";
 import { createAuthorizer } from "./authorization";
 import { HttpError, OrgParam, errors, isUniqueViolation, json } from "./http";
 import type { Mailer } from "./mailer";
 import { registerOrganizationRoutes } from "./organization-routes";
+import { createUnitOfWork } from "./unit-of-work";
 
 export interface AppDeps {
   pool: Pool;
@@ -28,11 +29,20 @@ export interface AppDeps {
 export function createApp(deps: AppDeps) {
   const { pool, mailer, clock } = deps;
   const db = createDb(pool);
-  const auth = createAuth({ ...deps, db });
+  const authConfig = { baseURL: deps.baseURL, secret: deps.secret, trustedOrigins: deps.trustedOrigins };
+  const auth = createAuth({ ...authConfig, db });
+  const webURL = deps.webURL ?? deps.baseURL;
+  const unitOfWork = createUnitOfWork({ db, authConfig, mailer, clock, webURL });
   const app = new OpenAPIHono();
 
   app.onError((err, c) => {
     if (err instanceof HttpError) return c.json({ error: err.message }, err.status);
+    if (err instanceof APIError) {
+      const status = betterAuthStatus(err);
+      if (status) return c.json({ error: err.message }, status);
+    }
+    // A unique index (one membership per user, one Team name per Organization) lost a race or caught a repeat.
+    if (isUniqueViolation(err)) return c.json({ error: "already exists" }, 409);
     console.error(err);
     return c.json({ error: "internal error" }, 500);
   });
@@ -95,7 +105,8 @@ export function createApp(deps: AppDeps) {
             email: adminEmail.toLowerCase(),
             role: ORG_ADMIN_ROLE,
             status: "pending",
-            expiresAt: new Date(now.getTime() + INVITATION_TTL_MS),
+            // Better Auth judges expiry against the real time, not `clock`.
+            expiresAt: new Date(Date.now() + INVITATION_EXPIRES_IN_SECONDS * 1000),
             createdAt: now,
             inviterId: operator.id,
           });
@@ -117,7 +128,7 @@ export function createApp(deps: AppDeps) {
         .send({
           to: adminEmail,
           subject: `You are invited to administer ${name}`,
-          text: `Accept your invitation: ${deps.webURL ?? deps.baseURL}/accept-invitation/${invitationId}`,
+          text: `Accept your invitation: ${webURL}/accept-invitation/${invitationId}`,
         })
         .catch((err) => console.error("invitation email failed", err));
       return c.json({ id: orgId, invitationId }, 201);
@@ -158,34 +169,10 @@ export function createApp(deps: AppDeps) {
     async (c) => {
       const user = await requireUser(c);
       const { id } = c.req.valid("param");
-      const now = clock();
-      const result = await db.transaction(async (tx) => {
-        const [inv] = await tx.select().from(invitation).where(eq(invitation.id, id)).for("update");
-        if (!inv) throw new HttpError(404, "invitation not found");
-        if (inv.email.toLowerCase() !== user.email.toLowerCase()) throw new HttpError(403, "invitation is for a different email");
-        if (inv.status !== "pending") throw new HttpError(409, "invitation already used");
-        if (inv.expiresAt < now) throw new HttpError(404, "invitation expired");
-        const [already] = await tx
-          .select({ id: member.id })
-          .from(member)
-          .where(and(eq(member.organizationId, inv.organizationId), eq(member.userId, user.id)));
-        if (already) throw new HttpError(409, "already a member of this organization");
-        const role = inv.role ?? "member";
-        await tx.update(invitation).set({ status: "accepted" }).where(eq(invitation.id, id));
-        await tx
-          .insert(member)
-          .values({ id: crypto.randomUUID(), organizationId: inv.organizationId, userId: user.id, role, createdAt: now });
-        await recordAudit(tx, {
-          organizationId: inv.organizationId,
-          occurredAt: now,
-          actor: user,
-          action: "invitation.accepted",
-          target: { type: "invitation", id },
-          detail: { role },
-        });
-        return { organizationId: inv.organizationId, role };
-      });
-      return c.json(result, 200);
+      const { member: joined } = await unitOfWork.run(user, (a) =>
+        a.api.acceptInvitation({ body: { invitationId: id }, headers: c.req.raw.headers }),
+      );
+      return c.json({ organizationId: joined.organizationId, role: joined.role }, 200);
     },
   );
 
@@ -235,7 +222,7 @@ export function createApp(deps: AppDeps) {
     }),
     async (c) => {
       const { orgId } = c.req.valid("param");
-      await authorize(await requireUser(c), orgId, "managedCertificate.list");
+      await authorize(await requireUser(c), orgId);
       const items = await db
         .select({ id: managedCertificate.id })
         .from(managedCertificate)
@@ -271,12 +258,12 @@ export function createApp(deps: AppDeps) {
     }),
     async (c) => {
       const { orgId } = c.req.valid("param");
-      await authorize(await requireUser(c), orgId, "audit.read");
+      await authorize(await requireUser(c), orgId, { audit: ["read"] });
       return c.json({ items: await listAudit(db, orgId) }, 200);
     },
   );
 
-  registerOrganizationRoutes({ app, db, deps, requireUser, authorize });
+  registerOrganizationRoutes({ app, db, auth, unitOfWork, requireUser, authorize });
 
   app.doc("/api/openapi.json", {
     openapi: "3.1.0",
@@ -297,4 +284,21 @@ export function createApp(deps: AppDeps) {
   );
 
   return { app, auth, db };
+}
+
+/** The HTTP status for a Better Auth error: its own, except that conflicts and missing things say so. */
+function betterAuthStatus(err: APIError): 401 | 403 | 404 | 409 | 400 | null {
+  const code = (err.body as { code?: string } | undefined)?.code ?? "";
+  if (/ALREADY_A_MEMBER|ALREADY_INVITED|ONLY_OWNER|WITHOUT_AN_OWNER/.test(code)) return 409;
+  if (/NOT_FOUND|NOT_A_MEMBER/.test(code)) return 404;
+  switch (err.statusCode) {
+    case 400:
+    case 401:
+    case 403:
+    case 404:
+    case 409:
+      return err.statusCode;
+    default:
+      return null;
+  }
 }

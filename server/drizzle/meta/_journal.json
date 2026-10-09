@@ -22,6 +22,13 @@
       "when": 1791552245417,
       "tag": "0002_team_name_unique_per_organization",
       "breakpoints": true
+    },
+    {
+      "idx": 3,
+      "version": "7",
+      "when": 1791553481597,
+      "tag": "0003_member_unique_per_organization",
+      "breakpoints": true
     }
   ]
 }

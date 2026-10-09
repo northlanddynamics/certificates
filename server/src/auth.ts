@@ -1,5 +1,6 @@
 import { betterAuth } from "better-auth";
 import { admin, openAPI, organization } from "better-auth/plugins";
+import type { OrganizationOptions } from "better-auth/plugins";
 import { createAccessControl } from "better-auth/plugins/access";
 import { adminAc, userAc } from "better-auth/plugins/admin/access";
 import { drizzleAdapter } from "better-auth/adapters/drizzle";
@@ -11,12 +12,18 @@ export const ORG_ADMIN_ROLE = "organization-administrator";
 export const APPROVER_ROLE = "approver";
 export const MEMBER_ROLE = "member";
 
+// Permission statements. The organization, member, invitation and team resources are the ones Better Auth's
+// organization plugin checks itself; `audit` is ours. This is the only place roles are given permissions:
+// Better Auth's endpoints and our own `authorize` (authorization.ts) both read these roles.
 const statements = {
   organization: ["update", "delete"],
   member: ["create", "update", "delete"],
   invitation: ["create", "cancel"],
   team: ["create", "update", "delete"],
+  audit: ["read"],
 } as const;
+
+export type Permissions = { [R in keyof typeof statements]?: (typeof statements)[R][number][] };
 
 const ac = createAccessControl(statements);
 
@@ -26,10 +33,13 @@ export const orgRoles = {
     member: ["create", "update", "delete"],
     invitation: ["create", "cancel"],
     team: ["create", "update", "delete"],
+    audit: ["read"],
   }),
-  [APPROVER_ROLE]: ac.newRole({ organization: [], member: [], invitation: [], team: [] }),
-  [MEMBER_ROLE]: ac.newRole({ organization: [], member: [], invitation: [], team: [] }),
+  [APPROVER_ROLE]: ac.newRole({ organization: [], member: [], invitation: [], team: [], audit: [] }),
+  [MEMBER_ROLE]: ac.newRole({ organization: [], member: [], invitation: [], team: [], audit: [] }),
 };
+
+export const INVITATION_EXPIRES_IN_SECONDS = 7 * 24 * 3600;
 
 export const PLATFORM_OPERATOR_ROLE = "platform-operator";
 
@@ -40,9 +50,11 @@ export interface AuthConfig {
   secret: string;
   /** Extra origins allowed to call the auth endpoints from a browser (e.g. the Vite dev server). */
   trustedOrigins?: string[];
+  /** Hooks and mail for the organization plugin; set on the per-transaction instance (see unit-of-work.ts). */
+  organization?: Pick<OrganizationOptions, "organizationHooks" | "sendInvitationEmail">;
 }
 
-export function createAuth({ db, baseURL, secret, trustedOrigins = [] }: AuthConfig) {
+export function createAuth({ db, baseURL, secret, trustedOrigins = [], organization: orgExtras }: AuthConfig) {
   return betterAuth({
     database: drizzleAdapter(db, { provider: "pg" }),
     baseURL,
@@ -63,7 +75,17 @@ export function createAuth({ db, baseURL, secret, trustedOrigins = [] }: AuthCon
         ac,
         roles: orgRoles,
         creatorRole: ORG_ADMIN_ROLE,
-        teams: { enabled: true },
+        ...orgExtras,
+        // Our own Organizations stay far below these; Better Auth's defaults are 100 members and 100 pending invitations.
+        membershipLimit: 10_000,
+        invitationLimit: 10_000,
+        invitationExpiresIn: INVITATION_EXPIRES_IN_SECONDS,
+        // requireEmailVerificationOnInvitation stays off until sign-up verifies email (see ticket 28).
+        teams: {
+          enabled: true,
+          // Better Auth refuses to delete an Organization's last Team by default.
+          allowRemovingAllTeams: true,
+        },
         // Organizations are created only by Platform Operators, through the platform API.
         allowUserToCreateOrganization: false,
       }),

@@ -67,7 +67,7 @@ describe("walking skeleton", () => {
 
     const right = await h.signUp("admin@acme.test", PASSWORD);
     expect((await h.api(url, { cookie: right, method: "POST" })).status).toBe(200);
-    expect((await h.api(url, { cookie: right, method: "POST" })).status).toBe(409);
+    expect((await h.api(url, { cookie: right, method: "POST" })).status).toBe(404); // spent: Better Auth calls it not found
 
     // Only the one successful acceptance (plus the Organization's creation) was audited.
     const admin = await h.signIn("admin@acme.test", PASSWORD);

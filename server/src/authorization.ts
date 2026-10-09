@@ -1,69 +1,50 @@
 import { and, eq } from "drizzle-orm";
-import { APPROVER_ROLE, MEMBER_ROLE, ORG_ADMIN_ROLE } from "./auth";
-import type { Db } from "./db/client";
+import { orgRoles, type Permissions } from "./auth";
+import type { Db, Tx } from "./db/client";
 import { member } from "./db/schema";
 import { HttpError } from "./http";
 
-/**
- * Everything an Organization member can be permitted to do. Add an action here, and to a role below,
- * rather than testing a role name anywhere else: this is the one place permissions are decided.
- */
-export type Action =
-  | "organization.read"
-  | "member.read"
-  | "member.invite"
-  | "member.changeRole"
-  | "member.remove"
-  | "invitation.read"
-  | "invitation.cancel"
-  | "team.read"
-  | "team.create"
-  | "team.update"
-  | "team.delete"
-  | "team.manageMembers"
-  | "managedCertificate.list"
-  | "audit.read";
+/** Whether `role` holds every permission asked for. Roles and their permissions are defined in auth.ts. */
+export function roleCan(role: string, permissions: Permissions): boolean {
+  const r = (orgRoles as Record<string, (typeof orgRoles)[keyof typeof orgRoles] | undefined>)[role];
+  return r ? r.authorize(permissions).success : false;
+}
 
-const EVERYONE: readonly Action[] = ["organization.read", "member.read", "team.read", "managedCertificate.list"];
-
-const ROLE_PERMISSIONS: Record<string, ReadonlySet<Action>> = {
-  [MEMBER_ROLE]: new Set(EVERYONE),
-  [APPROVER_ROLE]: new Set(EVERYONE),
-  [ORG_ADMIN_ROLE]: new Set<Action>([
-    ...EVERYONE,
-    "member.invite",
-    "member.changeRole",
-    "member.remove",
-    "invitation.read",
-    "invitation.cancel",
-    "team.create",
-    "team.update",
-    "team.delete",
-    "team.manageMembers",
-    "audit.read",
-  ]),
-};
-
-export const roleCan = (role: string, action: Action) => ROLE_PERMISSIONS[role]?.has(action) ?? false;
+export interface AuthorizeOptions {
+  /** Run on this transaction instead of the pool. */
+  tx?: Tx;
+  /**
+   * Lock the actor's membership row until the transaction ends, so that a concurrent demotion or removal of the
+   * actor waits for this change to finish instead of racing it. Use it on every change made inside a transaction.
+   */
+  lockActor?: boolean;
+}
 
 export interface Authorizer {
   /**
-   * "Can this actor do this action in this Organization?" The only way other modules ask about permissions.
-   * Throws 404 for a non-member (so an Organization's existence is not revealed, and a Platform Operator
-   * who was not invited in sees nothing) and 403 for a member whose role does not permit the action.
+   * "Can this actor do this in this Organization?": the only way other modules ask about permissions.
+   * With no `permissions`, membership is enough. Throws 404 for a non-member (so an Organization's existence is
+   * not revealed, and a Platform Operator who was not invited in sees nothing) and 403 for a member whose role
+   * lacks a permission.
    */
-  authorize(actor: { id: string }, organizationId: string, action: Action): Promise<{ role: string }>;
+  authorize(
+    actor: { id: string },
+    organizationId: string,
+    permissions?: Permissions,
+    options?: AuthorizeOptions,
+  ): Promise<{ role: string }>;
 }
 
 export function createAuthorizer(db: Db): Authorizer {
   return {
-    async authorize(actor, organizationId, action) {
-      const [row] = await db
+    async authorize(actor, organizationId, permissions, { tx, lockActor } = {}) {
+      const query = (tx ?? db)
         .select({ role: member.role })
         .from(member)
         .where(and(eq(member.organizationId, organizationId), eq(member.userId, actor.id)));
+      const [row] = await (lockActor ? query.for("share") : query);
       if (!row) throw new HttpError(404, "organization not found");
-      if (!roleCan(row.role, action)) throw new HttpError(403, "not permitted");
+      if (permissions && !roleCan(row.role, permissions)) throw new HttpError(403, "not permitted");
       return { role: row.role };
     },
   };

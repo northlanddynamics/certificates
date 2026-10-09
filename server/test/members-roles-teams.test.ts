@@ -1,4 +1,5 @@
 import { afterAll, beforeAll, beforeEach, describe, expect, test } from "bun:test";
+import type { Permissions } from "../src/auth";
 import { roleCan } from "../src/authorization";
 import { memberRemovalHooks } from "../src/member-removal";
 import { PASSWORD, createHarness, type Harness } from "./harness";
@@ -92,8 +93,8 @@ describe("invitations", () => {
     expect((await h.api(org(`/invitations/${inv.body.id}`), { cookie: acme.cookie, method: "DELETE" })).status).toBe(204);
     expect((await h.api(org("/invitations"), { cookie: acme.cookie })).body.items).toEqual([]);
     const cookie = await h.signUp("p@acme.test", PASSWORD);
-    expect((await h.api(`/api/invitations/${inv.body.id}/accept`, { cookie, method: "POST" })).status).toBe(409);
-    expect(await auditActions()).toContain("invitation.cancelled");
+    expect((await h.api(`/api/invitations/${inv.body.id}/accept`, { cookie, method: "POST" })).status).toBe(404);
+    expect(await auditActions()).toContain("invitation.canceled");
   });
 
   test("an invitation cannot be created or cancelled across Organizations", async () => {
@@ -231,7 +232,9 @@ describe("Teams", () => {
     const user = await memberOf("m@acme.test");
     const add = await h.api(org(`/teams/${team}/members`), { cookie: acme.cookie, body: { userId: user.userId } });
     expect(add.status).toBe(204);
-    expect((await h.api(org(`/teams/${team}/members`), { cookie: acme.cookie, body: { userId: user.userId } })).status).toBe(409);
+    // Adding someone who is already in the Team changes nothing, and is not audited again.
+    expect((await h.api(org(`/teams/${team}/members`), { cookie: acme.cookie, body: { userId: user.userId } })).status).toBe(204);
+    expect((await auditActions()).filter((a) => a === "team.member_added")).toHaveLength(1);
     const listed = (await h.api(org("/teams"), { cookie: acme.cookie })).body.items[0];
     expect(listed.members).toEqual([{ userId: user.userId, email: "m@acme.test" }]);
 
@@ -316,6 +319,68 @@ describe("removing a user from the Organization", () => {
   });
 });
 
+describe("races and leftovers", () => {
+  test("an administrator demoted while their change is in flight cannot complete it", async () => {
+    const second = await join("second@acme.test", "organization-administrator");
+    const secondMember = await memberOf("second@acme.test");
+
+    // Hold an uncommitted demotion of the second administrator, as a concurrent request would.
+    const other = await h.pool.connect();
+    try {
+      await other.query("begin");
+      await other.query(`update member set role = 'member' where id = $1`, [secondMember.id]);
+      const inFlight = h.api(org("/invitations"), { cookie: second, body: { email: "late@acme.test", role: "member" } });
+      await Bun.sleep(150); // the invitation request is now waiting on the demotion
+      await other.query("commit");
+      expect((await inFlight).status).toBe(403);
+    } finally {
+      other.release();
+    }
+    expect((await h.api(org("/invitations"), { cookie: acme.cookie })).body.items).toEqual([]);
+  });
+
+  test("a user cannot be a member of an Organization twice, whatever the application checked", async () => {
+    await join("m@acme.test", "member");
+    const user = await memberOf("m@acme.test");
+    await expect(
+      h.pool.query(
+        `insert into member (id, organization_id, user_id, role, created_at) values ($1, $2, $3, 'member', now())`,
+        [crypto.randomUUID(), acme.orgId, user.userId],
+      ),
+    ).rejects.toThrow();
+  });
+
+  test("accepting an invitation retires other pending invitations to the same address", async () => {
+    const first = await h.api(org("/invitations"), { cookie: acme.cookie, body: { email: "p@acme.test", role: "member" } });
+    // A second one that raced the first past the duplicate check.
+    const second = crypto.randomUUID();
+    await h.pool.query(
+      `insert into invitation (id, organization_id, email, role, status, expires_at, created_at, inviter_id)
+       select $1, organization_id, email, 'approver', 'pending', expires_at, created_at, inviter_id from invitation where id = $2`,
+      [second, first.body.id],
+    );
+    const cookie = await h.signUp("p@acme.test", PASSWORD);
+    expect((await h.api(`/api/invitations/${first.body.id}/accept`, { cookie, method: "POST" })).status).toBe(200);
+    expect((await h.api(org("/invitations"), { cookie: acme.cookie })).body.items).toEqual([]);
+    expect((await h.pool.query(`select status from invitation where id = $1`, [second])).rows[0].status).toBe("canceled");
+  });
+
+  test("removing a user cancels invitations still pending for their address", async () => {
+    await join("m@acme.test", "member");
+    const user = await memberOf("m@acme.test");
+    const stale = crypto.randomUUID();
+    await h.pool.query(
+      `insert into invitation (id, organization_id, email, role, status, expires_at, created_at, inviter_id)
+       values ($1, $2, 'm@acme.test', 'approver', 'pending', now() + interval '1 day', now(), (select id from "user" where email = 'admin@acme.test'))`,
+      [stale, acme.orgId],
+    );
+    await h.api(org(`/members/${user.id}`), { cookie: acme.cookie, method: "DELETE" });
+    expect((await h.pool.query(`select status from invitation where id = $1`, [stale])).rows[0].status).toBe("canceled");
+    const event = (await h.api(org("/audit-events"), { cookie: acme.cookie })).body.items.find((e: any) => e.action === "member.removed");
+    expect(event.detail.canceledInvitationIds).toEqual([stale]);
+  });
+});
+
 describe("authorization", () => {
   test("Better Auth's own organization endpoints are not exposed; they would bypass audit and the removal hook", async () => {
     await join("m@acme.test", "member");
@@ -330,14 +395,21 @@ describe("authorization", () => {
 
   test("only Organization Administrators hold the administrative permissions", () => {
     const admin = "organization-administrator";
-    const actions = ["member.invite", "member.changeRole", "member.remove", "invitation.cancel", "team.create", "team.update", "team.delete", "team.manageMembers", "audit.read"] as const;
-    for (const a of actions) {
-      expect(roleCan(admin, a)).toBe(true);
-      expect(roleCan("approver", a)).toBe(false);
-      expect(roleCan("member", a)).toBe(false);
-      expect(roleCan("owner", a)).toBe(false);
+    const administrative: Permissions[] = [
+      { invitation: ["create"] },
+      { invitation: ["cancel"] },
+      { member: ["update"] },
+      { member: ["delete"] },
+      { team: ["create"] },
+      { team: ["update"] },
+      { team: ["delete"] },
+      { audit: ["read"] },
+    ];
+    for (const p of administrative) {
+      expect(roleCan(admin, p)).toBe(true);
+      expect(roleCan("approver", p)).toBe(false);
+      expect(roleCan("member", p)).toBe(false);
+      expect(roleCan("owner", p)).toBe(false);
     }
-    expect(roleCan("member", "managedCertificate.list")).toBe(true);
-    expect(roleCan("unknown", "managedCertificate.list")).toBe(false);
   });
 });
