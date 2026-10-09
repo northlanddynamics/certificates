@@ -6,6 +6,7 @@ import { and, eq, inArray, isNull, lte, or, sql } from "drizzle-orm";
 import type { CertificateAuthority } from "./certificate-authority";
 import type { Db } from "./db/client";
 import { managedCertificate, renewalInfo } from "./db/schema";
+import { renewsAutomatically } from "./issuance";
 import { currentCertificates, type RenewalWindow } from "./renewal";
 
 /** Asked again after this when the CA gave no Retry-After, or offered no ARI (it may come to), or did not know the Certificate. */
@@ -54,9 +55,7 @@ export async function refreshRenewalInfo({ db, certificateAuthority, now }: { db
     .leftJoin(renewalInfo, eq(renewalInfo.certificateId, current.id))
     .where(
       and(
-        eq(managedCertificate.renewalMode, "automatic"),
-        isNull(managedCertificate.archivedAt),
-        inArray(managedCertificate.approvalStatus, ["not_required", "approved"]),
+        renewsAutomatically,
         // One that has ended is past a window.
         sql`${current.notAfter} > ${now}`,
         or(isNull(renewalInfo.certificateId), lte(renewalInfo.nextCheckAt, now)),

@@ -633,6 +633,35 @@ describe("failures say what went wrong", () => {
     expect((await ended(created.body.id)).issuance.status).toBe("succeeded");
   });
 
+  test("an archived Managed Certificate cannot be issued by trying again", async () => {
+    await readyToIssue();
+    h.dcvResolver.current = { lookupTxt: async () => [] };
+    const created = await admin().create(await request([host()]));
+    await ended(created.body.id);
+    await h.pool.query(`update managed_certificate set archived_at = now() where id = $1`, [created.body.id]);
+
+    const again = await admin().retry(created.body.id);
+
+    expect(again.status).toBe(409);
+    expect(again.body.error).toContain("archived");
+    expect((await auditOf()).filter((e) => e.action === "issuance.started")).toHaveLength(1);
+  });
+
+  test("trying again for one that already has a Certificate is its Renewal, audited as asked for and naming the Certificate it replaces", async () => {
+    await readyToIssue();
+    const created = await admin().create(await request([host()]));
+    await ended(created.body.id);
+    const replacesBefore = h.ari.replaces.length;
+
+    expect((await admin().retry(created.body.id)).status).toBe(202);
+    await ended(created.body.id);
+
+    const started = (await auditOf()).filter((e) => e.action === "issuance.started");
+    expect(started.map((e) => e.detail.renewal)).toEqual([undefined, "requested"]);
+    expect(h.ari.replaces.slice(replacesBefore)).toHaveLength(1);
+    expect(h.ari.replaces[replacesBefore]).toContain("BEGIN CERTIFICATE");
+  });
+
   test("a stored Certificate is immutable", async () => {
     await readyToIssue();
     const created = await admin().create(await request([host()]));

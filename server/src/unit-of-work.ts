@@ -20,6 +20,12 @@ export interface Change {
   }): Promise<void>;
   /** Queues `mail` to be sent after the commit. A rolled-back change sends nothing. */
   mail(mail: Mail): void;
+  /**
+   * Queues `work` to run after the commit, in the order queued and before queued mail is sent: for what must start only
+   * once the change is durable, such as an Issuance's background run. A rolled-back change runs none of it. A failure
+   * is logged, never hides the commit from the caller and does not stop the rest.
+   */
+  afterCommit(work: () => void | Promise<void>): void;
 }
 
 export interface UnitOfWork {
@@ -43,14 +49,17 @@ export function createUnitOfWork({ db, mailer, clock }: UnitOfWorkDeps): UnitOfW
   return {
     async run(actor, work) {
       const outbox: Mail[] = [];
+      const afterCommit: (() => void | Promise<void>)[] = [];
       const occurredAt = clock();
       const result = await db.transaction((tx) =>
         work(tx, {
           occurredAt,
           audit: (event) => recordAudit(tx, { ...event, occurredAt, actor }),
           mail: (mail) => void outbox.push(mail),
+          afterCommit: (queued) => void afterCommit.push(queued),
         }),
       );
+      for (const queued of afterCommit) await Promise.resolve().then(queued).catch((err) => console.error("work after the commit failed", err));
       for (const mail of outbox) await mailer.send(mail).catch((err) => console.error("mail failed", err));
       return result;
     },

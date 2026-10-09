@@ -104,4 +104,51 @@ describe("unit of work", () => {
     expect(await teamNames()).toEqual(["Platform"]);
     expect(logged).toHaveLength(1);
   });
+
+  test("work queued to run after the commit runs once the change is committed, in order, and not before", async () => {
+    const ran: string[] = [];
+    await unitOfWork().run(actor, async (tx, change) => {
+      await tx.insert(team).values({ id: "t1", name: "Platform", organizationId: orgId, createdAt: NOW });
+      change.afterCommit(async () => void ran.push(`first, sees ${(await teamNames()).join()}`));
+      change.afterCommit(() => void ran.push("second"));
+      expect(ran).toEqual([]);
+    });
+
+    expect(ran).toEqual(["first, sees Platform", "second"]);
+  });
+
+  test("work queued to run after the commit never runs for a change that rolls back", async () => {
+    const ran: string[] = [];
+    await expect(
+      unitOfWork().run(actor, async (_tx, change) => {
+        change.afterCommit(() => void ran.push("ran"));
+        throw new Error("boom");
+      }),
+    ).rejects.toThrow("boom");
+
+    expect(ran).toEqual([]);
+  });
+
+  test("work queued to run after the commit that fails is logged, does not hide the commit and does not stop the rest", async () => {
+    const log = console.error;
+    const logged: unknown[][] = [];
+    console.error = (...args) => void logged.push(args);
+    const ran: string[] = [];
+    try {
+      const result = await unitOfWork().run(actor, async (tx, change) => {
+        await tx.insert(team).values({ id: "t1", name: "Platform", organizationId: orgId, createdAt: NOW });
+        change.afterCommit(() => {
+          throw new Error("nope");
+        });
+        change.afterCommit(() => void ran.push("still ran"));
+        return "committed";
+      });
+      expect(result).toBe("committed");
+    } finally {
+      console.error = log;
+    }
+    expect(await teamNames()).toEqual(["Platform"]);
+    expect(ran).toEqual(["still ran"]);
+    expect(logged).toHaveLength(1);
+  });
 });

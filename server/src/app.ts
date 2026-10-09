@@ -262,5 +262,5 @@ export function createApp(deps: AppDeps) {
     }),
   );
 
-  return { app, auth, db, issuances, renewals };
+  return { app, auth, db, unitOfWork, issuances, renewals };
 }

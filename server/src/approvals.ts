@@ -63,7 +63,7 @@ export function registerApprovals(ctx: {
     if (mc.proposedById === actor.id) throw new HttpError(403, "a proposal must be decided by someone other than who proposed it");
     if (mc.approvalStatus !== "pending") throw new HttpError(409, "this Managed Certificate is not awaiting Approval");
 
-    const issuanceId = await unitOfWork.run(actor, async (tx, change) => {
+    await unitOfWork.run(actor, async (tx, change) => {
       const decided = await tx
         .update(managedCertificate)
         .set({ approvalStatus: decision, decidedById: actor.id, decidedByEmail: actor.email, decidedAt: change.occurredAt, decisionReason: reason })
@@ -76,9 +76,11 @@ export function registerApprovals(ctx: {
         target: { type: "managed_certificate", id: mc.id },
         detail: { names: mc.names, reason, proposedBy: mc.proposedByEmail },
       });
-      return decision === "approved" ? issuances.begin(tx, change, actor, mc) : null;
+      if (decision === "approved") {
+        const begun = await issuances.begin(tx, change, actor, mc, "issue");
+        if ("refused" in begun) throw new Error(`the Issuance of a Managed Certificate just approved was refused: ${begun.refused}`);
+      }
     });
-    if (issuanceId) issuances.start(issuanceId);
     return (await withState([await findManagedCertificate(orgId, id)]))[0]!;
   }
 

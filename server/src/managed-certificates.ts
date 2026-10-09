@@ -11,9 +11,9 @@ import { ACME_ENVIRONMENTS } from "./certificate-authority";
 import { CsrError, KEY_ALGORITHMS, parseCsr } from "./csr";
 import type { Db } from "./db/client";
 import { issuance, managedCertificate } from "./db/schema";
-import { HttpError, OrgParam, errors, isUniqueViolation, json } from "./http";
+import { HttpError, OrgParam, errors, json } from "./http";
 import { InventoryQuery, inventoryCondition } from "./inventory-filters";
-import type { Issuances } from "./issuance";
+import { refusalMessage, type Issuances } from "./issuance";
 import { Certificate, Issuance, ManagedCertificate, ManagedCertificateParams, toCertificate, toIssuance, type ManagedCertificateReader } from "./managed-certificate-reader";
 import { MAX_NAMES, normalizeNames, sameNames } from "./names";
 import { OwnerRef, addOwner } from "./owners";
@@ -133,10 +133,13 @@ export function registerManagedCertificates(ctx: {
         // Whoever creates or proposes may name the Owners at the same time; each is audited as added (naming one twice adds it once).
         for (const ref of body.owners) await addOwner(tx, change, orgId, row!.id, ref);
         // A proposal is issued only once approved.
-        return { row: row!, issuanceId: needsApproval ? null : await issuances.begin(tx, change, actor, row!) };
+        if (!needsApproval) {
+          const begun = await issuances.begin(tx, change, actor, row!, "issue");
+          if ("refused" in begun) throw new Error(`the Issuance of a Managed Certificate just created was refused: ${begun.refused}`);
+        }
+        return row!;
       });
-      if (created.issuanceId) issuances.start(created.issuanceId);
-      return c.json((await withState([created.row]))[0]!, 201);
+      return c.json((await withState([created]))[0]!, 201);
     },
   );
 
@@ -169,18 +172,9 @@ export function registerManagedCertificates(ctx: {
       const actor = await requireUser(c);
       await authorize(actor, orgId, { managedCertificate: ["issue"] });
       const mc = await findManagedCertificate(orgId, id);
-      if (mc.approvalStatus === "pending" || mc.approvalStatus === "rejected") {
-        throw new HttpError(409, `the Managed Certificate is ${mc.approvalStatus === "pending" ? "awaiting Approval" : "rejected"}, so it cannot be issued`);
-      }
-      let issuanceId: string;
-      try {
-        issuanceId = await unitOfWork.run(actor, (tx, change) => issuances.begin(tx, change, actor, mc));
-      } catch (err) {
-        if (isUniqueViolation(err)) throw new HttpError(409, "an Issuance of this Managed Certificate is already running");
-        throw err;
-      }
-      issuances.start(issuanceId);
-      const [row] = await db.select().from(issuance).where(eq(issuance.id, issuanceId));
+      const begun = await unitOfWork.run(actor, (tx, change) => issuances.begin(tx, change, actor, mc, "issue"));
+      if ("refused" in begun) throw new HttpError(409, refusalMessage(begun.refused, "issue"));
+      const [row] = await db.select().from(issuance).where(eq(issuance.id, begun.issuanceId));
       return c.json(toIssuance(row!), 202);
     },
   );

@@ -3,12 +3,11 @@
 // is due, and what to wait for after a failure, are read from the Managed Certificates and their Issuances, so a pass
 // that is repeated, or run by two platform instances at once, starts a Renewal once (a Managed Certificate has at most
 // one Issuance running). Its time is the clock it is given, so tests control it.
-import { and, eq, inArray, isNull, or, sql } from "drizzle-orm";
+import { and, eq, or, sql } from "drizzle-orm";
 import type { CertificateAuthority } from "./certificate-authority";
 import type { Db } from "./db/client";
 import { issuance, managedCertificate, renewalInfo } from "./db/schema";
-import { isUniqueViolation } from "./http";
-import type { Issuances } from "./issuance";
+import { renewsAutomatically, type Issuances } from "./issuance";
 import { currentCertificates, failuresOf, nextAttemptAt } from "./renewal";
 import { refreshRenewalInfo, informationOf } from "./renewal-information";
 import type { UnitOfWork } from "./unit-of-work";
@@ -48,9 +47,7 @@ export function createRenewalScheduler({
         .leftJoin(renewalInfo, eq(renewalInfo.certificateId, current.id))
         .where(
           and(
-            eq(managedCertificate.renewalMode, "automatic"),
-            isNull(managedCertificate.archivedAt),
-            inArray(managedCertificate.approvalStatus, ["not_required", "approved"]),
+            renewsAutomatically,
             or(
               sql`${current.notAfter} - make_interval(secs => ${managedCertificate.renewalDaysBeforeExpiry} * 86400) <= ${now}`,
               sql`${renewalInfo.windowStart} <= ${now}`,
@@ -67,18 +64,11 @@ export function createRenewalScheduler({
         const at = nextAttemptAt(policy, certificate, failures.get(mc.id), information.get(certificate.id)?.window ?? null);
         if (!at || at > now) continue;
         try {
-          const issuanceId = await unitOfWork.run(null, async (tx, change) => {
-            // Looked at again under a lock: a change made since the pass began (a switch to manual, an archive) wins.
-            const [row] = await tx.select().from(managedCertificate).where(eq(managedCertificate.id, mc.id)).for("update");
-            if (!row || row.renewalMode !== "automatic" || row.archivedAt || !["not_required", "approved"].includes(row.approvalStatus)) return null;
-            return issuances.begin(tx, change, null, mc, "scheduled");
-          });
-          if (!issuanceId) continue;
-          issuances.start(issuanceId);
-          started++;
+          // Decided again under a lock: a change made since the pass began (a switch to manual, an archive, another Issuance) wins.
+          const begun = await unitOfWork.run(null, (tx, change) => issuances.begin(tx, change, null, mc, "scheduled"));
+          if ("issuanceId" in begun) started++;
         } catch (err) {
-          // Another pass, or a person, started one first.
-          if (!isUniqueViolation(err)) console.error("could not start the Renewal of", mc.id, err);
+          console.error("could not start the Renewal of", mc.id, err);
         }
       }
       return started;

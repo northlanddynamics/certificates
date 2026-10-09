@@ -7,11 +7,13 @@ import { createApp, type AppDeps } from "../src/app";
 import { CertificateAuthorityError, createLetsEncrypt, type AcmeEnvironment } from "../src/certificate-authority";
 import { createTxtResolver, type TxtResolver } from "../src/dcv";
 import type { Db } from "../src/db/client";
+import type { Issuances } from "../src/issuance";
 import { createLocalKms } from "../src/kms";
 import { CapturingMailer } from "../src/mailer";
 import type { MemberRemovalHook } from "../src/member-removal";
 import { runMigrations } from "../src/migrate";
 import { bootstrapPlatformOperator } from "../src/operator";
+import type { UnitOfWork } from "../src/unit-of-work";
 
 export const TEST_DATABASE_URL =
   process.env.TEST_DATABASE_URL ?? "postgres://postgres:postgres@localhost:5433/certs_test";
@@ -53,6 +55,9 @@ export interface Harness {
   app: ReturnType<typeof createApp>["app"];
   pool: Pool;
   db: Db;
+  /** The platform's own unit of work and Issuances, for tests of the Issuances interface itself. */
+  unitOfWork: UnitOfWork;
+  issuances: Issuances;
   mailer: CapturingMailer;
   /** Where the CA's environments are served; every one is Pebble unless a test points one elsewhere. */
   caDirectories: Record<AcmeEnvironment, string>;
@@ -156,7 +161,7 @@ export async function createHarness(): Promise<Harness> {
     baseURL: BASE,
     secret: "test-secret-test-secret-test-secret-1234",
   };
-  const { app, auth, db, issuances, renewals } = createApp(deps);
+  const { app, auth, db, unitOfWork, issuances, renewals } = createApp(deps);
   await runMigrations(pool);
   const reset = async () => {
     await issuances.idle();
@@ -185,6 +190,8 @@ export async function createHarness(): Promise<Harness> {
     app,
     pool,
     db,
+    unitOfWork,
+    issuances,
     mailer,
     caDirectories,
     bindTxt,

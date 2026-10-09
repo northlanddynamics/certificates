@@ -6,8 +6,8 @@ import { and, eq } from "drizzle-orm";
 import { CsrError, parseCsr } from "./csr";
 import type { Db } from "./db/client";
 import { issuance, managedCertificate } from "./db/schema";
-import { HttpError, errors, isUniqueViolation, json } from "./http";
-import type { Issuances } from "./issuance";
+import { HttpError, errors, json } from "./http";
+import { refusalMessage, type Issuances } from "./issuance";
 import { Issuance, ManagedCertificate, ManagedCertificateParams, RenewalPolicy, toIssuance, type ManagedCertificateReader } from "./managed-certificate-reader";
 import { sameNames } from "./names";
 import type { Actor, UnitOfWork } from "./unit-of-work";
@@ -116,22 +116,9 @@ export function registerRenewalRoutes(ctx: {
       const { orgId, id } = c.req.valid("param");
       const actor = await requireUser(c);
       const mc = await findAsOwnerOr(actor, orgId, id, { managedCertificate: ["renew"] }, "only an Owner or an Organization Administrator may renew a Managed Certificate");
-      if (mc.archivedAt) throw new HttpError(409, "the Managed Certificate is archived, so it is not renewed");
-      if (mc.approvalStatus === "pending" || mc.approvalStatus === "rejected") {
-        throw new HttpError(409, `the Managed Certificate is ${mc.approvalStatus === "pending" ? "awaiting Approval" : "rejected"}, so it cannot be renewed`);
-      }
-      if (!(await reader.certificatesOf(orgId, mc.id)).length) {
-        throw new HttpError(409, "the Managed Certificate has no Certificate yet to renew; try issuing it again instead");
-      }
-      let issuanceId: string;
-      try {
-        issuanceId = await unitOfWork.run(actor, (tx, change) => issuances.begin(tx, change, actor, mc, "requested"));
-      } catch (err) {
-        if (isUniqueViolation(err)) throw new HttpError(409, "an Issuance of this Managed Certificate is already running");
-        throw err;
-      }
-      issuances.start(issuanceId);
-      const [row] = await db.select().from(issuance).where(eq(issuance.id, issuanceId));
+      const begun = await unitOfWork.run(actor, (tx, change) => issuances.begin(tx, change, actor, mc, "renewNow"));
+      if ("refused" in begun) throw new HttpError(409, refusalMessage(begun.refused, "renewNow"));
+      const [row] = await db.select().from(issuance).where(eq(issuance.id, begun.issuanceId));
       return c.json(toIssuance(row!), 202);
     },
   );

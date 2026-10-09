@@ -53,11 +53,11 @@ A Managed Certificate that someone who may not create one outright has asked for
 _Avoid_: request, draft, pending certificate
 
 **Archive**:
-Soft deletion of a Managed Certificate: it stops renewing and deploying, but it and its Certificates and history are retained. Archiving never revokes.
+Soft deletion of a Managed Certificate: it stops issuing, renewing and deploying, but it and its Certificates and history are retained. Archiving never revokes.
 _Avoid_: delete, remove, decommission
 
 **Renewal**:
-Issuing a new Certificate for a Managed Certificate whose names are already approved.
+Issuing a new Certificate for a Managed Certificate that already has one, under names that are already approved; whether an Issuance is a Renewal follows from the Managed Certificate having a Certificate, not from who asked.
 _Avoid_: reissue, re-key (unless the key is specifically being replaced)
 
 **Subscriber**:

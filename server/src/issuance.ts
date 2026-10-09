@@ -3,7 +3,7 @@
 // request should wait): it does DCV through the Organization's DNS Provider, has the CA finalize the order with the
 // CSR, and ends by storing the Certificate, or with the cause of its failure. Either end is one audited change.
 import { X509Certificate, createHash } from "node:crypto";
-import { and, desc, eq } from "drizzle-orm";
+import { and, desc, eq, inArray, isNull } from "drizzle-orm";
 import { CertificateAuthorityError, type CertificateAuthority } from "./certificate-authority";
 import { parseCsr } from "./csr";
 import type { Dcv } from "./dcv";
@@ -13,23 +13,63 @@ import { IssuanceFailure, type IssuanceFailureCode } from "./issuance-failure";
 import type { Secrets } from "./secrets";
 import type { Actor, Change, UnitOfWork } from "./unit-of-work";
 
-/** Who started an Issuance that renews a Managed Certificate that has a Certificate: the scheduler, or a person who asked for it. */
-export type RenewalTrigger = "scheduled" | "requested";
+/**
+ * What an Issuance is asked for as: `issue` is for a Managed Certificate's Issuance by creation, Approval or a person
+ * trying again, whether or not it has a Certificate; `renewNow` is a person's Renewal, which needs one; `scheduled` is
+ * the scheduler's, which needs one and an automatic Renewal Policy.
+ */
+export type IssuanceIntent = "issue" | "renewNow" | "scheduled";
+
+/** Why a Managed Certificate may not have an Issuance begin now. */
+export type Refusal = "awaiting_approval" | "rejected" | "archived" | "already_running" | "no_certificate" | "not_automatic";
+
+export type Begun = { issuanceId: string } | { refused: Refusal };
+
+/**
+ * The Managed Certificates whose Certificates are renewed by the platform on its own: automatic, not archived and
+ * approved. What the scheduler and the asking of the CA about renewal windows select by; the same three things `begin`
+ * refuses a scheduled Issuance for (it checks them again under a lock).
+ */
+export const renewsAutomatically = and(
+  eq(managedCertificate.renewalMode, "automatic"),
+  isNull(managedCertificate.archivedAt),
+  inArray(managedCertificate.approvalStatus, ["not_required", "approved"]),
+)!;
+
+/** What to tell whoever asked for an Issuance that was refused. */
+export function refusalMessage(refusal: Refusal, intent: IssuanceIntent): string {
+  const verb = intent === "issue" ? "issued" : "renewed";
+  switch (refusal) {
+    case "awaiting_approval":
+      return `the Managed Certificate is awaiting Approval, so it cannot be ${verb}`;
+    case "rejected":
+      return `the Managed Certificate is rejected, so it cannot be ${verb}`;
+    case "archived":
+      return `the Managed Certificate is archived, so it cannot be ${verb}`;
+    case "already_running":
+      return "an Issuance of this Managed Certificate is already running";
+    case "no_certificate":
+      return "the Managed Certificate has no Certificate yet to renew; try issuing it again instead";
+    case "not_automatic":
+      return "the Managed Certificate is not renewed automatically";
+  }
+}
 
 export interface Issuances {
   /**
-   * Records that an Issuance of the Managed Certificate has been asked for, on the transaction of the change that asks
-   * (so it exists only if that change commits), and returns its id. Call `start` with it once that change has committed.
+   * Begins an Issuance of the Managed Certificate if it may have one now, as the intent says, on the transaction of the
+   * change that asks (so it exists only if that change commits), and runs it in the background once that change has
+   * committed. It decides from the Managed Certificate as the transaction sees it, under a lock on it, so changes that
+   * race (an archive, a rejection, another Issuance) are not overridden by a decision made earlier. A refusal writes
+   * nothing. An Issuance of a Managed Certificate that has a Certificate is its Renewal, whatever the intent.
    */
   begin(
     tx: Tx,
     change: Change,
     actor: Actor | null,
     managedCertificate: { id: string; organizationId: string },
-    renewal?: RenewalTrigger,
-  ): Promise<string>;
-  /** Runs the Issuance in the background; it records its own outcome and never throws. */
-  start(issuanceId: string): void;
+    intent: IssuanceIntent,
+  ): Promise<Begun>;
   /** Resolves once every Issuance started so far has recorded its outcome. */
   idle(): Promise<void>;
   /** Ends the Issuances a stopped platform left running, as failed. Call it once, before serving. */
@@ -188,33 +228,63 @@ export function createIssuances({ db, unitOfWork, certificateAuthority: ca, dcv,
     }
   }
 
+  /** Runs the Issuance in the background; it records its own outcome and never throws. */
+  function start(issuanceId: string) {
+    const task = run(issuanceId)
+      // Recording the outcome failed too (the database is gone): nothing more can be done but say so.
+      .catch((err) => console.error("could not record the outcome of issuance", issuanceId, err))
+      .finally(() => running.delete(task));
+    running.add(task);
+  }
+
   return {
-    async begin(tx, change, actor, mc, renewal) {
+    async begin(tx, change, actor, { id, organizationId }, intent) {
+      const [mc] = await tx
+        .select()
+        .from(managedCertificate)
+        .where(and(eq(managedCertificate.id, id), eq(managedCertificate.organizationId, organizationId)))
+        .for("update");
+      if (!mc) throw new Error("the Managed Certificate is gone");
+      const [certificateOf] = await tx
+        .select({ id: certificate.id })
+        .from(certificate)
+        .where(and(eq(certificate.organizationId, organizationId), eq(certificate.managedCertificateId, id)))
+        .limit(1);
+      const hasCertificate = certificateOf !== undefined;
+
+      if (mc.archivedAt) return { refused: "archived" };
+      if (mc.approvalStatus === "pending") return { refused: "awaiting_approval" };
+      if (mc.approvalStatus === "rejected") return { refused: "rejected" };
+      if (intent === "scheduled" && mc.renewalMode !== "automatic") return { refused: "not_automatic" };
+      if (intent !== "issue" && !hasCertificate) return { refused: "no_certificate" };
+      // The lock on the Managed Certificate makes this the only Issuance that can begin now; the index that allows one running is a backstop.
+      const [runningOne] = await tx
+        .select({ id: issuance.id })
+        .from(issuance)
+        .where(and(eq(issuance.managedCertificateId, id), eq(issuance.status, "running")))
+        .limit(1);
+      if (runningOne) return { refused: "already_running" };
+
       const [row] = await tx
         .insert(issuance)
         .values({
-          organizationId: mc.organizationId,
-          managedCertificateId: mc.id,
+          organizationId,
+          managedCertificateId: id,
           status: "running",
           requestedById: actor?.id ?? null,
           requestedByEmail: actor?.email ?? null,
           startedAt: change.occurredAt,
         })
         .returning({ id: issuance.id });
+      const renewal = hasCertificate ? (intent === "scheduled" ? "scheduled" : "requested") : undefined;
       await change.audit({
-        organizationId: mc.organizationId,
+        organizationId,
         action: "issuance.started",
-        target: { type: "managed_certificate", id: mc.id },
+        target: { type: "managed_certificate", id },
         detail: { issuanceId: row!.id, ...(renewal && { renewal }) },
       });
-      return row!.id;
-    },
-    start(issuanceId) {
-      const task = run(issuanceId)
-        // Recording the outcome failed too (the database is gone): nothing more can be done but say so.
-        .catch((err) => console.error("could not record the outcome of issuance", issuanceId, err))
-        .finally(() => running.delete(task));
-      running.add(task);
+      change.afterCommit(() => start(row!.id));
+      return { issuanceId: row!.id };
     },
     async idle() {
       while (running.size > 0) await Promise.all(running);
