@@ -102,6 +102,17 @@ describe("invitations", () => {
     expect(await auditActions()).toHaveLength(auditBefore);
   });
 
+  test("only those who may invite can list invitations, which show the invited addresses", async () => {
+    await admin().invite("p@acme.test", "member");
+    const memberCookie = await join("m@acme.test", "member");
+    const approverCookie = await join("a@acme.test", "approver");
+    for (const cookie of [memberCookie, approverCookie]) {
+      expect((await as(cookie).invitations()).status).toBe(403);
+    }
+    expect((await admin().invitations()).status).toBe(200);
+    expect((await h.api(`${BA}/list-invitations`, { cookie: acme.cookie })).status).toBe(400);
+  });
+
   test("inviting an existing member, or someone already invited, is refused", async () => {
     await join("m@acme.test", "member");
     expect((await admin().invite("M@acme.test", "approver")).status).toBe(400);
@@ -129,7 +140,7 @@ describe("invitations", () => {
   test("an invitation cannot be created, listed or cancelled across Organizations", async () => {
     const other = await h.createOrgWithAdmin(operator, "other", "admin@other.test");
     expect((await as(acme.cookie, other.orgId).invite("x@a.test", "member")).status).toBeGreaterThanOrEqual(400);
-    expect((await as(acme.cookie, other.orgId).invitations()).status).toBe(403);
+    expect((await as(acme.cookie, other.orgId).invitations()).status).toBe(404);
     const inv = await as(other.cookie, other.orgId).invite("x@a.test", "member");
     denied(await admin().cancelInvitation(inv.body.id));
     expect((await h.pool.query(`select status from invitation where id = $1`, [inv.body.id])).rows[0].status).toBe("pending");

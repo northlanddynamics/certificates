@@ -46,7 +46,15 @@ export function createApp(deps: AppDeps) {
   // removal hook), and updating or deleting an Organization is not offered.
   app.all("/api/auth/organization/*", async (c) => {
     const endpoint = new URL(c.req.url).pathname.slice(ORGANIZATION_PATH.length);
-    if (c.req.method === "GET" && ORGANIZATION_READS.has(endpoint)) return auth.handler(c.req.raw);
+    if (c.req.method === "GET" && ORGANIZATION_READS.has(endpoint)) {
+      // Better Auth shows every invitation, with the invited addresses, to any member; here only to those who may invite.
+      if (endpoint === "list-invitations") {
+        const orgId = new URL(c.req.url).searchParams.get("organizationId");
+        if (!orgId) return c.json({ error: "organizationId is required" }, 400);
+        await authorize(await requireUser(c), orgId, { invitation: ["create"] });
+      }
+      return auth.handler(c.req.raw);
+    }
     const change = c.req.method === "POST" ? ORGANIZATION_CHANGES.get(endpoint) : undefined;
     if (!change) return c.json({ error: "not found" }, 404);
     const session = await auth.api.getSession({ headers: c.req.raw.headers });
