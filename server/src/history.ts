@@ -1,9 +1,13 @@
 // A Managed Certificate's history: how it got to its current state, oldest first. It is read from the audit log and
 // from its Certificates, so it can only say what really happened, and a later kind of change (a name change, a
 // Deployment Run) adds its Audit Event action to HISTORY_KINDS.
+import { OpenAPIHono, createRoute, z } from "@hono/zod-openapi";
 import { and, asc, eq, inArray } from "drizzle-orm";
 import type { Db } from "./db/client";
 import { auditEvent, certificate } from "./db/schema";
+import { errors, json } from "./http";
+import { Certificate, ManagedCertificateParams, Person, toCertificate, type ManagedCertificateReader } from "./managed-certificate-reader";
+import type { Actor } from "./unit-of-work";
 
 /** The Audit Event actions that are part of a Managed Certificate's history, and what each is called there. */
 export const HISTORY_KINDS = {
@@ -54,4 +58,42 @@ export async function historyOf(db: Db, organizationId: string, managedCertifica
   ];
   // Stable, so of two things at the same moment an Audit Event stays before the Certificate it led to.
   return entries.sort((a, b) => Date.parse(a.at) - Date.parse(b.at));
+}
+
+const HistoryEntry = z.discriminatedUnion("kind", [
+  z.object({
+    kind: z.enum(Object.values(HISTORY_KINDS) as [string, ...string[]]),
+    at: z.string(),
+    actor: Person.nullable(),
+    reason: z.string().nullable().openapi({ description: "What the Approver said, for a decision." }),
+  }),
+  z.object({ kind: z.literal("certificate_issued"), at: z.string(), certificate: Certificate }),
+]);
+
+export function registerHistory(ctx: {
+  app: OpenAPIHono;
+  db: Db;
+  requireUser(c: any): Promise<Actor>;
+  reader: ManagedCertificateReader;
+}) {
+  const { app, db, requireUser, reader } = ctx;
+  const { findReadable } = reader;
+
+  app.openapi(
+    createRoute({
+      method: "get",
+      path: "/api/organizations/{orgId}/managed-certificates/{id}/history",
+      tags: ["Managed Certificates"],
+      summary: "How the Managed Certificate got to its current state, oldest first",
+      description: "Its creation or proposal, its Approvals and the Certificates issued for it.",
+      request: { params: ManagedCertificateParams },
+      responses: { 200: json(z.object({ items: z.array(HistoryEntry) })), ...errors(401, 403, 404) },
+    }),
+    async (c) => {
+      const { orgId, id } = c.req.valid("param");
+      const mc = await findReadable(await requireUser(c), orgId, id);
+      const entries = await historyOf(db, orgId, mc.id);
+      return c.json({ items: entries.map((e) => (e.kind === "certificate_issued" ? { ...e, certificate: toCertificate(e.certificate) } : e)) }, 200);
+    },
+  );
 }

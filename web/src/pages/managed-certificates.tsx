@@ -1,7 +1,9 @@
 import { useMutation, useQuery, useQueryClient } from "@tanstack/react-query";
 import { useState, type FormEvent } from "react";
 import { Button } from "@/components/ui/button";
+import { Checkbox } from "@/components/ui/checkbox";
 import { Label } from "@/components/ui/label";
+import { Select, SelectContent, SelectItem, SelectTrigger, SelectValue } from "@/components/ui/select";
 import { Textarea } from "@/components/ui/textarea";
 import {
   api,
@@ -16,14 +18,13 @@ import {
   type OwnerRef,
 } from "@/lib/api";
 
-const KEY_ALGORITHMS = [
+const KEY_ALGORITHMS: [string, string][] = [
   ["ecdsa-p256", "ECDSA P-256"],
   ["ecdsa-p384", "ECDSA P-384"],
   ["rsa-2048", "RSA 2048"],
   ["rsa-3072", "RSA 3072"],
   ["rsa-4096", "RSA 4096"],
 ];
-const selectClass = "h-9 rounded-md border border-input bg-transparent px-2 text-sm";
 
 /** What a Managed Certificate's latest Issuance has come to, in words. */
 function status(m: ManagedCertificate) {
@@ -34,6 +35,8 @@ function status(m: ManagedCertificate) {
   return m.currentCertificate ? `Issued, valid until ${new Date(m.currentCertificate.notAfter).toLocaleDateString()}` : "Not issued";
 }
 
+/** The Key Custody filter's "no filter": a select item cannot have an empty value. */
+const ANY = "any";
 const FILTERS: [keyof Omit<InventoryFilters, "keyCustody">, string][] = [
   ["expiringSoon", "Expiring soon"],
   ["pendingApproval", "Awaiting Approval"],
@@ -64,22 +67,26 @@ export function ManagedCertificates({ org }: { org: Me["organizations"][number] 
       <fieldset className="flex flex-wrap items-center gap-x-4 gap-y-2 text-sm">
         <legend className="sr-only">Filter the inventory</legend>
         {FILTERS.map(([name, label]) => (
-          <label key={name} className="flex items-center gap-1">
-            <input type="checkbox" checked={Boolean(filters[name])} onChange={(e) => setFilters({ ...filters, [name]: e.target.checked || undefined })} />
+          <Label key={name} className="gap-2 font-normal">
+            <Checkbox checked={Boolean(filters[name])} onCheckedChange={(checked) => setFilters({ ...filters, [name]: checked === true || undefined })} />
             {label}
-          </label>
+          </Label>
         ))}
-        <label className="flex items-center gap-1">
+        <Label className="gap-2 font-normal">
           Key Custody
-          <select
-            className={selectClass}
-            value={filters.keyCustody ?? ""}
-            onChange={(e) => setFilters({ ...filters, keyCustody: (e.target.value || undefined) as InventoryFilters["keyCustody"] })}
+          <Select
+            value={filters.keyCustody ?? ANY}
+            onValueChange={(value) => setFilters({ ...filters, keyCustody: value === ANY ? undefined : (value as InventoryFilters["keyCustody"]) })}
           >
-            <option value="">Any</option>
-            <option value="owner">Owner</option>
-          </select>
-        </label>
+            <SelectTrigger size="sm" aria-label="Key Custody">
+              <SelectValue />
+            </SelectTrigger>
+            <SelectContent>
+              <SelectItem value={ANY}>Any</SelectItem>
+              <SelectItem value="owner">Owner</SelectItem>
+            </SelectContent>
+          </Select>
+        </Label>
       </fieldset>
       {inventory.data && items.length === 0 && (
         <p className="text-muted-foreground">
@@ -165,19 +172,23 @@ function Owners({ org, m, userId, onChanged }: { org: Me["organizations"][number
             if (choice) add.mutate(ownerFromKey(choice), { onSuccess: () => setChoice("") });
           }}
         >
-          <select aria-label={`Add an Owner of ${m.names.join(", ")}`} className={selectClass} value={choice} onChange={(e) => setChoice(e.target.value)}>
-            <option value="">Add an Owner…</option>
-            {teams.data?.items.filter((t) => !taken.has(`team:${t.id}`)).map((t) => (
-              <option key={t.id} value={`team:${t.id}`}>
-                {t.name} (Team)
-              </option>
-            ))}
-            {people.data?.items.filter((p) => !taken.has(`user:${p.userId}`)).map((p) => (
-              <option key={p.userId} value={`user:${p.userId}`}>
-                {p.email}
-              </option>
-            ))}
-          </select>
+          <Select value={choice} onValueChange={setChoice}>
+            <SelectTrigger size="sm" aria-label={`Add an Owner of ${m.names.join(", ")}`}>
+              <SelectValue placeholder="Add an Owner…" />
+            </SelectTrigger>
+            <SelectContent>
+              {teams.data?.items.filter((t) => !taken.has(`team:${t.id}`)).map((t) => (
+                <SelectItem key={t.id} value={`team:${t.id}`}>
+                  {t.name} (Team)
+                </SelectItem>
+              ))}
+              {people.data?.items.filter((p) => !taken.has(`user:${p.userId}`)).map((p) => (
+                <SelectItem key={p.userId} value={`user:${p.userId}`}>
+                  {p.email}
+                </SelectItem>
+              ))}
+            </SelectContent>
+          </Select>
           <Button type="submit" size="sm" variant="outline" disabled={!choice || add.isPending}>
             Add
           </Button>
@@ -306,52 +317,53 @@ function NewManagedCertificate({ org, onCreated }: { org: Me["organizations"][nu
       <div className="flex gap-4">
         <div className="flex flex-col gap-2">
           <Label htmlFor={`algorithm-${org.id}`}>Key algorithm</Label>
-          <select id={`algorithm-${org.id}`} className={selectClass} value={keyAlgorithm} onChange={(e) => setKeyAlgorithm(e.target.value)}>
-            {KEY_ALGORITHMS.map(([value, label]) => (
-              <option key={value} value={value}>
-                {label}
-              </option>
-            ))}
-          </select>
+          <Select value={keyAlgorithm} onValueChange={setKeyAlgorithm}>
+            <SelectTrigger id={`algorithm-${org.id}`}>
+              <SelectValue />
+            </SelectTrigger>
+            <SelectContent>
+              {KEY_ALGORITHMS.map(([value, label]) => (
+                <SelectItem key={value} value={value}>
+                  {label}
+                </SelectItem>
+              ))}
+            </SelectContent>
+          </Select>
         </div>
         <div className="flex flex-col gap-2">
           <Label htmlFor={`environment-${org.id}`}>ACME environment</Label>
-          <select
-            id={`environment-${org.id}`}
-            className={selectClass}
-            value={environment}
-            onChange={(e) => setEnvironment(e.target.value as "staging" | "production")}
-          >
-            <option value="staging">Staging</option>
-            <option value="production">Production</option>
-          </select>
+          <Select value={environment} onValueChange={(value) => setEnvironment(value as "staging" | "production")}>
+            <SelectTrigger id={`environment-${org.id}`}>
+              <SelectValue />
+            </SelectTrigger>
+            <SelectContent>
+              <SelectItem value="staging">Staging</SelectItem>
+              <SelectItem value="production">Production</SelectItem>
+            </SelectContent>
+          </Select>
         </div>
       </div>
       <div className="flex flex-col gap-2">
         <Label htmlFor={`csr-${org.id}`}>CSR (PEM, for a key you keep; it must ask for exactly these names)</Label>
         <Textarea id={`csr-${org.id}`} className="font-mono text-xs" rows={6} value={csr} onChange={(e) => setCsr(e.target.value)} required />
       </div>
-      <div className="flex flex-col gap-2">
-        <Label htmlFor={`owners-${org.id}`}>Owners (optional; the users and Teams accountable for it)</Label>
-        <select
-          id={`owners-${org.id}`}
-          multiple
-          className="rounded-md border border-input bg-transparent px-2 py-1 text-sm"
-          value={owners}
-          onChange={(e) => setOwners([...e.currentTarget.selectedOptions].map((o) => o.value))}
-        >
-          {teams.data?.items.map((t) => (
-            <option key={t.id} value={`team:${t.id}`}>
-              {t.name} (Team)
-            </option>
+      <fieldset className="flex flex-col gap-2">
+        <legend className="text-sm font-medium">Owners (optional; the users and Teams accountable for it)</legend>
+        <div className="flex max-h-40 flex-col gap-2 overflow-y-auto rounded-md border p-2">
+          {[
+            ...(teams.data?.items.map((t) => ({ key: ownerKey({ type: "team", id: t.id }), label: `${t.name} (Team)` })) ?? []),
+            ...(people.data?.items.map((p) => ({ key: ownerKey({ type: "user", id: p.userId }), label: p.email })) ?? []),
+          ].map(({ key, label }) => (
+            <Label key={key} className="gap-2 font-normal">
+              <Checkbox
+                checked={owners.includes(key)}
+                onCheckedChange={(checked) => setOwners(checked === true ? [...owners, key] : owners.filter((o) => o !== key))}
+              />
+              {label}
+            </Label>
           ))}
-          {people.data?.items.map((p) => (
-            <option key={p.userId} value={`user:${p.userId}`}>
-              {p.email}
-            </option>
-          ))}
-        </select>
-      </div>
+        </div>
+      </fieldset>
       {create.error && <p className="text-sm text-destructive">{create.error.message}</p>}
       <Button type="submit" disabled={create.isPending}>
         {direct ? "Create and issue" : "Propose"}

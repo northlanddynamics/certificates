@@ -5,9 +5,8 @@ import { Button } from "@/components/ui/button";
 import { Card, CardContent, CardHeader, CardTitle } from "@/components/ui/card";
 import { Input } from "@/components/ui/input";
 import { Label } from "@/components/ui/label";
+import { Select, SelectContent, SelectItem, SelectTrigger, SelectValue } from "@/components/ui/select";
 import { api, roleLabel, type Team } from "@/lib/api";
-
-const selectClass = "h-9 rounded-md border border-input bg-transparent px-2 text-sm";
 
 /** Mutation that refetches the given query keys on success and shows its error. */
 function useAction<A>(fn: (arg: A) => Promise<unknown>, invalidate: string[], onDone?: () => void) {
@@ -60,18 +59,18 @@ function MembersCard({ orgId }: { orgId: string }) {
             <li key={m.id} className="flex items-center justify-between gap-2">
               <span>{m.email}</span>
               <span className="flex items-center gap-2">
-                <select
-                  aria-label={`Role of ${m.email}`}
-                  className={selectClass}
-                  value={m.role}
-                  onChange={(e) => changeRole.mutate({ id: m.id, role: e.target.value })}
-                >
-                  {roles.map((r) => (
-                    <option key={r} value={r}>
-                      {roleLabel(r)}
-                    </option>
-                  ))}
-                </select>
+                <Select value={m.role} onValueChange={(value) => changeRole.mutate({ id: m.id, role: value })}>
+                  <SelectTrigger size="sm" aria-label={`Role of ${m.email}`}>
+                    <SelectValue />
+                  </SelectTrigger>
+                  <SelectContent>
+                    {roles.map((r) => (
+                      <SelectItem key={r} value={r}>
+                        {roleLabel(r)}
+                      </SelectItem>
+                    ))}
+                  </SelectContent>
+                </Select>
                 <Button variant="outline" size="sm" onClick={() => remove.mutate(m.id)}>
                   Remove
                 </Button>
@@ -112,13 +111,18 @@ function MembersCard({ orgId }: { orgId: string }) {
           </div>
           <div className="flex flex-col gap-2">
             <Label htmlFor="invite-role">Role</Label>
-            <select id="invite-role" className={selectClass} value={role} onChange={(e) => setRole(e.target.value)}>
-              {roles.map((r) => (
-                <option key={r} value={r}>
-                  {roleLabel(r)}
-                </option>
-              ))}
-            </select>
+            <Select value={role} onValueChange={setRole}>
+              <SelectTrigger id="invite-role">
+                <SelectValue />
+              </SelectTrigger>
+              <SelectContent>
+                {roles.map((r) => (
+                  <SelectItem key={r} value={r}>
+                    {roleLabel(r)}
+                  </SelectItem>
+                ))}
+              </SelectContent>
+            </Select>
           </div>
           <ErrorLine error={invite.error} />
           <Button type="submit" disabled={invite.isPending}>
@@ -204,19 +208,18 @@ function TeamRow({ orgId, team, candidates }: { orgId: string; team: Team; candi
         ))}
       </ul>
       {addable.length > 0 && (
-        <select
-          aria-label={`Add a user to ${team.name}`}
-          className={selectClass}
-          value=""
-          onChange={(e) => e.target.value && add.mutate(e.target.value)}
-        >
-          <option value="">Add a user…</option>
-          {addable.map((c) => (
-            <option key={c.userId} value={c.userId}>
-              {c.email}
-            </option>
-          ))}
-        </select>
+        <Select value="" onValueChange={(userId) => add.mutate(userId)}>
+          <SelectTrigger size="sm" aria-label={`Add a user to ${team.name}`}>
+            <SelectValue placeholder="Add a user…" />
+          </SelectTrigger>
+          <SelectContent>
+            {addable.map((c) => (
+              <SelectItem key={c.userId} value={c.userId}>
+                {c.email}
+              </SelectItem>
+            ))}
+          </SelectContent>
+        </Select>
       )}
       <ErrorLine error={rename.error ?? del.error ?? add.error ?? removeMember.error} />
     </div>

@@ -15,7 +15,11 @@ import { createAuthorizer } from "./authorization";
 import { HttpError, OrgParam, errors, json } from "./http";
 import { createIssuances } from "./issuance";
 import type { Kms } from "./kms";
+import { registerApprovals } from "./approvals";
+import { registerHistory } from "./history";
+import { createManagedCertificateReader } from "./managed-certificate-reader";
 import { registerManagedCertificates } from "./managed-certificates";
+import { registerOwnerRoutes } from "./owner-routes";
 import type { Mailer } from "./mailer";
 import type { MemberRemovalHook } from "./member-removal";
 import { removeTeamFromOwners, removeUserFromOwners } from "./owners";
@@ -226,7 +230,11 @@ export function createApp(deps: AppDeps) {
   registerDnsProviders({ app, db, requireUser, authorize, unitOfWork, secrets, dnsProviders });
   const dcv = createDcv(dnsProviders, { resolver: createTxtResolver(), ...DEFAULT_DCV_CONFIG, ...deps.dcv });
   const issuances = createIssuances({ db, unitOfWork, certificateAuthority: deps.certificateAuthority, dcv, secrets });
-  registerManagedCertificates({ app, db, requireUser, authorize, unitOfWork, issuances, clock });
+  const reader = createManagedCertificateReader({ db, authorize });
+  registerManagedCertificates({ app, db, requireUser, authorize, unitOfWork, issuances, reader, clock });
+  registerOwnerRoutes({ app, requireUser, unitOfWork, reader });
+  registerApprovals({ app, db, requireUser, authorize, unitOfWork, issuances, reader });
+  registerHistory({ app, db, requireUser, reader });
 
   app.doc("/api/openapi.json", {
     openapi: "3.1.0",
