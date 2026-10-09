@@ -12,7 +12,8 @@ import { certificate, issuance, managedCertificate } from "./db/schema";
 import { HttpError, OrgParam } from "./http";
 import { ISSUANCE_FAILURE_CODES } from "./issuance-failure";
 import { isOwner, ownedByUser, ownersOf } from "./owners";
-import { roleCan } from "./permissions";
+import { roleCan, type Permissions } from "./permissions";
+import { MAX_RENEWAL_DAYS, RENEWAL_MODES, dueAt, failuresOf, nextAttemptAt } from "./renewal";
 import type { Actor } from "./unit-of-work";
 
 export const ManagedCertificateParams = OrgParam.extend({ id: z.string().openapi({ param: { name: "id", in: "path" } }) });
@@ -42,6 +43,24 @@ export const Certificate = z.object({
   issuedAt: z.string(),
 });
 
+export const RenewalPolicy = z.object({
+  mode: z.enum(RENEWAL_MODES).openapi({ description: "`automatic`: the scheduler renews it when due. `manual`: only an Owner or an Organization Administrator does." }),
+  daysBeforeExpiry: z.number().int().min(1).max(MAX_RENEWAL_DAYS).openapi({ description: "How many days before its current Certificate ends it is due for Renewal." }),
+});
+
+export const Renewal = z.object({
+  policy: RenewalPolicy,
+  dueAt: z.string().nullable().openapi({ description: "When the scheduler will renew it; none for a manual one or one with no Certificate yet." }),
+  failing: z
+    .object({
+      failures: z.number().int().openapi({ description: "How many Renewals have failed since the current Certificate was issued." }),
+      lastFailure: z.object({ code: z.enum(ISSUANCE_FAILURE_CODES), message: z.string(), at: z.string() }),
+      nextAttemptAt: z.string().nullable().openapi({ description: "When the scheduler will try again; none for a manual one, which only a person renews." }),
+    })
+    .nullable()
+    .openapi({ description: "Set while the latest Renewal of a Managed Certificate that has a Certificate has failed." }),
+});
+
 export const Person = z.object({ id: z.string(), email: z.string() });
 
 export const Approval = z.object({
@@ -66,6 +85,7 @@ export const ManagedCertificate = z.object({
   createdAt: z.string(),
   owners: z.array(Owner).openapi({ description: "Users and Teams accountable for it, in the order they were added; none is allowed." }),
   approval: Approval,
+  renewal: Renewal,
   issuance: Issuance.nullable().openapi({ description: "The latest attempt to issue a Certificate." }),
   currentCertificate: Certificate.nullable().openapi({ description: "The most recently issued Certificate." }),
 });
@@ -124,15 +144,20 @@ export function createManagedCertificateReader({ db, authorize }: { db: Db; auth
     return row;
   }
 
-  /** The Managed Certificate the caller may change the Owners of: Organization Administrators, and its Owners. */
-  async function findOwnable(actor: Actor, orgId: string, id: string) {
+  /**
+   * The Managed Certificate the caller may see and may do `permissions` to: those whose role holds them, and its Owners
+   * whatever their role. Anyone else is refused (403) with `refusal`.
+   */
+  async function findAsOwnerOr(actor: Actor, orgId: string, id: string, permissions: Permissions, refusal: string) {
     const mc = await findReadable(actor, orgId, id);
     const { role } = await authorize(actor, orgId);
-    if (!roleCan(role, { managedCertificate: ["changeOwners"] }) && !(await isOwner(db, orgId, mc.id, actor.id))) {
-      throw new HttpError(403, "only an Owner or an Organization Administrator may change a Managed Certificate's Owners");
-    }
+    if (!roleCan(role, permissions) && !(await isOwner(db, orgId, mc.id, actor.id))) throw new HttpError(403, refusal);
     return mc;
   }
+
+  /** The Managed Certificate the caller may change the Owners of: Organization Administrators, and its Owners. */
+  const findOwnable = (actor: Actor, orgId: string, id: string) =>
+    findAsOwnerOr(actor, orgId, id, { managedCertificate: ["changeOwners"] }, "only an Owner or an Organization Administrator may change a Managed Certificate's Owners");
 
   /** The Managed Certificate's Certificates, the most recently stored first: the first is the current one. */
   const certificatesOf = (orgId: string, managedCertificateId: string) =>
@@ -157,9 +182,13 @@ export function createManagedCertificateReader({ db, authorize }: { db: Db; auth
       .where(inArray(certificate.managedCertificateId, ids))
       .orderBy(certificate.managedCertificateId, desc(certificate.createdAt), desc(certificate.id));
     const owners = await ownersOf(db, ids);
+    const failures = await failuresOf(db, ids);
     return rows.map((row) => {
       const latest = latestIssuances.find((i) => i.managedCertificateId === row.id);
       const current = currentCertificates.find((c) => c.managedCertificateId === row.id);
+      const policy = { mode: row.renewalMode, daysBeforeExpiry: row.renewalDaysBeforeExpiry };
+      // A failed first Issuance is not a failing Renewal: there is no Certificate yet to renew.
+      const failed = current ? failures.get(row.id) : undefined;
       return {
         id: row.id,
         names: row.names,
@@ -175,13 +204,24 @@ export function createManagedCertificateReader({ db, authorize }: { db: Db; auth
           decidedAt: row.decidedAt?.toISOString() ?? null,
           reason: row.decisionReason,
         },
+        renewal: {
+          policy,
+          dueAt: policy.mode === "automatic" && current ? dueAt(current, policy.daysBeforeExpiry).toISOString() : null,
+          failing: failed
+            ? {
+                failures: failed.failures,
+                lastFailure: { code: failed.last.code, message: failed.last.message, at: failed.last.at.toISOString() },
+                nextAttemptAt: nextAttemptAt(policy, current!, failed)?.toISOString() ?? null,
+              }
+            : null,
+        },
         issuance: latest ? toIssuance(latest) : null,
         currentCertificate: current ? toCertificate(current) : null,
       };
     });
   }
 
-  return { findManagedCertificate, visibleTo, findReadable, findOwnable, certificatesOf, withState };
+  return { findManagedCertificate, visibleTo, findReadable, findOwnable, findAsOwnerOr, certificatesOf, withState };
 }
 
 export type ManagedCertificateReader = ReturnType<typeof createManagedCertificateReader>;

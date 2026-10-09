@@ -28,6 +28,8 @@ export type AuditAction =
   | "managed_certificate.rejected"
   | "managed_certificate.owner_added"
   | "managed_certificate.owner_removed"
+  | "managed_certificate.renewal_policy_changed"
+  | "managed_certificate.csr_uploaded"
   | "api_key.created"
   | "api_key.revoked"
   | "api_key.used"
@@ -38,7 +40,7 @@ export type AuditAction =
 export interface AuditInput {
   organizationId: string;
   occurredAt: Date;
-  /** Whoever made the change; none when an Organization's API key did. */
+  /** Whoever made the change; none when an Organization's API key or the platform itself (the Renewal scheduler) did. */
   actor: { id: string; email: string } | null;
   action: AuditAction;
   target: { type: string; id?: string };

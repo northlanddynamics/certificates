@@ -73,6 +73,7 @@ export const ownerLabel = (o: Owner) => (o.type === "user" ? o.email : `${o.name
 /** The inventory's filters; each narrows what is listed, and they combine. */
 export interface InventoryFilters {
   expiringSoon?: boolean;
+  renewalFailing?: boolean;
   pendingApproval?: boolean;
   noOwners?: boolean;
   archived?: boolean;
@@ -81,6 +82,17 @@ export interface InventoryFilters {
 export type HistoryEntry =
   | { kind: "created" | "proposed" | "approved" | "rejected"; at: string; actor: { id: string; email: string } | null; reason: string | null }
   | { kind: "certificate_issued"; at: string; certificate: { fingerprint: string; notBefore: string; notAfter: string; names: string[] } };
+export interface RenewalPolicy {
+  mode: "automatic" | "manual";
+  daysBeforeExpiry: number;
+}
+export interface Renewal {
+  policy: RenewalPolicy;
+  /** When the scheduler will renew it; none for a manual one or one with no Certificate yet. */
+  dueAt: string | null;
+  /** Set while the latest Renewal has failed. */
+  failing: { failures: number; lastFailure: { code: string; message: string; at: string }; nextAttemptAt: string | null } | null;
+}
 export interface ManagedCertificate {
   id: string;
   names: string[];
@@ -88,6 +100,7 @@ export interface ManagedCertificate {
   environment: "staging" | "production";
   owners: Owner[];
   approval: Approval;
+  renewal: Renewal;
   issuance: Issuance | null;
   currentCertificate: { fingerprint: string; notAfter: string } | null;
 }
@@ -161,6 +174,12 @@ export const api = {
     call<ManagedCertificate>(`/api/organizations/${orgId}/managed-certificates/${id}/reject`, { body: { reason } }),
   retryIssuance: (orgId: string, id: string) =>
     call<Issuance>(`/api/organizations/${orgId}/managed-certificates/${id}/issuances`, { method: "POST", body: {} }),
+  setRenewalPolicy: (orgId: string, id: string, policy: RenewalPolicy) =>
+    call<ManagedCertificate>(`/api/organizations/${orgId}/managed-certificates/${id}/renewal-policy`, { method: "PUT", body: policy }),
+  renewNow: (orgId: string, id: string) =>
+    call<Issuance>(`/api/organizations/${orgId}/managed-certificates/${id}/renewals`, { method: "POST", body: {} }),
+  uploadCsr: (orgId: string, id: string, csr: string) =>
+    call<ManagedCertificate>(`/api/organizations/${orgId}/managed-certificates/${id}/csr`, { body: { csr } }),
   certificates: (orgId: string, id: string) => call<{ items: Certificate[] }>(`/api/organizations/${orgId}/managed-certificates/${id}/certificates`),
   /** Where a Certificate downloads from: the current one, or the one with `certificateId`. */
   certificateDownloadUrl: (orgId: string, id: string, form: { format: string; chain: string }, certificateId?: string) =>

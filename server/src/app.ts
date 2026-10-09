@@ -22,6 +22,8 @@ import { registerHistory } from "./history";
 import { createManagedCertificateReader } from "./managed-certificate-reader";
 import { registerManagedCertificates } from "./managed-certificates";
 import { registerOwnerRoutes } from "./owner-routes";
+import { createRenewalScheduler } from "./renewal-scheduler";
+import { registerRenewalRoutes } from "./renewal-routes";
 import type { Mailer } from "./mailer";
 import type { MemberRemovalHook } from "./member-removal";
 import { removeTeamFromOwners, removeUserFromOwners } from "./owners";
@@ -237,6 +239,8 @@ export function createApp(deps: AppDeps) {
   const apiKeys = registerApiKeys({ app, db, auth, authConfig, requireUser, authorize, unitOfWork });
   registerCertificateExport({ app, apiKeys, unitOfWork, reader, certificateAuthority: deps.certificateAuthority });
   registerOwnerRoutes({ app, requireUser, unitOfWork, reader });
+  registerRenewalRoutes({ app, db, requireUser, unitOfWork, issuances, reader });
+  const renewals = createRenewalScheduler({ db, unitOfWork, issuances, clock });
   registerApprovals({ app, db, requireUser, authorize, unitOfWork, issuances, reader });
   registerHistory({ app, db, requireUser, reader });
 
@@ -258,5 +262,5 @@ export function createApp(deps: AppDeps) {
     }),
   );
 
-  return { app, auth, db, issuances };
+  return { app, auth, db, issuances, renewals };
 }

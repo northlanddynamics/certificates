@@ -13,12 +13,21 @@ import { IssuanceFailure, type IssuanceFailureCode } from "./issuance-failure";
 import type { Secrets } from "./secrets";
 import type { Actor, Change, UnitOfWork } from "./unit-of-work";
 
+/** Who started an Issuance that renews a Managed Certificate that has a Certificate: the scheduler, or a person who asked for it. */
+export type RenewalTrigger = "scheduled" | "requested";
+
 export interface Issuances {
   /**
    * Records that an Issuance of the Managed Certificate has been asked for, on the transaction of the change that asks
    * (so it exists only if that change commits), and returns its id. Call `start` with it once that change has committed.
    */
-  begin(tx: Tx, change: Change, actor: Actor, managedCertificate: { id: string; organizationId: string }): Promise<string>;
+  begin(
+    tx: Tx,
+    change: Change,
+    actor: Actor | null,
+    managedCertificate: { id: string; organizationId: string },
+    renewal?: RenewalTrigger,
+  ): Promise<string>;
   /** Runs the Issuance in the background; it records its own outcome and never throws. */
   start(issuanceId: string): void;
   /** Resolves once every Issuance started so far has recorded its outcome. */
@@ -66,7 +75,7 @@ function failureOf(err: unknown): Failure {
 
 export function createIssuances({ db, unitOfWork, certificateAuthority: ca, dcv, secrets }: IssuancesDeps): Issuances {
   const running = new Set<Promise<void>>();
-  const actorOf = (row: typeof issuance.$inferSelect) => ({ id: row.requestedById, email: row.requestedByEmail });
+  const actorOf = (row: typeof issuance.$inferSelect) => (row.requestedById && row.requestedByEmail ? { id: row.requestedById, email: row.requestedByEmail } : null);
   const targetOf = (row: typeof issuance.$inferSelect) => ({ type: "managed_certificate", id: row.managedCertificateId });
   const leftoverDetail = (leftovers: string[]) => (leftovers.length > 0 ? { challengeRecordsNotRemoved: leftovers } : {});
 
@@ -173,15 +182,15 @@ export function createIssuances({ db, unitOfWork, certificateAuthority: ca, dcv,
   }
 
   return {
-    async begin(tx, change, actor, mc) {
+    async begin(tx, change, actor, mc, renewal) {
       const [row] = await tx
         .insert(issuance)
         .values({
           organizationId: mc.organizationId,
           managedCertificateId: mc.id,
           status: "running",
-          requestedById: actor.id,
-          requestedByEmail: actor.email,
+          requestedById: actor?.id ?? null,
+          requestedByEmail: actor?.email ?? null,
           startedAt: change.occurredAt,
         })
         .returning({ id: issuance.id });
@@ -189,7 +198,7 @@ export function createIssuances({ db, unitOfWork, certificateAuthority: ca, dcv,
         organizationId: mc.organizationId,
         action: "issuance.started",
         target: { type: "managed_certificate", id: mc.id },
-        detail: { issuanceId: row!.id },
+        detail: { issuanceId: row!.id, ...(renewal && { renewal }) },
       });
       return row!.id;
     },

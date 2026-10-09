@@ -5,6 +5,7 @@ import { Checkbox } from "@/components/ui/checkbox";
 import { Label } from "@/components/ui/label";
 import { Select, SelectContent, SelectItem, SelectTrigger, SelectValue } from "@/components/ui/select";
 import { Textarea } from "@/components/ui/textarea";
+import { Renewal } from "./renewal-controls";
 import {
   EXPORT_CHAINS,
   EXPORT_FORMATS,
@@ -32,7 +33,8 @@ const KEY_ALGORITHMS: [string, string][] = [
 function status(m: ManagedCertificate) {
   if (m.approval.status === "pending") return "Awaiting Approval";
   if (m.approval.status === "rejected") return "Rejected";
-  if (m.issuance?.status === "running") return "Issuing…";
+  if (m.issuance?.status === "running") return m.currentCertificate ? "Renewing…" : "Issuing…";
+  if (m.renewal.failing) return "Renewal failing";
   if (m.issuance?.status === "failed") return "Issuance failed";
   return m.currentCertificate ? `Issued, valid until ${new Date(m.currentCertificate.notAfter).toLocaleDateString()}` : "Not issued";
 }
@@ -41,6 +43,7 @@ function status(m: ManagedCertificate) {
 const ANY = "any";
 const FILTERS: [keyof Omit<InventoryFilters, "keyCustody">, string][] = [
   ["expiringSoon", "Expiring soon"],
+  ["renewalFailing", "Renewal failing"],
   ["pendingApproval", "Awaiting Approval"],
   ["noOwners", "No Owners"],
   ["archived", "Archived"],
@@ -112,6 +115,7 @@ export function ManagedCertificates({ org }: { org: Me["organizations"][number] 
                 {m.issuance.failure.message}
               </span>
             )}
+            <Renewal org={org} m={m} userId={me.data?.user.id} onChanged={refresh} />
             <Owners org={org} m={m} userId={me.data?.user.id} onChanged={refresh} />
             <span className="flex gap-3">
               {m.issuance?.status === "failed" && can(org, "managedCertificate", "issue") && (

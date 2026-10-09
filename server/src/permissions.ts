@@ -21,9 +21,9 @@ const statements = {
   dnsProvider: ["read", "create", "update", "test"],
   // `read` sees every Managed Certificate in the Organization (anyone else sees only what they own or proposed);
   // `create` makes one outright; `propose` asks for one that waits for Approval; `changeOwners` changes whose it is
-  // (its Owners may do that too, whatever their role); `download` exports a Certificate it may see, and is what an API key
-  // must carry to do the same.
-  managedCertificate: ["read", "create", "propose", "issue", "changeOwners", "download"],
+  // (its Owners may do that too, whatever their role, as they may `renew` it now, `setRenewalPolicy` and `replaceCsr`);
+  // `download` exports a Certificate it may see, and is what an API key must carry to do the same.
+  managedCertificate: ["read", "create", "propose", "issue", "changeOwners", "renew", "setRenewalPolicy", "replaceCsr", "download"],
   approval: ["read", "decide"],
   // The Organization's own API keys (a user's keys need none): the organization plugin asks for these names.
   apiKey: ["create", "read", "update", "delete"],

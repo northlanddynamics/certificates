@@ -62,6 +62,8 @@ export interface Harness {
   dcvResolver: { current: TxtResolver };
   /** Resolves once every Issuance that was started has ended; read outcomes through the API, this only waits. */
   settleIssuances(): Promise<void>;
+  /** One pass of the Renewal scheduler at the harness's clock: starts the Renewals that are due and returns how many. Settle the Issuances to see their outcome. */
+  runRenewalScheduler(): Promise<number>;
   /** What the platform does when it starts: ends the Issuances an earlier run left running. */
   failInterruptedIssuances(): Promise<void>;
   /** The roots the CA's chains end in, as an export that includes the root finds them: Pebble's, unless a test sets `current` to something else. */
@@ -135,7 +137,7 @@ export async function createHarness(): Promise<Harness> {
     baseURL: BASE,
     secret: "test-secret-test-secret-test-secret-1234",
   };
-  const { app, auth, db, issuances } = createApp(deps);
+  const { app, auth, db, issuances, renewals } = createApp(deps);
   await runMigrations(pool);
   const reset = async () => {
     await issuances.idle();
@@ -167,6 +169,7 @@ export async function createHarness(): Promise<Harness> {
     bindTxt,
     dcvResolver,
     settleIssuances: () => issuances.idle(),
+    runRenewalScheduler: () => renewals.tick(),
     failInterruptedIssuances: () => issuances.failInterrupted(),
     caRoots,
     createdAccountKeys,

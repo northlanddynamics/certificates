@@ -1,9 +1,9 @@
 // The inventory's filters, each a query parameter that narrows the Managed Certificates listed. A filter is one entry
 // here: how its value is read, and the condition it adds. Filters combine (all must hold), and apply within what the
-// caller may see. A later filter (renewal failing, Agent offline) is one more entry.
+// caller may see. A later filter (Agent offline) is one more entry.
 import { z } from "@hono/zod-openapi";
 import { and, eq, isNotNull, isNull, sql, type SQL } from "drizzle-orm";
-import { certificate, managedCertificate } from "./db/schema";
+import { certificate, issuance, managedCertificate } from "./db/schema";
 import { hasNoOwners } from "./owners";
 
 /** How close to the end of its current Certificate a Managed Certificate is "expiring soon". */
@@ -27,11 +27,15 @@ const on = z.literal("true");
 
 const currentCertificateEnds = sql`(select ${certificate.notAfter} from ${certificate} where ${certificate.managedCertificateId} = ${managedCertificate.id} order by ${certificate.createdAt} desc, ${certificate.id} desc limit 1)`;
 
+/** Has a Certificate, and its latest Issuance, which is then a Renewal, failed: see `renewal.failing` on the Managed Certificate. */
+const renewalFailing = sql`exists (select 1 from ${certificate} where ${certificate.managedCertificateId} = ${managedCertificate.id}) and (select ${issuance.status} from ${issuance} where ${issuance.managedCertificateId} = ${managedCertificate.id} order by ${issuance.createdAt} desc, ${issuance.id} desc limit 1) = 'failed'`;
+
 export const INVENTORY_FILTERS = {
   expiringSoon: filter(on.meta({ description: `Whose current Certificate ends within ${EXPIRING_SOON_DAYS} days, or has ended.` }), (_, now) => {
     const threshold = new Date(now.getTime() + EXPIRING_SOON_DAYS * 86_400_000);
     return sql`${currentCertificateEnds} <= ${threshold}`;
   }),
+  renewalFailing: filter(on.meta({ description: "Whose latest Renewal failed." }), () => renewalFailing),
   pendingApproval: filter(on.meta({ description: "Proposals waiting for Approval." }), () => eq(managedCertificate.approvalStatus, "pending")),
   noOwners: filter(on.meta({ description: "Managed Certificates with no Owners." }), () => hasNoOwners()),
   keyCustody: filter(z.enum(["owner"]).meta({ description: "Whose private key is held this way." }), (value) => eq(managedCertificate.keyCustody, value)),
