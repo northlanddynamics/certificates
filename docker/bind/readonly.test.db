@@ -1,0 +1,4 @@
+$TTL 60
+@ IN SOA ns.readonly.test. hostmaster.readonly.test. 1 3600 600 86400 60
+@ IN NS ns.readonly.test.
+ns IN A 127.0.0.1

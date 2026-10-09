@@ -26,5 +26,13 @@ services:
     ports:
       - "14000:14000"
 
+  # An RFC 2136 DNS server (BIND), the DNS Provider's counterpart in tests: its zone rfc2136.test accepts dynamic updates
+  # signed with the TSIG key in docker/bind/named.conf. Served on localhost:5354, TCP and UDP.
+  bind:
+    build: docker/bind
+    ports:
+      - "5354:53/tcp"
+      - "5354:53/udp"
+
 volumes:
   pgdata:

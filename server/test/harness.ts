@@ -23,6 +23,22 @@ const BASE = "http://localhost";
 export const PEBBLE_DIRECTORY = process.env.PEBBLE_DIRECTORY ?? "https://localhost:14000/dir";
 const PEBBLE_CA = readFileSync(new URL("./pebble/minica.pem", import.meta.url), "utf8");
 
+/** BIND (`docker compose up -d bind`): rfc2136.test takes dynamic updates signed with this key; readonly.test takes none. */
+export const BIND = {
+  server: process.env.BIND_HOST ?? "127.0.0.1",
+  port: Number(process.env.BIND_PORT ?? 5354),
+  zone: "rfc2136.test",
+  readonlyZone: "readonly.test",
+  keyName: "certs-test",
+  keySecret: "dGVzdC10c2lnLWtleS1mb3ItdGhlLXJmYzIxMzYtdGVzdHM=",
+  /**
+   * Keys of the other TSIG algorithms, named <value>-key, each allowed to update only <value>.rfc2136.test (and refused
+   * everywhere else); they share one secret.
+   */
+  otherKeys: { "hmac-sha1": "sha1", "hmac-sha384": "sha384", "hmac-sha512": "sha512", "hmac-md5": "md5" } as Record<string, string>,
+  otherKeySecret: "b3RoZXItc2VjcmV0LWZvci10aGUtb3RoZXItYWxnb3JpdGhtcw==",
+};
+
 export interface OrgAdmin {
   orgId: string;
   cookie: string;

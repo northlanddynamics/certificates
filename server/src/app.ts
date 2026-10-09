@@ -8,6 +8,7 @@ import { PLATFORM_OPERATOR_ROLE, createAuth } from "./auth";
 import type { CertificateAuthority } from "./certificate-authority";
 import { listAudit } from "./audit";
 import { createDb } from "./db/client";
+import { createDnsProviders, registerDnsProviders } from "./dns-providers";
 import { managedCertificate, member, organization } from "./db/schema";
 import { createAuthorizer } from "./authorization";
 import { HttpError, OrgParam, errors, json } from "./http";
@@ -229,15 +230,9 @@ export function createApp(deps: AppDeps) {
   );
 
   registerTeamsOverview({ app, db, requireUser, authorize });
-  registerAcmeAccounts({
-    app,
-    db,
-    requireUser,
-    authorize,
-    unitOfWork,
-    secrets: createSecrets(deps.kms),
-    certificateAuthority: deps.certificateAuthority,
-  });
+  const secrets = createSecrets(deps.kms);
+  registerAcmeAccounts({ app, db, requireUser, authorize, unitOfWork, secrets, certificateAuthority: deps.certificateAuthority });
+  registerDnsProviders({ app, db, requireUser, authorize, unitOfWork, secrets, dnsProviders: createDnsProviders(secrets) });
 
   app.doc("/api/openapi.json", {
     openapi: "3.1.0",
