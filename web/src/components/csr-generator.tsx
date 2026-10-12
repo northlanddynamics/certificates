@@ -255,10 +255,9 @@ export function CsrGenerator({ names: givenNames, keyAlgorithm: givenKeyAlgorith
           <section className="flex flex-col gap-2" aria-label="Private key">
             <h2 className="text-sm font-medium">Private key (PKCS#8 PEM)</h2>
             <p role="alert" className="rounded-md border border-destructive/40 bg-destructive/5 p-3 text-sm">
-              This key was made in your browser and is never sent to the platform. It cannot be recovered: download or copy it now, and keep it secret.
-              {!keySaved && " You will be warned if you leave this page before you have."}
+              This key was made in your browser and is never sent to the platform. It cannot be recovered: download or copy it now, and keep it secret. Until you
+              have, leaving this page asks you to confirm.
             </p>
-            {showKey && <Textarea readOnly className="font-mono text-xs" rows={8} value={result.keyPem} aria-label="Private key" />}
             <div className="flex flex-wrap gap-2">
               <Button type="button" variant="outline" size="sm" onClick={() => setShowKey(!showKey)}>
                 {showKey ? <EyeOffIcon /> : <EyeIcon />}
@@ -281,6 +280,7 @@ export function CsrGenerator({ names: givenNames, keyAlgorithm: givenKeyAlgorith
                 {copied === "key" ? "Copied" : "Copy key"}
               </Button>
             </div>
+            {showKey && <Textarea readOnly className="font-mono text-xs" rows={8} value={result.keyPem} aria-label="Private key" />}
           </section>
 
           <section className="flex flex-col gap-2" aria-label="CSR">
