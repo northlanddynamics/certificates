@@ -44,6 +44,10 @@ _Avoid_: cert version, instance
 Where a Managed Certificate's private key is generated and held: by the Owner, who submits a CSR, or by exactly one Agent. The platform never holds private keys.
 _Avoid_: key mode, key ownership
 
+**CSR Generator**:
+A tool in the web app that makes a key pair and a CSR in the user's browser, for an Owner who keeps their own key. The key is made with WebCrypto, never sent to the platform, and offered to the user to download or copy; only the CSR is ever submitted. It stands on its own under Tools in the Organization sidebar, and is the way to make the CSR that Key Custody: Owner asks for.
+_Avoid_: key generator, CSR wizard
+
 **Approval**:
 An Approver's authorization of a Managed Certificate's names; required when a non-administrator creates a Managed Certificate or changes its names, but never for Renewal or for changes made by an Organization Administrator. While a name change is pending Approval, Renewal continues with the last approved names.
 _Avoid_: sign-off, authorization
