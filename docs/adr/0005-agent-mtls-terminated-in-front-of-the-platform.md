@@ -7,3 +7,5 @@ Bun's HTTP server does not tell a request handler which client certificate the c
 We chose this over an application-level signature on every request, which would need no terminator but would not be mTLS, and over a separate mTLS listener in another runtime, which would be a second deployable.
 
 Consequences: the terminator must overwrite `x-client-cert` on every request (empty when the client sent no certificate), and the platform's own port must not be reachable except through it, because the header is trusted. A certificate is not a secret, so a header the terminator did not set would let anyone who has seen an Agent's certificate act as that Agent. An Agent that is away longer than its certificate lasts (30 days) cannot rotate and registers again with a new token.
+
+To not rely on the network alone, the platform can be given a secret (`AGENT_GATEWAY_SECRET`) that the terminator sends in `x-agent-gateway-secret` on every request; when it is set, a call that carries an identity without it is refused. Setting it is recommended wherever the platform's port can be reached other than through the terminator.

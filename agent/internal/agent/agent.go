@@ -51,8 +51,8 @@ type Config struct {
 	Log     *slog.Logger
 	// BackoffMin and BackoffMax bound the wait after a failure, which doubles from the first up to the second.
 	BackoffMin, BackoffMax time.Duration
-	// HostName and OS and Arch are what registration reports; they default to the host's.
-	HostName, OS, Arch string
+	// OS and Arch are what registration reports; they default to the host's.
+	OS, Arch string
 }
 
 func (c *Config) defaults() {
@@ -97,9 +97,6 @@ func Register(ctx context.Context, cfg Config, platformURL, token, hostName stri
 	csr, err := identity.CSR(key)
 	if err != nil {
 		return err
-	}
-	if hostName == "" {
-		hostName = cfg.HostName
 	}
 	res, err := client.Register(ctx, platform.RegistrationRequest{
 		Token: token, CSR: string(csr), HostName: hostName, OS: cfg.OS, Arch: cfg.Arch, Version: cfg.Version,

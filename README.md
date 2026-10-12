@@ -27,7 +27,7 @@ agent register --platform https://certs.example.com --token agt_...   # or AGENT
 agent run                                                             # as a service; state in /var/lib/certificate-agent or %ProgramData%\CertificateAgent
 ```
 
-The Agent's protocol is the routes under `/api/agent`. Their OpenAPI contract is generated from the route schemas into `agent/contract/openapi.json` (`bun run contract:export`); a platform test fails while that copy is stale. Seam B runs the Agent against `agent/internal/platformstub`, a stub platform built from that contract, over real mutual TLS, with a clock the tests move; it holds both sides to the contract. The platform must run behind a TLS terminator that verifies Agents' client certificates and passes them in a header: see ADR 0005. `AGENT_LATEST_VERSION` sets the Agent version below which the Agents list flags an Agent as outdated.
+The Agent's protocol is the routes under `/api/agent`. Their OpenAPI contract is generated from the route schemas into `agent/contract/openapi.json` (`bun run contract:export`); a platform test fails while that copy is stale. Seam B runs the Agent against `agent/internal/platformstub`, a stub platform built from that contract, over real mutual TLS, with a clock the tests move; it holds both sides to the contract. The platform must run behind a TLS terminator that verifies Agents' client certificates and passes them in a header: see ADR 0005. `AGENT_GATEWAY_SECRET` makes the platform trust that header only from a terminator that sends the secret in `x-agent-gateway-secret`. `AGENT_LATEST_VERSION` sets the Agent version below which the Agents list flags an Agent as outdated.
 
 ## Database schema
 

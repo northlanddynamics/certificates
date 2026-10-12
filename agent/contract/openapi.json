@@ -124,7 +124,7 @@
                     "agentId": {
                       "type": "string"
                     },
-                    "pollIntervalSeconds": {
+                    "pollAfterSeconds": {
                       "type": "integer"
                     }
                   },
@@ -132,7 +132,7 @@
                     "certificate",
                     "notAfter",
                     "agentId",
-                    "pollIntervalSeconds"
+                    "pollAfterSeconds"
                   ]
                 }
               }

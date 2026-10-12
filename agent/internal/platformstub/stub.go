@@ -444,7 +444,7 @@ func (s *Stub) register(payload map[string]any) (int, any) {
 	defer s.mu.Unlock()
 	delete(s.tokens, token)
 	s.agents[id] = &agentRecord{id: id, current: serial, hostName: payload["hostName"].(string), version: payload["version"].(string), lastSeen: s.clock.Now()}
-	return 201, map[string]any{"agentId": id, "certificate": certPEM, "notAfter": notAfter.UTC().Format(time.RFC3339), "pollIntervalSeconds": s.pollSeconds}
+	return 201, map[string]any{"agentId": id, "certificate": certPEM, "notAfter": notAfter.UTC().Format(time.RFC3339), "pollAfterSeconds": s.pollSeconds}
 }
 
 func (s *Stub) rotate(agent *agentRecord, payload map[string]any) (int, any) {

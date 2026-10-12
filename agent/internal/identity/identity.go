@@ -80,7 +80,7 @@ const (
 	metaFile     = "agent.json"
 )
 
-// Save replaces the stored identity and registration. The directory and files are for the service account alone.
+// Save replaces the stored identity and registration. The directory and files are for the service account alone; on Windows, where modes protect nothing, the state directory's ACL must (the installer sets it).
 func (s Store) Save(id *Identity, meta Meta) error {
 	if err := os.MkdirAll(s.Dir, 0o700); err != nil {
 		return err
@@ -88,7 +88,7 @@ func (s Store) Save(id *Identity, meta Meta) error {
 	if err := os.Chmod(s.Dir, 0o700); err != nil && runtime.GOOS != "windows" {
 		return err
 	}
-	keyDER, err := x509MarshalKey(id.Key)
+	keyDER, err := x509.MarshalPKCS8PrivateKey(id.Key)
 	if err != nil {
 		return err
 	}
@@ -164,8 +164,6 @@ func (s Store) Load() (*Identity, Meta, error) {
 	}
 	return id, meta, nil
 }
-
-func x509MarshalKey(key *ecdsa.PrivateKey) ([]byte, error) { return x509.MarshalPKCS8PrivateKey(key) }
 
 func parseKey(der []byte) (*ecdsa.PrivateKey, error) {
 	parsed, err := x509.ParsePKCS8PrivateKey(der)

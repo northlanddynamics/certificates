@@ -117,7 +117,7 @@ function cookieFrom(res: Response): string {
   return [...jar].map(([name, value]) => `${name}=${value}`).join("; ");
 }
 
-export async function createHarness(): Promise<Harness> {
+export async function createHarness(overrides: Partial<AppDeps> = {}): Promise<Harness> {
   const pool = new Pool({ connectionString: TEST_DATABASE_URL });
   const mailer = new CapturingMailer();
   const memberRemovalHooks: MemberRemovalHook[] = [];
@@ -167,6 +167,7 @@ export async function createHarness(): Promise<Harness> {
     clock: () => now,
     baseURL: BASE,
     secret: "test-secret-test-secret-test-secret-1234",
+    ...overrides,
   };
   const { app, auth, db, unitOfWork, issuances, renewals } = createApp(deps);
   await runMigrations(pool);

@@ -110,10 +110,10 @@ type RegistrationRequest struct {
 }
 
 type RegistrationResponse struct {
-	AgentID             string `json:"agentId"`
-	Certificate         string `json:"certificate"`
-	NotAfter            string `json:"notAfter"`
-	PollIntervalSeconds int    `json:"pollIntervalSeconds"`
+	AgentID          string `json:"agentId"`
+	Certificate      string `json:"certificate"`
+	NotAfter         string `json:"notAfter"`
+	PollAfterSeconds int    `json:"pollAfterSeconds"`
 }
 
 // Register is Agent Registration: the token and a CSR for the key the Agent keeps, for an identity certificate.

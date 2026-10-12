@@ -13,6 +13,7 @@ import { HttpError, OrgParam, errors, json } from "./http";
 import type { Actor, UnitOfWork } from "./unit-of-work";
 
 type Row = typeof agent.$inferSelect;
+const DAY_MS = 24 * 3600_000;
 const STATUSES = ["online", "offline", "revoked"] as const;
 
 const AgentView = z.object({
@@ -71,7 +72,7 @@ export function registerAgents(ctx: {
       await authorize(actor, orgId, { agent: ["register"] });
       const token = newRegistrationToken();
       const made = await unitOfWork.run(actor, async (tx, change) => {
-        const expiresAt = new Date(change.occurredAt.getTime() + config.registrationTokenDays * 24 * 3600_000);
+        const expiresAt = new Date(change.occurredAt.getTime() + config.registrationTokenDays * DAY_MS);
         const [row] = await tx
           .insert(agentRegistrationToken)
           .values({ organizationId: orgId, tokenHash: hashToken(token), createdById: actor.id, createdByEmail: actor.email, createdAt: change.occurredAt, expiresAt })

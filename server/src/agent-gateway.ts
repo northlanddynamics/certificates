@@ -7,7 +7,7 @@
 // (`GET /api/agent/identity-ca`) and passes the verified one on in a header (ADR 0005); the platform checks it again and
 // whether it is the one the Agent is meant to be using.
 import { OpenAPIHono, createRoute, z } from "@hono/zod-openapi";
-import { createHash, randomBytes } from "node:crypto";
+import { createHash, randomBytes, timingSafeEqual } from "node:crypto";
 import { and, eq, gt, isNull } from "drizzle-orm";
 import type { Context } from "hono";
 import { AGENT_ARCHES, AGENT_OSES, LATEST_AGENT_VERSION } from "./agent-kinds";
@@ -25,26 +25,33 @@ export interface AgentGatewayConfig {
   /** How long a Registration token may wait to be used. */
   registrationTokenDays: number;
   /** How often an Agent is told to poll, and how long it may be silent before it counts as offline. */
-  pollIntervalSeconds: number;
+  pollAfterSeconds: number;
   offlineAfterSeconds: number;
   /** The request header in which the TLS terminator passes the client certificate it verified: PEM, URL-encoded (nginx's `$ssl_client_escaped_cert`). */
   clientCertificateHeader: string;
+  /**
+   * When set, every call that carries an identity must also send it in `x-agent-gateway-secret`: the TLS terminator adds it, so a
+   * client certificate in the header is trusted only from the terminator, even if the platform's port can be reached some other way.
+   */
+  terminatorSecret?: string;
 }
 
 export const DEFAULT_AGENT_GATEWAY: AgentGatewayConfig = {
   latestVersion: LATEST_AGENT_VERSION,
   identityValidityDays: 30,
   registrationTokenDays: 7,
-  pollIntervalSeconds: 30,
+  pollAfterSeconds: 30,
   offlineAfterSeconds: 120,
   clientCertificateHeader: "x-client-cert",
 };
 
+export const TERMINATOR_SECRET_HEADER = "x-agent-gateway-secret";
 export const REGISTRATION_TOKEN_PREFIX = "agt_";
 export const hashToken = (token: string) => createHash("sha256").update(token).digest("hex");
 export const newRegistrationToken = () => REGISTRATION_TOKEN_PREFIX + randomBytes(32).toString("base64url");
 
 const SECURITY = [{ agentIdentity: [] }];
+const IDENTITY_NOT_ACCEPTED = "the Agent's identity is not accepted";
 const Certificate = z.object({
   certificate: z.string().openapi({ description: "The Agent's identity certificate, PEM." }),
   notAfter: z.string().openapi({ description: "When it ends. The Agent rotates it once a third of its life is left." }),
@@ -63,9 +70,24 @@ export function registerAgentGateway(ctx: { app: OpenAPIHono; db: Db; unitOfWork
     description: "The Agent's identity certificate, from Agent Registration or its latest rotation.",
   } as never);
 
+  /** An identity certificate for the CSR, or the 400 that says what is wrong with it. */
+  async function issueIdentity(csr: string, agentId: string, now: Date) {
+    try {
+      return await identityCa.issue({ csr, agentId, now, validityDays: config.identityValidityDays });
+    } catch (err) {
+      if (err instanceof AgentCsrError) throw new HttpError(400, err.message);
+      throw err;
+    }
+  }
+
   /** The Agent whose identity certificate the request carries, or a 401: no certificate, one that is not the identity CA's or is not valid now, one that is no longer the Agent's, or an Agent that is revoked. */
   async function authenticate(c: Context) {
-    const refused = new HttpError(401, "the Agent's identity is not accepted");
+    const refused = new HttpError(401, IDENTITY_NOT_ACCEPTED);
+    if (config.terminatorSecret !== undefined) {
+      const sent = Buffer.from(c.req.header(TERMINATOR_SECRET_HEADER) ?? "");
+      const expected = Buffer.from(config.terminatorSecret);
+      if (sent.length !== expected.length || !timingSafeEqual(sent, expected)) throw refused;
+    }
     const header = c.req.header(config.clientCertificateHeader);
     if (!header) throw new HttpError(401, "an Agent identity certificate is required");
     let pem: string;
@@ -120,7 +142,7 @@ export function registerAgentGateway(ctx: { app: OpenAPIHono; db: Db; unitOfWork
           },
         },
       },
-      responses: { 201: json(Certificate.extend({ agentId: z.string(), pollIntervalSeconds: z.number().int() }), "Registered"), ...errors(400, 401) },
+      responses: { 201: json(Certificate.extend({ agentId: z.string(), pollAfterSeconds: z.number().int() }), "Registered"), ...errors(400, 401) },
     }),
     async (c) => {
       const body = c.req.valid("json");
@@ -133,14 +155,8 @@ export function registerAgentGateway(ctx: { app: OpenAPIHono; db: Db; unitOfWork
           .returning();
         if (!token) throw new HttpError(401, "the registration token is not valid: it is unknown, used or expired");
         const agentId = crypto.randomUUID();
-        let issued;
-        try {
-          issued = await identityCa.issue({ csr: body.csr, agentId, now: change.occurredAt, validityDays: config.identityValidityDays });
-        } catch (err) {
-          // Rolled back, so the token is not spent on a request that could not be served.
-          if (err instanceof AgentCsrError) throw new HttpError(400, err.message);
-          throw err;
-        }
+        // A CSR that is refused rolls the transaction back, so the token is not spent on a request that could not be served.
+        const issued = await issueIdentity(body.csr, agentId, change.occurredAt);
         await tx.insert(agent).values({
           id: agentId,
           organizationId: token.organizationId,
@@ -159,7 +175,7 @@ export function registerAgentGateway(ctx: { app: OpenAPIHono; db: Db; unitOfWork
           target: { type: "agent", id: agentId },
           detail: { hostName: body.hostName, os: body.os, arch: body.arch, version: body.version, registrationTokenId: token.id },
         });
-        return { agentId, certificate: issued.certificate, notAfter: issued.notAfter.toISOString(), pollIntervalSeconds: config.pollIntervalSeconds };
+        return { agentId, certificate: issued.certificate, notAfter: issued.notAfter.toISOString(), pollAfterSeconds: config.pollAfterSeconds };
       });
       return c.json(registered, 201);
     },
@@ -179,11 +195,14 @@ export function registerAgentGateway(ctx: { app: OpenAPIHono; db: Db; unitOfWork
     async (c) => {
       const { version } = c.req.valid("json");
       const { row, serial, now } = await authenticate(c);
-      await db
-        .update(agent)
-        .set({ version, lastContactAt: now, ...(serial === row.identitySerial && row.previousIdentitySerial ? { previousIdentitySerial: null } : {}) })
-        .where(eq(agent.id, row.id));
-      return c.json({ items: [], pollAfterSeconds: config.pollIntervalSeconds }, 200);
+      // A heartbeat records no Audit Event, but it is a change like any other and goes through the unit of work.
+      await unitOfWork.run(null, (tx) =>
+        tx
+          .update(agent)
+          .set({ version, lastContactAt: now, ...(serial === row.identitySerial && row.previousIdentitySerial ? { previousIdentitySerial: null } : {}) })
+          .where(eq(agent.id, row.id)),
+      );
+      return c.json({ items: [], pollAfterSeconds: config.pollAfterSeconds }, 200);
     },
   );
 
@@ -202,18 +221,13 @@ export function registerAgentGateway(ctx: { app: OpenAPIHono; db: Db; unitOfWork
     }),
     async (c) => {
       const { csr } = c.req.valid("json");
-      const { row } = await authenticate(c);
+      const { row, serial } = await authenticate(c);
       const rotated = await unitOfWork.run(null, async (tx, change) => {
         // Under the Agent's row, so a revocation or another rotation in flight has finished.
         const [current] = await tx.select().from(agent).where(eq(agent.id, row.id)).for("update");
-        if (!current || current.revokedAt) throw new HttpError(401, "the Agent's identity is not accepted");
-        let issued;
-        try {
-          issued = await identityCa.issue({ csr, agentId: row.id, now: change.occurredAt, validityDays: config.identityValidityDays });
-        } catch (err) {
-          if (err instanceof AgentCsrError) throw new HttpError(400, err.message);
-          throw err;
-        }
+        // The certificate presented must still be one of the Agent's now, not one that another rotation has just replaced.
+        if (!current || current.revokedAt || (serial !== current.identitySerial && serial !== current.previousIdentitySerial)) throw new HttpError(401, IDENTITY_NOT_ACCEPTED);
+        const issued = await issueIdentity(csr, row.id, change.occurredAt);
         await tx.update(agent).set({ identitySerial: issued.serial, previousIdentitySerial: current.identitySerial, lastContactAt: change.occurredAt }).where(eq(agent.id, row.id));
         await change.audit({
           organizationId: row.organizationId,

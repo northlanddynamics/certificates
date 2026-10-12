@@ -84,7 +84,7 @@ describe("Agent Registration", () => {
     const { csr, keys } = await newIdentityRequest();
     const { res, agent } = await TestAgent.register(h, { token, hostName: "web-01", os: "windows", arch: "arm64", version: "0.1.0" }, csr);
     expect(res.status).toBe(201);
-    expect(res.body).toEqual({ agentId: expect.any(String), certificate: expect.stringContaining("BEGIN CERTIFICATE"), notAfter: expect.any(String), pollIntervalSeconds: 30 });
+    expect(res.body).toEqual({ agentId: expect.any(String), certificate: expect.stringContaining("BEGIN CERTIFICATE"), notAfter: expect.any(String), pollAfterSeconds: 30 });
 
     const ca = new x509.X509Certificate((await h.api("/api/agent/identity-ca")).body.certificate);
     const identity = new x509.X509Certificate(res.body.certificate);
