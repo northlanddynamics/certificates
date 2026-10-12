@@ -9,6 +9,8 @@ import { DnsProviderError, domainName, nameInZone, testByThrowawayRecord, type D
 
 const WAPI_PATH = /^\/wapi\/v\d+(\.\d+)*$/;
 const TXT_TTL = 60;
+/** The most a WAPI answer may be: a TXT search for one name and text returns a handful of records. */
+const MAX_ANSWER_BYTES = 1_000_000;
 
 const wapiUrl = z
   .string()
@@ -61,6 +63,23 @@ function wapiText(body: unknown): string {
   return "";
 }
 
+/** The body of `response`, which is refused once it is larger than any WAPI answer here could be. */
+async function boundedText(response: Response, where: string): Promise<string> {
+  const chunks: Uint8Array[] = [];
+  let size = 0;
+  try {
+    for await (const chunk of response.body ?? []) {
+      size += chunk.length;
+      if (size > MAX_ANSWER_BYTES) throw new DnsProviderError("rejected", `${where} sent an answer larger than ${MAX_ANSWER_BYTES / 1_000_000} MB, which no WAPI would`);
+      chunks.push(chunk);
+    }
+  } catch (err) {
+    if (err instanceof DnsProviderError) throw err;
+    throw new DnsProviderError("unreachable", `${where} stopped answering part way`);
+  }
+  return Buffer.concat(chunks).toString("utf8");
+}
+
 export function createInfoblox(settings: InfobloxSettings, secret: string, { timeoutMs = 10_000 }: InfobloxOptions = {}): DnsProvider {
   const { url, zone, view, caCertificate } = settings;
   const authorization = `Basic ${Buffer.from(secret).toString("base64")}`;
@@ -86,7 +105,7 @@ export function createInfoblox(settings: InfobloxSettings, secret: string, { tim
         e.name === "TimeoutError" ? `${where} did not answer within ${timeoutMs / 1000} seconds` : `${where} could not be reached: ${e.code ?? e.message ?? "unknown error"}`,
       );
     }
-    const text = await response.text().catch(() => "");
+    const text = await boundedText(response, where);
     let answer: unknown = text;
     try {
       answer = JSON.parse(text);

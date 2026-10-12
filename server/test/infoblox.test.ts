@@ -144,6 +144,13 @@ describe("what goes wrong", () => {
     expect(gone.kind).toBe("unreachable");
   });
 
+  test("an answer larger than any WAPI's is refused rather than read", async () => {
+    wapi.failing = { status: 200, body: "x".repeat(1_500_000) };
+    const err = await failure(provider().presentTxt({ name: "_acme-challenge.x.infoblox.test", value: "v" }));
+    expect(err.kind).toBe("rejected");
+    expect(err.message).toContain("larger");
+  });
+
   test("a server whose certificate is not trusted is unreachable, not trusted anyway", async () => {
     const err = await failure(provider({ caCertificate: undefined }).presentTxt({ name: "_acme-challenge.x.infoblox.test", value: "v" }));
     expect(err.kind).toBe("unreachable");
