@@ -163,7 +163,7 @@ export async function createHarness(): Promise<Harness> {
         return ari.enabled ? letsEncrypt.renewalInfo(environment, certificate) : null;
       },
     },
-    dcv: { resolver: { lookupTxt: (name) => dcvResolver.current.lookupTxt(name) }, visibilityTimeoutMs: 1500, pollIntervalMs: 50 },
+    dcv: { resolver: { lookupTxt: (name) => dcvResolver.current.lookupTxt(name), lookupCname: (name) => dcvResolver.current.lookupCname(name) }, visibilityTimeoutMs: 1500, pollIntervalMs: 50 },
     clock: () => now,
     baseURL: BASE,
     secret: "test-secret-test-secret-test-secret-1234",

@@ -103,8 +103,12 @@ A DNS zone belonging to one Organization, reached through that Organization's DN
 _Avoid_: challenge zone, ACME zone
 
 **Delegated DCV**:
-DCV performed through a Validation Zone, as opposed to Direct DCV, where the platform writes to the domain's authoritative zone through a DNS Provider.
+DCV performed through a Validation Zone, as opposed to Direct DCV, where the platform writes to the domain's authoritative zone through a DNS Provider. The Organization creates one CNAME per name, from `_acme-challenge.<name>` to `<name>.<Validation Zone>`, which the platform shows it; the platform writes the challenge TXT at the CNAME's target.
 _Avoid_: CNAME validation, acme-dns
+
+**DCV Rule**:
+An Organization Administrator's choice, for one name or for a zone (the name and everything beneath it), of Direct or Delegated DCV and through which DNS Provider or Validation Zone; a name's own rule beats a zone's, and the longest zone wins. A name under no rule is Direct through whichever DNS Provider publishes it.
+_Avoid_: DCV policy, validation setting
 
 **API Key**:
 A key for scripts and pipelines, made for one Organization and shown once when made; it can only be revoked. A user's key acts as the user who made it: it carries the permissions they held then, works only for what they may still see and do, and dies with their membership. An Organization's key, which only Organization Administrators make and revoke, belongs to the Organization, sees all its Managed Certificates and outlives whoever made it. Every use is an Audit Event.

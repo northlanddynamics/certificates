@@ -1,0 +1,11 @@
+$TTL 60
+@ IN SOA ns.delegating.test. hostmaster.delegating.test. 1 3600 600 86400 60
+@ IN NS ns.delegating.test.
+ns IN A 127.0.0.1
+; Names whose DCV is delegated, as an Organization would set it up in its own DNS: each _acme-challenge name is a CNAME
+; to <name>.validation.rfc2136.test, in the Validation Zone the platform writes the challenge records into.
+_acme-challenge.app IN CNAME app.delegating.test.validation.rfc2136.test.
+_acme-challenge.wild IN CNAME wild.delegating.test.validation.rfc2136.test.
+; Delegated somewhere other than where the platform would write.
+_acme-challenge.elsewhere IN CNAME elsewhere.delegating.test.elsewhere.rfc2136.test.
+; Nothing at _acme-challenge.undelegated: it is a name no CNAME was created for.

@@ -120,6 +120,13 @@
       "when": 1791581076470,
       "tag": "0016_certificate_revocation",
       "breakpoints": true
+    },
+    {
+      "idx": 17,
+      "version": "7",
+      "when": 1791809662321,
+      "tag": "0017_delegated_dcv",
+      "breakpoints": true
     }
   ]
 }

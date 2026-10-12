@@ -569,7 +569,7 @@ describe("failures say what went wrong", () => {
 
   test("when the published record never shows in DNS, and it is removed again", async () => {
     await readyToIssue();
-    h.dcvResolver.current = { lookupTxt: async () => [] };
+    h.dcvResolver.current = { lookupTxt: async () => [], lookupCname: async () => [] };
     const name = host();
     const failed = await issueAndEnd([name]);
     expect(failed.issuance.failure).toMatchObject({ code: "record_not_visible", message: expect.stringContaining(`_acme-challenge.${name}`) });
@@ -608,7 +608,7 @@ describe("failures say what went wrong", () => {
 
   test("and only one Issuance of a Managed Certificate runs at a time", async () => {
     await readyToIssue();
-    h.dcvResolver.current = { lookupTxt: async () => [] }; // keeps the first one waiting for its record
+    h.dcvResolver.current = { lookupTxt: async () => [], lookupCname: async () => [] }; // keeps the first one waiting for its record
     const created = await admin().create(await request([host()]));
     const again = await admin().retry(created.body.id);
     expect(again.status).toBe(409);
@@ -618,7 +618,7 @@ describe("failures say what went wrong", () => {
 
   test("an Issuance the platform was stopped in the middle of ends as failed, once", async () => {
     await readyToIssue();
-    h.dcvResolver.current = { lookupTxt: async () => [] }; // keeps it running while the platform "restarts"
+    h.dcvResolver.current = { lookupTxt: async () => [], lookupCname: async () => [] }; // keeps it running while the platform "restarts"
     const created = await admin().create(await request([host()]));
     expect((await admin().get(created.body.id)).body.issuance.status).toBe("running");
 
@@ -636,7 +636,7 @@ describe("failures say what went wrong", () => {
 
   test("an archived Managed Certificate cannot be issued by trying again", async () => {
     await readyToIssue();
-    h.dcvResolver.current = { lookupTxt: async () => [] };
+    h.dcvResolver.current = { lookupTxt: async () => [], lookupCname: async () => [] };
     const created = await admin().create(await request([host()]));
     await ended(created.body.id);
     await h.pool.query(`update managed_certificate set archived_at = now() where id = $1`, [created.body.id]);
@@ -676,7 +676,7 @@ describe("failures say what went wrong", () => {
 describe("downloading", () => {
   test("there is nothing to download until a Certificate has been issued, and the newest Certificate is the current one", async () => {
     await readyToIssue();
-    h.dcvResolver.current = { lookupTxt: async () => [] };
+    h.dcvResolver.current = { lookupTxt: async () => [], lookupCname: async () => [] };
     const created = await admin().create(await request([host()]));
     await ended(created.body.id);
     const before = await admin().download(created.body.id);
@@ -713,7 +713,7 @@ describe("audit", () => {
     const created = await admin().create(await request([name]));
     const issued = await ended(created.body.id);
 
-    h.dcvResolver.current = { lookupTxt: async () => [] };
+    h.dcvResolver.current = { lookupTxt: async () => [], lookupCname: async () => [] };
     h.setNow(new Date("2026-02-02T09:00:00Z"));
     await admin().retry(created.body.id);
     const retried = await ended(created.body.id);

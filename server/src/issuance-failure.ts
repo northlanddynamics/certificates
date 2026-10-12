@@ -8,6 +8,8 @@ export const ISSUANCE_FAILURE_CODES = [
   "dns_update_rejected",
   /** The DNS Provider did not answer. */
   "dns_provider_unreachable",
+  /** Delegated DCV: the CNAME that delegates the challenge name to the Validation Zone is not in DNS, or points elsewhere. */
+  "cname_missing",
   /** The challenge record was published but never showed up in DNS. */
   "record_not_visible",
   /** The CA answered and said no: refused the names, did not accept the challenge, refused the order. */

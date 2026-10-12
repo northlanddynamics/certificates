@@ -12,8 +12,10 @@ export class HttpError extends Error {
 }
 
 const UNIQUE_VIOLATION = "23505";
+const FOREIGN_KEY_VIOLATION = "23503";
 // Drizzle wraps driver errors; the Postgres error code is on the cause.
 export const isUniqueViolation = (err: any) => (err?.cause?.code ?? err?.code) === UNIQUE_VIOLATION;
+export const isForeignKeyViolation = (err: any) => (err?.cause?.code ?? err?.code) === FOREIGN_KEY_VIOLATION;
 
 const ErrorBody = z.object({ error: z.string() });
 export const errors = (...codes: ErrorStatus[]) =>

@@ -155,7 +155,7 @@ export function createIssuances({ db, unitOfWork, certificateAuthority: ca, dcv,
   async function run(issuanceId: string) {
     const [row] = await db.select().from(issuance).where(eq(issuance.id, issuanceId));
     if (!row || row.status !== "running") return;
-    const responder = dcv.directFor(db, row.organizationId);
+    const responder = dcv.responderFor(db, row.organizationId);
     let chainPem: string;
     let mc: typeof managedCertificate.$inferSelect;
     let accountId: string;

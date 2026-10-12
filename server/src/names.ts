@@ -29,3 +29,9 @@ export function normalizeNames(names: string[]): { names: string[] } | { invalid
 
 /** Whether two lists name the same set of names, in any order. Both are already normalised. */
 export const sameNames = (a: string[], b: string[]) => a.length === b.length && new Set([...a, ...b]).size === a.length;
+
+/** `name` as a domain that a DCV rule or a Validation Zone is for: a name as above, but never a wildcard. Null when it cannot be one. */
+export function normalizeDomain(name: string): string | null {
+  const normal = normalizeName(name);
+  return normal === null || normal.startsWith("*.") ? null : normal;
+}

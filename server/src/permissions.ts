@@ -10,7 +10,7 @@ export const APPROVER_ROLE = "approver";
 export const MEMBER_ROLE = "member";
 
 // Every permission there is. The organization, member, invitation and team resources are the ones Better Auth's
-// organization plugin checks itself; `audit`, `acmeAccount`, `dnsProvider`, `managedCertificate`, `approval` and `apiKey` are ours (the last is the plugin's too).
+// organization plugin checks itself; `audit`, `acmeAccount`, `dnsProvider`, `validationZone`, `dcvRule`, `managedCertificate`, `approval` and `apiKey` are ours (the last is the plugin's too).
 const statements = {
   organization: ["update", "delete"],
   member: ["create", "update", "delete"],
@@ -19,6 +19,10 @@ const statements = {
   audit: ["read"],
   acmeAccount: ["read", "create", "update", "test"],
   dnsProvider: ["read", "create", "update", "test"],
+  // Delegated DCV: where `_acme-challenge` names are delegated to, and how each name or zone is validated. `dcvRule.read`
+  // also shows the CNAME record a name needs.
+  validationZone: ["read", "create", "delete"],
+  dcvRule: ["read", "create", "update", "delete"],
   // `read` sees every Managed Certificate in the Organization (anyone else sees only what they own or proposed);
   // `create` makes one outright; `propose` asks for one that waits for Approval; `changeOwners` changes whose it is
   // (its Owners may do that too, whatever their role, as they may `renew` it now, `setRenewalPolicy`, `replaceCsr` and

@@ -34,7 +34,10 @@ services:
       - "15000:15000"
 
   # An RFC 2136 DNS server (BIND), the DNS Provider's counterpart in tests: its zone rfc2136.test accepts dynamic updates
-  # signed with the TSIG key in docker/bind/named.conf. Served on localhost:5354, TCP and UDP.
+  # signed with the TSIG key in docker/bind/named.conf. Served on localhost:5354, TCP and UDP. The names under delegating.test
+  # delegate their _acme-challenge to validation.rfc2136.test by CNAME, for the Delegated DCV tests. It is recursive, so the
+  # CA's lookups follow that CNAME. Its config is a volume of the image: after changing docker/bind, recreate it with
+  # `docker compose up -d --build --force-recreate --renew-anon-volumes bind`, or the old files stay.
   bind:
     build: docker/bind
     ports:

@@ -1,6 +1,7 @@
 import { bigint, check, customType, integer, foreignKey, index, jsonb, pgTable, text, timestamp, unique, uniqueIndex, uuid } from "drizzle-orm/pg-core";
 import { sql } from "drizzle-orm";
 import type { AcmeEnvironment, RevocationReason } from "../certificate-authority";
+import type { DcvMethod, DcvScope } from "../dcv-plan";
 import type { DnsProviderType } from "../dns-provider-kinds";
 import type { IssuanceFailureCode } from "../issuance-failure";
 import type { KeyAlgorithm, KeyCustody } from "../csr";
@@ -208,6 +209,64 @@ export const dnsProvider = pgTable(
   (t) => [
     unique("dns_provider_organization_name_unique").on(t.organizationId, t.name),
     foreignKey({ columns: [t.secretId, t.organizationId], foreignColumns: [secret.id, secret.organizationId] }),
+    // Lets other tables reference a DNS Provider together with its Organization, so none can point at another's.
+    unique("dns_provider_id_organization_unique").on(t.id, t.organizationId),
+  ],
+);
+
+/**
+ * A DNS zone of an Organization, reached through one of its DNS Providers, into which `_acme-challenge` names are
+ * delegated by CNAME: the platform writes the challenge records of Delegated DCV there. It is inside its provider's zone.
+ */
+export const validationZone = pgTable(
+  "validation_zone",
+  {
+    id: uuid("id").primaryKey().defaultRandom(),
+    organizationId: text("organization_id")
+      .notNull()
+      .references(() => organization.id),
+    /** Lower case, no trailing dot. */
+    name: text("name").notNull(),
+    dnsProviderId: uuid("dns_provider_id").notNull(),
+    createdAt: timestamp("created_at", { withTimezone: true }).notNull().defaultNow(),
+  },
+  (t) => [
+    unique("validation_zone_organization_name_unique").on(t.organizationId, t.name),
+    foreignKey({ columns: [t.dnsProviderId, t.organizationId], foreignColumns: [dnsProvider.id, dnsProvider.organizationId] }),
+    unique("validation_zone_id_organization_unique").on(t.id, t.organizationId),
+  ],
+);
+
+/**
+ * How DCV is done for a name (its own rule) or for a zone (the name and everything beneath it): Direct, through a DNS
+ * Provider or whichever publishes the name, or Delegated through a Validation Zone. The most specific rule decides.
+ */
+export const dcvRule = pgTable(
+  "dcv_rule",
+  {
+    id: uuid("id").primaryKey().defaultRandom(),
+    organizationId: text("organization_id")
+      .notNull()
+      .references(() => organization.id),
+    scope: text("scope").$type<DcvScope>().notNull(),
+    /** Lower case, no trailing dot, never a wildcard: a rule for a name covers its wildcard too. */
+    domain: text("domain").notNull(),
+    method: text("method").$type<DcvMethod>().notNull(),
+    /** Direct only: the DNS Provider to write through; null leaves it to whichever publishes the name. */
+    dnsProviderId: uuid("dns_provider_id"),
+    /** Delegated only. */
+    validationZoneId: uuid("validation_zone_id"),
+    createdAt: timestamp("created_at", { withTimezone: true }).notNull().defaultNow(),
+  },
+  (t) => [
+    unique("dcv_rule_organization_scope_domain_unique").on(t.organizationId, t.scope, t.domain),
+    check("dcv_rule_scope", sql`${t.scope} in ('name', 'zone')`),
+    check(
+      "dcv_rule_method",
+      sql`(${t.method} = 'direct' and ${t.validationZoneId} is null) or (${t.method} = 'delegated' and ${t.validationZoneId} is not null and ${t.dnsProviderId} is null)`,
+    ),
+    foreignKey({ columns: [t.dnsProviderId, t.organizationId], foreignColumns: [dnsProvider.id, dnsProvider.organizationId] }),
+    foreignKey({ columns: [t.validationZoneId, t.organizationId], foreignColumns: [validationZone.id, validationZone.organizationId] }),
   ],
 );
 

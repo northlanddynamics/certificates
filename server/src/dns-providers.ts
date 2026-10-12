@@ -19,10 +19,11 @@ export interface DnsProviders {
   /** The Organization's DNS Provider `providerId`, ready to use: the one way anything else gets at a provider and its secret. Throws when there is no such provider. */
   open(db: Db | Tx, organizationId: string, providerId: string): Promise<DnsProvider>;
   /**
-   * The Organization's DNS Provider that publishes records at `name`, ready to use: of those whose zone contains the
-   * name, the one with the most specific zone (earliest added when two have the same). Null when none does.
+   * The Organization's DNS Provider that publishes records at `name`: of those whose zone contains the name, the one
+   * with the most specific zone (earliest added when two have the same), or only `only` when given. Null when none
+   * does. Nothing is opened: this is for deciding which provider, `open` is for using it.
    */
-  findFor(db: Db | Tx, organizationId: string, name: string): Promise<{ id: string; name: string; zone: string; provider: DnsProvider } | null>;
+  locate(db: Db | Tx, organizationId: string, name: string, only?: string): Promise<{ id: string; name: string; zone: string } | null>;
 }
 
 export function createDnsProviders(secrets: Secrets): DnsProviders {
@@ -40,11 +41,11 @@ export function createDnsProviders(secrets: Secrets): DnsProviders {
       if (!row) throw new Error("no such DNS Provider");
       return build(db, row);
     },
-    async findFor(db, organizationId, name) {
+    async locate(db, organizationId, name, only) {
       const rows = await db
         .select()
         .from(dnsProvider)
-        .where(eq(dnsProvider.organizationId, organizationId))
+        .where(and(eq(dnsProvider.organizationId, organizationId), only ? eq(dnsProvider.id, only) : undefined))
         .orderBy(asc(dnsProvider.createdAt), asc(dnsProvider.id));
       let best: { row: Row; zone: string } | undefined;
       for (const row of rows) {
@@ -54,7 +55,7 @@ export function createDnsProviders(secrets: Secrets): DnsProviders {
         const zone = settings.success ? kind.zoneOf(settings.data, name) : null;
         if (zone !== null && (!best || zone.length > best.zone.length)) best = { row, zone };
       }
-      return best ? { id: best.row.id, name: best.row.name, zone: best.zone, provider: await build(db, best.row) } : null;
+      return best ? { id: best.row.id, name: best.row.name, zone: best.zone } : null;
     },
   };
 }
