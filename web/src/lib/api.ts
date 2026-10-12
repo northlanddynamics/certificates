@@ -78,6 +78,17 @@ export interface InventoryFilters {
   noOwners?: boolean;
   archived?: boolean;
   keyCustody?: "owner";
+  /** Any of these. */
+  environment?: ManagedCertificate["environment"][];
+  /** Any of these. */
+  keyAlgorithm?: string[];
+}
+/** One page of a list the server pages; `total` is how many there are in all. */
+export interface Page<T> {
+  items: T[];
+  total: number;
+  page: number;
+  pageSize: number;
 }
 /** A change of a Managed Certificate's names waiting for Approval. */
 export interface PendingNameChange {
@@ -140,6 +151,7 @@ export interface ManagedCertificate {
   id: string;
   names: string[];
   keyAlgorithm: string;
+  keyCustody: "owner";
   environment: "staging" | "production";
   /** When it was archived: it then neither issues, renews nor deploys. */
   archivedAt: string | null;
@@ -149,7 +161,8 @@ export interface ManagedCertificate {
   pendingNameChange: PendingNameChange | null;
   renewal: Renewal;
   issuance: Issuance | null;
-  currentCertificate: { id: string; fingerprint: string; notAfter: string; revocation: Revocation | null } | null;
+  /** The most recently issued Certificate. */
+  currentCertificate: Certificate | null;
 }
 export interface QueuedNameChange extends PendingNameChange {
   managedCertificateId: string;
@@ -167,11 +180,24 @@ export const EXPORT_CHAINS: [string, string][] = [
 ];
 export interface Certificate {
   id: string;
+  /** SHA-256 of the certificate, lower-case hex. */
   fingerprint: string;
+  serial: string;
   notBefore: string;
   notAfter: string;
+  names: string[];
+  ca: string;
+  environment: "staging" | "production";
+  acmeAccountId: string;
   issuedAt: string;
   revocation: Revocation | null;
+}
+/** An Organization's account with a CA; its key is never returned. */
+export interface AcmeAccount {
+  id: string;
+  environment: "staging" | "production";
+  accountUrl: string;
+  contactEmail: string | null;
 }
 /** An Agent as the Agents list shows it. */
 export interface Agent {
@@ -222,10 +248,16 @@ export const api = {
     call("/api/auth/sign-up/email", { body: { email, password, name } }),
   signOut: () => call("/api/auth/sign-out", { method: "POST", body: {} }),
   acceptInvitation: (invitationId: string) => call(`${BA}/accept-invitation`, { body: { invitationId } }),
-  managedCertificates: (orgId: string, filters: InventoryFilters = {}) => {
-    const query = new URLSearchParams(Object.entries(filters).filter(([, v]) => v).map(([k, v]) => [k, v === true ? "true" : String(v)]));
-    return call<{ items: ManagedCertificate[] }>(`/api/organizations/${orgId}/managed-certificates${query.size ? `?${query}` : ""}`);
+  /** `page` is from 1. */
+  managedCertificates: (orgId: string, filters: InventoryFilters = {}, paging: { page: number; pageSize: number }) => {
+    const query = new URLSearchParams(
+      Object.entries({ ...filters, ...paging })
+        .filter(([, v]) => (Array.isArray(v) ? v.length > 0 : v))
+        .map(([k, v]) => [k, Array.isArray(v) ? v.join(",") : v === true ? "true" : String(v)]),
+    );
+    return call<Page<ManagedCertificate>>(`/api/organizations/${orgId}/managed-certificates?${query}`);
   },
+  managedCertificate: (orgId: string, id: string) => call<ManagedCertificate>(`/api/organizations/${orgId}/managed-certificates/${id}`),
   addOwner: (orgId: string, id: string, owner: OwnerRef) =>
     call<ManagedCertificate>(`/api/organizations/${orgId}/managed-certificates/${id}/owners`, { body: owner }),
   removeOwner: (orgId: string, id: string, owner: OwnerRef) =>
@@ -267,10 +299,22 @@ export const api = {
   createApiKey: (orgId: string, body: { name: string; type: ApiKey["type"]; expiresInDays?: number }) =>
     call<ApiKey & { key: string }>(`/api/organizations/${orgId}/api-keys`, { body }),
   revokeApiKey: (orgId: string, keyId: string) => call(`/api/organizations/${orgId}/api-keys/${keyId}`, { method: "DELETE" }),
-  agents: (orgId: string) => call<{ items: Agent[]; latestVersion: string }>(`/api/organizations/${orgId}/agents`),
+  /** One page of the Agents, oldest first, narrowed to those that are any of `status` and run any of `os`, and to the outdated if asked; `page` is from 1. */
+  agents: (orgId: string, filters: { status: string[]; os: string[]; outdated: boolean }, paging: { page: number; pageSize: number }) => {
+    const query = new URLSearchParams({ page: String(paging.page), pageSize: String(paging.pageSize) });
+    if (filters.status.length > 0) query.set("status", filters.status.join(","));
+    if (filters.os.length > 0) query.set("os", filters.os.join(","));
+    if (filters.outdated) query.set("outdated", "true");
+    return call<Page<Agent> & { latestVersion: string }>(`/api/organizations/${orgId}/agents?${query}`);
+  },
   createAgentRegistrationToken: (orgId: string) =>
     call<{ token: string; expiresAt: string }>(`/api/organizations/${orgId}/agent-registration-tokens`, { method: "POST", body: {} }),
   revokeAgent: (orgId: string, agentId: string) => call<Agent>(`/api/organizations/${orgId}/agents/${agentId}/revoke`, { method: "POST", body: {} }),
+  acmeAccounts: (orgId: string) => call<{ items: AcmeAccount[] }>(`/api/organizations/${orgId}/acme-accounts`),
+  registerAcmeAccount: (orgId: string, body: { environment: AcmeAccount["environment"]; contactEmail?: string }) =>
+    call<AcmeAccount>(`/api/organizations/${orgId}/acme-accounts`, { body: { ...body, termsOfServiceAgreed: true } }),
+  testAcmeAccount: (orgId: string, accountId: string) =>
+    call<{ ok: boolean; error?: string }>(`/api/organizations/${orgId}/acme-accounts/${accountId}/test`, { method: "POST", body: {} }),
   platformOrganizations: () => call<{ items: { id: string; name: string; slug: string }[] }>("/api/platform/organizations"),
   createOrganization: (body: { name: string; slug: string; adminEmail: string }) =>
     call<{ id: string; invitationId: string }>("/api/platform/organizations", { body }),
@@ -279,6 +323,18 @@ export const api = {
       `${BA}/list-members?organizationId=${orgId}`,
     );
     return { items: res.members.map((m): OrgMember => ({ id: m.id, userId: m.userId, email: m.user.email, name: m.user.name, role: m.role })) };
+  },
+  /** One page of the members, oldest first, narrowed to those holding any of `roles`; `page` is from 1. */
+  membersPage: async (orgId: string, roles: string[], paging: { page: number; pageSize: number }): Promise<Page<OrgMember>> => {
+    const query = new URLSearchParams({ organizationId: orgId, sortBy: "createdAt", limit: String(paging.pageSize), offset: String((paging.page - 1) * paging.pageSize) });
+    if (roles.length > 0) {
+      query.set("filterField", "role");
+      // Better Auth reads one value as equal to it, and several (a repeated key) as any of them.
+      if (roles.length > 1) query.set("filterOperator", "in");
+      for (const role of roles) query.append("filterValue", role);
+    }
+    const res = await call<{ members: { id: string; userId: string; role: string; user: { email: string; name: string } }[]; total: number }>(`${BA}/list-members?${query}`);
+    return { items: res.members.map((m): OrgMember => ({ id: m.id, userId: m.userId, email: m.user.email, name: m.user.name, role: m.role })), total: res.total, ...paging };
   },
   changeRole: (orgId: string, memberId: string, role: string) =>
     call(`${BA}/update-member-role`, { body: { memberId, role, organizationId: orgId } }),
@@ -294,7 +350,11 @@ export const api = {
   },
   invite: (orgId: string, email: string, role: string) => call(`${BA}/invite-member`, { body: { email, role, organizationId: orgId } }),
   cancelInvitation: (_orgId: string, invitationId: string) => call(`${BA}/cancel-invitation`, { body: { invitationId } }),
-  teams: (orgId: string) => call<{ items: Team[] }>(`/api/organizations/${orgId}/teams`),
+  /** The Teams as a list to choose from: the first page of the largest size the server allows. */
+  teams: (orgId: string) => call<Page<Team>>(`/api/organizations/${orgId}/teams?pageSize=100`),
+  /** One page of the Teams, oldest first, narrowed to those with (or without) members; `page` is from 1. */
+  teamsPage: (orgId: string, membership: "empty" | "populated" | undefined, paging: { page: number; pageSize: number }) =>
+    call<Page<Team>>(`/api/organizations/${orgId}/teams?${new URLSearchParams({ ...(membership && { membership }), page: String(paging.page), pageSize: String(paging.pageSize) })}`),
   createTeam: (orgId: string, name: string) => call(`${BA}/create-team`, { body: { name, organizationId: orgId } }),
   renameTeam: (orgId: string, teamId: string, name: string) =>
     call(`${BA}/update-team`, { body: { teamId, data: { name, organizationId: orgId } } }),

@@ -1,39 +1,58 @@
 import { useMutation, useQuery } from "@tanstack/react-query";
+import { ArchiveIcon, EllipsisIcon } from "lucide-react";
 import { useState } from "react";
+import { ConfirmDialog } from "@/components/confirm-dialog";
 import { Button } from "@/components/ui/button";
+import { DropdownMenu, DropdownMenuContent, DropdownMenuItem, DropdownMenuTrigger } from "@/components/ui/dropdown-menu";
 import { Select, SelectContent, SelectItem, SelectTrigger, SelectValue } from "@/components/ui/select";
 import { REVOCATION_REASONS, api, can, revocationReasonLabel, type ManagedCertificate, type Me, type Revocation } from "@/lib/api";
+import { isOwner } from "@/lib/managed-certificate";
 
 const when = (iso: string) => new Date(iso).toLocaleString();
 
-/** Archives a Managed Certificate, for those who may (Organization Administrators, not its Owners), after asking once more. */
-export function Archive({ org, m, onChanged }: { org: Me["organizations"][number]; m: ManagedCertificate; onChanged: () => void }) {
+/** The "⋯" menu of a Managed Certificate's page, holding Archive for those who may (Organization Administrators, not its Owners), which asks again first. */
+export function ArchiveMenu({ org, m, onChanged }: { org: Me["organizations"][number]; m: ManagedCertificate; onChanged: () => void }) {
   const [confirming, setConfirming] = useState(false);
-  const archive = useMutation({ mutationFn: () => api.archive(org.id, m.id), onSuccess: onChanged });
+  const archive = useMutation({
+    mutationFn: () => api.archive(org.id, m.id),
+    onSuccess: () => {
+      setConfirming(false);
+      onChanged();
+    },
+  });
 
-  if (m.archivedAt) return <span className="text-muted-foreground">Archived {when(m.archivedAt)}: it no longer renews, and its Certificates stay valid until they end or are revoked</span>;
-  if (!can(org, "managedCertificate", "archive")) return null;
+  if (m.archivedAt || !can(org, "managedCertificate", "archive")) return null;
   return (
-    <div className="flex flex-col gap-1">
-      {confirming ? (
-        <span className="flex flex-wrap items-center gap-2">
-          <span>Archive it? It stops renewing and deploying, and is kept. Nothing is revoked.</span>
-          <Button size="sm" variant="outline" disabled={archive.isPending} onClick={() => archive.mutate()}>
-            Archive {m.names.join(", ")}
+    <>
+      <DropdownMenu>
+        <DropdownMenuTrigger asChild>
+          <Button variant="outline" size="icon" aria-label="More actions">
+            <EllipsisIcon />
           </Button>
-          <Button size="sm" variant="link" onClick={() => setConfirming(false)}>
-            Cancel
-          </Button>
-        </span>
-      ) : (
-        <span>
-          <Button variant="link" size="sm" className="h-auto p-0" onClick={() => setConfirming(true)}>
+        </DropdownMenuTrigger>
+        <DropdownMenuContent align="end">
+          <DropdownMenuItem
+            onSelect={() => {
+              archive.reset();
+              setConfirming(true);
+            }}
+          >
+            <ArchiveIcon />
             Archive
-          </Button>
-        </span>
-      )}
-      {archive.error && <span className="text-destructive">{archive.error.message}</span>}
-    </div>
+          </DropdownMenuItem>
+        </DropdownMenuContent>
+      </DropdownMenu>
+      <ConfirmDialog
+        open={confirming}
+        onOpenChange={setConfirming}
+        title={`Archive ${m.names.join(", ")}?`}
+        description="It stops issuing, renewing and deploying, and is kept with its Certificates and history. Nothing is revoked."
+        confirmLabel="Archive"
+        pending={archive.isPending}
+        error={archive.error}
+        onConfirm={() => archive.mutate()}
+      />
+    </>
   );
 }
 
@@ -43,7 +62,7 @@ export function Archive({ org, m, onChanged }: { org: Me["organizations"][number
  */
 export function Revoke({ org, m, userId, onChanged }: { org: Me["organizations"][number]; m: ManagedCertificate; userId?: string; onChanged: () => void }) {
   // The server decides; this only keeps the control from those who surely may not (a Team's members may, too).
-  const owns = m.owners.some((o) => o.type === "user" && o.id === userId);
+  const owns = isOwner(m, userId);
   const [open, setOpen] = useState(false);
   const [certificateId, setCertificateId] = useState("");
   const [reason, setReason] = useState("");

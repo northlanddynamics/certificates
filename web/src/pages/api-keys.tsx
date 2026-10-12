@@ -1,5 +1,5 @@
 import { useMutation, useQuery, useQueryClient } from "@tanstack/react-query";
-import { Link, useParams } from "@tanstack/react-router";
+import { useParams } from "@tanstack/react-router";
 import { useState, type FormEvent } from "react";
 import { Button } from "@/components/ui/button";
 import { Card, CardContent, CardHeader, CardTitle } from "@/components/ui/card";
@@ -13,7 +13,7 @@ import { api, can, type ApiKey } from "@/lib/api";
  * Organization's, which belong to it and outlive whoever made them. So far a key downloads Certificates.
  */
 export function ApiKeysPage() {
-  const { orgId } = useParams({ from: "/organizations/$orgId/api-keys" });
+  const { orgId } = useParams({ from: "/app/organizations/$orgId/api-keys" });
   const queryClient = useQueryClient();
   const keys = useQuery({ queryKey: ["api-keys", orgId], queryFn: () => api.apiKeys(orgId) });
   const org = useQuery({ queryKey: ["me"], queryFn: api.me, select: (me) => me.organizations.find((o) => o.id === orgId) }).data;
@@ -37,9 +37,6 @@ export function ApiKeysPage() {
 
   return (
     <div className="flex flex-col gap-6">
-      <Link to="/" className="text-sm underline">
-        Back
-      </Link>
       <Card>
         <CardHeader>
           <CardTitle>API keys</CardTitle>

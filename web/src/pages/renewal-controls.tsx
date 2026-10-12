@@ -1,4 +1,5 @@
 import { useMutation } from "@tanstack/react-query";
+import { RefreshCwIcon } from "lucide-react";
 import { useState, type FormEvent } from "react";
 import { Button } from "@/components/ui/button";
 import { Input } from "@/components/ui/input";
@@ -6,6 +7,7 @@ import { Label } from "@/components/ui/label";
 import { Select, SelectContent, SelectItem, SelectTrigger, SelectValue } from "@/components/ui/select";
 import { Textarea } from "@/components/ui/textarea";
 import { api, can, type ManagedCertificate, type Me, type RenewalPolicy } from "@/lib/api";
+import { isOwner } from "@/lib/managed-certificate";
 
 const when = (iso: string) => new Date(iso).toLocaleString();
 
@@ -20,12 +22,28 @@ function summary(m: ManagedCertificate) {
   return `Renews automatically ${why}, from ${when(failing?.nextAttemptAt ?? dueAt)}`;
 }
 
-/** A Managed Certificate's Renewal: its policy, how it is going, and for those who may, the means to change the policy, renew now and upload a new CSR. */
+/** Starts a Renewal at once, for those who may: an Owner or an Organization Administrator, of one that has a Certificate and is approved and not archived. */
+export function RenewNowButton({ org, m, userId, onChanged }: { org: Me["organizations"][number]; m: ManagedCertificate; userId?: string; onChanged: () => void }) {
+  // The server decides; this only keeps the button from those who surely may not (a Team's members may, too).
+  const owns = isOwner(m, userId);
+  const renew = useMutation({ mutationFn: () => api.renewNow(org.id, m.id), onSuccess: onChanged });
+  if (m.archivedAt || !m.currentCertificate || m.approval.status === "pending" || m.approval.status === "rejected" || !(can(org, "managedCertificate", "renew") || owns)) return null;
+  return (
+    <>
+      <Button disabled={renew.isPending || m.issuance?.status === "running"} onClick={() => renew.mutate()}>
+        <RefreshCwIcon />
+        Renew now
+      </Button>
+      {renew.error && <span className="text-sm text-destructive">{renew.error.message}</span>}
+    </>
+  );
+}
+
+/** A Managed Certificate's Renewal: its policy, how it is going, and for those who may, the means to change the policy and upload a new CSR. */
 export function Renewal({ org, m, userId, onChanged }: { org: Me["organizations"][number]; m: ManagedCertificate; userId?: string; onChanged: () => void }) {
   // The server decides; this only keeps the controls from those who surely may not (a Team's members may, too).
-  const owns = m.owners.some((o) => o.type === "user" && o.id === userId);
+  const owns = isOwner(m, userId);
   const mayPolicy = can(org, "managedCertificate", "setRenewalPolicy") || owns;
-  const mayRenew = can(org, "managedCertificate", "renew") || owns;
   const mayCsr = can(org, "managedCertificate", "replaceCsr") || owns;
   const settled = m.approval.status !== "pending" && m.approval.status !== "rejected";
 
@@ -33,7 +51,6 @@ export function Renewal({ org, m, userId, onChanged }: { org: Me["organizations"
   const [days, setDays] = useState(String(m.renewal.policy.daysBeforeExpiry));
   const [csr, setCsr] = useState("");
   const savePolicy = useMutation({ mutationFn: (policy: RenewalPolicy) => api.setRenewalPolicy(org.id, m.id, policy), onSuccess: onChanged });
-  const renew = useMutation({ mutationFn: () => api.renewNow(org.id, m.id), onSuccess: onChanged });
   const upload = useMutation({
     mutationFn: () => api.uploadCsr(org.id, m.id, csr),
     onSuccess: () => {
@@ -41,7 +58,7 @@ export function Renewal({ org, m, userId, onChanged }: { org: Me["organizations"
       onChanged();
     },
   });
-  const error = savePolicy.error ?? renew.error ?? upload.error;
+  const error = savePolicy.error ?? upload.error;
   const label = m.names.join(", ");
   const changed = mode !== m.renewal.policy.mode || Number(days) !== m.renewal.policy.daysBeforeExpiry;
 
@@ -49,17 +66,9 @@ export function Renewal({ org, m, userId, onChanged }: { org: Me["organizations"
   return (
     <div className="flex flex-col gap-1">
       <span className="text-muted-foreground">{summary(m)}</span>
-      {m.renewal.failing && (
-        <span className="text-destructive">
-          Renewal failed {m.renewal.failing.failures} time{m.renewal.failing.failures === 1 ? "" : "s"}: {m.renewal.failing.lastFailure.message}
-          {m.renewal.failing.nextAttemptAt ? `. Next attempt ${when(m.renewal.failing.nextAttemptAt)}` : ""}
-        </span>
-      )}
-      {m.currentCertificate && mayRenew && (
-        <span>
-          <Button variant="link" size="sm" className="h-auto p-0" disabled={renew.isPending || m.issuance?.status === "running"} onClick={() => renew.mutate()}>
-            Renew now
-          </Button>
+      {m.renewal.ari?.window && (
+        <span className="text-muted-foreground">
+          The CA suggests renewing between {when(m.renewal.ari.window.start)} and {when(m.renewal.ari.window.end)}
         </span>
       )}
       {(mayPolicy || mayCsr) && (

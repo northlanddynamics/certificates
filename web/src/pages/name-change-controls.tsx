@@ -4,11 +4,12 @@ import { Button } from "@/components/ui/button";
 import { Label } from "@/components/ui/label";
 import { Textarea } from "@/components/ui/textarea";
 import { api, can, type ManagedCertificate, type Me } from "@/lib/api";
+import { isOwner } from "@/lib/managed-certificate";
 
 /** A Managed Certificate's name change: the one waiting for Approval, and for those who may, the means to make one. */
 export function NameChange({ org, m, userId, onChanged }: { org: Me["organizations"][number]; m: ManagedCertificate; userId?: string; onChanged: () => void }) {
   // The server decides; this only keeps the form from those who surely may not (a Team's members may, too).
-  const owns = m.owners.some((o) => o.type === "user" && o.id === userId);
+  const owns = isOwner(m, userId);
   const direct = can(org, "managedCertificate", "changeNames");
   const mayChange = (direct || can(org, "managedCertificate", "proposeNameChange") || owns) && m.approval.status !== "pending" && m.approval.status !== "rejected";
   const [names, setNames] = useState("");
