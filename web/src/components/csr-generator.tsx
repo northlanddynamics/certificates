@@ -1,5 +1,5 @@
 import { ChevronDownIcon, CopyIcon, DownloadIcon, EyeIcon, EyeOffIcon } from "lucide-react";
-import { useEffect, useState, type FormEvent } from "react";
+import { useEffect, useRef, useState, type FormEvent, type KeyboardEvent } from "react";
 import { Button } from "@/components/ui/button";
 import { Collapsible, CollapsibleContent, CollapsibleTrigger } from "@/components/ui/collapsible";
 import { Field, FieldDescription, FieldError, FieldGroup, FieldLabel } from "@/components/ui/field";
@@ -31,6 +31,11 @@ export interface CsrGeneratorProps {
   keyAlgorithm?: KeyAlgorithm;
   /** Whether a form that has its own names and key algorithm fixes them here, so the CSR cannot be refused for not matching. */
   locked?: boolean;
+  /**
+   * Set by a form that embeds the generator (it sits inside the form's own `<form>`, so it renders no form of its
+   * own). Adds a "Use this CSR" button, disabled until the key has been downloaded or copied, that hands over the CSR.
+   */
+  onUse?: (csrPem: string) => void;
 }
 
 /** A file name for a name, safe for a wildcard: `*.example.com` is `wildcard.example.com`. */
@@ -47,7 +52,8 @@ function download(filename: string, text: string) {
  * Makes a key and a CSR in the browser; the key is never sent anywhere, and only the CSR is ever submitted. It stands
  * alone on the Tools page, and a form that takes a CSR can embed it with its own names and key algorithm locked.
  */
-export function CsrGenerator({ names: givenNames, keyAlgorithm: givenKeyAlgorithm, locked = false }: CsrGeneratorProps) {
+export function CsrGenerator({ names: givenNames, keyAlgorithm: givenKeyAlgorithm, locked = false, onUse }: CsrGeneratorProps) {
+  const embedded = onUse !== undefined;
   const [typedNames, setTypedNames] = useState((givenNames ?? []).join("\n"));
   const names = locked ? (givenNames ?? []) : splitNames(typedNames);
   const [chosenKeyAlgorithm, setChosenKeyAlgorithm] = useState<KeyAlgorithm>(givenKeyAlgorithm ?? DEFAULT_KEY_ALGORITHM);
@@ -65,7 +71,8 @@ export function CsrGenerator({ names: givenNames, keyAlgorithm: givenKeyAlgorith
   const [working, setWorking] = useState(false);
 
   const problems = nameProblems(names);
-  const shownProblems = !locked && typedNames.trim() === "" ? [] : problems;
+  // Nothing is said about names not yet typed, here or in the form that owns them.
+  const shownProblems = names.length === 0 ? [] : problems;
   const distinct = problems.length === 0 ? normalizedNames(names) : [];
   // The CN is one of the names that fit in a CN, or none; it is the first name until the user says otherwise.
   const commonNames = distinct.filter((n) => n.length <= MAX_COMMON_NAME_LENGTH);
@@ -75,6 +82,14 @@ export function CsrGenerator({ names: givenNames, keyAlgorithm: givenKeyAlgorith
   const countryProblem = subject.country !== "" && !/^[A-Za-z]{2}$/.test(subject.country.trim()) ? "Country is exactly two letters, such as US." : null;
   const note = hashNote(keyAlgorithm, hash);
 
+  // A CSR made for names and a key algorithm that have since changed is no use to the form that locked them.
+  const lockedInputs = locked ? `${names.join("\n")}|${keyAlgorithm}` : "";
+  useEffect(() => {
+    setResult(null);
+  }, [lockedInputs]);
+  const currentInputs = useRef(lockedInputs);
+  currentInputs.current = lockedInputs;
+
   // A key that has not been downloaded or copied exists nowhere else.
   useEffect(() => {
     if (!result || keySaved) return;
@@ -83,10 +98,11 @@ export function CsrGenerator({ names: givenNames, keyAlgorithm: givenKeyAlgorith
     return () => window.removeEventListener("beforeunload", warn);
   }, [result, keySaved]);
 
-  async function generate(e: FormEvent) {
-    e.preventDefault();
+  async function generate(e?: FormEvent) {
+    e?.preventDefault();
     setError(null);
     setWorking(true);
+    const madeFor = lockedInputs;
     try {
       const made = await generateCsr({
         keyAlgorithm,
@@ -95,6 +111,8 @@ export function CsrGenerator({ names: givenNames, keyAlgorithm: givenKeyAlgorith
         commonName,
         subject: { ...subject, country: subject.country.trim().toUpperCase() },
       });
+      // The form changed the names or key algorithm while the key was being made: this CSR is for the old ones.
+      if (currentInputs.current !== madeFor) return;
       setResult({ ...made, fileBase: safeFileBase(distinct[0]) });
       setKeySaved(false);
       setShowKey(false);
@@ -118,9 +136,15 @@ export function CsrGenerator({ names: givenNames, keyAlgorithm: givenKeyAlgorith
 
   const setSubjectField = (field: keyof typeof subject) => (e: { target: { value: string } }) => setSubject({ ...subject, [field]: e.target.value });
 
+  // Inside another form, Enter must not submit that form, and there can be no form of our own.
+  const Shell = embedded ? "div" : "form";
+  const shellProps = embedded
+    ? { onKeyDown: (e: KeyboardEvent) => e.key === "Enter" && (e.target as HTMLElement).tagName === "INPUT" && e.preventDefault() }
+    : { onSubmit: generate };
+
   return (
     <div className="flex flex-col gap-6">
-      <form onSubmit={generate}>
+      <Shell {...shellProps}>
         <FieldGroup>
           <Field data-invalid={shownProblems.length > 0}>
             <FieldLabel htmlFor="csr-names">Names</FieldLabel>
@@ -243,12 +267,12 @@ export function CsrGenerator({ names: givenNames, keyAlgorithm: givenKeyAlgorith
           {error && <FieldError>{error}</FieldError>}
           {countryProblem && <FieldError>{countryProblem}</FieldError>}
           <div>
-            <Button type="submit" disabled={working || problems.length > 0 || !!countryProblem}>
+            <Button type={embedded ? "button" : "submit"} onClick={embedded ? () => generate() : undefined} disabled={working || problems.length > 0 || !!countryProblem}>
               {working ? "Generating…" : result ? "Generate a new key and CSR" : "Generate key and CSR"}
             </Button>
           </div>
         </FieldGroup>
-      </form>
+      </Shell>
 
       {result && (
         <div className="flex flex-col gap-6" aria-live="polite">
@@ -295,7 +319,13 @@ export function CsrGenerator({ names: givenNames, keyAlgorithm: givenKeyAlgorith
                 <CopyIcon />
                 {copied === "csr" ? "Copied" : "Copy CSR"}
               </Button>
+              {onUse && (
+                <Button type="button" size="sm" disabled={!keySaved} onClick={() => onUse(result.csrPem)}>
+                  Use this CSR
+                </Button>
+              )}
             </div>
+            {onUse && !keySaved && <p className="text-sm text-muted-foreground">Download or copy the key first; it cannot be recovered once this is closed.</p>}
           </section>
         </div>
       )}

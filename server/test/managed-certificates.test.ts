@@ -5,6 +5,7 @@ import { afterAll, beforeAll, beforeEach, describe, expect, setDefaultTimeout, t
 import { Pkcs10CertificateRequest } from "@peculiar/x509";
 import acme from "acme-client";
 import { X509Certificate, createHash, randomBytes } from "node:crypto";
+import { generateCsr } from "../../web/src/lib/csr-generator";
 import { BIND, PASSWORD, createHarness, type Harness } from "./harness";
 
 setDefaultTimeout(60_000);
@@ -173,6 +174,18 @@ describe("key algorithms and names", () => {
     expect(issued.names).toEqual([`*.${name}`, name]);
     expect(issued.currentCertificate.names.sort()).toEqual([`*.${name}`, name].sort());
     expect(await h.bindTxt.lookupTxt(`_acme-challenge.${name}`)).toEqual([]);
+  });
+
+  test("a CSR made by the CSR Generator in the new Managed Certificate dialog is accepted, wildcard and base name together, and issued", async () => {
+    await readyToIssue();
+    const name = host();
+    // What the dialog sends: the names as typed, the form's key algorithm, and the generator's CSR for those names (CN: the first).
+    const made = await generateCsr({ keyAlgorithm: "ecdsa-p384", names: [`*.${name}`, name], commonName: `*.${name}` });
+    const created = await admin().create({ names: [`*.${name}`, name], keyAlgorithm: "ecdsa-p384", csr: made.csrPem, environment: "staging", owners: [] });
+    expect(created.status).toBe(201);
+    const issued = await ended(created.body.id);
+    expect(issued.issuance).toMatchObject({ status: "succeeded", failure: null });
+    expect(issued.currentCertificate.names.sort()).toEqual([`*.${name}`, name].sort());
   });
 
   test("names are kept in lower case, without a trailing dot or repeats, and a CSR for them matches whatever the case", async () => {
@@ -362,6 +375,15 @@ describe("Approval", () => {
     expect(await actions()).not.toContain("issuance.started");
     const event = (await auditOf()).find((e) => e.action === "managed_certificate.proposed")!;
     expect(event).toMatchObject({ actor: { email: "member@acme.test" }, target: { type: "managed_certificate", id: proposed.body.id }, detail: { names: [name] } });
+  });
+
+  test("a proposal with a CSR made by the CSR Generator, for a wildcard name, waits for Approval", async () => {
+    await readyToIssue();
+    const name = `*.${host()}`;
+    const made = await generateCsr({ keyAlgorithm: "rsa-2048", names: [name], commonName: null });
+    const proposed = await certs(member, acmeOrg.orgId).create({ names: [name], keyAlgorithm: "rsa-2048", csr: made.csrPem, environment: "staging", owners: [] });
+    expect(proposed.status).toBe(201);
+    expect(proposed.body).toMatchObject({ names: [name], keyAlgorithm: "rsa-2048", approval: { status: "pending" }, issuance: null });
   });
 
   test("a proposal is checked like a creation: the CSR must be for the algorithm and the names", async () => {
