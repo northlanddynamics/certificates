@@ -6,6 +6,7 @@
     "dev:server": "bun --watch server/src/index.ts",
     "dev:web": "bun run --cwd web dev",
     "migrate": "bun server/src/migrate.ts",
+    "contract:export": "bun server/src/agent-contract-export.ts",
     "auth:generate": "bunx --bun auth generate --config server/src/auth-cli.ts --output server/src/db/auth-schema.ts -y",
     "db:generate": "bunx --bun drizzle-kit generate",
     "typecheck": "tsc --noEmit -p server/tsconfig.json && tsc --noEmit -p web/tsconfig.json",

@@ -94,7 +94,7 @@ export interface Harness {
   createOperator(email: string, password: string): Promise<string>;
   api(
     path: string,
-    opts?: { method?: string; body?: unknown; cookie?: string },
+    opts?: { method?: string; body?: unknown; cookie?: string; headers?: Record<string, string> },
   ): Promise<{ status: number; body: any; cookie: string }>;
   /** Operator creates an Organization; its first administrator accepts the invitation and signs in. */
   createOrgWithAdmin(operatorCookie: string, slug: string, adminEmail: string): Promise<OrgAdmin>;
@@ -245,6 +245,7 @@ export async function createHarness(): Promise<Harness> {
           "content-type": "application/json",
           origin: BASE,
           ...(opts.cookie ? { cookie: opts.cookie } : {}),
+          ...opts.headers,
         },
         body: opts.body ? JSON.stringify(opts.body) : undefined,
       });

@@ -173,6 +173,20 @@ export interface Certificate {
   issuedAt: string;
   revocation: Revocation | null;
 }
+/** An Agent as the Agents list shows it. */
+export interface Agent {
+  id: string;
+  hostName: string;
+  os: "linux" | "windows";
+  arch: "amd64" | "arm64";
+  version: string;
+  /** Older than the latest version the platform knows of. */
+  outdated: boolean;
+  status: "online" | "offline" | "revoked";
+  registeredAt: string;
+  lastContactAt: string;
+  revokedAt: string | null;
+}
 export interface ApiKey {
   id: string;
   /** A user's key is its person's; an Organization's belongs to the Organization and outlives whoever made it. */
@@ -253,6 +267,10 @@ export const api = {
   createApiKey: (orgId: string, body: { name: string; type: ApiKey["type"]; expiresInDays?: number }) =>
     call<ApiKey & { key: string }>(`/api/organizations/${orgId}/api-keys`, { body }),
   revokeApiKey: (orgId: string, keyId: string) => call(`/api/organizations/${orgId}/api-keys/${keyId}`, { method: "DELETE" }),
+  agents: (orgId: string) => call<{ items: Agent[]; latestVersion: string }>(`/api/organizations/${orgId}/agents`),
+  createAgentRegistrationToken: (orgId: string) =>
+    call<{ token: string; expiresAt: string }>(`/api/organizations/${orgId}/agent-registration-tokens`, { method: "POST", body: {} }),
+  revokeAgent: (orgId: string, agentId: string) => call<Agent>(`/api/organizations/${orgId}/agents/${agentId}/revoke`, { method: "POST", body: {} }),
   platformOrganizations: () => call<{ items: { id: string; name: string; slug: string }[] }>("/api/platform/organizations"),
   createOrganization: (body: { name: string; slug: string; adminEmail: string }) =>
     call<{ id: string; invitationId: string }>("/api/platform/organizations", { body }),

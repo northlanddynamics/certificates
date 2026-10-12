@@ -4,6 +4,9 @@ import { and, asc, eq } from "drizzle-orm";
 import type { Context } from "hono";
 import type { Pool } from "pg";
 import { registerAcmeAccounts } from "./acme-accounts";
+import { DEFAULT_AGENT_GATEWAY, registerAgentGateway, type AgentGatewayConfig } from "./agent-gateway";
+import { createAgentIdentityCa } from "./agent-identity-ca";
+import { registerAgents } from "./agents";
 import { registerApiKeys } from "./api-keys";
 import { PLATFORM_OPERATOR_ROLE, createAuth } from "./auth";
 import { registerCertificateExport } from "./certificate-export";
@@ -55,6 +58,8 @@ export interface AppDeps {
   certificateAuthority: CertificateAuthority;
   /** How DCV checks that a challenge record is visible; the host's DNS resolvers, waiting up to two minutes, unless given. */
   dcv?: Partial<DcvConfig>;
+  /** How the Agent protocol is run: see `AgentGatewayConfig` for what each setting is and its default. */
+  agentGateway?: Partial<AgentGatewayConfig>;
   /** See `OrganizationChangesDeps.memberRemovalHooks`. */
   memberRemovalHooks?: MemberRemovalHook[];
 }
@@ -255,6 +260,9 @@ export function createApp(deps: AppDeps) {
   registerArchiveRoutes({ app, requireUser, authorize, unitOfWork, reader });
   registerRevocationRoutes({ app, db, requireUser, unitOfWork, reader, secrets, certificateAuthority: deps.certificateAuthority });
   registerHistory({ app, db, requireUser, reader });
+  const agentGateway = { ...DEFAULT_AGENT_GATEWAY, ...deps.agentGateway };
+  registerAgents({ app, db, requireUser, authorize, unitOfWork, clock, config: agentGateway });
+  registerAgentGateway({ app, db, unitOfWork, identityCa: createAgentIdentityCa({ db, kms: deps.kms, clock }), clock, config: agentGateway });
 
   app.doc("/api/openapi.json", {
     openapi: "3.1.0",

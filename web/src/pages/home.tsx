@@ -63,6 +63,11 @@ function Inventory({ org }: { org: Me["organizations"][number] }) {
             <Link to="/organizations/$orgId/api-keys" params={{ orgId: org.id }} className="underline">
               API keys
             </Link>
+            {can(org, "agent", "read") && (
+              <Link to="/organizations/$orgId/agents" params={{ orgId: org.id }} className="underline">
+                Agents
+              </Link>
+            )}
             {can(org, "invitation", "create") && (
               <Link to="/organizations/$orgId/people" params={{ orgId: org.id }} className="underline">
                 People and Teams

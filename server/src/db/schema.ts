@@ -5,6 +5,7 @@ import type { DcvMethod, DcvScope } from "../dcv-plan";
 import type { DnsProviderType } from "../dns-provider-kinds";
 import type { IssuanceFailureCode } from "../issuance-failure";
 import type { KeyAlgorithm, KeyCustody } from "../csr";
+import type { AgentArch, AgentOs } from "../agent-kinds";
 import type { ApprovalStatus } from "../approval";
 import type { NameChangeStatus } from "../name-change";
 import type { RenewalMode } from "../renewal";
@@ -387,4 +388,80 @@ export const certificateRevocation = pgTable(
     index("certificate_revocation_org_idx").on(t.organizationId),
     check("certificate_revocation_reason", sql`${t.reason} in ('unspecified', 'keyCompromise', 'superseded', 'cessationOfOperation')`),
   ],
+);
+
+/**
+ * The platform's own CA for Agent identity (not a Private CA: it issues nothing but the mTLS certificates by which
+ * Agents authenticate). One row for the whole platform, made the first time it is needed; its key is wrapped by the KMS.
+ */
+export const agentIdentityCa = pgTable(
+  "agent_identity_ca",
+  {
+    id: integer("id").primaryKey().default(1),
+    certificatePem: text("certificate_pem").notNull(),
+    wrappedKey: bytea("wrapped_key").notNull(),
+    createdAt: timestamp("created_at", { withTimezone: true }).notNull().defaultNow(),
+  },
+  (t) => [check("agent_identity_ca_singleton", sql`${t.id} = 1`)],
+);
+
+/**
+ * Software an Organization installed inside its network, bound to the Organization by Agent Registration and acting
+ * for the platform there. It authenticates with an identity certificate from the Agent identity CA, of which the
+ * platform recognises only the current one (`identitySerial`) and, until the new one is first used, the one it replaced.
+ * A revoked Agent is kept as a record and authenticates no more.
+ */
+export const agent = pgTable(
+  "agent",
+  {
+    id: uuid("id").primaryKey().defaultRandom(),
+    organizationId: text("organization_id")
+      .notNull()
+      .references(() => organization.id),
+    hostName: text("host_name").notNull(),
+    os: text("os").$type<AgentOs>().notNull(),
+    arch: text("arch").$type<AgentArch>().notNull(),
+    /** What it last reported: at registration, then with every poll. */
+    version: text("version").notNull(),
+    /** Upper-case hex serials of the identity certificate in use and, after a rotation and before the new one is used, the one before. */
+    identitySerial: text("identity_serial").notNull(),
+    previousIdentitySerial: text("previous_identity_serial"),
+    registeredAt: timestamp("registered_at", { withTimezone: true }).notNull(),
+    /** The last time it polled; its registration, until it does. */
+    lastContactAt: timestamp("last_contact_at", { withTimezone: true }).notNull(),
+    revokedAt: timestamp("revoked_at", { withTimezone: true }),
+    revokedById: text("revoked_by_id"),
+    revokedByEmail: text("revoked_by_email"),
+  },
+  (t) => [
+    index("agent_org_idx").on(t.organizationId, t.registeredAt),
+    check("agent_os", sql`${t.os} in ('linux', 'windows')`),
+    check("agent_arch", sql`${t.arch} in ('amd64', 'arm64')`),
+    // Lets other tables reference an Agent together with its Organization, so none can point at another's.
+    unique("agent_id_organization_unique").on(t.id, t.organizationId),
+  ],
+);
+
+/**
+ * The single-use token by which an Organization Administrator lets one Agent register into the Organization. Only its
+ * hash is kept; the token itself is shown once when it is made. It is used up by the Agent Registration that spends it.
+ */
+export const agentRegistrationToken = pgTable(
+  "agent_registration_token",
+  {
+    id: uuid("id").primaryKey().defaultRandom(),
+    organizationId: text("organization_id")
+      .notNull()
+      .references(() => organization.id),
+    /** SHA-256 of the token, lower-case hex. */
+    tokenHash: text("token_hash").notNull().unique(),
+    createdById: text("created_by_id").notNull(),
+    createdByEmail: text("created_by_email").notNull(),
+    createdAt: timestamp("created_at", { withTimezone: true }).notNull(),
+    expiresAt: timestamp("expires_at", { withTimezone: true }).notNull(),
+    usedAt: timestamp("used_at", { withTimezone: true }),
+    /** The Agent that registered with it. */
+    agentId: uuid("agent_id"),
+  },
+  (t) => [foreignKey({ columns: [t.agentId, t.organizationId], foreignColumns: [agent.id, agent.organizationId] })],
 );

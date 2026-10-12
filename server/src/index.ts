@@ -22,6 +22,7 @@ const { app, auth, db, issuances, renewals } = createApp({
   secret,
   kms: createLocalKms(localKmsKey),
   certificateAuthority: createLetsEncrypt(),
+  agentGateway: process.env.AGENT_LATEST_VERSION ? { latestVersion: process.env.AGENT_LATEST_VERSION } : undefined,
 });
 await runMigrations(pool);
 await issuances.failInterrupted();

@@ -18,7 +18,15 @@ jobs:
     steps:
       - uses: actions/checkout@v4
       - uses: oven-sh/setup-bun@v2
+      - uses: actions/setup-go@v5
+        with:
+          go-version-file: agent/go.mod
+          cache-dependency-path: agent/go.sum
       - run: bun install --frozen-lockfile
+      - name: The Agent's copy of the protocol contract is up to date
+        run: |
+          bun run contract:export
+          git diff --exit-code -- agent/contract
       - name: Generated schema and migrations are up to date
         run: |
           bun run auth:generate
@@ -39,3 +47,9 @@ jobs:
       - run: bun run typecheck
       - run: bun run test
       - run: bun run build:web
+      - name: Agent (Seam B, against a stub platform built from the contract)
+        working-directory: agent
+        run: |
+          go vet ./...
+          go test -race ./...
+          for target in linux/amd64 linux/arm64 windows/amd64 windows/arm64; do GOOS=${target%/*} GOARCH=${target#*/} go build -o /dev/null ./cmd/agent; done

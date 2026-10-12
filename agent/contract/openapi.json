@@ -1,0 +1,390 @@
+{
+  "openapi": "3.1.0",
+  "info": {
+    "title": "Certificate Platform Agent protocol",
+    "version": "0.1.0"
+  },
+  "components": {
+    "securitySchemes": {
+      "agentIdentity": {
+        "type": "mutualTLS",
+        "description": "The Agent's identity certificate, from Agent Registration or its latest rotation."
+      }
+    },
+    "schemas": {},
+    "parameters": {}
+  },
+  "paths": {
+    "/api/agent/identity-ca": {
+      "get": {
+        "tags": [
+          "Agent protocol"
+        ],
+        "summary": "The Agent identity CA's certificate",
+        "description": "What a TLS terminator in front of the platform verifies Agents' client certificates against. Public.",
+        "responses": {
+          "200": {
+            "description": "OK",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "type": "object",
+                  "properties": {
+                    "certificate": {
+                      "type": "string",
+                      "description": "PEM."
+                    }
+                  },
+                  "required": [
+                    "certificate"
+                  ]
+                }
+              }
+            }
+          }
+        }
+      }
+    },
+    "/api/agent/registration": {
+      "post": {
+        "tags": [
+          "Agent protocol"
+        ],
+        "summary": "Agent Registration: bind a newly installed Agent to an Organization with a single-use token",
+        "description": "The token is the one an Organization Administrator made for the Organization; it is used up by this call, and used or expired ones are refused. The Agent generates an ECDSA P-256 key, keeps it, and sends only a CSR for it (ADR 0002); the response is its identity certificate, which it presents from then on.",
+        "requestBody": {
+          "content": {
+            "application/json": {
+              "schema": {
+                "type": "object",
+                "properties": {
+                  "token": {
+                    "type": "string",
+                    "minLength": 1,
+                    "maxLength": 200
+                  },
+                  "csr": {
+                    "type": "string",
+                    "minLength": 1,
+                    "description": "PEM, for the Agent's new identity key."
+                  },
+                  "hostName": {
+                    "type": "string",
+                    "minLength": 1,
+                    "maxLength": 255
+                  },
+                  "os": {
+                    "type": "string",
+                    "enum": [
+                      "linux",
+                      "windows"
+                    ]
+                  },
+                  "arch": {
+                    "type": "string",
+                    "enum": [
+                      "amd64",
+                      "arm64"
+                    ]
+                  },
+                  "version": {
+                    "type": "string",
+                    "minLength": 1,
+                    "maxLength": 64
+                  }
+                },
+                "required": [
+                  "token",
+                  "csr",
+                  "hostName",
+                  "os",
+                  "arch",
+                  "version"
+                ]
+              }
+            }
+          }
+        },
+        "responses": {
+          "201": {
+            "description": "Registered",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "type": "object",
+                  "properties": {
+                    "certificate": {
+                      "type": "string",
+                      "description": "The Agent's identity certificate, PEM."
+                    },
+                    "notAfter": {
+                      "type": "string",
+                      "description": "When it ends. The Agent rotates it once a third of its life is left."
+                    },
+                    "agentId": {
+                      "type": "string"
+                    },
+                    "pollIntervalSeconds": {
+                      "type": "integer"
+                    }
+                  },
+                  "required": [
+                    "certificate",
+                    "notAfter",
+                    "agentId",
+                    "pollIntervalSeconds"
+                  ]
+                }
+              }
+            }
+          },
+          "400": {
+            "description": "Error",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "type": "object",
+                  "properties": {
+                    "error": {
+                      "type": "string"
+                    }
+                  },
+                  "required": [
+                    "error"
+                  ]
+                }
+              }
+            }
+          },
+          "401": {
+            "description": "Error",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "type": "object",
+                  "properties": {
+                    "error": {
+                      "type": "string"
+                    }
+                  },
+                  "required": [
+                    "error"
+                  ]
+                }
+              }
+            }
+          }
+        }
+      }
+    },
+    "/api/agent/poll": {
+      "post": {
+        "tags": [
+          "Agent protocol"
+        ],
+        "summary": "Heartbeat: report the version and receive work items",
+        "description": "An Agent calls this every `pollAfterSeconds`. Each call is its contact with the platform: it is how its last contact, its version and so its online status are known.",
+        "security": [
+          {
+            "agentIdentity": []
+          }
+        ],
+        "requestBody": {
+          "content": {
+            "application/json": {
+              "schema": {
+                "type": "object",
+                "properties": {
+                  "version": {
+                    "type": "string",
+                    "minLength": 1,
+                    "maxLength": 64
+                  }
+                },
+                "required": [
+                  "version"
+                ]
+              }
+            }
+          }
+        },
+        "responses": {
+          "200": {
+            "description": "OK",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "type": "object",
+                  "properties": {
+                    "items": {
+                      "type": "array",
+                      "items": {
+                        "type": "object",
+                        "properties": {
+                          "id": {
+                            "type": "string"
+                          },
+                          "type": {
+                            "type": "string",
+                            "description": "What the Agent is asked to do. None exist yet: later tickets add them, and an Agent ignores a type it does not know."
+                          },
+                          "payload": {
+                            "type": "object",
+                            "additionalProperties": {}
+                          }
+                        },
+                        "required": [
+                          "id",
+                          "type",
+                          "payload"
+                        ]
+                      }
+                    },
+                    "pollAfterSeconds": {
+                      "type": "integer"
+                    }
+                  },
+                  "required": [
+                    "items",
+                    "pollAfterSeconds"
+                  ]
+                }
+              }
+            }
+          },
+          "400": {
+            "description": "Error",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "type": "object",
+                  "properties": {
+                    "error": {
+                      "type": "string"
+                    }
+                  },
+                  "required": [
+                    "error"
+                  ]
+                }
+              }
+            }
+          },
+          "401": {
+            "description": "Error",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "type": "object",
+                  "properties": {
+                    "error": {
+                      "type": "string"
+                    }
+                  },
+                  "required": [
+                    "error"
+                  ]
+                }
+              }
+            }
+          }
+        }
+      }
+    },
+    "/api/agent/identity": {
+      "post": {
+        "tags": [
+          "Agent protocol"
+        ],
+        "summary": "Rotate the Agent's identity certificate",
+        "description": "The Agent sends a CSR for a new key it generated and receives a new certificate, which replaces the one it presented. That one stays accepted until the new one is first used, so an Agent that never received the response can try again.",
+        "security": [
+          {
+            "agentIdentity": []
+          }
+        ],
+        "requestBody": {
+          "content": {
+            "application/json": {
+              "schema": {
+                "type": "object",
+                "properties": {
+                  "csr": {
+                    "type": "string",
+                    "minLength": 1
+                  }
+                },
+                "required": [
+                  "csr"
+                ]
+              }
+            }
+          }
+        },
+        "responses": {
+          "200": {
+            "description": "OK",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "type": "object",
+                  "properties": {
+                    "certificate": {
+                      "type": "string",
+                      "description": "The Agent's identity certificate, PEM."
+                    },
+                    "notAfter": {
+                      "type": "string",
+                      "description": "When it ends. The Agent rotates it once a third of its life is left."
+                    }
+                  },
+                  "required": [
+                    "certificate",
+                    "notAfter"
+                  ]
+                }
+              }
+            }
+          },
+          "400": {
+            "description": "Error",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "type": "object",
+                  "properties": {
+                    "error": {
+                      "type": "string"
+                    }
+                  },
+                  "required": [
+                    "error"
+                  ]
+                }
+              }
+            }
+          },
+          "401": {
+            "description": "Error",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "type": "object",
+                  "properties": {
+                    "error": {
+                      "type": "string"
+                    }
+                  },
+                  "required": [
+                    "error"
+                  ]
+                }
+              }
+            }
+          }
+        }
+      }
+    }
+  },
+  "webhooks": {}
+}

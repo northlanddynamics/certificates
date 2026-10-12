@@ -18,6 +18,17 @@ bun run dev:web                    # UI on :5173 (the web/ workspace), proxies /
 
 Invitation emails are printed to the server console in development.
 
+## The Agent
+
+`agent/` is the Go Agent, a separate module (`cd agent && go test ./...`). It only connects outbound over HTTPS, registers once with a single-use token that an Organization Administrator makes on the Agents page, and then polls the platform, authenticating with an identity certificate that it rotates before it ends.
+
+```bash
+agent register --platform https://certs.example.com --token agt_...   # or AGENT_REGISTRATION_TOKEN; once
+agent run                                                             # as a service; state in /var/lib/certificate-agent or %ProgramData%\CertificateAgent
+```
+
+The Agent's protocol is the routes under `/api/agent`. Their OpenAPI contract is generated from the route schemas into `agent/contract/openapi.json` (`bun run contract:export`); a platform test fails while that copy is stale. Seam B runs the Agent against `agent/internal/platformstub`, a stub platform built from that contract, over real mutual TLS, with a clock the tests move; it holds both sides to the contract. The platform must run behind a TLS terminator that verifies Agents' client certificates and passes them in a header: see ADR 0005. `AGENT_LATEST_VERSION` sets the Agent version below which the Agents list flags an Agent as outdated.
+
 ## Database schema
 
 Drizzle ORM is the data layer; Better Auth uses it through its Drizzle adapter.
@@ -31,6 +42,7 @@ Drizzle ORM is the data layer; Better Auth uses it through its Drizzle adapter.
 ```bash
 bun run typecheck
 bun run test          # Seam A: the Hono app in-process against the real Postgres (TEST_DATABASE_URL overrides the default), Pebble and BIND
+(cd agent && go vet ./... && go test ./...)   # Seam B: the Agent against a stub platform built from the contract
 ```
 
 Pebble, Let's Encrypt's ACME test server, stands in for the CA (`docker compose up -d pebble`; `PEBBLE_DIRECTORY` overrides `https://localhost:14000/dir`). The tests trust its root, `server/test/pebble/minica.pem`. Pebble checks DNS-01 challenges against BIND (`-dnsserver bind:53` in `docker-compose.yml`), so issuing in the tests runs the real path: the platform publishes the challenge record through an RFC 2136 DNS Provider, and the CA reads it back from the same server.

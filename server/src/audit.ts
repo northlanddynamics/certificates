@@ -46,6 +46,10 @@ export type AuditAction =
   | "api_key.created"
   | "api_key.revoked"
   | "api_key.used"
+  | "agent_registration_token.created"
+  | "agent.registered"
+  | "agent.identity_rotated"
+  | "agent.revoked"
   | "issuance.started"
   | "issuance.succeeded"
   | "issuance.failed";
