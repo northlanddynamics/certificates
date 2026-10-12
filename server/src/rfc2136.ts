@@ -5,17 +5,10 @@
 import { z } from "@hono/zod-openapi";
 import { createHmac, randomBytes, timingSafeEqual } from "node:crypto";
 import { connect, isIP } from "node:net";
-import { DnsProviderError, type DnsProvider, type DnsProviderKind, type TxtRecord } from "./dns-provider";
+import { DnsProviderError, domainName, nameInZone, testByThrowawayRecord, type DnsProvider, type DnsProviderKind, type TxtRecord } from "./dns-provider";
 
 export const TSIG_ALGORITHMS = ["hmac-sha256", "hmac-sha384", "hmac-sha512", "hmac-sha1", "hmac-md5"] as const;
 type TsigAlgorithm = (typeof TSIG_ALGORITHMS)[number];
-
-const DOMAIN_NAME = /^(?=.{1,253}$)[a-z0-9_]([a-z0-9_-]{0,61}[a-z0-9_])?(\.[a-z0-9_]([a-z0-9_-]{0,61}[a-z0-9_])?)*$/;
-/** A domain name as the platform keeps it: lower case, no trailing dot. */
-const domainName = z
-  .string()
-  .transform((name) => name.toLowerCase().replace(/\.$/, ""))
-  .refine((name) => DOMAIN_NAME.test(name), "not a domain name");
 
 export const Rfc2136Settings = z.object({
   server: domainName.or(z.string().refine((s) => isIP(s) !== 0, "not a host name or IP address")).openapi({ description: "Host name or IP address of the DNS server." }),
@@ -285,12 +278,7 @@ export function createRfc2136(settings: Rfc2136Settings, secret: string, { timeo
     }
   }
 
-  /** The record's name as kept here, which must be the zone or inside it. */
-  function nameIn(record: TxtRecord) {
-    const name = record.name.toLowerCase().replace(/\.$/, "");
-    if (name !== zone && !name.endsWith(`.${zone}`)) throw rejected(`${name} is not inside the zone ${zone}`);
-    return name;
-  }
+  const nameIn = (record: TxtRecord) => nameInZone(zone, record);
 
   const present = async (record: TxtRecord) => send(resourceRecord(nameIn(record), TYPE_TXT, CLASS_IN, TXT_TTL, txtRdata(record.value)));
   // Class NONE deletes exactly this record from the name's set, which is what lets several challenges share a name.
@@ -299,15 +287,7 @@ export function createRfc2136(settings: Rfc2136Settings, secret: string, { timeo
   return {
     presentTxt: present,
     cleanUpTxt: cleanUp,
-    async testConnection() {
-      // Where a challenge for the zone's own name goes, which any policy that lets this key do its job allows.
-      const record = { name: `_acme-challenge.${zone}`, value: `certificate-platform-connection-test-${randomBytes(8).toString("hex")}` };
-      await present(record);
-      await cleanUp(record).catch((err) => {
-        if (!(err instanceof DnsProviderError)) throw err;
-        throw new DnsProviderError(err.kind, `the test record was published but not removed (${err.message}); remove the TXT record "${record.value}" at ${record.name} by hand`);
-      });
-    },
+    testConnection: () => testByThrowawayRecord(zone, { presentTxt: present, cleanUpTxt: cleanUp }),
   };
 }
 

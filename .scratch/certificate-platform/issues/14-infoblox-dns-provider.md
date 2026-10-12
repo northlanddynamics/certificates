@@ -4,8 +4,18 @@
 
 **Blocked by:** 04 (RFC 2136 DNS Provider)
 
-**Status:** ready-for-agent
+**Status:** done
 
-- [ ] An Organization Administrator can add an Infoblox DNS Provider with WAPI URL, credentials (write-only) and zone/view settings.
-- [ ] Present, clean up and test-connection work against Infoblox (verified with a WAPI test double at the provider boundary).
-- [ ] Infoblox can be used for Direct DCV and to host a Validation Zone.
+- [x] An Organization Administrator can add an Infoblox DNS Provider with WAPI URL, credentials (write-only) and zone/view settings.
+- [x] Present, clean up and test-connection work against Infoblox (verified with a WAPI test double at the provider boundary).
+- [x] Infoblox can be used for Direct DCV and to host a Validation Zone.
+
+## Comments
+
+Implemented on `main`. Infoblox is a module and an entry (`server/src/infoblox.ts`, `dns-provider-kinds.ts`); the routes, permissions, audit and `DnsProviders.open` are the ones from ticket 04, unchanged.
+
+- A provider is `{ name, type: "infoblox", settings: { url, zone, view ("default"), caCertificate? }, secret }`. `url` is the WAPI's including its version (`https://gm.example.com/wapi/v2.12`); https only, no embedded credentials. The secret is the WAPI user's credentials written `user:password` (HTTP Basic), write-only like every Secret. `caCertificate` (PEM) is for a grid whose certificate is not publicly trusted: certificates are always verified, never skipped; without it the system's roots are used.
+- Present searches `record:txt` by name, text and view first and creates only when absent (TTL 60); clean up deletes exactly the matching record(s), so a name shared by two challenges keeps the other. Both are idempotent. Redirects are not followed (the credentials go with each request), and a reference to delete is followed only if it is a `record:txt` one. 401 is reported as refused credentials, other WAPI errors with the WAPI's own text, an unanswered or untrusted connection as "unreachable".
+- "Test connection" is the one RFC 2136 uses (a throwaway TXT at `_acme-challenge.<zone>`, removed again), now shared as `testByThrowawayRecord` in `dns-provider.ts` along with `nameInZone`.
+- Tests: `server/test/infoblox.test.ts` (the provider against `test/infoblox-double.ts`, an HTTPS WAPI double that checks the credentials, views and zones and answers as NIOS does) and `server/test/infoblox-dns-provider.test.ts` (the API, and real Issuances against Pebble for Direct DCV and for a Validation Zone, the double publishing to BIND where the CA looks). The double is not a real grid: WAPI behaviour beyond what it models (versions, session auth, permissions on zones) is untested.
+- Not built: a grid reached only through an Agent (relayed execution, 16), WAPI session cookies, and DNS views other than the one configured per provider.

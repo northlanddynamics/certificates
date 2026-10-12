@@ -128,7 +128,9 @@ export function registerDnsProviders(ctx: {
       summary: "Connect a DNS Provider",
       description:
         "`settings` and `secret` are those of the `type`. For `rfc2136`: settings `server`, `port` (53), `zone`, `keyName` and " +
-        "`algorithm` (hmac-sha256), and the TSIG key's secret, base64, as `secret`. The secret is write-only: nothing returns it.",
+        "`algorithm` (hmac-sha256), and the TSIG key's secret, base64, as `secret`. For `infoblox`: settings `url` (the WAPI's, with " +
+        "its version: https://gm.example.com/wapi/v2.12), `zone`, `view` (default) and, for a grid whose certificate is not publicly " +
+        "trusted, `caCertificate` (PEM), and the WAPI user's credentials as `secret`, written `user:password`. The secret is write-only: nothing returns it.",
       request: {
         params: OrgParam,
         body: {
