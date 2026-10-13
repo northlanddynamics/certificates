@@ -28,3 +28,15 @@ export const json = <T extends z.ZodType>(schema: T, description = "OK") => ({
   description,
   content: { "application/json": { schema } },
 });
+
+/** The query of a list the server pages: `page` from 1, and how many to a page. The response says `total`, the count in all. */
+const DEFAULT_PAGE_SIZE = 25;
+const MAX_PAGE_SIZE = 100;
+export const PageQuery = z.object({
+  page: z.coerce.number().int().min(1).default(1).meta({ description: "Which page, from 1." }),
+  pageSize: z.coerce.number().int().min(1).max(MAX_PAGE_SIZE).default(DEFAULT_PAGE_SIZE).meta({ description: `How many to a page, up to ${MAX_PAGE_SIZE}.` }),
+});
+export const pageOf = <T extends z.ZodType>(item: T) => z.object({ items: z.array(item), total: z.number().int(), page: z.number().int(), pageSize: z.number().int() });
+
+/** One or more of `values`, comma-separated, for a filter that matches what has any of them. */
+export const anyOf = (values: readonly string[]) => z.string().refine((s) => s.split(",").every((v) => values.includes(v)), `One or more of ${values.join(", ")}, comma-separated.`);

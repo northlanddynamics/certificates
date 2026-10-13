@@ -11,7 +11,7 @@ import { ACME_ENVIRONMENTS } from "./certificate-authority";
 import { KEY_ALGORITHMS } from "./csr";
 import type { Db } from "./db/client";
 import { issuance, managedCertificate } from "./db/schema";
-import { HttpError, OrgParam, errors, json } from "./http";
+import { HttpError, OrgParam, PageQuery, errors, json, pageOf } from "./http";
 import { InventoryQuery, inventoryCondition } from "./inventory-filters";
 import { refusalMessage, type Issuances } from "./issuance";
 import { Certificate, Issuance, ManagedCertificate, ManagedCertificateParams, toCertificate, toIssuance, type ManagedCertificateReader } from "./managed-certificate-reader";
@@ -22,7 +22,6 @@ import { revocationsOf } from "./revocation";
 import type { Actor, UnitOfWork } from "./unit-of-work";
 
 const MAX_OWNERS = 50;
-
 export function registerManagedCertificates(ctx: {
   app: OpenAPIHono;
   db: Db;
@@ -44,20 +43,28 @@ export function registerManagedCertificates(ctx: {
       summary: "The inventory: the Managed Certificates the caller may see",
       description:
         "Everyone in the Organization may ask. Organization Administrators and Approvers see every Managed Certificate; anyone else sees those they own, directly or through a Team, and those they proposed. " +
-        "Archived ones are left out unless `archived` is given. The filters combine, and narrow what the caller sees.",
-      request: { params: OrgParam, query: InventoryQuery },
-      responses: { 200: json(z.object({ items: z.array(ManagedCertificate) })), ...errors(400, 401, 404) },
+        "Archived ones are left out unless `archived` is given. The filters combine, and narrow what the caller sees. " +
+        "It is listed oldest first, a page at a time; `total` is how many match the filters, whatever the page.",
+      request: { params: OrgParam, query: InventoryQuery.extend(PageQuery.shape) },
+      responses: { 200: json(pageOf(ManagedCertificate)), ...errors(400, 401, 404) },
     }),
     async (c) => {
       const { orgId } = c.req.valid("param");
       const actor = await requireUser(c);
       const { role } = await authorize(actor, orgId);
-      const rows = await db
-        .select()
-        .from(managedCertificate)
-        .where(and(visibleTo(role, actor, orgId), inventoryCondition(c.req.valid("query"), clock())))
-        .orderBy(asc(managedCertificate.createdAt), asc(managedCertificate.id));
-      return c.json({ items: await withState(rows) }, 200);
+      const query = c.req.valid("query");
+      const where = and(visibleTo(role, actor, orgId), inventoryCondition(query, clock()));
+      const [total, rows] = await Promise.all([
+        db.$count(managedCertificate, where),
+        db
+          .select()
+          .from(managedCertificate)
+          .where(where)
+          .orderBy(asc(managedCertificate.createdAt), asc(managedCertificate.id))
+          .limit(query.pageSize)
+          .offset((query.page - 1) * query.pageSize),
+      ]);
+      return c.json({ items: await withState(rows), total, page: query.page, pageSize: query.pageSize }, 200);
     },
   );
 

@@ -2,8 +2,11 @@
 // here: how its value is read, and the condition it adds. Filters combine (all must hold), and apply within what the
 // caller may see. A later filter (Agent offline) is one more entry.
 import { z } from "@hono/zod-openapi";
-import { and, eq, isNotNull, isNull, sql, type SQL } from "drizzle-orm";
+import { and, eq, inArray, isNotNull, isNull, sql, type SQL } from "drizzle-orm";
+import { ACME_ENVIRONMENTS, type AcmeEnvironment } from "./certificate-authority";
+import { KEY_ALGORITHMS, type KeyAlgorithm } from "./csr";
 import { certificate, issuance, managedCertificate } from "./db/schema";
+import { anyOf } from "./http";
 import { hasNoOwners } from "./owners";
 
 /** How close to the end of its current Certificate a Managed Certificate is "expiring soon". */
@@ -39,6 +42,8 @@ export const INVENTORY_FILTERS = {
   pendingApproval: filter(on.meta({ description: "Proposals waiting for Approval." }), () => eq(managedCertificate.approvalStatus, "pending")),
   noOwners: filter(on.meta({ description: "Managed Certificates with no Owners." }), () => hasNoOwners()),
   keyCustody: filter(z.enum(["owner"]).meta({ description: "Whose private key is held this way." }), (value) => eq(managedCertificate.keyCustody, value)),
+  environment: filter(anyOf(ACME_ENVIRONMENTS).meta({ description: "Issued through one of these ACME environments, comma-separated." }), (value) => inArray(managedCertificate.environment, value.split(",") as unknown as AcmeEnvironment[])),
+  keyAlgorithm: filter(anyOf(KEY_ALGORITHMS).meta({ description: "Whose key is of one of these algorithms, comma-separated." }), (value) => inArray(managedCertificate.keyAlgorithm, value.split(",") as unknown as KeyAlgorithm[])),
   archived: filter(
     on.meta({ description: "Only archived Managed Certificates, which are otherwise left out." }),
     () => isNotNull(managedCertificate.archivedAt),

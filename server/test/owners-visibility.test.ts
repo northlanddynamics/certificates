@@ -405,8 +405,34 @@ describe("filters", () => {
     expect(await filtered("?archived=true", alice)).toEqual([one.id]);
   });
 
+  test("environment and key algorithm each take one or more values, any of which matches", async () => {
+    const staging = await adminCreates();
+    const production = (await admin().create({ ...(await request()), environment: "production" })).body.id as string;
+    await h.settleIssuances();
+
+    expect(await filtered("?environment=staging")).toEqual([staging.id]);
+    expect(await filtered("?environment=production")).toEqual([production]);
+    expect(await filtered("?environment=staging,production")).toEqual([staging.id, production]);
+    expect(await filtered("?keyAlgorithm=ecdsa-p256")).toEqual([staging.id, production]);
+    expect(await filtered("?keyAlgorithm=rsa-2048,rsa-4096")).toEqual([]);
+    expect(await filtered("?keyAlgorithm=rsa-2048,ecdsa-p256&environment=production")).toEqual([production]);
+  });
+
+  test("the inventory is listed a page at a time, with how many match in all", async () => {
+    const made = [await adminCreates(), await adminCreates(), await adminCreates()].map((m) => m.id);
+    const page = async (query: string) => (await certs(org.cookie).list(query)).body as { items: { id: string }[]; total: number; page: number; pageSize: number };
+
+    expect(await page("")).toMatchObject({ total: 3, page: 1, pageSize: 25 });
+    expect((await page("?pageSize=2")).items.map((i) => i.id)).toEqual(made.slice(0, 2));
+    expect(await page("?pageSize=2&page=2")).toMatchObject({ total: 3, page: 2, pageSize: 2, items: [{ id: made[2] }] });
+    expect((await page("?pageSize=2&page=3")).items).toEqual([]);
+    // The total is of what the filters leave, not of the page.
+    expect(await page("?pageSize=1&noOwners=true&page=3")).toMatchObject({ total: 3, items: [{ id: made[2] }] });
+    expect(await page("?pageSize=1&pendingApproval=true")).toMatchObject({ total: 0, items: [] });
+  });
+
   test("a filter value that means nothing is refused", async () => {
-    for (const query of ["?keyCustody=agent", "?noOwners=maybe", "?expiringSoon=1", "?archived=yes", "?pendingApproval="]) {
+    for (const query of ["?keyCustody=agent", "?noOwners=maybe", "?expiringSoon=1", "?archived=yes", "?pendingApproval=", "?environment=dev", "?environment=staging,", "?keyAlgorithm=des", "?page=0", "?pageSize=0", "?pageSize=101", "?page=x"]) {
       expect((await certs(org.cookie).list(query)).status).toBe(400);
     }
   });

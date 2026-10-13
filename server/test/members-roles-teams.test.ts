@@ -38,7 +38,7 @@ const as = (cookie: string, orgId = acme.orgId) => ({
   removeFromTeam: (teamId: string, userId: string) =>
     h.api(`${BA}/remove-team-member`, { cookie, body: { teamId, userId, organizationId: orgId } }),
   teams: () => h.api(`${BA}/list-teams?organizationId=${orgId}`, { cookie }),
-  overview: () => h.api(`/api/organizations/${orgId}/teams`, { cookie }),
+  overview: (query = "") => h.api(`/api/organizations/${orgId}/teams${query}`, { cookie }),
   inventory: () => h.api(`/api/organizations/${orgId}/managed-certificates`, { cookie }),
   audit: async () => (await h.api(`/api/organizations/${orgId}/audit-events`, { cookie })).body?.items ?? [],
 });
@@ -62,6 +62,47 @@ async function members(cookie = acme.cookie, orgId = acme.orgId) {
 }
 const memberOf = async (email: string) => (await members()).find((m) => m.user.email === email)!;
 const auditActions = async () => (await admin().audit()).map((e: any) => e.action) as string[];
+
+describe("listing members a page at a time", () => {
+  test("Better Auth pages members, narrows them by role (one or several) and counts them all", async () => {
+    await join("m1@acme.test", "member");
+    await join("m2@acme.test", "member");
+    await join("a1@acme.test", "approver");
+    const list = async (query: string) => (await h.api(`${BA}/list-members?organizationId=${acme.orgId}&${query}`, { cookie: acme.cookie })).body as { members: Member[]; total: number };
+
+    const first = await list("limit=2&offset=0&sortBy=createdAt");
+    expect(first.total).toBe(4);
+    expect(first.members.map((m) => m.user.email)).toEqual(["admin@acme.test", "m1@acme.test"]);
+    expect((await list("limit=2&offset=2&sortBy=createdAt")).members.map((m) => m.user.email)).toEqual(["m2@acme.test", "a1@acme.test"]);
+    const approvers = await list("filterField=role&filterValue=approver");
+    expect([approvers.total, approvers.members.map((m) => m.user.email)]).toEqual([1, ["a1@acme.test"]]);
+    const several = await list("filterField=role&filterOperator=in&filterValue=approver&filterValue=organization-administrator");
+    expect([several.total, several.members.map((m) => m.user.email).sort()]).toEqual([2, ["a1@acme.test", "admin@acme.test"]]);
+  });
+});
+
+describe("the Teams overview a page at a time", () => {
+  test("Teams are paged, counted in all, and narrowed by whether they have members", async () => {
+    const ids: string[] = [];
+    for (const name of ["Alpha", "Bravo", "Charlie"]) ids.push((await admin().createTeam(name)).body.id);
+    await join("m@acme.test", "member");
+    await admin().addToTeam(ids[1]!, (await memberOf("m@acme.test")).userId);
+    const names = async (query: string) => {
+      const res = await admin().overview(query);
+      expect(res.status).toBe(200);
+      return [res.body.total, res.body.page, res.body.pageSize, res.body.items.map((t: any) => t.name)];
+    };
+
+    expect(await names("")).toEqual([3, 1, 25, ["Alpha", "Bravo", "Charlie"]]);
+    expect(await names("?pageSize=2")).toEqual([3, 1, 2, ["Alpha", "Bravo"]]);
+    expect(await names("?pageSize=2&page=2")).toEqual([3, 2, 2, ["Charlie"]]);
+    expect(await names("?membership=populated")).toEqual([1, 1, 25, ["Bravo"]]);
+    expect(await names("?membership=empty&pageSize=1&page=2")).toEqual([2, 2, 1, ["Charlie"]]);
+    // A Team's members come with the Team, whichever page it is on.
+    expect((await admin().overview("?membership=populated")).body.items[0].members).toHaveLength(1);
+    for (const query of ["?membership=some", "?page=0", "?pageSize=101"]) expect((await admin().overview(query)).status).toBe(400);
+  });
+});
 
 describe("what the caller may do", () => {
   test("/api/me reports each Organization's permissions for the caller, and the roles the server accepts", async () => {

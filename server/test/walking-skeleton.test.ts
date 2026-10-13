@@ -58,7 +58,7 @@ describe("walking skeleton", () => {
     ]);
     const inventory = await h.api(`/api/organizations/${orgId}/managed-certificates`, { cookie });
     expect(inventory.status).toBe(200);
-    expect(inventory.body).toEqual({ items: [] });
+    expect(inventory.body).toEqual({ items: [], total: 0, page: 1, pageSize: 25 });
   });
 
   test("an invitation can only be accepted by the invited email, and only once", async () => {

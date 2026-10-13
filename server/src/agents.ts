@@ -2,14 +2,14 @@
 // which an Agent registers, sees every Agent with its host, operating system, version, last contact and whether it is
 // online, and revokes one. What an Agent itself calls is in agent-gateway.ts.
 import { OpenAPIHono, createRoute, z } from "@hono/zod-openapi";
-import { and, asc, eq, isNull } from "drizzle-orm";
+import { and, asc, eq, gte, inArray, isNotNull, isNull, lt, or, sql, type SQL } from "drizzle-orm";
 import type { Context } from "hono";
 import { AGENT_ARCHES, AGENT_OSES, isOutdated } from "./agent-kinds";
 import { newRegistrationToken, hashToken, type AgentGatewayConfig } from "./agent-gateway";
 import type { Authorizer } from "./authorization";
 import type { Db } from "./db/client";
 import { agent, agentRegistrationToken } from "./db/schema";
-import { HttpError, OrgParam, errors, json } from "./http";
+import { HttpError, OrgParam, PageQuery, anyOf, errors, json, pageOf } from "./http";
 import type { Actor, UnitOfWork } from "./unit-of-work";
 
 type Row = typeof agent.$inferSelect;
@@ -27,6 +27,11 @@ const AgentView = z.object({
   registeredAt: z.string(),
   lastContactAt: z.string(),
   revokedAt: z.string().nullable(),
+});
+const AgentsQuery = PageQuery.extend({
+  status: anyOf(STATUSES).optional().meta({ description: "Those that are any of these, comma-separated." }),
+  os: anyOf(AGENT_OSES).optional().meta({ description: "Those running any of these operating systems, comma-separated." }),
+  outdated: z.literal("true").optional().meta({ description: "Only those running an outdated version." }),
 });
 const AgentParams = OrgParam.extend({ agentId: z.string().openapi({ param: { name: "agentId", in: "path" } }) });
 
@@ -89,17 +94,45 @@ export function registerAgents(ctx: {
       method: "get",
       path: "/api/organizations/{orgId}/agents",
       tags: ["Agents"],
-      summary: "The Organization's Agents",
-      description: "Organization Administrators only. Revoked Agents are listed too, as such.",
-      request: { params: OrgParam },
-      responses: { 200: json(z.object({ items: z.array(AgentView), latestVersion: z.string().openapi({ description: "The version an Agent is outdated against." }) })), ...errors(401, 403, 404) },
+      summary: "The Organization's Agents, oldest first, a page at a time",
+      description: "Organization Administrators only. Revoked Agents are listed too, as such. The filters combine; `total` is how many match them, whatever the page.",
+      request: { params: OrgParam, query: AgentsQuery },
+      responses: {
+        200: json(pageOf(AgentView).extend({ latestVersion: z.string().openapi({ description: "The version an Agent is outdated against." }) })),
+        ...errors(400, 401, 403, 404),
+      },
     }),
     async (c) => {
       const { orgId } = c.req.valid("param");
       await authorize(await requireUser(c), orgId, { agent: ["read"] });
+      const { page, pageSize, status, os, outdated } = c.req.valid("query");
       const now = clock();
-      const rows = await db.select().from(agent).where(eq(agent.organizationId, orgId)).orderBy(asc(agent.registeredAt), asc(agent.id));
-      return c.json({ items: rows.map((row) => toView(row, now)), latestVersion: config.latestVersion }, 200);
+      const silentSince = new Date(now.getTime() - config.offlineAfterSeconds * 1000);
+      const conditions: (SQL | undefined)[] = [eq(agent.organizationId, orgId)];
+      if (status) {
+        const wanted = status.split(",");
+        // `status` is worked out as `toView` does: revoked first, then by how long it has been silent.
+        conditions.push(
+          or(
+            wanted.includes("revoked") ? isNotNull(agent.revokedAt) : undefined,
+            wanted.includes("offline") ? and(isNull(agent.revokedAt), lt(agent.lastContactAt, silentSince)) : undefined,
+            wanted.includes("online") ? and(isNull(agent.revokedAt), gte(agent.lastContactAt, silentSince)) : undefined,
+          ),
+        );
+      }
+      if (os) conditions.push(inArray(agent.os, os.split(",") as Row["os"][]));
+      if (outdated) {
+        // Whether a version is outdated is not for the database to say; the Organization has few distinct versions to ask about.
+        const versions = await db.selectDistinct({ version: agent.version }).from(agent).where(eq(agent.organizationId, orgId));
+        const old = versions.map((v) => v.version).filter((v) => isOutdated(v, config.latestVersion));
+        conditions.push(old.length > 0 ? inArray(agent.version, old) : sql`false`);
+      }
+      const where = and(...conditions);
+      const [total, rows] = await Promise.all([
+        db.$count(agent, where),
+        db.select().from(agent).where(where).orderBy(asc(agent.registeredAt), asc(agent.id)).limit(pageSize).offset((page - 1) * pageSize),
+      ]);
+      return c.json({ items: rows.map((row) => toView(row, now)), total, page, pageSize, latestVersion: config.latestVersion }, 200);
     },
   );
 

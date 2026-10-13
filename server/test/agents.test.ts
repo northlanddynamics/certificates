@@ -233,6 +233,44 @@ describe("online and offline, and outdated versions", () => {
   });
 });
 
+describe("listing Agents a page at a time", () => {
+  test("they are paged, counted in all, and narrowed by status, operating system and version, which combine", async () => {
+    // Registered at the start; `silent` then goes quiet while the others keep in touch.
+    // A second apart, so they are listed in the order they registered.
+    const registerAt = (second: number, reg: object) => {
+      h.setNow(new Date(Date.parse("2026-01-01T00:00:00Z") + second * 1000));
+      return registerAgent(acmeOrg, reg);
+    };
+    const silent = await registerAt(0, { hostName: "silent", os: "linux", version: "0.1.0" });
+    const old = await registerAt(1, { hostName: "old", os: "windows", version: "0.0.9" });
+    const revoked = await registerAt(2, { hostName: "revoked", os: "linux", version: "0.1.0" });
+    const live = await registerAt(3, { hostName: "live", os: "linux", version: "0.1.0" });
+    await h.api(`${agentsOf()}/${revoked.id}/revoke`, { cookie: acmeOrg.cookie, method: "POST", body: {} });
+    h.setNow(new Date("2026-01-01T00:02:01Z"));
+    await old.poll("0.0.9");
+    await live.poll("0.1.0");
+    expect(silent.id).toBeString();
+
+    const hosts = async (query: string) => {
+      const res = await h.api(`${agentsOf()}${query}`, { cookie: acmeOrg.cookie });
+      expect(res.status).toBe(200);
+      return [res.body.total, res.body.items.map((a: any) => a.hostName)];
+    };
+    expect(await hosts("")).toEqual([4, ["silent", "old", "revoked", "live"]]);
+    expect(await hosts("?pageSize=3&page=2")).toEqual([4, ["live"]]);
+    expect(await hosts("?status=offline")).toEqual([1, ["silent"]]);
+    expect(await hosts("?status=online")).toEqual([2, ["old", "live"]]);
+    expect(await hosts("?status=offline,revoked")).toEqual([2, ["silent", "revoked"]]);
+    expect(await hosts("?os=windows")).toEqual([1, ["old"]]);
+    expect(await hosts("?os=linux&status=online")).toEqual([1, ["live"]]);
+    expect(await hosts("?outdated=true")).toEqual([1, ["old"]]);
+    expect(await hosts("?outdated=true&os=linux")).toEqual([0, []]);
+    for (const query of ["?status=gone", "?os=mac", "?outdated=yes", "?page=0", "?pageSize=101"]) {
+      expect((await h.api(`${agentsOf()}${query}`, { cookie: acmeOrg.cookie })).status).toBe(400);
+    }
+  });
+});
+
 describe("rotating the identity", () => {
   test("an Agent gets a new certificate for a new key, which works, and the old one only until the new one is used", async () => {
     const agent = await registerAgent();
