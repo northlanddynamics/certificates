@@ -9,7 +9,7 @@ import { Owners } from "./owner-controls";
 import { Renewal } from "./renewal-controls";
 import { Revoke, revokedLine } from "./revocation-controls";
 
-const KEY_CUSTODY_LABELS = { owner: "Owner" } as const;
+const KEY_CUSTODY_LABELS = { owner: "Owner", agent: "Agent" } as const;
 
 const DAY = 24 * 60 * 60 * 1000;
 const date = (iso: string) => new Date(iso).toLocaleDateString();
@@ -60,7 +60,7 @@ export function ManagedCertificateOverview() {
             <Fact label="Key Custody">{KEY_CUSTODY_LABELS[m.keyCustody]}</Fact>
             <ProposalStatus m={m} />
           </dl>
-          {!m.archivedAt && <NameChange org={org} m={m} userId={userId} onChanged={refresh} />}
+          {!m.archivedAt && m.keyCustody === "owner" && <NameChange org={org} m={m} userId={userId} onChanged={refresh} />}
         </CardContent>
       </Card>
 

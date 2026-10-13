@@ -14,6 +14,8 @@ import { AGENT_ARCHES, AGENT_OSES, LATEST_AGENT_VERSION } from "./agent-kinds";
 import { AgentCsrError, type AgentIdentityCa } from "./agent-identity-ca";
 import type { Db } from "./db/client";
 import { agent, agentRegistrationToken } from "./db/schema";
+import { MAX_CSR_LENGTH } from "./csr";
+import { OUTPUT_LIMIT_BYTES } from "./deployments";
 import { HttpError, errors, json } from "./http";
 import type { UnitOfWork } from "./unit-of-work";
 import type { WorkItems } from "./work-items";
@@ -71,6 +73,9 @@ const WorkItem = z.object({
     description:
       "What the Agent is asked to do; an Agent ignores a type it does not know. `dns.present`, `dns.cleanup` and `dns.test` are DNS Provider operations the Agent relays: " +
       "the payload has `provider` (`type`, its `settings` and its `secret`, the credentials, which the Agent uses for this operation only) and, but for `dns.test`, the TXT `record` (`name`, `value`). " +
+      "`deployment.generate_key` asks the Agent to make a private key for a Managed Certificate in a store only its service account can read, and to report a CSR for it (never the key): the payload has `deploymentId`, `managedCertificateId`, `names` and `keyAlgorithm`. " +
+      "`deployment.run` gives the Agent a Certificate and a Deployment Script to run for it: the payload has `deploymentId`, `managedCertificateId`, `trigger`, `names`, the `certificate` (`id`, `fingerprint`, `notAfter`, `chainPem`: the leaf then the intermediates) and the `script` (`name`, `interpreter`, `version`, `hash`, `content`). " +
+      "The Agent runs the script only if the SHA-256 of its content is the hash, and reports how it went. " +
       "The Agent reports how it went to `POST /api/agent/work-items/{id}/result`.",
   }),
   payload: z.record(z.string(), z.unknown()),
@@ -80,6 +85,17 @@ const WorkResult = z.object({
   ok: z.boolean(),
   kind: z.enum(["rejected", "unreachable"]).optional().openapi({ description: "When a DNS Provider operation failed: `rejected` if the DNS service answered and said no, `unreachable` if it did not answer." }),
   error: z.string().max(1000).optional().openapi({ description: "What went wrong, for a person to read. It must not contain the credentials." }),
+  csr: z.string().max(MAX_CSR_LENGTH).optional().openapi({ description: "For `deployment.generate_key`: a PEM CSR for the key the Agent made, for the names and key algorithm it was given. The key is never sent." }),
+  run: z
+    .object({
+      startedAt: z.string(),
+      finishedAt: z.string(),
+      exitCode: z.number().int().nullable().openapi({ description: "The script's exit code; none when it was not started, which it is not when its content does not match its hash." }),
+      output: z.string().max(OUTPUT_LIMIT_BYTES * 2).openapi({ description: `What the script wrote to its standard output and error, cut to ${OUTPUT_LIMIT_BYTES / 1024} KiB; when it was not started, why.` }),
+      outputTruncated: z.boolean(),
+    })
+    .optional()
+    .openapi({ description: "For `deployment.run`: how the script went. `ok` is whether it succeeded (exit code 0)." }),
 });
 
 export function registerAgentGateway(ctx: { app: OpenAPIHono; db: Db; unitOfWork: UnitOfWork; identityCa: AgentIdentityCa; workItems: WorkItems; clock: () => Date; config: AgentGatewayConfig }) {

@@ -10,7 +10,7 @@ export const APPROVER_ROLE = "approver";
 export const MEMBER_ROLE = "member";
 
 // Every permission there is. The organization, member, invitation and team resources are the ones Better Auth's
-// organization plugin checks itself; `audit`, `acmeAccount`, `dnsProvider`, `validationZone`, `dcvRule`, `managedCertificate`, `approval`, `agent`, `deploymentScript` and `apiKey` are ours (the last is the plugin's too).
+// organization plugin checks itself; `audit`, `acmeAccount`, `dnsProvider`, `validationZone`, `dcvRule`, `managedCertificate`, `approval`, `agent`, `deploymentScript`, `deployment` and `apiKey` are ours (the last is the plugin's too).
 const statements = {
   organization: ["update", "delete"],
   member: ["create", "update", "delete"],
@@ -37,6 +37,10 @@ const statements = {
   // Deployment Scripts: what Agents run on their hosts (ADR 0004), so only Organization Administrators hold any of this.
   // `read` sees the library and every version's content; `upload` adds a script or a new version of one.
   deploymentScript: ["read", "upload"],
+  // Deployments: an Agent making the key for a Managed Certificate and running a Deployment Script to put its Certificates to
+  // use, which is running code on hosts, so only Organization Administrators hold any of this. `create` sets one up, `read`
+  // sees them and their runs, `run` has an Agent run one again for its current Certificate.
+  deployment: ["read", "create", "run"],
   // The Organization's own API keys (a user's keys need none): the organization plugin asks for these names.
   apiKey: ["create", "read", "update", "delete"],
 } as const;

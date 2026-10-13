@@ -49,12 +49,24 @@ type WorkItem struct {
 	Payload map[string]any `json:"payload"`
 }
 
+// Run is how an Agent reported that a Deployment Script went.
+type Run struct {
+	StartedAt, FinishedAt string
+	// ExitCode is nil when the script was not started.
+	ExitCode        *int
+	Output          string
+	OutputTruncated bool
+}
+
 // Result is what an Agent reported of a work item.
 type Result struct {
 	ID    string
 	OK    bool
 	Kind  string
 	Error string
+	// CSR is what an Agent that made a key reported, and Run how a Deployment Script went.
+	CSR string
+	Run *Run
 }
 
 type agentRecord struct {
@@ -458,6 +470,19 @@ func (s *Stub) report(id string, payload map[string]any) (int, any) {
 	result.OK, _ = payload["ok"].(bool)
 	result.Kind, _ = payload["kind"].(string)
 	result.Error, _ = payload["error"].(string)
+	result.CSR, _ = payload["csr"].(string)
+	if run, ok := payload["run"].(map[string]any); ok {
+		reported := &Run{}
+		reported.StartedAt, _ = run["startedAt"].(string)
+		reported.FinishedAt, _ = run["finishedAt"].(string)
+		reported.Output, _ = run["output"].(string)
+		reported.OutputTruncated, _ = run["outputTruncated"].(bool)
+		if code, ok := run["exitCode"].(float64); ok {
+			n := int(code)
+			reported.ExitCode = &n
+		}
+		result.Run = reported
+	}
 	s.results = append(s.results, result)
 	return 200, map[string]any{"received": true}
 }

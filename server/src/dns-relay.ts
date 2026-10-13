@@ -11,7 +11,7 @@ import { DnsProviderError, type DnsProvider, type TxtRecord } from "./dns-provid
 import { DNS_PROVIDER_KINDS } from "./dns-provider-kinds";
 import { HttpError } from "./http";
 import type { Secrets } from "./secrets";
-import type { WorkItems } from "./work-items";
+import { PreparationError, type WorkItems } from "./work-items";
 
 export interface DnsRelayConfig {
   /** How long one Agent has to report on an operation before another online one is tried. */
@@ -59,10 +59,14 @@ export function createDnsRelay(ctx: { db: Db; workItems: WorkItems; secrets: Sec
   // What an Agent is given to carry out an operation: the provider as plain data, which is all a provider is, and the record.
   const materialize = async (tx: Tx, item: { organizationId: string; payload: Record<string, unknown> }) => {
     const { providerId, record } = item.payload as { providerId: string; record?: TxtRecord };
-    const [row] = await tx.select().from(dnsProvider).where(and(eq(dnsProvider.organizationId, item.organizationId), eq(dnsProvider.id, providerId)));
-    if (!row) throw new Error("no such DNS Provider");
-    const settings = DNS_PROVIDER_KINDS[row.type].settings.parse(row.settings);
-    return { provider: { type: row.type, settings, secret: await secrets.open(tx, item.organizationId, row.secretId) }, ...(record ? { record } : {}) };
+    try {
+      const [row] = await tx.select().from(dnsProvider).where(and(eq(dnsProvider.organizationId, item.organizationId), eq(dnsProvider.id, providerId)));
+      if (!row) throw new Error("no such DNS Provider");
+      const settings = DNS_PROVIDER_KINDS[row.type].settings.parse(row.settings);
+      return { provider: { type: row.type, settings, secret: await secrets.open(tx, item.organizationId, row.secretId) }, ...(record ? { record } : {}) };
+    } catch {
+      throw new PreparationError("the platform could not prepare the work for the Agent: the DNS Provider's stored settings or secret cannot be used");
+    }
   };
   for (const type of Object.values(DNS_WORK_TYPES)) workItems.register(type, materialize);
 

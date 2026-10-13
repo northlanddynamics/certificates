@@ -77,7 +77,7 @@ export interface InventoryFilters {
   pendingApproval?: boolean;
   noOwners?: boolean;
   archived?: boolean;
-  keyCustody?: "owner";
+  keyCustody?: ManagedCertificate["keyCustody"];
   /** Any of these. */
   environment?: ManagedCertificate["environment"][];
   /** Any of these. */
@@ -151,7 +151,8 @@ export interface ManagedCertificate {
   id: string;
   names: string[];
   keyAlgorithm: string;
-  keyCustody: "owner";
+  /** Who holds the private key: the Owner, who submitted a CSR, or one Agent, through its one Deployment. */
+  keyCustody: "owner" | "agent";
   environment: "staging" | "production";
   /** When it was archived: it then neither issues, renews nor deploys. */
   archivedAt: string | null;
@@ -213,6 +214,47 @@ export interface DeploymentScript {
   name: string;
   interpreter: "bash" | "powershell";
   latestVersion: DeploymentScriptVersion;
+}
+/** One execution of a Deployment: when, which Certificate, and how the script went. */
+export interface DeploymentRun {
+  id: string;
+  deploymentId: string;
+  status: "succeeded" | "failed";
+  trigger: "issuance" | "rerun";
+  startedAt: string;
+  finishedAt: string;
+  /** None when the script was not started: it did not match its hash. */
+  exitCode: number | null;
+  output: string;
+  outputTruncated: boolean;
+  certificate: { id: string; fingerprint: string };
+  script: { version: number; hash: string };
+}
+export type DeploymentState = "awaiting_key" | "key_failed" | "issuing" | "issuance_failed" | "awaiting_deployment" | "deployed" | "deployment_failed";
+/** An Agent making the key for a Managed Certificate and running a Deployment Script with each of its Certificates. */
+export interface Deployment {
+  id: string;
+  managedCertificateId: string;
+  names: string[];
+  keyAlgorithm: string;
+  agent: { id: string; hostName: string };
+  script: { id: string; name: string; interpreter: DeploymentScript["interpreter"]; version: number; hash: string };
+  createdAt: string;
+  createdBy: string;
+  state: DeploymentState;
+  keyFailure: string | null;
+  /** The Agent has been asked to run the script and has not yet reported. */
+  runPending: boolean;
+  lastRun: DeploymentRun | null;
+}
+export interface NewDeployment {
+  agentId: string;
+  scriptId: string;
+  scriptVersion?: number;
+  names: string[];
+  keyAlgorithm: string;
+  environment: "staging" | "production";
+  renewalPolicy: RenewalPolicy;
 }
 /** An Agent as the Agents list shows it. */
 export interface Agent {
@@ -338,6 +380,14 @@ export const api = {
     call<DeploymentScript>(`/api/organizations/${orgId}/deployment-scripts`, { body }),
   uploadDeploymentScriptVersion: (orgId: string, scriptId: string, content: string) =>
     call<DeploymentScript>(`/api/organizations/${orgId}/deployment-scripts/${scriptId}/versions`, { body: { content } }),
+  /** One page of the Deployments, newest first; `page` is from 1. */
+  deployments: (orgId: string, paging: { page: number; pageSize: number }) =>
+    call<Page<Deployment>>(`/api/organizations/${orgId}/deployments?${new URLSearchParams({ page: String(paging.page), pageSize: String(paging.pageSize) })}`),
+  createDeployment: (orgId: string, body: NewDeployment) => call<Deployment>(`/api/organizations/${orgId}/deployments`, { body }),
+  /** One page of a Deployment's runs, newest first; `page` is from 1. */
+  deploymentRuns: (orgId: string, id: string, paging: { page: number; pageSize: number }) =>
+    call<Page<DeploymentRun>>(`/api/organizations/${orgId}/deployments/${id}/runs?${new URLSearchParams({ page: String(paging.page), pageSize: String(paging.pageSize) })}`),
+  runDeploymentAgain: (orgId: string, id: string) => call<Deployment>(`/api/organizations/${orgId}/deployments/${id}/runs`, { method: "POST", body: {} }),
   acmeAccounts: (orgId: string) => call<{ items: AcmeAccount[] }>(`/api/organizations/${orgId}/acme-accounts`),
   registerAcmeAccount: (orgId: string, body: { environment: AcmeAccount["environment"]; contactEmail?: string }) =>
     call<AcmeAccount>(`/api/organizations/${orgId}/acme-accounts`, { body: { ...body, termsOfServiceAgreed: true } }),

@@ -64,13 +64,14 @@ export function registerRenewalRoutes(ctx: {
         "For a key the Owner holds: a new CSR for the same key algorithm and exactly the same names. Nothing is issued now; every Renewal from the next on uses it. " +
         "Organization Administrators and the Managed Certificate's own Owners may.",
       request: { params: ManagedCertificateParams, body: { content: { "application/json": { schema: z.object({ csr: csrField }) } } } },
-      responses: { 200: json(ManagedCertificate, "Stored"), ...errors(400, 401, 403, 404, 422) },
+      responses: { 200: json(ManagedCertificate, "Stored"), ...errors(400, 401, 403, 404, 409, 422) },
     }),
     async (c) => {
       const { orgId, id } = c.req.valid("param");
       const { csr: pem } = c.req.valid("json");
       const actor = await requireUser(c);
       const mc = await findAsOwnerOr(actor, orgId, id, { managedCertificate: ["replaceCsr"] }, "only an Owner or an Organization Administrator may upload a new CSR for a Managed Certificate");
+      if (mc.keyCustody === "agent" || mc.csr === null) throw new HttpError(409, "the key of this Managed Certificate is held by an Agent, which makes its CSR; one cannot be uploaded");
       const { csr } = await checkNamesAndCsr({ names: mc.names, csr: pem, keyAlgorithm: mc.keyAlgorithm });
       await unitOfWork.run(actor, async (tx, change) => {
         await tx
@@ -81,7 +82,7 @@ export function registerRenewalRoutes(ctx: {
           organizationId: orgId,
           action: "managed_certificate.csr_uploaded",
           target: { type: "managed_certificate", id: mc.id },
-          detail: { csrFingerprint: csr.fingerprint, previousCsrFingerprint: (await parseCsr(mc.csr)).fingerprint },
+          detail: { csrFingerprint: csr.fingerprint, previousCsrFingerprint: (await parseCsr(mc.csr!)).fingerprint },
         });
       });
       return c.json((await withState([await findManagedCertificate(orgId, mc.id)]))[0]!, 200);

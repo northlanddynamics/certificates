@@ -54,6 +54,8 @@ type Config struct {
 	BackoffMin, BackoffMax time.Duration
 	// OS and Arch are what registration reports; they default to the host's.
 	OS, Arch string
+	// ScriptTimeout stops a Deployment Script that has not ended; ten minutes when zero.
+	ScriptTimeout time.Duration
 }
 
 func (c *Config) defaults() {
@@ -198,17 +200,17 @@ func (r *runner) cycle(ctx context.Context) (time.Duration, error) {
 // handle carries out a work item and reports how it went. Only the platform refusing the Agent's identity is an error: an
 // item that failed has been reported as failed, and one that could not be reported is the platform's to give up on.
 func (r *runner) handle(ctx context.Context, item platform.WorkItem) error {
-	if !dnsrelay.Handles(item.Type) {
+	var result platform.WorkResult
+	switch {
+	case dnsrelay.Handles(item.Type):
+		result = r.relayDNS(ctx, item)
+	case item.Type == workGenerateKey:
+		result = r.generateKey(item)
+	case item.Type == workRun:
+		result = r.runDeployment(ctx, item)
+	default:
 		r.cfg.Log.Warn("ignoring a work item of a type this Agent does not know", "id", item.ID, "type", item.Type)
 		return nil
-	}
-	// The work item holds the provider's credentials: it is logged by its id and type, never by what it carries.
-	result := platform.WorkResult{OK: true}
-	if failure := dnsrelay.Carry(ctx, item.Type, item.Payload); failure != nil {
-		result = platform.WorkResult{Kind: failure.Kind, Error: failure.Message}
-		r.cfg.Log.Warn("a DNS Provider operation failed", "id", item.ID, "type", item.Type, "kind", failure.Kind, "error", failure.Message)
-	} else {
-		r.cfg.Log.Info("carried out a DNS Provider operation", "id", item.ID, "type", item.Type)
 	}
 	if err := r.client.ReportResult(ctx, item.ID, result); err != nil {
 		if platform.Rejected(err) {
@@ -218,6 +220,17 @@ func (r *runner) handle(ctx context.Context, item platform.WorkItem) error {
 		r.cfg.Log.Warn("the result of a work item could not be reported", "id", item.ID, "error", err)
 	}
 	return nil
+}
+
+// relayDNS carries out a DNS Provider operation.
+func (r *runner) relayDNS(ctx context.Context, item platform.WorkItem) platform.WorkResult {
+	// The work item holds the provider's credentials: it is logged by its id and type, never by what it carries.
+	if failure := dnsrelay.Carry(ctx, item.Type, item.Payload); failure != nil {
+		r.cfg.Log.Warn("a DNS Provider operation failed", "id", item.ID, "type", item.Type, "kind", failure.Kind, "error", failure.Message)
+		return platform.WorkResult{Kind: failure.Kind, Error: failure.Message}
+	}
+	r.cfg.Log.Info("carried out a DNS Provider operation", "id", item.ID, "type", item.Type)
+	return platform.WorkResult{OK: true}
 }
 
 // due is when the identity certificate is rotated: with a third of its life left.

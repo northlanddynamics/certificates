@@ -155,6 +155,13 @@
       "when": 1791858738481,
       "tag": "0021_deployment_script_versions_immutable",
       "breakpoints": true
+    },
+    {
+      "idx": 22,
+      "version": "7",
+      "when": 1791895282005,
+      "tag": "0022_tidy_lightspeed",
+      "breakpoints": true
     }
   ]
 }

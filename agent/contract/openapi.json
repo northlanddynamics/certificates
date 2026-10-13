@@ -226,7 +226,7 @@
                           },
                           "type": {
                             "type": "string",
-                            "description": "What the Agent is asked to do; an Agent ignores a type it does not know. `dns.present`, `dns.cleanup` and `dns.test` are DNS Provider operations the Agent relays: the payload has `provider` (`type`, its `settings` and its `secret`, the credentials, which the Agent uses for this operation only) and, but for `dns.test`, the TXT `record` (`name`, `value`). The Agent reports how it went to `POST /api/agent/work-items/{id}/result`."
+                            "description": "What the Agent is asked to do; an Agent ignores a type it does not know. `dns.present`, `dns.cleanup` and `dns.test` are DNS Provider operations the Agent relays: the payload has `provider` (`type`, its `settings` and its `secret`, the credentials, which the Agent uses for this operation only) and, but for `dns.test`, the TXT `record` (`name`, `value`). `deployment.generate_key` asks the Agent to make a private key for a Managed Certificate in a store only its service account can read, and to report a CSR for it (never the key): the payload has `deploymentId`, `managedCertificateId`, `names` and `keyAlgorithm`. `deployment.run` gives the Agent a Certificate and a Deployment Script to run for it: the payload has `deploymentId`, `managedCertificateId`, `trigger`, `names`, the `certificate` (`id`, `fingerprint`, `notAfter`, `chainPem`: the leaf then the intermediates) and the `script` (`name`, `interpreter`, `version`, `hash`, `content`). The Agent runs the script only if the SHA-256 of its content is the hash, and reports how it went. The Agent reports how it went to `POST /api/agent/work-items/{id}/result`."
                           },
                           "payload": {
                             "type": "object",
@@ -334,6 +334,45 @@
                     "type": "string",
                     "maxLength": 1000,
                     "description": "What went wrong, for a person to read. It must not contain the credentials."
+                  },
+                  "csr": {
+                    "type": "string",
+                    "maxLength": 64000,
+                    "description": "For `deployment.generate_key`: a PEM CSR for the key the Agent made, for the names and key algorithm it was given. The key is never sent."
+                  },
+                  "run": {
+                    "type": "object",
+                    "properties": {
+                      "startedAt": {
+                        "type": "string"
+                      },
+                      "finishedAt": {
+                        "type": "string"
+                      },
+                      "exitCode": {
+                        "type": [
+                          "integer",
+                          "null"
+                        ],
+                        "description": "The script's exit code; none when it was not started, which it is not when its content does not match its hash."
+                      },
+                      "output": {
+                        "type": "string",
+                        "maxLength": 65536,
+                        "description": "What the script wrote to its standard output and error, cut to 32 KiB; when it was not started, why."
+                      },
+                      "outputTruncated": {
+                        "type": "boolean"
+                      }
+                    },
+                    "required": [
+                      "startedAt",
+                      "finishedAt",
+                      "exitCode",
+                      "output",
+                      "outputTruncated"
+                    ],
+                    "description": "For `deployment.run`: how the script went. `ok` is whether it succeeded (exit code 0)."
                   }
                 },
                 "required": [

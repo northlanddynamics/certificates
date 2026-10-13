@@ -12,6 +12,7 @@ import { PLATFORM_OPERATOR_ROLE, createAuth } from "./auth";
 import { registerCertificateExport } from "./certificate-export";
 import type { CertificateAuthority } from "./certificate-authority";
 import { registerDeploymentScripts } from "./deployment-scripts";
+import { registerDeployments } from "./deployments";
 import { registerDcvConfiguration } from "./dcv-configuration";
 import { createDcvPlans } from "./dcv-plan";
 import { DEFAULT_DCV_CONFIG, createDcv, createTxtResolver, type DcvConfig } from "./dcv";
@@ -249,7 +250,7 @@ export function createApp(deps: AppDeps) {
   registerAcmeAccounts({ app, db, requireUser, authorize, unitOfWork, secrets, certificateAuthority: deps.certificateAuthority });
   const agentGateway = { ...DEFAULT_AGENT_GATEWAY, ...deps.agentGateway };
   const dnsRelayConfig = { ...DEFAULT_DNS_RELAY, ...deps.dnsRelay };
-  const workItems = createWorkItems({ db, unitOfWork, pollMs: dnsRelayConfig.pollMs, maxWaitMs: dnsRelayConfig.maxWaitMs });
+  const workItems = createWorkItems({ db, unitOfWork, pollMs: dnsRelayConfig.pollMs, maxWaitMs: dnsRelayConfig.maxWaitMs, clock });
   const dnsRelay = createDnsRelay({ db, workItems, secrets, clock, offlineAfterSeconds: agentGateway.offlineAfterSeconds, config: dnsRelayConfig });
   const dnsProviders = createDnsProviders(secrets, dnsRelay);
   registerDnsProviders({ app, db, requireUser, authorize, unitOfWork, secrets, dnsProviders, relay: dnsRelay });
@@ -270,6 +271,7 @@ export function createApp(deps: AppDeps) {
   registerRevocationRoutes({ app, db, requireUser, unitOfWork, reader, secrets, certificateAuthority: deps.certificateAuthority });
   registerHistory({ app, db, requireUser, reader });
   registerDeploymentScripts({ app, db, requireUser, authorize, unitOfWork });
+  registerDeployments({ app, db, requireUser, authorize, unitOfWork, workItems, issuances });
   registerAgents({ app, db, requireUser, authorize, unitOfWork, clock, config: agentGateway });
   registerAgentGateway({ app, db, unitOfWork, identityCa: createAgentIdentityCa({ db, kms: deps.kms, clock }), workItems, clock, config: agentGateway });
 

@@ -4,7 +4,7 @@
 import { z } from "@hono/zod-openapi";
 import { and, eq, inArray, isNotNull, isNull, sql, type SQL } from "drizzle-orm";
 import { ACME_ENVIRONMENTS, type AcmeEnvironment } from "./certificate-authority";
-import { KEY_ALGORITHMS, type KeyAlgorithm } from "./csr";
+import { KEY_ALGORITHMS, KEY_CUSTODIES, type KeyAlgorithm } from "./csr";
 import { certificate, issuance, managedCertificate } from "./db/schema";
 import { anyOf } from "./http";
 import { hasNoOwners } from "./owners";
@@ -41,7 +41,7 @@ export const INVENTORY_FILTERS = {
   renewalFailing: filter(on.meta({ description: "Whose Renewal is failing: one has failed since its last Certificate was issued." }), () => renewalFailing),
   pendingApproval: filter(on.meta({ description: "Proposals waiting for Approval." }), () => eq(managedCertificate.approvalStatus, "pending")),
   noOwners: filter(on.meta({ description: "Managed Certificates with no Owners." }), () => hasNoOwners()),
-  keyCustody: filter(z.enum(["owner"]).meta({ description: "Whose private key is held this way." }), (value) => eq(managedCertificate.keyCustody, value)),
+  keyCustody: filter(z.enum(KEY_CUSTODIES).meta({ description: "Whose private key is held this way." }), (value) => eq(managedCertificate.keyCustody, value)),
   environment: filter(anyOf(ACME_ENVIRONMENTS).meta({ description: "Issued through one of these ACME environments, comma-separated." }), (value) => inArray(managedCertificate.environment, value.split(",") as unknown as AcmeEnvironment[])),
   keyAlgorithm: filter(anyOf(KEY_ALGORITHMS).meta({ description: "Whose key is of one of these algorithms, comma-separated." }), (value) => inArray(managedCertificate.keyAlgorithm, value.split(",") as unknown as KeyAlgorithm[])),
   archived: filter(

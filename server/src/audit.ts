@@ -52,6 +52,13 @@ export type AuditAction =
   | "agent.identity_rotated"
   | "agent.revoked"
   | "deployment_script.uploaded"
+  | "deployment.created"
+  | "deployment.key_generated"
+  | "deployment.key_failed"
+  | "deployment.key_requested"
+  | "deployment.run_requested"
+  | "deployment_run.succeeded"
+  | "deployment_run.failed"
   | "issuance.started"
   | "issuance.succeeded"
   | "issuance.failed";

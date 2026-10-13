@@ -22,7 +22,7 @@ import type { Actor, Change, UnitOfWork } from "./unit-of-work";
 export type IssuanceIntent = "issue" | "renewNow" | "scheduled";
 
 /** Why a Managed Certificate may not have an Issuance begin now. */
-export type Refusal = "awaiting_approval" | "rejected" | "archived" | "already_running" | "no_certificate" | "not_automatic";
+export type Refusal = "awaiting_approval" | "rejected" | "archived" | "already_running" | "no_certificate" | "not_automatic" | "awaiting_key";
 
 export type Begun = { issuanceId: string } | { refused: Refusal };
 
@@ -53,7 +53,16 @@ export function refusalMessage(refusal: Refusal, intent: IssuanceIntent): string
       return "the Managed Certificate has no Certificate yet to renew; try issuing it again instead";
     case "not_automatic":
       return "the Managed Certificate is not renewed automatically";
+    case "awaiting_key":
+      return "the Agent has not yet made the key for this Managed Certificate, which has to be done first";
   }
+}
+
+/** A Certificate that was just issued, as what follows from it is told. */
+export interface IssuedCertificate {
+  organizationId: string;
+  managedCertificateId: string;
+  certificateId: string;
 }
 
 export interface Issuances {
@@ -71,6 +80,12 @@ export interface Issuances {
     managedCertificate: { id: string; organizationId: string },
     intent: IssuanceIntent,
   ): Promise<Begun>;
+  /**
+   * Has `listener` run for every Certificate issued from now on, on the transaction that stores it: what must follow
+   * from a Certificate exactly when it exists, such as having an Agent deploy it. A listener that fails is logged and
+   * undone alone: the Certificate the CA issued is kept whatever else goes wrong.
+   */
+  onIssued(listener: (tx: Tx, change: Change, issued: IssuedCertificate) => Promise<void>): void;
   /** Resolves once every Issuance started so far has recorded its outcome. */
   idle(): Promise<void>;
   /** Ends the Issuances a stopped platform left running, as failed. Call it once, before serving. */
@@ -116,6 +131,7 @@ function failureOf(err: unknown): Failure {
 
 export function createIssuances({ db, unitOfWork, certificateAuthority: ca, dcv, secrets }: IssuancesDeps): Issuances {
   const running = new Set<Promise<void>>();
+  const issuedListeners: ((tx: Tx, change: Change, issued: IssuedCertificate) => Promise<void>)[] = [];
   const actorOf = (row: typeof issuance.$inferSelect) => (row.requestedById && row.requestedByEmail ? { id: row.requestedById, email: row.requestedByEmail } : null);
   const targetOf = (row: typeof issuance.$inferSelect) => ({ type: "managed_certificate", id: row.managedCertificateId });
   const leftoverDetail = (leftovers: string[]) => (leftovers.length > 0 ? { challengeRecordsNotRemoved: leftovers } : {});
@@ -182,6 +198,7 @@ export function createIssuances({ db, unitOfWork, certificateAuthority: ca, dcv,
         .where(and(eq(certificate.organizationId, row.organizationId), eq(certificate.managedCertificateId, mc.id)))
         .orderBy(desc(certificate.createdAt), desc(certificate.id))
         .limit(1);
+      if (mc.csr === null) throw new IssuanceFailure("internal", "the Managed Certificate has no CSR to issue from");
       chainPem = await ca.issue(mc.environment, { accountUrl: account.accountUrl, accountKey }, { csr: mc.csr, responder, replaces: replaced && sameNames(replaced.names, mc.names) ? replaced.chainPem : undefined });
     } catch (err) {
       return fail(row, failureOf(err), responder.leftovers());
@@ -190,7 +207,7 @@ export function createIssuances({ db, unitOfWork, certificateAuthority: ca, dcv,
     // The CA has issued: from here on the Certificate is kept whatever else happens to the Issuance.
     try {
       const issued = readLeaf(chainPem);
-      const csr = await parseCsr(mc.csr);
+      const csr = await parseCsr(mc.csr!);
       if (!issued.publicKey.equals(csr.publicKey)) throw new IssuanceFailure("ca_rejected", "the CA issued a Certificate for a different key than the CSR's");
       if (issued.names.length !== mc.names.length || !mc.names.every((name) => issued.names.includes(name))) {
         throw new IssuanceFailure("ca_rejected", `the CA issued a Certificate for ${issued.names.join(", ")}, not for the names asked (${mc.names.join(", ")})`);
@@ -224,6 +241,10 @@ export function createIssuances({ db, unitOfWork, certificateAuthority: ca, dcv,
             ...leftoverDetail(responder.leftovers()),
           },
         });
+        for (const listener of issuedListeners) {
+          // A savepoint, so that a listener's failure undoes only what it did.
+          await tx.transaction((inner) => listener(inner, change, { organizationId: row.organizationId, managedCertificateId: mc.id, certificateId })).catch((err) => console.error("what follows from a Certificate failed", err));
+        }
       });
     } catch (err) {
       await fail(row, failureOf(err), responder.leftovers());
@@ -255,6 +276,8 @@ export function createIssuances({ db, unitOfWork, certificateAuthority: ca, dcv,
       const hasCertificate = certificateOf !== undefined;
 
       if (mc.archivedAt) return { refused: "archived" };
+      // An Agent makes the key first, and sends the CSR that its Managed Certificate is issued from.
+      if (mc.csr === null) return { refused: "awaiting_key" };
       if (mc.approvalStatus === "pending") return { refused: "awaiting_approval" };
       if (mc.approvalStatus === "rejected") return { refused: "rejected" };
       if (intent === "scheduled" && mc.renewalMode !== "automatic") return { refused: "not_automatic" };
@@ -288,6 +311,7 @@ export function createIssuances({ db, unitOfWork, certificateAuthority: ca, dcv,
       change.afterCommit(() => start(row!.id));
       return { issuanceId: row!.id };
     },
+    onIssued: (listener) => void issuedListeners.push(listener),
     async idle() {
       while (running.size > 0) await Promise.all(running);
     },

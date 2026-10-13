@@ -432,7 +432,7 @@ describe("filters", () => {
   });
 
   test("a filter value that means nothing is refused", async () => {
-    for (const query of ["?keyCustody=agent", "?noOwners=maybe", "?expiringSoon=1", "?archived=yes", "?pendingApproval=", "?environment=dev", "?environment=staging,", "?keyAlgorithm=des", "?page=0", "?pageSize=0", "?pageSize=101", "?page=x"]) {
+    for (const query of ["?keyCustody=nobody", "?noOwners=maybe", "?expiringSoon=1", "?archived=yes", "?pendingApproval=", "?environment=dev", "?environment=staging,", "?keyAlgorithm=des", "?page=0", "?pageSize=0", "?pageSize=101", "?page=x"]) {
       expect((await certs(org.cookie).list(query)).status).toBe(400);
     }
   });

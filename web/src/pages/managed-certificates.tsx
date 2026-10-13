@@ -138,7 +138,7 @@ export function ManagedCertificates({ org }: { org: Org }) {
           value={facets.keyAlgorithm}
           onChange={(keyAlgorithm) => narrow({ keyAlgorithm })}
         />
-        <DataTableFacetedFilter title="Key Custody" options={[{ value: "owner", label: "Owner" }]} value={facets.keyCustody} onChange={(keyCustody) => narrow({ keyCustody })} />
+        <DataTableFacetedFilter title="Key Custody" options={[{ value: "owner", label: "Owner" }, { value: "agent", label: "Agent" }]} value={facets.keyCustody} onChange={(keyCustody) => narrow({ keyCustody })} />
         {narrowed && (
           <Button variant="ghost" size="sm" onClick={() => narrow(NO_FACETS)}>
             Reset

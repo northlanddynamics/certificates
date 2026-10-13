@@ -6,6 +6,7 @@
 import { z } from "@hono/zod-openapi";
 import { and, asc, eq, inArray, isNull } from "drizzle-orm";
 import type { ApprovalStatus } from "./approval";
+import type { KeyCustody } from "./csr";
 import type { Tx, Db } from "./db/client";
 import { managedCertificate, nameChange } from "./db/schema";
 import { HttpError } from "./http";
@@ -62,7 +63,9 @@ export async function lockManagedCertificate(tx: Tx, organizationId: string, id:
 }
 
 /** Why the Managed Certificate's names may not be changed now, if they may not. */
-export function refusalToChangeNames(mc: { approvalStatus: ApprovalStatus; archivedAt: Date | null }): string | null {
+export function refusalToChangeNames(mc: { approvalStatus: ApprovalStatus; archivedAt: Date | null; keyCustody: KeyCustody }): string | null {
+  // A new CSR for new names would need the Agent to make a new key, which a Deployment does not yet do.
+  if (mc.keyCustody === "agent") return "the key of this Managed Certificate is held by an Agent, so its names cannot be changed";
   if (mc.archivedAt) return "the Managed Certificate is archived, so its names cannot be changed";
   if (mc.approvalStatus === "pending") return "the Managed Certificate is awaiting Approval, which decides its names, so they cannot be changed";
   if (mc.approvalStatus === "rejected") return "the Managed Certificate is rejected, so its names cannot be changed";

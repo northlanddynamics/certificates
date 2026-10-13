@@ -144,12 +144,24 @@ func (c *Client) Poll(ctx context.Context, version string) (*PollResponse, error
 	return &res, c.post(ctx, "/api/agent/poll", PollRequest{Version: version}, &res)
 }
 
+// RunReport is how a Deployment Script went. ExitCode is null when the script was not started, and Output then says why.
+type RunReport struct {
+	StartedAt       string `json:"startedAt"`
+	FinishedAt      string `json:"finishedAt"`
+	ExitCode        *int   `json:"exitCode"`
+	Output          string `json:"output"`
+	OutputTruncated bool   `json:"outputTruncated"`
+}
+
 // WorkResult is how a work item went. Kind says how a DNS Provider operation failed: "rejected" when the DNS service answered
-// and said no, "unreachable" when it did not answer. Error is for a person to read and holds no secret.
+// and said no, "unreachable" when it did not answer. Error is for a person to read and holds no secret. CSR is for the key the
+// Agent made (never the key), and Run is how a Deployment Script went.
 type WorkResult struct {
-	OK    bool   `json:"ok"`
-	Kind  string `json:"kind,omitempty"`
-	Error string `json:"error,omitempty"`
+	OK    bool       `json:"ok"`
+	Kind  string     `json:"kind,omitempty"`
+	Error string     `json:"error,omitempty"`
+	CSR   string     `json:"csr,omitempty"`
+	Run   *RunReport `json:"run,omitempty"`
 }
 
 type workResultResponse struct {

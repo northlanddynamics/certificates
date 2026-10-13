@@ -2,7 +2,8 @@
 // with its identity certificate in the header a TLS terminator would pass it in. (The real Agent is the Go program
 // in agent/, which Seam B runs against a stub of the platform.)
 import * as x509 from "@peculiar/x509";
-import { webcrypto } from "node:crypto";
+import * as acme from "acme-client";
+import { createHash, webcrypto } from "node:crypto";
 import { DnsProviderError } from "../src/dns-provider";
 import { DNS_PROVIDER_KINDS } from "../src/dns-provider-kinds";
 import type { Harness } from "./harness";
@@ -53,6 +54,30 @@ export interface WorkItem {
   payload: any;
 }
 
+/** What the stand-in's "script" does when it is run: it runs nothing, it reports this. */
+export interface ScriptOutcome {
+  exitCode: number | null;
+  output: string;
+  outputTruncated?: boolean;
+}
+
+/** A Deployment the stand-in was asked to carry out, as it saw it. */
+export interface DeployedRun {
+  item: WorkItem;
+  /** Whether the script's content hashed to the hash it was given: the Agent runs it only if so. */
+  hashMatched: boolean;
+  /** The private key it holds for the Certificate's Managed Certificate (PEM): it never sends this anywhere. */
+  keyPem: string | undefined;
+}
+
+const KEY_MAKERS = {
+  "ecdsa-p256": () => acme.crypto.createPrivateEcdsaKey("P-256"),
+  "ecdsa-p384": () => acme.crypto.createPrivateEcdsaKey("P-384"),
+  "rsa-2048": () => acme.crypto.createPrivateRsaKey(2048),
+  "rsa-3072": () => acme.crypto.createPrivateRsaKey(3072),
+  "rsa-4096": () => acme.crypto.createPrivateRsaKey(4096),
+} as const;
+
 export class TestAgent {
   /** Every work item this Agent has been given, in order. */
   readonly received: WorkItem[] = [];
@@ -60,6 +85,14 @@ export class TestAgent {
   readonly executed: WorkItem[] = [];
   /** Makes it take work items and never answer them, as an Agent that stalled or lost its connection does. */
   stalled = false;
+  /** The private keys it generated, by Managed Certificate (PEM); they stay here, as on the Agent's host. */
+  readonly keys = new Map<string, string>();
+  /** The Deployments it carried out, in order. */
+  readonly deployed: DeployedRun[] = [];
+  /** Makes the script reach it altered, as one corrupted on its way does: it must see that it does not match its hash and not run it. */
+  corruptScripts = false;
+  /** What the script it "runs" does. */
+  scriptOutcome: ScriptOutcome = { exitCode: 0, output: "installed" };
 
   private constructor(
     private readonly h: Harness,
@@ -97,7 +130,7 @@ export class TestAgent {
   }
 
   /** Reports how a work item went. */
-  report(id: string, result: { ok: boolean; kind?: "rejected" | "unreachable"; error?: string }, certificate: string | null = this.certificate) {
+  report(id: string, result: Record<string, unknown> & { ok: boolean }, certificate: string | null = this.certificate) {
     return this.call(`/api/agent/work-items/${id}/result`, result, certificate);
   }
 
@@ -119,6 +152,8 @@ export class TestAgent {
   }
 
   private async carryOut(item: WorkItem) {
+    if (item.type === "deployment.generate_key") return this.generateKey(item);
+    if (item.type === "deployment.run") return this.runDeployment(item);
     const { provider, record } = item.payload;
     try {
       const kind = DNS_PROVIDER_KINDS[provider.type as keyof typeof DNS_PROVIDER_KINDS];
@@ -132,6 +167,30 @@ export class TestAgent {
       if (!(err instanceof DnsProviderError)) throw err;
       await this.report(item.id, { ok: false, kind: err.kind, error: err.message });
     }
+  }
+
+  /** Makes the key for the Managed Certificate here and reports a CSR for it, as the Agent does. */
+  private async generateKey(item: WorkItem) {
+    const { managedCertificateId, names, keyAlgorithm } = item.payload as { managedCertificateId: string; names: string[]; keyAlgorithm: keyof typeof KEY_MAKERS };
+    const key = await KEY_MAKERS[keyAlgorithm]();
+    const [, csr] = await acme.crypto.createCsr({ commonName: names[0], altNames: names }, key);
+    this.keys.set(managedCertificateId, key.toString());
+    await this.report(item.id, { ok: true, csr: csr.toString() });
+  }
+
+  /** Checks the script against its hash and, if it matches, "runs" it: reports `scriptOutcome`. */
+  private async runDeployment(item: WorkItem) {
+    const { managedCertificateId, script } = item.payload as { managedCertificateId: string; script: { content: string; hash: string } };
+    const content = this.corruptScripts ? `${script.content}\n# altered` : script.content;
+    const hashMatched = createHash("sha256").update(content, "utf8").digest("hex") === script.hash;
+    this.deployed.push({ item, hashMatched, keyPem: this.keys.get(managedCertificateId) });
+    const startedAt = new Date().toISOString();
+    const outcome: ScriptOutcome = hashMatched ? this.scriptOutcome : { exitCode: null, output: "the script does not match its hash, so it was not run" };
+    await this.report(item.id, {
+      ok: outcome.exitCode === 0,
+      ...(outcome.exitCode !== 0 && { error: outcome.exitCode === null ? outcome.output : `the script exited with ${outcome.exitCode}` }),
+      run: { startedAt, finishedAt: new Date().toISOString(), exitCode: outcome.exitCode, output: outcome.output, outputTruncated: outcome.outputTruncated ?? false },
+    });
   }
 
   /** Has the Agent poll and work every `everyMs` until the returned function is called, which waits for what it is doing. */

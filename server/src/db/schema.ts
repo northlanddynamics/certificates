@@ -1,4 +1,4 @@
-import { bigint, check, customType, integer, foreignKey, index, jsonb, pgTable, primaryKey, text, timestamp, unique, uniqueIndex, uuid } from "drizzle-orm/pg-core";
+import { bigint, boolean, check, customType, integer, foreignKey, index, jsonb, pgTable, primaryKey, text, timestamp, unique, uniqueIndex, uuid } from "drizzle-orm/pg-core";
 import { sql } from "drizzle-orm";
 import type { AcmeEnvironment, RevocationReason } from "../certificate-authority";
 import type { DcvMethod, DcvScope } from "../dcv-plan";
@@ -32,8 +32,11 @@ export const managedCertificate = pgTable(
     keyCustody: text("key_custody").$type<KeyCustody>().notNull(),
     /** Which of the Organization's ACME accounts, by environment, Certificates are obtained through. */
     environment: text("environment").$type<AcmeEnvironment>().notNull(),
-    /** The CSR under which Certificates are issued (Key Custody: Owner), so Renewal can reuse it. */
-    csr: text("csr").notNull(),
+    /**
+     * The CSR under which Certificates are issued, so Renewal can reuse it. With Key Custody: Owner it is submitted with the
+     * Managed Certificate; with Key Custody: Agent it is none until the Agent has made the key and sent the CSR for it.
+     */
+    csr: text("csr"),
     /** Whether its names have the Approval they need: `not_required` when an Organization Administrator created it. */
     approvalStatus: text("approval_status").$type<ApprovalStatus>().notNull().default("not_required"),
     /** Who proposed it, when someone who needs Approval did; null for one that never needed it. */
@@ -53,6 +56,8 @@ export const managedCertificate = pgTable(
   },
   (t) => [
     index("managed_certificate_org_idx").on(t.organizationId),
+    check("managed_certificate_key_custody", sql`${t.keyCustody} in ('owner', 'agent')`),
+    check("managed_certificate_owner_has_csr", sql`${t.keyCustody} <> 'owner' or ${t.csr} is not null`),
     check("managed_certificate_renewal_mode", sql`${t.renewalMode} in ('automatic', 'manual')`),
     check("managed_certificate_renewal_days", sql`${t.renewalDaysBeforeExpiry} between 1 and 365`),
     // Lets other tables reference a Managed Certificate together with its Organization, so none can point at another's.
@@ -567,5 +572,76 @@ export const deploymentScriptVersion = pgTable(
     // A script never holds the same content twice, so a hash names one of its versions.
     unique("deployment_script_version_hash_unique").on(t.scriptId, t.hash),
     foreignKey({ columns: [t.scriptId, t.organizationId], foreignColumns: [deploymentScript.id, deploymentScript.organizationId] }),
+  ],
+);
+
+/**
+ * An Organization Administrator's arrangement for one Agent to make the key for a Managed Certificate, obtain its
+ * Certificates and put them into use by running a Deployment Script version. A Managed Certificate whose key an Agent
+ * holds has exactly one, and it is bound to that one Agent.
+ */
+export const deployment = pgTable(
+  "deployment",
+  {
+    id: uuid("id").primaryKey().defaultRandom(),
+    organizationId: text("organization_id")
+      .notNull()
+      .references(() => organization.id),
+    managedCertificateId: uuid("managed_certificate_id").notNull(),
+    agentId: uuid("agent_id").notNull(),
+    scriptId: uuid("script_id").notNull(),
+    /** The version of the script it runs; the Agent is given exactly that content. */
+    scriptVersion: integer("script_version").notNull(),
+    createdById: text("created_by_id").notNull(),
+    createdByEmail: text("created_by_email").notNull(),
+    /** Why the Agent could not make the key or its CSR was refused, while that is so: the Deployment waits for a person. */
+    keyFailure: text("key_failure"),
+    createdAt: timestamp("created_at", { withTimezone: true }).notNull(),
+  },
+  (t) => [
+    uniqueIndex("deployment_managed_certificate_unique").on(t.managedCertificateId),
+    index("deployment_org_idx").on(t.organizationId, t.createdAt),
+    index("deployment_agent_idx").on(t.agentId),
+    foreignKey({ columns: [t.managedCertificateId, t.organizationId], foreignColumns: [managedCertificate.id, managedCertificate.organizationId] }),
+    foreignKey({ columns: [t.agentId, t.organizationId], foreignColumns: [agent.id, agent.organizationId] }),
+    foreignKey({ columns: [t.scriptId, t.scriptVersion], foreignColumns: [deploymentScriptVersion.scriptId, deploymentScriptVersion.version] }),
+    foreignKey({ columns: [t.scriptId, t.organizationId], foreignColumns: [deploymentScript.id, deploymentScript.organizationId] }),
+    // Lets other tables reference a Deployment together with its Organization, so none can point at another's.
+    unique("deployment_id_organization_unique").on(t.id, t.organizationId),
+  ],
+);
+
+/**
+ * The record of one execution of a Deployment: when it ran, which Certificate it delivered, which script content, whether
+ * the script succeeded, and its output (truncated). A run whose script was not started (it did not match its hash) has no exit code.
+ */
+export const deploymentRun = pgTable(
+  "deployment_run",
+  {
+    id: uuid("id").primaryKey().defaultRandom(),
+    organizationId: text("organization_id")
+      .notNull()
+      .references(() => organization.id),
+    deploymentId: uuid("deployment_id").notNull(),
+    certificateId: uuid("certificate_id")
+      .notNull()
+      .references(() => certificate.id),
+    /** What asked for it: the Issuance of the Certificate, or an Organization Administrator running it again. */
+    trigger: text("trigger").$type<"issuance" | "rerun">().notNull(),
+    status: text("status").$type<"succeeded" | "failed">().notNull(),
+    scriptVersion: integer("script_version").notNull(),
+    scriptHash: text("script_hash").notNull(),
+    startedAt: timestamp("started_at", { withTimezone: true }).notNull(),
+    finishedAt: timestamp("finished_at", { withTimezone: true }).notNull(),
+    exitCode: integer("exit_code"),
+    output: text("output").notNull(),
+    outputTruncated: boolean("output_truncated").notNull(),
+    createdAt: timestamp("created_at", { withTimezone: true }).notNull(),
+  },
+  (t) => [
+    index("deployment_run_deployment_idx").on(t.deploymentId, t.createdAt),
+    foreignKey({ columns: [t.deploymentId, t.organizationId], foreignColumns: [deployment.id, deployment.organizationId] }),
+    check("deployment_run_status", sql`${t.status} in ('succeeded', 'failed')`),
+    check("deployment_run_trigger", sql`${t.trigger} in ('issuance', 'rerun')`),
   ],
 );

@@ -44,7 +44,8 @@ export function Renewal({ org, m, userId, onChanged }: { org: Me["organizations"
   // The server decides; this only keeps the controls from those who surely may not (a Team's members may, too).
   const owns = isOwner(m, userId);
   const mayPolicy = can(org, "managedCertificate", "setRenewalPolicy") || owns;
-  const mayCsr = can(org, "managedCertificate", "replaceCsr") || owns;
+  // An Agent makes its own CSRs: only a key the Owner holds has one uploaded.
+  const mayCsr = (can(org, "managedCertificate", "replaceCsr") || owns) && m.keyCustody === "owner";
   const settled = m.approval.status !== "pending" && m.approval.status !== "rejected";
 
   const [mode, setMode] = useState<RenewalPolicy["mode"]>(m.renewal.policy.mode);

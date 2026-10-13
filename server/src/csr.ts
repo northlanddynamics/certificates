@@ -8,7 +8,8 @@ x509.cryptoProvider.set(webcrypto as unknown as Crypto);
 
 export const KEY_ALGORITHMS = ["ecdsa-p256", "ecdsa-p384", "rsa-2048", "rsa-3072", "rsa-4096"] as const;
 export type KeyAlgorithm = (typeof KEY_ALGORITHMS)[number];
-export type KeyCustody = "owner";
+export const KEY_CUSTODIES = ["owner", "agent"] as const;
+export type KeyCustody = (typeof KEY_CUSTODIES)[number];
 
 // By OID: looked up by class, an extension is not found when two copies of the library are loaded.
 const SUBJECT_ALTERNATIVE_NAME = "2.5.29.17";

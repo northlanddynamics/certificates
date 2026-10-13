@@ -6,7 +6,7 @@ import { and, desc, eq, inArray, or, type SQL } from "drizzle-orm";
 import { APPROVAL_STATUSES } from "./approval";
 import type { Authorizer } from "./authorization";
 import { ACME_ENVIRONMENTS } from "./certificate-authority";
-import { KEY_ALGORITHMS } from "./csr";
+import { KEY_ALGORITHMS, KEY_CUSTODIES } from "./csr";
 import type { Db } from "./db/client";
 import { certificate, issuance, managedCertificate } from "./db/schema";
 import { HttpError, OrgParam } from "./http";
@@ -93,7 +93,7 @@ export const ManagedCertificate = z.object({
   id: z.string(),
   names: z.array(z.string()),
   keyAlgorithm: z.enum(KEY_ALGORITHMS),
-  keyCustody: z.enum(["owner"]),
+  keyCustody: z.enum(KEY_CUSTODIES).openapi({ description: "`owner`: the Owner holds the private key and submitted a CSR. `agent`: one Agent made the key and holds it, through its one Deployment." }),
   environment: z.enum(ACME_ENVIRONMENTS),
   createdAt: z.string(),
   archivedAt: z.string().nullable().openapi({ description: "When it was archived: it then neither issues, renews nor deploys, and is listed only when archived ones are asked for." }),
