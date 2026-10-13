@@ -14,6 +14,7 @@ import (
 	"sync/atomic"
 	"time"
 
+	"certificate-platform/agent/internal/dnsrelay"
 	"certificate-platform/agent/internal/identity"
 	"certificate-platform/agent/internal/platform"
 )
@@ -183,14 +184,40 @@ func (r *runner) cycle(ctx context.Context) (time.Duration, error) {
 		return 0, err
 	}
 	for _, item := range res.Items {
-		// There is nothing to do yet for any type; later work items arrive here.
-		r.cfg.Log.Warn("ignoring a work item of a type this Agent does not know", "id", item.ID, "type", item.Type)
+		if err := r.handle(ctx, item); err != nil {
+			return 0, err
+		}
 	}
 	wait := time.Duration(res.PollAfterSeconds) * time.Second
 	if wait < time.Second {
 		wait = time.Second
 	}
 	return wait, nil
+}
+
+// handle carries out a work item and reports how it went. Only the platform refusing the Agent's identity is an error: an
+// item that failed has been reported as failed, and one that could not be reported is the platform's to give up on.
+func (r *runner) handle(ctx context.Context, item platform.WorkItem) error {
+	if !dnsrelay.Handles(item.Type) {
+		r.cfg.Log.Warn("ignoring a work item of a type this Agent does not know", "id", item.ID, "type", item.Type)
+		return nil
+	}
+	// The work item holds the provider's credentials: it is logged by its id and type, never by what it carries.
+	result := platform.WorkResult{OK: true}
+	if failure := dnsrelay.Carry(ctx, item.Type, item.Payload); failure != nil {
+		result = platform.WorkResult{Kind: failure.Kind, Error: failure.Message}
+		r.cfg.Log.Warn("a DNS Provider operation failed", "id", item.ID, "type", item.Type, "kind", failure.Kind, "error", failure.Message)
+	} else {
+		r.cfg.Log.Info("carried out a DNS Provider operation", "id", item.ID, "type", item.Type)
+	}
+	if err := r.client.ReportResult(ctx, item.ID, result); err != nil {
+		if platform.Rejected(err) {
+			return err
+		}
+		// A platform that stopped waiting (it asked another Agent) refuses a late report; neither that nor an outage is the Agent's to retry.
+		r.cfg.Log.Warn("the result of a work item could not be reported", "id", item.ID, "error", err)
+	}
+	return nil
 }
 
 // due is when the identity certificate is rotated: with a third of its life left.

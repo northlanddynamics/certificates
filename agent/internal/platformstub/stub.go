@@ -42,6 +42,21 @@ type Request struct {
 	ClientCertificate string
 }
 
+// WorkItem is something the stub asks an Agent to do, as the platform does: its payload is what the Agent is sent.
+type WorkItem struct {
+	ID      string         `json:"id"`
+	Type    string         `json:"type"`
+	Payload map[string]any `json:"payload"`
+}
+
+// Result is what an Agent reported of a work item.
+type Result struct {
+	ID    string
+	OK    bool
+	Kind  string
+	Error string
+}
+
 type agentRecord struct {
 	id       string
 	current  string
@@ -71,7 +86,11 @@ type Stub struct {
 	agents   map[string]*agentRecord
 	requests []Request
 	failures []string
-	down     bool
+	// queued are the work items not yet given to an Agent; given those that were, which wait for a result.
+	queued  []WorkItem
+	given   map[string]bool
+	results []Result
+	down    bool
 	// rotationFailing makes rotating an identity fail with a 500.
 	rotationFailing bool
 	// identityLife is how long the identity certificates it issues last.
@@ -92,7 +111,7 @@ type Options struct {
 
 // Start runs a stub on a local port. Close it when done.
 func Start(opts Options) (*Stub, error) {
-	s := &Stub{clock: opts.Clock, tokens: map[string]bool{}, agents: map[string]*agentRecord{}, identityLife: opts.IdentityLife, pollSeconds: opts.PollAfterSeconds}
+	s := &Stub{clock: opts.Clock, tokens: map[string]bool{}, agents: map[string]*agentRecord{}, given: map[string]bool{}, identityLife: opts.IdentityLife, pollSeconds: opts.PollAfterSeconds}
 	if s.identityLife == 0 {
 		s.identityLife = 30 * 24 * time.Hour
 	}
@@ -151,6 +170,20 @@ func (s *Stub) Revoke(agentID string) {
 	s.mu.Lock()
 	defer s.mu.Unlock()
 	s.agents[agentID].revoked = true
+}
+
+// Enqueue asks the Agent that next polls to do something, once.
+func (s *Stub) Enqueue(item WorkItem) {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	s.queued = append(s.queued, item)
+}
+
+// Results are the reports on work items received so far, in order.
+func (s *Stub) Results() []Result {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	return append([]Result(nil), s.results...)
 }
 
 // Requests are the calls received so far, in order.
@@ -318,7 +351,7 @@ func (s *Stub) handle(w http.ResponseWriter, r *http.Request) {
 		s.reply(w, r, 503, map[string]string{"error": "the platform is down"}, nil)
 		return
 	}
-	op := s.ops[r.Method+" "+r.URL.Path]
+	op, template := s.operation(r.Method, r.URL.Path)
 	if op == nil {
 		s.violation("%s %s is not in the contract", r.Method, r.URL.Path)
 		s.reply(w, r, 404, map[string]string{"error": "not found"}, nil)
@@ -347,7 +380,7 @@ func (s *Stub) handle(w http.ResponseWriter, r *http.Request) {
 	}
 	var payload map[string]any
 	_ = json.Unmarshal(body, &payload)
-	switch r.URL.Path {
+	switch template {
 	case "/api/agent/registration":
 		status, answer := s.register(payload)
 		s.reply(w, r, status, answer, op)
@@ -358,8 +391,17 @@ func (s *Stub) handle(w http.ResponseWriter, r *http.Request) {
 		if agent.previous != "" && serial == agent.current {
 			agent.previous = ""
 		}
+		items := []WorkItem{}
+		for _, item := range s.queued {
+			s.given[item.ID] = true
+			items = append(items, item)
+		}
+		s.queued = nil
 		s.mu.Unlock()
-		s.reply(w, r, 200, map[string]any{"items": []any{}, "pollAfterSeconds": s.pollSeconds}, op)
+		s.reply(w, r, 200, map[string]any{"items": items, "pollAfterSeconds": s.pollSeconds}, op)
+	case "/api/agent/work-items/{id}/result":
+		status, answer := s.report(strings.TrimSuffix(strings.TrimPrefix(r.URL.Path, "/api/agent/work-items/"), "/result"), payload)
+		s.reply(w, r, status, answer, op)
 	case "/api/agent/identity":
 		s.mu.Lock()
 		failing := s.rotationFailing
@@ -373,6 +415,51 @@ func (s *Stub) handle(w http.ResponseWriter, r *http.Request) {
 	default:
 		s.reply(w, r, 501, map[string]string{"error": "the stub does not implement this route"}, nil)
 	}
+}
+
+// operation is the contract's operation for the call, whose path may have parameters (`/work-items/{id}/result`), and the path as the contract writes it.
+func (s *Stub) operation(method, path string) (*operation, string) {
+	if op := s.ops[method+" "+path]; op != nil {
+		return op, path
+	}
+	actual := strings.Split(path, "/")
+	for key, op := range s.ops {
+		verb, template, _ := strings.Cut(key, " ")
+		parts := strings.Split(template, "/")
+		if verb != method || len(parts) != len(actual) {
+			continue
+		}
+		matches := true
+		for i, part := range parts {
+			if !(strings.HasPrefix(part, "{") && strings.HasSuffix(part, "}")) && part != actual[i] {
+				matches = false
+				break
+			}
+		}
+		if matches {
+			return op, template
+		}
+	}
+	return nil, path
+}
+
+// report is the platform taking an Agent's report: of an item it was given, once.
+func (s *Stub) report(id string, payload map[string]any) (int, any) {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	if _, known := s.given[id]; !known {
+		return 404, map[string]string{"error": "work item not found"}
+	}
+	if !s.given[id] {
+		return 409, map[string]string{"error": "the work item is not waiting for a result"}
+	}
+	s.given[id] = false
+	result := Result{ID: id}
+	result.OK, _ = payload["ok"].(bool)
+	result.Kind, _ = payload["kind"].(string)
+	result.Error, _ = payload["error"].(string)
+	s.results = append(s.results, result)
+	return 200, map[string]any{"received": true}
 }
 
 // authenticate is mutual TLS as the platform does it: a certificate the identity CA issued, valid now, that is the Agent's

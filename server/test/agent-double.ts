@@ -3,6 +3,8 @@
 // in agent/, which Seam B runs against a stub of the platform.)
 import * as x509 from "@peculiar/x509";
 import { webcrypto } from "node:crypto";
+import { DnsProviderError } from "../src/dns-provider";
+import { DNS_PROVIDER_KINDS } from "../src/dns-provider-kinds";
 import type { Harness } from "./harness";
 
 x509.cryptoProvider.set(webcrypto as unknown as Crypto);
@@ -45,7 +47,20 @@ export interface Registration {
   version?: string;
 }
 
+export interface WorkItem {
+  id: string;
+  type: string;
+  payload: any;
+}
+
 export class TestAgent {
+  /** Every work item this Agent has been given, in order. */
+  readonly received: WorkItem[] = [];
+  /** The work items it carried out (to the end, whatever the outcome), in order. */
+  readonly executed: WorkItem[] = [];
+  /** Makes it take work items and never answer them, as an Agent that stalled or lost its connection does. */
+  stalled = false;
+
   private constructor(
     private readonly h: Harness,
     readonly id: string,
@@ -79,6 +94,59 @@ export class TestAgent {
 
   poll(version = "0.1.0", certificate?: string | null) {
     return this.call("/api/agent/poll", { version }, certificate);
+  }
+
+  /** Reports how a work item went. */
+  report(id: string, result: { ok: boolean; kind?: "rejected" | "unreachable"; error?: string }, certificate: string | null = this.certificate) {
+    return this.call(`/api/agent/work-items/${id}/result`, result, certificate);
+  }
+
+  /**
+   * Polls once and carries out the DNS Provider work items it is given, as the Agent does: with the provider code the
+   * platform itself runs (the Agent proper is Go, which has its own; Seam B), and reports how each went.
+   */
+  async work(): Promise<WorkItem[]> {
+    const polled = await this.poll();
+    if (polled.status !== 200) return [];
+    const items = polled.body.items as WorkItem[];
+    this.received.push(...items);
+    if (this.stalled) return items;
+    for (const item of items) {
+      await this.carryOut(item);
+      this.executed.push(item);
+    }
+    return items;
+  }
+
+  private async carryOut(item: WorkItem) {
+    const { provider, record } = item.payload;
+    try {
+      const kind = DNS_PROVIDER_KINDS[provider.type as keyof typeof DNS_PROVIDER_KINDS];
+      const dns = kind.create(kind.settings.parse(provider.settings), provider.secret);
+      if (item.type === "dns.present") await dns.presentTxt(record);
+      else if (item.type === "dns.cleanup") await dns.cleanUpTxt(record);
+      else if (item.type === "dns.test") await dns.testConnection();
+      else throw new Error(`a work item of a type this Agent does not know: ${item.type}`);
+      await this.report(item.id, { ok: true });
+    } catch (err) {
+      if (!(err instanceof DnsProviderError)) throw err;
+      await this.report(item.id, { ok: false, kind: err.kind, error: err.message });
+    }
+  }
+
+  /** Has the Agent poll and work every `everyMs` until the returned function is called, which waits for what it is doing. */
+  startWorking(everyMs = 20): () => Promise<void> {
+    let running = true;
+    const loop = (async () => {
+      while (running) {
+        await this.work();
+        await new Promise((resolve) => setTimeout(resolve, everyMs));
+      }
+    })();
+    return async () => {
+      running = false;
+      await loop;
+    };
   }
 
   /** Asks for a new identity certificate for a new key; this Agent takes the new one when it is issued. */

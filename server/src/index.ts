@@ -23,6 +23,8 @@ const { app, auth, db, issuances, renewals } = createApp({
   kms: createLocalKms(localKmsKey),
   certificateAuthority: createLetsEncrypt(),
   agentGateway: {
+    // An Agent's poll waits for work this long, so that relayed DNS operations reach it at once (see AgentGatewayConfig).
+    longPollSeconds: Number(process.env.AGENT_LONG_POLL_SECONDS ?? 20),
     ...(process.env.AGENT_LATEST_VERSION && { latestVersion: process.env.AGENT_LATEST_VERSION }),
     ...(process.env.AGENT_GATEWAY_SECRET && { terminatorSecret: process.env.AGENT_GATEWAY_SECRET }),
   },
@@ -45,4 +47,5 @@ if (process.env.OPERATOR_EMAIL && process.env.OPERATOR_PASSWORD) {
   });
 }
 
-export default { port: Number(process.env.PORT ?? 3000), fetch: app.fetch };
+// An idle connection is closed after `idleTimeout` seconds, which must outlast a long poll (Bun allows at most 255).
+export default { port: Number(process.env.PORT ?? 3000), fetch: app.fetch, idleTimeout: 60 };

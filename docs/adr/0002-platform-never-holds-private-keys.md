@@ -7,3 +7,7 @@ The same principle applies to the secrets the platform must hold (DNS Provider c
 ## Addendum: the CSR Generator
 
 The web app's code runs in the user's browser, and what the platform serves is not the platform. The CSR Generator makes a key pair and a CSR there, with WebCrypto, and never sends the key anywhere: it has no route on the server, and only the CSR is submitted, to the forms that already took one. The key is offered to the user to download or copy, and is dropped from the page's state when they leave it or make another. The platform still never generates, stores or relays a private key.
+
+## Addendum: relayed DNS Provider credentials
+
+A DNS Provider that Agents relay is run beside DNS the platform cannot reach, so its credentials must reach the Agent that runs an operation. They stay write-only for people. The platform puts them into a work item only at the moment its Agent is given it, over the Agent's mTLS channel, for that operation alone: they are never stored in the work item, shown by any API, written to an Audit Event or logged, and an Agent that is revoked, or an item that has waited too long, is given none. The Agent holds them in memory for the operation and keeps nothing. Delivery is not itself an Audit Event; the operations that cause it (a connection test, an Issuance) are recorded.

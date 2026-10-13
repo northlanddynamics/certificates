@@ -16,6 +16,7 @@ import { createDcvPlans } from "./dcv-plan";
 import { DEFAULT_DCV_CONFIG, createDcv, createTxtResolver, type DcvConfig } from "./dcv";
 import { listAudit } from "./audit";
 import { createDb } from "./db/client";
+import { DEFAULT_DNS_RELAY, createDnsRelay, type DnsRelayConfig } from "./dns-relay";
 import { createDnsProviders, registerDnsProviders } from "./dns-providers";
 import { member, organization } from "./db/schema";
 import { createAuthorizer } from "./authorization";
@@ -42,6 +43,7 @@ import { ROLE_NAMES, permissionsOf } from "./permissions";
 import { createSecrets } from "./secrets";
 import { registerTeamsOverview } from "./teams-overview";
 import { createUnitOfWork } from "./unit-of-work";
+import { createWorkItems } from "./work-items";
 
 export interface AppDeps {
   pool: Pool;
@@ -60,6 +62,8 @@ export interface AppDeps {
   dcv?: Partial<DcvConfig>;
   /** How the Agent protocol is run: see `AgentGatewayConfig` for what each setting is and its default. */
   agentGateway?: Partial<AgentGatewayConfig>;
+  /** How DNS Provider operations relayed by Agents wait for them: see `DnsRelayConfig`. */
+  dnsRelay?: Partial<DnsRelayConfig>;
   /** See `OrganizationChangesDeps.memberRemovalHooks`. */
   memberRemovalHooks?: MemberRemovalHook[];
 }
@@ -242,8 +246,12 @@ export function createApp(deps: AppDeps) {
   registerTeamsOverview({ app, db, requireUser, authorize });
   const secrets = createSecrets(deps.kms);
   registerAcmeAccounts({ app, db, requireUser, authorize, unitOfWork, secrets, certificateAuthority: deps.certificateAuthority });
-  const dnsProviders = createDnsProviders(secrets);
-  registerDnsProviders({ app, db, requireUser, authorize, unitOfWork, secrets, dnsProviders });
+  const agentGateway = { ...DEFAULT_AGENT_GATEWAY, ...deps.agentGateway };
+  const dnsRelayConfig = { ...DEFAULT_DNS_RELAY, ...deps.dnsRelay };
+  const workItems = createWorkItems({ db, unitOfWork, pollMs: dnsRelayConfig.pollMs, maxWaitMs: dnsRelayConfig.maxWaitMs });
+  const dnsRelay = createDnsRelay({ db, workItems, secrets, clock, offlineAfterSeconds: agentGateway.offlineAfterSeconds, config: dnsRelayConfig });
+  const dnsProviders = createDnsProviders(secrets, dnsRelay);
+  registerDnsProviders({ app, db, requireUser, authorize, unitOfWork, secrets, dnsProviders, relay: dnsRelay });
   const dcvPlans = createDcvPlans(dnsProviders);
   registerDcvConfiguration({ app, db, requireUser, authorize, unitOfWork, dcvPlans });
   const dcv = createDcv(dnsProviders, dcvPlans, { resolver: createTxtResolver(), ...DEFAULT_DCV_CONFIG, ...deps.dcv });
@@ -260,9 +268,8 @@ export function createApp(deps: AppDeps) {
   registerArchiveRoutes({ app, requireUser, authorize, unitOfWork, reader });
   registerRevocationRoutes({ app, db, requireUser, unitOfWork, reader, secrets, certificateAuthority: deps.certificateAuthority });
   registerHistory({ app, db, requireUser, reader });
-  const agentGateway = { ...DEFAULT_AGENT_GATEWAY, ...deps.agentGateway };
   registerAgents({ app, db, requireUser, authorize, unitOfWork, clock, config: agentGateway });
-  registerAgentGateway({ app, db, unitOfWork, identityCa: createAgentIdentityCa({ db, kms: deps.kms, clock }), clock, config: agentGateway });
+  registerAgentGateway({ app, db, unitOfWork, identityCa: createAgentIdentityCa({ db, kms: deps.kms, clock }), workItems, clock, config: agentGateway });
 
   app.doc("/api/openapi.json", {
     openapi: "3.1.0",

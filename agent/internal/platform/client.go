@@ -122,7 +122,7 @@ func (c *Client) Register(ctx context.Context, req RegistrationRequest) (*Regist
 	return &res, c.post(ctx, "/api/agent/registration", req, &res)
 }
 
-// WorkItem is something the platform asks the Agent to do. The platform has none to ask yet.
+// WorkItem is something the platform asks the Agent to do.
 type WorkItem struct {
 	ID      string                     `json:"id"`
 	Type    string                     `json:"type"`
@@ -142,6 +142,24 @@ type PollResponse struct {
 func (c *Client) Poll(ctx context.Context, version string) (*PollResponse, error) {
 	var res PollResponse
 	return &res, c.post(ctx, "/api/agent/poll", PollRequest{Version: version}, &res)
+}
+
+// WorkResult is how a work item went. Kind says how a DNS Provider operation failed: "rejected" when the DNS service answered
+// and said no, "unreachable" when it did not answer. Error is for a person to read and holds no secret.
+type WorkResult struct {
+	OK    bool   `json:"ok"`
+	Kind  string `json:"kind,omitempty"`
+	Error string `json:"error,omitempty"`
+}
+
+type workResultResponse struct {
+	Received bool `json:"received"`
+}
+
+// ReportResult tells the platform how a work item went, once.
+func (c *Client) ReportResult(ctx context.Context, id string, result WorkResult) error {
+	var res workResultResponse
+	return c.post(ctx, "/api/agent/work-items/"+url.PathEscape(id)+"/result", result, &res)
 }
 
 type identityRequest struct {

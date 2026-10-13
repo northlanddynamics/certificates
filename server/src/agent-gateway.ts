@@ -16,6 +16,7 @@ import type { Db } from "./db/client";
 import { agent, agentRegistrationToken } from "./db/schema";
 import { HttpError, errors, json } from "./http";
 import type { UnitOfWork } from "./unit-of-work";
+import type { WorkItems } from "./work-items";
 
 export interface AgentGatewayConfig {
   /** The newest Agent version the platform knows of; older ones are flagged. */
@@ -27,6 +28,11 @@ export interface AgentGatewayConfig {
   /** How often an Agent is told to poll, and how long it may be silent before it counts as offline. */
   pollAfterSeconds: number;
   offlineAfterSeconds: number;
+  /**
+   * How long a poll with nothing to bring waits for something to come, so that work reaches an Agent within moments of
+   * being asked for rather than a poll later. Zero answers at once. An Agent polls again straight after a long poll.
+   */
+  longPollSeconds: number;
   /** The request header in which the TLS terminator passes the client certificate it verified: PEM, URL-encoded (nginx's `$ssl_client_escaped_cert`). */
   clientCertificateHeader: string;
   /**
@@ -42,9 +48,12 @@ export const DEFAULT_AGENT_GATEWAY: AgentGatewayConfig = {
   registrationTokenDays: 7,
   pollAfterSeconds: 30,
   offlineAfterSeconds: 120,
+  longPollSeconds: 0,
   clientCertificateHeader: "x-client-cert",
 };
 
+/** How often a long poll looks for work. */
+const LONG_POLL_CHECK_MS = 250;
 export const TERMINATOR_SECRET_HEADER = "x-agent-gateway-secret";
 export const REGISTRATION_TOKEN_PREFIX = "agt_";
 export const hashToken = (token: string) => createHash("sha256").update(token).digest("hex");
@@ -58,12 +67,23 @@ const Certificate = z.object({
 });
 const WorkItem = z.object({
   id: z.string(),
-  type: z.string().openapi({ description: "What the Agent is asked to do. None exist yet: later tickets add them, and an Agent ignores a type it does not know." }),
+  type: z.string().openapi({
+    description:
+      "What the Agent is asked to do; an Agent ignores a type it does not know. `dns.present`, `dns.cleanup` and `dns.test` are DNS Provider operations the Agent relays: " +
+      "the payload has `provider` (`type`, its `settings` and its `secret`, the credentials, which the Agent uses for this operation only) and, but for `dns.test`, the TXT `record` (`name`, `value`). " +
+      "The Agent reports how it went to `POST /api/agent/work-items/{id}/result`.",
+  }),
   payload: z.record(z.string(), z.unknown()),
 });
+const WorkItemParams = z.object({ id: z.string().openapi({ param: { name: "id", in: "path" } }) });
+const WorkResult = z.object({
+  ok: z.boolean(),
+  kind: z.enum(["rejected", "unreachable"]).optional().openapi({ description: "When a DNS Provider operation failed: `rejected` if the DNS service answered and said no, `unreachable` if it did not answer." }),
+  error: z.string().max(1000).optional().openapi({ description: "What went wrong, for a person to read. It must not contain the credentials." }),
+});
 
-export function registerAgentGateway(ctx: { app: OpenAPIHono; db: Db; unitOfWork: UnitOfWork; identityCa: AgentIdentityCa; clock: () => Date; config: AgentGatewayConfig }) {
-  const { app, db, unitOfWork, identityCa, clock, config } = ctx;
+export function registerAgentGateway(ctx: { app: OpenAPIHono; db: Db; unitOfWork: UnitOfWork; identityCa: AgentIdentityCa; workItems: WorkItems; clock: () => Date; config: AgentGatewayConfig }) {
+  const { app, db, unitOfWork, identityCa, workItems, clock, config } = ctx;
 
   app.openAPIRegistry.registerComponent("securitySchemes", "agentIdentity", {
     type: "mutualTLS",
@@ -202,7 +222,36 @@ export function registerAgentGateway(ctx: { app: OpenAPIHono; db: Db; unitOfWork
           .set({ version, lastContactAt: now, ...(serial === row.identitySerial && row.previousIdentitySerial ? { previousIdentitySerial: null } : {}) })
           .where(eq(agent.id, row.id)),
       );
-      return c.json({ items: [], pollAfterSeconds: config.pollAfterSeconds }, 200);
+      // Each item is given once. When there is none the call may wait for one: it ends with the first, or after `longPollSeconds`.
+      const deadline = Date.now() + config.longPollSeconds * 1000;
+      let items = await workItems.deliver(row);
+      while (items.length === 0 && Date.now() < deadline) {
+        await new Promise((resolve) => setTimeout(resolve, Math.min(LONG_POLL_CHECK_MS, Math.max(deadline - Date.now(), 1))));
+        items = await workItems.deliver(row);
+      }
+      // After a long poll the Agent asks again at once; the next one is its next heartbeat.
+      return c.json({ items, pollAfterSeconds: config.longPollSeconds > 0 ? 1 : config.pollAfterSeconds }, 200);
+    },
+  );
+
+  app.openapi(
+    createRoute({
+      method: "post",
+      path: "/api/agent/work-items/{id}/result",
+      tags: ["Agent protocol"],
+      summary: "Report how a work item went",
+      description:
+        "Once, by the Agent the item was given to. An item whose requester stopped waiting for the Agent (it was too slow, so another was asked) is refused with a 409, as is one already reported on.",
+      security: SECURITY,
+      request: { params: WorkItemParams, body: { content: { "application/json": { schema: WorkResult } } } },
+      responses: { 200: json(z.object({ received: z.boolean() })), ...errors(400, 401, 404, 409) },
+    }),
+    async (c) => {
+      const { id } = c.req.valid("param");
+      const result = c.req.valid("json");
+      const { row } = await authenticate(c);
+      await workItems.report(row, id, result);
+      return c.json({ received: true }, 200);
     },
   );
 

@@ -63,6 +63,7 @@ describe("connecting an Infoblox DNS Provider", () => {
       name: "Infoblox",
       type: "infoblox",
       settings: { url: wapi.url, zone: BIND.zone, view: "default", caCertificate: wapi.caCertificate },
+      relayAgentIds: [],
     });
     const listed = await api(acmeOrg, "/dns-providers");
     expect(listed.body.items).toEqual([created.body]);

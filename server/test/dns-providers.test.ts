@@ -48,6 +48,7 @@ describe("connecting an RFC 2136 DNS Provider", () => {
       name: "BIND",
       type: "rfc2136",
       settings: { server: BIND.server, port: BIND.port, zone: BIND.zone, keyName: BIND.keyName, algorithm: "hmac-sha256" },
+      relayAgentIds: [],
     });
 
     const listed = await admin().list();
@@ -157,6 +158,7 @@ describe("changing a DNS Provider", () => {
       name: "BIND (fixed)",
       type: "rfc2136",
       settings: { server: BIND.server, port: BIND.port, zone: BIND.zone, keyName: BIND.keyName, algorithm: "hmac-sha256" },
+      relayAgentIds: [],
     });
     expect((await admin().list()).body.items).toEqual([changed.body]);
     expect((await admin().test(body.id)).body).toEqual({ ok: true });

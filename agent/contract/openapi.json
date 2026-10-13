@@ -226,7 +226,7 @@
                           },
                           "type": {
                             "type": "string",
-                            "description": "What the Agent is asked to do. None exist yet: later tickets add them, and an Agent ignores a type it does not know."
+                            "description": "What the Agent is asked to do; an Agent ignores a type it does not know. `dns.present`, `dns.cleanup` and `dns.test` are DNS Provider operations the Agent relays: the payload has `provider` (`type`, its `settings` and its `secret`, the credentials, which the Agent uses for this operation only) and, but for `dns.test`, the TXT `record` (`name`, `value`). The Agent reports how it went to `POST /api/agent/work-items/{id}/result`."
                           },
                           "payload": {
                             "type": "object",
@@ -271,6 +271,152 @@
             }
           },
           "401": {
+            "description": "Error",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "type": "object",
+                  "properties": {
+                    "error": {
+                      "type": "string"
+                    }
+                  },
+                  "required": [
+                    "error"
+                  ]
+                }
+              }
+            }
+          }
+        }
+      }
+    },
+    "/api/agent/work-items/{id}/result": {
+      "post": {
+        "tags": [
+          "Agent protocol"
+        ],
+        "summary": "Report how a work item went",
+        "description": "Once, by the Agent the item was given to. An item whose requester stopped waiting for the Agent (it was too slow, so another was asked) is refused with a 409, as is one already reported on.",
+        "security": [
+          {
+            "agentIdentity": []
+          }
+        ],
+        "parameters": [
+          {
+            "schema": {
+              "type": "string"
+            },
+            "required": true,
+            "name": "id",
+            "in": "path"
+          }
+        ],
+        "requestBody": {
+          "content": {
+            "application/json": {
+              "schema": {
+                "type": "object",
+                "properties": {
+                  "ok": {
+                    "type": "boolean"
+                  },
+                  "kind": {
+                    "type": "string",
+                    "enum": [
+                      "rejected",
+                      "unreachable"
+                    ],
+                    "description": "When a DNS Provider operation failed: `rejected` if the DNS service answered and said no, `unreachable` if it did not answer."
+                  },
+                  "error": {
+                    "type": "string",
+                    "maxLength": 1000,
+                    "description": "What went wrong, for a person to read. It must not contain the credentials."
+                  }
+                },
+                "required": [
+                  "ok"
+                ]
+              }
+            }
+          }
+        },
+        "responses": {
+          "200": {
+            "description": "OK",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "type": "object",
+                  "properties": {
+                    "received": {
+                      "type": "boolean"
+                    }
+                  },
+                  "required": [
+                    "received"
+                  ]
+                }
+              }
+            }
+          },
+          "400": {
+            "description": "Error",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "type": "object",
+                  "properties": {
+                    "error": {
+                      "type": "string"
+                    }
+                  },
+                  "required": [
+                    "error"
+                  ]
+                }
+              }
+            }
+          },
+          "401": {
+            "description": "Error",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "type": "object",
+                  "properties": {
+                    "error": {
+                      "type": "string"
+                    }
+                  },
+                  "required": [
+                    "error"
+                  ]
+                }
+              }
+            }
+          },
+          "404": {
+            "description": "Error",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "type": "object",
+                  "properties": {
+                    "error": {
+                      "type": "string"
+                    }
+                  },
+                  "required": [
+                    "error"
+                  ]
+                }
+              }
+            }
+          },
+          "409": {
             "description": "Error",
             "content": {
               "application/json": {

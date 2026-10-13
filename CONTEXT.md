@@ -99,7 +99,7 @@ Proof, demanded by a Certificate Authority, that the requester controls a domain
 _Avoid_: domain verification, challenge (when meaning the whole process)
 
 **DNS Provider**:
-A pluggable integration with an authoritative DNS service, used to publish the records that satisfy DCV.
+A pluggable integration with an authoritative DNS service, used to publish the records that satisfy DCV. It runs either directly from the platform or relayed: an Organization Administrator assigns it one or more of the Organization's Agents, and any online one of them carries out its operations beside DNS the platform cannot reach.
 _Avoid_: DNS backend, DNS plugin
 
 **Validation Zone**:
@@ -145,6 +145,10 @@ _Avoid_: client, daemon, connector, relay
 **Agent Registration**:
 The one-time binding of a newly installed Agent to an Organization using a single-use token that an Organization Administrator made, which expires if it is not used. The Agent sends a CSR for a key it generated and is given an identity certificate.
 _Avoid_: enrollment (reserved for Enrollment Profiles), onboarding
+
+**Work Item**:
+One thing the platform asks one Agent to do, which the Agent finds by polling and answers with a result, such as carrying out a relayed DNS Provider operation. What an Agent needs in order to do it, such as a DNS Provider's credentials, is added only when the Agent is given it.
+_Avoid_: job, task, command
 
 **Agent identity certificate**:
 The mTLS client certificate by which an Agent authenticates, issued by the platform's own Agent identity CA (which is not a Private CA and issues nothing else) for a key the Agent keeps, and rotated by the Agent before it ends. Revoking an Agent ends its identity at once.

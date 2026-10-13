@@ -9,6 +9,7 @@ import type { Db, Tx } from "./db/client";
 import { dnsProvider } from "./db/schema";
 import { DnsProviderError, type DnsProvider } from "./dns-provider";
 import { DNS_PROVIDER_KINDS, DNS_PROVIDER_TYPES } from "./dns-provider-kinds";
+import type { DnsRelay } from "./dns-relay";
 import { HttpError, OrgParam, errors, isUniqueViolation, json } from "./http";
 import type { Secrets } from "./secrets";
 import type { Actor, UnitOfWork } from "./unit-of-work";
@@ -16,7 +17,11 @@ import type { Actor, UnitOfWork } from "./unit-of-work";
 type Row = typeof dnsProvider.$inferSelect;
 
 export interface DnsProviders {
-  /** The Organization's DNS Provider `providerId`, ready to use: the one way anything else gets at a provider and its secret. Throws when there is no such provider. */
+  /**
+   * The Organization's DNS Provider `providerId`, ready to use: the one way anything else gets at a provider and its secret.
+   * One that Agents are assigned to relay is a provider whose operations those Agents carry out (dns-relay.ts), with its
+   * secret left where it is until an Agent is given an operation. Throws when there is no such provider.
+   */
   open(db: Db | Tx, organizationId: string, providerId: string): Promise<DnsProvider>;
   /**
    * The Organization's DNS Provider that publishes records at `name`: of those whose zone contains the name, the one
@@ -26,7 +31,7 @@ export interface DnsProviders {
   locate(db: Db | Tx, organizationId: string, name: string, only?: string): Promise<{ id: string; name: string; zone: string } | null>;
 }
 
-export function createDnsProviders(secrets: Secrets): DnsProviders {
+export function createDnsProviders(secrets: Secrets, relay: DnsRelay): DnsProviders {
   async function build(db: Db | Tx, row: Row) {
     const kind = DNS_PROVIDER_KINDS[row.type];
     return kind.create(kind.settings.parse(row.settings), await secrets.open(db, row.organizationId, row.secretId));
@@ -39,7 +44,11 @@ export function createDnsProviders(secrets: Secrets): DnsProviders {
         .from(dnsProvider)
         .where(and(eq(dnsProvider.organizationId, organizationId), eq(dnsProvider.id, providerId)));
       if (!row) throw new Error("no such DNS Provider");
-      return build(db, row);
+      const agentIds = await relay.assignmentsOf(db, row.id);
+      if (agentIds.length === 0) return build(db, row);
+      // Settings that cannot be read could not be run by the Agent either; the secret is for the Agent alone.
+      DNS_PROVIDER_KINDS[row.type].settings.parse(row.settings);
+      return relay.provider({ organizationId, providerId: row.id, agentIds });
     },
     async locate(db, organizationId, name, only) {
       const rows = await db
@@ -68,8 +77,9 @@ const Provider = z.object({
   name: Name,
   type: z.enum(DNS_PROVIDER_TYPES),
   settings: z.record(z.string(), z.unknown()).openapi({ description: "The type's non-secret configuration." }),
+  relayAgentIds: z.array(z.string()).openapi({ description: "The Agents that relay the provider's operations; none when the platform runs them itself." }),
 });
-const toProvider = (row: Row) => ({ id: row.id, name: row.name, type: row.type, settings: row.settings });
+const toProvider = (row: Row, relayAgentIds: string[]) => ({ id: row.id, name: row.name, type: row.type, settings: row.settings, relayAgentIds });
 
 const nameTaken = (name: string) => new HttpError(409, `the Organization already has a DNS Provider named "${name}"`);
 
@@ -88,8 +98,10 @@ export function registerDnsProviders(ctx: {
   unitOfWork: UnitOfWork;
   secrets: Secrets;
   dnsProviders: DnsProviders;
+  relay: DnsRelay;
 }) {
-  const { app, db, requireUser, authorize, unitOfWork, secrets, dnsProviders } = ctx;
+  const { app, db, requireUser, authorize, unitOfWork, secrets, dnsProviders, relay } = ctx;
+  const relayAgentIdsOf = (row: Row) => relay.assignmentsOf(db, row.id);
 
   async function findProvider(orgId: string, providerId: string) {
     // Not a UUID can't be a provider; asking Postgres would only raise a type error.
@@ -116,7 +128,8 @@ export function registerDnsProviders(ctx: {
         .from(dnsProvider)
         .where(eq(dnsProvider.organizationId, orgId))
         .orderBy(asc(dnsProvider.createdAt), asc(dnsProvider.id));
-      return c.json({ items: rows.map(toProvider) }, 200);
+      const assigned = await relay.assignments(db, orgId);
+      return c.json({ items: rows.map((row) => toProvider(row, assigned.get(row.id) ?? [])) }, 200);
     },
   );
 
@@ -141,6 +154,7 @@ export function registerDnsProviders(ctx: {
                 type: z.enum(DNS_PROVIDER_TYPES),
                 settings: z.record(z.string(), z.unknown()),
                 secret: z.string().min(1),
+                relayAgentIds: z.array(z.string()).optional().openapi({ description: "Agents of the Organization to relay the provider's operations, so that DNS inside the Organization's network can be reached. Without them the platform runs them itself." }),
               }),
             },
           },
@@ -157,21 +171,23 @@ export function registerDnsProviders(ctx: {
       const settings = refuse("settings", kind.settings, body.settings);
       const secret = refuse("secret", kind.secret, body.secret);
       try {
-        const row = await unitOfWork.run(actor, async (tx, change) => {
+        const created = await unitOfWork.run(actor, async (tx, change) => {
           const secretId = await secrets.create(tx, orgId, secret);
           const [row] = await tx
             .insert(dnsProvider)
             .values({ organizationId: orgId, name: body.name, type: body.type, settings, secretId })
             .returning();
+          const relayAgentIds = body.relayAgentIds ?? [];
+          await relay.assign(tx, orgId, row!.id, relayAgentIds);
           await change.audit({
             organizationId: orgId,
             action: "dns_provider.created",
             target: { type: "dns_provider", id: row!.id },
-            detail: { name: body.name, type: body.type, settings },
+            detail: { name: body.name, type: body.type, settings, ...(relayAgentIds.length > 0 ? { relayAgentIds } : {}) },
           });
-          return row!;
+          return { row: row!, relayAgentIds };
         });
-        return c.json(toProvider(row), 201);
+        return c.json(toProvider(created.row, created.relayAgentIds), 201);
       } catch (err) {
         if (isUniqueViolation(err)) throw nameTaken(body.name);
         throw err;
@@ -211,7 +227,7 @@ export function registerDnsProviders(ctx: {
           });
           return row!;
         });
-        return c.json(toProvider(row), 200);
+        return c.json(toProvider(row, await relayAgentIdsOf(row)), 200);
       } catch (err) {
         if (isUniqueViolation(err)) throw nameTaken(body.name);
         throw err;
@@ -247,7 +263,44 @@ export function registerDnsProviders(ctx: {
           target: { type: "dns_provider", id: existing.id },
         });
       });
-      return c.json(toProvider(existing), 200);
+      return c.json(toProvider(existing, await relayAgentIdsOf(existing)), 200);
+    },
+  );
+
+  app.openapi(
+    createRoute({
+      method: "put",
+      path: "/api/organizations/{orgId}/dns-providers/{providerId}/relay",
+      tags: ["DNS Providers"],
+      summary: "Choose the Agents that relay the DNS Provider",
+      description:
+        "Replaces the Agents that carry out the provider's operations: publishing and removing records and testing the connection. " +
+        "With none the platform runs them itself. With some, any one that is online does, so one going offline does not stop issuance; " +
+        "when none is online the operation fails and says so. The provider's credentials go to an Agent only with an operation, and are never shown.",
+      request: {
+        params: ProviderParams,
+        body: { content: { "application/json": { schema: z.object({ agentIds: z.array(z.string()) }) } } },
+      },
+      responses: { 200: json(Provider), ...errors(400, 401, 403, 404) },
+    }),
+    async (c) => {
+      const { orgId, providerId } = c.req.valid("param");
+      const { agentIds } = c.req.valid("json");
+      const actor = await requireUser(c);
+      await authorize(actor, orgId, { dnsProvider: ["update"] });
+      const existing = await findProvider(orgId, providerId);
+      await unitOfWork.run(actor, async (tx, change) => {
+        // Under the provider's row, so two changes at once are one after the other.
+        await tx.select().from(dnsProvider).where(eq(dnsProvider.id, existing.id)).for("update");
+        const previousAgentIds = await relay.assign(tx, orgId, existing.id, agentIds);
+        await change.audit({
+          organizationId: orgId,
+          action: "dns_provider.relay_changed",
+          target: { type: "dns_provider", id: existing.id },
+          detail: { name: existing.name, agentIds, previousAgentIds },
+        });
+      });
+      return c.json(toProvider(existing, await relayAgentIdsOf(existing)), 200);
     },
   );
 

@@ -22,6 +22,7 @@ export type AuditAction =
   | "dns_provider.changed"
   | "dns_provider.secret_replaced"
   | "dns_provider.tested"
+  | "dns_provider.relay_changed"
   | "validation_zone.created"
   | "validation_zone.deleted"
   | "dcv_rule.created"
