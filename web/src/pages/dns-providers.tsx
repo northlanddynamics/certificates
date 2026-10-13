@@ -1,6 +1,7 @@
 import { useMutation, useQuery } from "@tanstack/react-query";
 import { useParams } from "@tanstack/react-router";
 import { createColumnHelper, tableFeatures, useTable } from "@tanstack/react-table";
+import { toast } from "sonner";
 import { DataTable } from "@/components/data-table/data-table";
 import { Badge } from "@/components/ui/badge";
 import { Button } from "@/components/ui/button";
@@ -99,10 +100,16 @@ function ProviderActions({
   mayChange: boolean;
 }) {
   // A test publishes a throwaway record through the provider and removes it again.
-  const test = useMutation({ mutationFn: () => api.testDnsProvider(orgId, provider.id) });
+  // A success is a toast; a failure stays by the buttons, where its reason can be read while the settings are corrected.
+  const test = useMutation({
+    mutationFn: () => api.testDnsProvider(orgId, provider.id),
+    onSuccess: (result) => {
+      if (result.ok) toast.success(`${provider.name}: the connection works`);
+    },
+  });
   return (
     <div className="flex flex-col items-end gap-2">
-      <div className="flex items-center gap-2">
+      <div className="flex flex-wrap items-center justify-end gap-2">
         {mayTest && (
           <Button variant="outline" size="sm" disabled={test.isPending} aria-label={`Test ${provider.name}`} onClick={() => test.mutate()}>
             {test.isPending ? "Testing…" : "Test"}
@@ -111,7 +118,6 @@ function ProviderActions({
         {mayChange && <EditDnsProviderDialog orgId={orgId} provider={provider} relay={relay} />}
         {mayChange && <ReplaceSecretDialog orgId={orgId} provider={provider} />}
       </div>
-      {test.data?.ok && <span role="status" className="text-sm">The connection works.</span>}
       {test.data && !test.data.ok && <span role="alert" className="max-w-72 whitespace-normal break-words text-right text-sm text-destructive">{test.data.error}</span>}
       {test.error && <span role="alert" className="max-w-72 whitespace-normal break-words text-right text-sm text-destructive">{test.error.message}</span>}
     </div>

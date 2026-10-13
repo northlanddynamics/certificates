@@ -74,6 +74,25 @@ Pebble, Let's Encrypt's ACME test server, stands in for the CA (`docker compose 
 
 BIND, built from `docker/bind` (`docker compose up -d --build bind`), is the RFC 2136 DNS server that the DNS Provider tests update with TSIG-signed requests (`BIND_HOST` and `BIND_PORT` override `127.0.0.1:5354`). Its image keeps its config and zones in volumes, so after changing `docker/bind` recreate it with `docker compose up -d --build --force-recreate -V bind`.
 
+### Connecting the local BIND as a DNS Provider
+
+To try the DNS Providers page against this BIND, add a provider (Administration → DNS Providers → Add a DNS Provider) with these values:
+
+| Field | Value |
+|---|---|
+| Type | RFC 2136 |
+| Name | anything, such as `Local BIND` |
+| Zone | `rfc2136.test` |
+| Server | `127.0.0.1` (use `host.docker.internal` if the platform itself runs in a container) |
+| Port | `5354` |
+| TSIG key name | `certs-test` |
+| TSIG algorithm | `hmac-sha256` |
+| TSIG key secret | `dGVzdC10c2lnLWtleS1mb3ItdGhlLXJmYzIxMzYtdGVzdHM=` |
+
+Leave "Where it runs" empty, so the platform talks to BIND itself. "Test" on the new row publishes a throwaway TXT record at `_acme-challenge.rfc2136.test` and removes it again, and says "The connection works." The secret is the fixed test key in `docker/bind/named.conf`; nothing real is behind it. The zone `readonly.test` takes no updates, so a provider for it reports a refusal.
+
+For your own BIND, the key name, algorithm and secret are the `key "…" { algorithm …; secret "…"; };` block of its configuration, and the key must be allowed to update TXT records in the zone (`allow-update` or `update-policy`).
+
 ## Secrets
 
 ACME account keys and DNS Provider credentials (an RFC 2136 provider's TSIG key) are write-only secrets: encrypted under a data key per Organization, which a KMS wraps (`server/src/kms.ts`, `server/src/secrets.ts`). No route returns a secret; they can be replaced or tested. Development and tests use the local KMS, keyed by `LOCAL_KMS_KEY` (32 bytes, base64); AWS KMS and Azure Key Vault are to be added behind the same `Kms` interface.
