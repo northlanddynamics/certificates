@@ -11,6 +11,7 @@ import { registerApiKeys } from "./api-keys";
 import { PLATFORM_OPERATOR_ROLE, createAuth } from "./auth";
 import { registerCertificateExport } from "./certificate-export";
 import type { CertificateAuthority } from "./certificate-authority";
+import { registerDeploymentScripts } from "./deployment-scripts";
 import { registerDcvConfiguration } from "./dcv-configuration";
 import { createDcvPlans } from "./dcv-plan";
 import { DEFAULT_DCV_CONFIG, createDcv, createTxtResolver, type DcvConfig } from "./dcv";
@@ -268,6 +269,7 @@ export function createApp(deps: AppDeps) {
   registerArchiveRoutes({ app, requireUser, authorize, unitOfWork, reader });
   registerRevocationRoutes({ app, db, requireUser, unitOfWork, reader, secrets, certificateAuthority: deps.certificateAuthority });
   registerHistory({ app, db, requireUser, reader });
+  registerDeploymentScripts({ app, db, requireUser, authorize, unitOfWork });
   registerAgents({ app, db, requireUser, authorize, unitOfWork, clock, config: agentGateway });
   registerAgentGateway({ app, db, unitOfWork, identityCa: createAgentIdentityCa({ db, kms: deps.kms, clock }), workItems, clock, config: agentGateway });
 

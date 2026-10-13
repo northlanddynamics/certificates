@@ -8,6 +8,7 @@ import { AgentsPage } from "./pages/agents";
 import { ApiKeysPage } from "./pages/api-keys";
 import { CertificatesPage } from "./pages/certificates";
 import { CsrToolsPage } from "./pages/csr-tools";
+import { DeploymentScriptsPage } from "./pages/deployment-scripts";
 import { HomePage } from "./pages/home";
 import { ManagedCertificateDetailsPage } from "./pages/managed-certificate-details";
 import { ManagedCertificateOverview } from "./pages/managed-certificate-overview";
@@ -97,6 +98,12 @@ const agentsRoute = createRoute({
   component: AgentsPage,
 });
 
+const deploymentScriptsRoute = createRoute({
+  getParentRoute: () => appRoute,
+  path: "/organizations/$orgId/deployment-scripts",
+  component: DeploymentScriptsPage,
+});
+
 const acmeAccountsRoute = createRoute({
   getParentRoute: () => appRoute,
   path: "/organizations/$orgId/acme-accounts",
@@ -128,7 +135,7 @@ const routeTree = rootRoute.addChildren([
       certificateNotificationsRoute,
       certificateUnknownTabRoute,
     ]),
-    membersRoute, teamsRoute, apiKeysRoute, agentsRoute, acmeAccountsRoute, csrToolsRoute,
+    membersRoute, teamsRoute, apiKeysRoute, agentsRoute, deploymentScriptsRoute, acmeAccountsRoute, csrToolsRoute,
     platformOrganizationsRoute,
   ]),
 ]);

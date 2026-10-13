@@ -37,6 +37,8 @@ The Agent's protocol is the routes under `/api/agent`. Their OpenAPI contract is
 
 An Organization Administrator can have Agents relay a DNS Provider (`PUT /api/organizations/{orgId}/dns-providers/{id}/relay`), so DNS the hosted platform cannot reach, such as on-prem BIND or Infoblox, still serves DCV. Publishing, removing and testing then become work items (`dns.present`, `dns.cleanup`, `dns.test`) for one online relay Agent, which carries them out with its own RFC 2136 and Infoblox providers (`agent/internal/dnsrelay`, which behave as `server/src/rfc2136.ts` and `server/src/infoblox.ts` do) and reports the result; an offline Agent is passed over, and one that does not answer within 45 seconds is given up on for the next. The provider's credentials are put into a work item only when the Agent is given it, are never stored in it, and are never shown. `AGENT_LONG_POLL_SECONDS` (default 20) is how long an idle poll waits for work, so that relayed operations reach an Agent at once; set it to 0 to answer polls immediately.
 
+Organization Administrators keep a library of Deployment Scripts (Bash or PowerShell, `/api/organizations/{orgId}/deployment-scripts`) that Agents will run to put a Certificate to use (ADR 0004). A script is a name and an interpreter; each upload adds an immutable version identified by the SHA-256 of its exact content (up to 256 KiB), earlier versions stay viewable (the database refuses to change or delete a version), and every upload is audited with the hash. No other role holds `deploymentScript.upload` or `.read`. Running scripts on an Agent comes with Deployments.
+
 ## Database schema
 
 Drizzle ORM is the data layer; Better Auth uses it through its Drizzle adapter.

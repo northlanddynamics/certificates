@@ -199,6 +199,21 @@ export interface AcmeAccount {
   accountUrl: string;
   contactEmail: string | null;
 }
+/** One version of a Deployment Script, identified by the SHA-256 of its content. */
+export interface DeploymentScriptVersion {
+  version: number;
+  hash: string;
+  size: number;
+  uploadedBy: string;
+  uploadedAt: string;
+}
+/** A script in the Organization's library, with its newest version. */
+export interface DeploymentScript {
+  id: string;
+  name: string;
+  interpreter: "bash" | "powershell";
+  latestVersion: DeploymentScriptVersion;
+}
 /** An Agent as the Agents list shows it. */
 export interface Agent {
   id: string;
@@ -310,6 +325,15 @@ export const api = {
   createAgentRegistrationToken: (orgId: string) =>
     call<{ token: string; expiresAt: string }>(`/api/organizations/${orgId}/agent-registration-tokens`, { method: "POST", body: {} }),
   revokeAgent: (orgId: string, agentId: string) => call<Agent>(`/api/organizations/${orgId}/agents/${agentId}/revoke`, { method: "POST", body: {} }),
+  deploymentScripts: (orgId: string) => call<{ items: DeploymentScript[] }>(`/api/organizations/${orgId}/deployment-scripts`),
+  deploymentScript: (orgId: string, scriptId: string) =>
+    call<DeploymentScript & { versions: DeploymentScriptVersion[] }>(`/api/organizations/${orgId}/deployment-scripts/${scriptId}`),
+  deploymentScriptVersion: (orgId: string, scriptId: string, hash: string) =>
+    call<DeploymentScriptVersion & { content: string }>(`/api/organizations/${orgId}/deployment-scripts/${scriptId}/versions/${hash}`),
+  uploadDeploymentScript: (orgId: string, body: { name: string; interpreter: DeploymentScript["interpreter"]; content: string }) =>
+    call<DeploymentScript>(`/api/organizations/${orgId}/deployment-scripts`, { body }),
+  uploadDeploymentScriptVersion: (orgId: string, scriptId: string, content: string) =>
+    call<DeploymentScript>(`/api/organizations/${orgId}/deployment-scripts/${scriptId}/versions`, { body: { content } }),
   acmeAccounts: (orgId: string) => call<{ items: AcmeAccount[] }>(`/api/organizations/${orgId}/acme-accounts`),
   registerAcmeAccount: (orgId: string, body: { environment: AcmeAccount["environment"]; contactEmail?: string }) =>
     call<AcmeAccount>(`/api/organizations/${orgId}/acme-accounts`, { body: { ...body, termsOfServiceAgreed: true } }),

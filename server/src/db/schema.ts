@@ -2,6 +2,7 @@ import { bigint, check, customType, integer, foreignKey, index, jsonb, pgTable, 
 import { sql } from "drizzle-orm";
 import type { AcmeEnvironment, RevocationReason } from "../certificate-authority";
 import type { DcvMethod, DcvScope } from "../dcv-plan";
+import type { ScriptInterpreter } from "../deployment-script-kinds";
 import type { DnsProviderType } from "../dns-provider-kinds";
 import type { IssuanceFailureCode } from "../issuance-failure";
 import type { KeyAlgorithm, KeyCustody } from "../csr";
@@ -513,5 +514,58 @@ export const workItem = pgTable(
     index("work_item_agent_idx").on(t.agentId, t.status),
     foreignKey({ columns: [t.agentId, t.organizationId], foreignColumns: [agent.id, agent.organizationId] }),
     check("work_item_status", sql`${t.status} in ('pending', 'delivered', 'succeeded', 'failed', 'expired')`),
+  ],
+);
+
+/**
+ * A script in an Organization's library of Deployment Scripts, which only Organization Administrators fill. It is the
+ * name and the interpreter; what it says is in its versions, which never change once made.
+ */
+export const deploymentScript = pgTable(
+  "deployment_script",
+  {
+    id: uuid("id").primaryKey().defaultRandom(),
+    organizationId: text("organization_id")
+      .notNull()
+      .references(() => organization.id),
+    name: text("name").notNull(),
+    interpreter: text("interpreter").$type<ScriptInterpreter>().notNull(),
+    createdAt: timestamp("created_at", { withTimezone: true }).notNull(),
+  },
+  (t) => [
+    unique("deployment_script_organization_name_unique").on(t.organizationId, t.name),
+    check("deployment_script_interpreter", sql`${t.interpreter} in ('bash', 'powershell')`),
+    // Lets other tables reference a Deployment Script together with its Organization, so none can point at another's.
+    unique("deployment_script_id_organization_unique").on(t.id, t.organizationId),
+  ],
+);
+
+/**
+ * One version of a Deployment Script: its exact content, identified by `hash`. Versions are only ever added, so what an
+ * Agent was told to run can always be shown, and what it checks before running is the hash.
+ */
+export const deploymentScriptVersion = pgTable(
+  "deployment_script_version",
+  {
+    scriptId: uuid("script_id").notNull(),
+    organizationId: text("organization_id")
+      .notNull()
+      .references(() => organization.id),
+    /** 1 for the first, then one more each time. */
+    version: integer("version").notNull(),
+    /** SHA-256 of the content's UTF-8 bytes, lower-case hex. */
+    hash: text("hash").notNull(),
+    content: text("content").notNull(),
+    /** The content's length in bytes. */
+    size: integer("size").notNull(),
+    uploadedById: text("uploaded_by_id").notNull(),
+    uploadedByEmail: text("uploaded_by_email").notNull(),
+    uploadedAt: timestamp("uploaded_at", { withTimezone: true }).notNull(),
+  },
+  (t) => [
+    primaryKey({ columns: [t.scriptId, t.version] }),
+    // A script never holds the same content twice, so a hash names one of its versions.
+    unique("deployment_script_version_hash_unique").on(t.scriptId, t.hash),
+    foreignKey({ columns: [t.scriptId, t.organizationId], foreignColumns: [deploymentScript.id, deploymentScript.organizationId] }),
   ],
 );

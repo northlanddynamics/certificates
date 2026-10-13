@@ -1,4 +1,4 @@
-import { BuildingIcon, BotIcon, LandmarkIcon, FileKey2Icon, KeyRoundIcon, ShieldCheckIcon, UserRoundIcon, UsersIcon, type LucideIcon } from "lucide-react";
+import { BuildingIcon, BotIcon, LandmarkIcon, FileKey2Icon, FileTerminalIcon, KeyRoundIcon, ShieldCheckIcon, UserRoundIcon, UsersIcon, type LucideIcon } from "lucide-react";
 import { can, type Me } from "@/lib/api";
 
 type Org = Me["organizations"][number];
@@ -37,7 +37,13 @@ export function organizationNavGroups(org: Org): NavGroup[] {
       items: [
         { title: "API keys", url: `${base}/api-keys`, icon: KeyRoundIcon },
         ...(can(org, "acmeAccount", "read") ? [{ title: "ACME accounts", url: `${base}/acme-accounts`, icon: LandmarkIcon }] : []),
+      ],
+    },
+    {
+      label: "Automation",
+      items: [
         ...(can(org, "agent", "read") ? [{ title: "Agents", url: `${base}/agents`, icon: BotIcon }] : []),
+        ...(can(org, "deploymentScript", "read") ? [{ title: "Deployment Scripts", url: `${base}/deployment-scripts`, icon: FileTerminalIcon }] : []),
       ],
     },
   ];

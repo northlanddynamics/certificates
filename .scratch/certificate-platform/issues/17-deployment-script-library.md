@@ -4,9 +4,9 @@
 
 **Blocked by:** 02 (Members, roles and Teams)
 
-**Status:** ready-for-agent
+**Status:** done
 
-- [ ] Organization Administrators can upload a script with a name and interpreter (Bash or PowerShell), creating a new immutable version identified by its hash.
-- [ ] Previous versions remain viewable.
-- [ ] Members, Approvers and Owners are refused when uploading or editing scripts (Seam A test).
-- [ ] Uploads are audited with the script hash.
+- [x] Organization Administrators can upload a script with a name and interpreter (Bash or PowerShell), creating a new immutable version identified by its hash.
+- [x] Previous versions remain viewable.
+- [x] Members, Approvers and Owners are refused when uploading or editing scripts (Seam A test).
+- [x] Uploads are audited with the script hash.

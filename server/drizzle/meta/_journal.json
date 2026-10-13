@@ -141,6 +141,20 @@
       "when": 1791856785573,
       "tag": "0019_perfect_random",
       "breakpoints": true
+    },
+    {
+      "idx": 20,
+      "version": "7",
+      "when": 1791858210100,
+      "tag": "0020_magenta_lorna_dane",
+      "breakpoints": true
+    },
+    {
+      "idx": 21,
+      "version": "7",
+      "when": 1791858738481,
+      "tag": "0021_deployment_script_versions_immutable",
+      "breakpoints": true
     }
   ]
 }
