@@ -6,52 +6,23 @@
   },
   "components": {
     "securitySchemes": {
-      "agentIdentity": {
-        "type": "mutualTLS",
-        "description": "The Agent's identity certificate, from Agent Registration or its latest rotation."
+      "agentCredential": {
+        "type": "http",
+        "scheme": "bearer",
+        "description": "The Agent's credential, from Agent Registration or its latest rotation."
       }
     },
     "schemas": {},
     "parameters": {}
   },
   "paths": {
-    "/api/agent/identity-ca": {
-      "get": {
-        "tags": [
-          "Agent protocol"
-        ],
-        "summary": "The Agent identity CA's certificate",
-        "description": "What a TLS terminator in front of the platform verifies Agents' client certificates against. Public.",
-        "responses": {
-          "200": {
-            "description": "OK",
-            "content": {
-              "application/json": {
-                "schema": {
-                  "type": "object",
-                  "properties": {
-                    "certificate": {
-                      "type": "string",
-                      "description": "PEM."
-                    }
-                  },
-                  "required": [
-                    "certificate"
-                  ]
-                }
-              }
-            }
-          }
-        }
-      }
-    },
     "/api/agent/registration": {
       "post": {
         "tags": [
           "Agent protocol"
         ],
         "summary": "Agent Registration: bind a newly installed Agent to an Organization with a single-use token",
-        "description": "The token is the one an Organization Administrator made for the Organization; it is used up by this call, and used or expired ones are refused. The Agent generates an ECDSA P-256 key, keeps it, and sends only a CSR for it (ADR 0002); the response is its identity certificate, which it presents from then on.",
+        "description": "The token is the one an Organization Administrator made for the Organization; it is used up by this call, and used or expired ones are refused. The response holds the Agent's credential, which it keeps and presents from then on (ADR 0006); the platform keeps only its hash, so it is not shown again.",
         "requestBody": {
           "content": {
             "application/json": {
@@ -63,11 +34,6 @@
                     "minLength": 1,
                     "maxLength": 200
                   },
-                  "csr": {
-                    "type": "string",
-                    "minLength": 1,
-                    "description": "PEM, for the Agent's new identity key."
-                  },
                   "hostName": {
                     "type": "string",
                     "minLength": 1,
@@ -77,7 +43,8 @@
                     "type": "string",
                     "enum": [
                       "linux",
-                      "windows"
+                      "windows",
+                      "macos"
                     ]
                   },
                   "arch": {
@@ -95,7 +62,6 @@
                 },
                 "required": [
                   "token",
-                  "csr",
                   "hostName",
                   "os",
                   "arch",
@@ -113,11 +79,11 @@
                 "schema": {
                   "type": "object",
                   "properties": {
-                    "certificate": {
+                    "credential": {
                       "type": "string",
-                      "description": "The Agent's identity certificate, PEM."
+                      "description": "The Agent's credential, sent as `Authorization: Bearer <credential>`. It is shown only in this response: the platform keeps only its hash."
                     },
-                    "notAfter": {
+                    "expiresAt": {
                       "type": "string",
                       "description": "When it ends. The Agent rotates it once a third of its life is left."
                     },
@@ -129,8 +95,8 @@
                     }
                   },
                   "required": [
-                    "certificate",
-                    "notAfter",
+                    "credential",
+                    "expiresAt",
                     "agentId",
                     "pollAfterSeconds"
                   ]
@@ -186,7 +152,7 @@
         "description": "An Agent calls this every `pollAfterSeconds`. Each call is its contact with the platform: it is how its last contact, its version and so its online status are known.",
         "security": [
           {
-            "agentIdentity": []
+            "agentCredential": []
           }
         ],
         "requestBody": {
@@ -300,7 +266,7 @@
         "description": "Once, by the Agent the item was given to. An item whose requester stopped waiting for the Agent (it was too slow, so another was asked) is refused with a 409, as is one already reported on.",
         "security": [
           {
-            "agentIdentity": []
+            "agentCredential": []
           }
         ],
         "parameters": [
@@ -476,36 +442,18 @@
         }
       }
     },
-    "/api/agent/identity": {
+    "/api/agent/credential": {
       "post": {
         "tags": [
           "Agent protocol"
         ],
-        "summary": "Rotate the Agent's identity certificate",
-        "description": "The Agent sends a CSR for a new key it generated and receives a new certificate, which replaces the one it presented. That one stays accepted until the new one is first used, so an Agent that never received the response can try again.",
+        "summary": "Rotate the Agent's credential",
+        "description": "The Agent receives a new credential, which replaces the one it presented. That one stays accepted until the new one is first used, so an Agent that never received the response can try again.",
         "security": [
           {
-            "agentIdentity": []
+            "agentCredential": []
           }
         ],
-        "requestBody": {
-          "content": {
-            "application/json": {
-              "schema": {
-                "type": "object",
-                "properties": {
-                  "csr": {
-                    "type": "string",
-                    "minLength": 1
-                  }
-                },
-                "required": [
-                  "csr"
-                ]
-              }
-            }
-          }
-        },
         "responses": {
           "200": {
             "description": "OK",
@@ -514,36 +462,18 @@
                 "schema": {
                   "type": "object",
                   "properties": {
-                    "certificate": {
+                    "credential": {
                       "type": "string",
-                      "description": "The Agent's identity certificate, PEM."
+                      "description": "The Agent's credential, sent as `Authorization: Bearer <credential>`. It is shown only in this response: the platform keeps only its hash."
                     },
-                    "notAfter": {
+                    "expiresAt": {
                       "type": "string",
                       "description": "When it ends. The Agent rotates it once a third of its life is left."
                     }
                   },
                   "required": [
-                    "certificate",
-                    "notAfter"
-                  ]
-                }
-              }
-            }
-          },
-          "400": {
-            "description": "Error",
-            "content": {
-              "application/json": {
-                "schema": {
-                  "type": "object",
-                  "properties": {
-                    "error": {
-                      "type": "string"
-                    }
-                  },
-                  "required": [
-                    "error"
+                    "credential",
+                    "expiresAt"
                   ]
                 }
               }

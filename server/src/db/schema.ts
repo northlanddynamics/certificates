@@ -398,25 +398,10 @@ export const certificateRevocation = pgTable(
 );
 
 /**
- * The platform's own CA for Agent identity (not a Private CA: it issues nothing but the mTLS certificates by which
- * Agents authenticate). One row for the whole platform, made the first time it is needed; its key is wrapped by the KMS.
- */
-export const agentIdentityCa = pgTable(
-  "agent_identity_ca",
-  {
-    id: integer("id").primaryKey().default(1),
-    certificatePem: text("certificate_pem").notNull(),
-    wrappedKey: bytea("wrapped_key").notNull(),
-    createdAt: timestamp("created_at", { withTimezone: true }).notNull().defaultNow(),
-  },
-  (t) => [check("agent_identity_ca_singleton", sql`${t.id} = 1`)],
-);
-
-/**
  * Software an Organization installed inside its network, bound to the Organization by Agent Registration and acting
- * for the platform there. It authenticates with an identity certificate from the Agent identity CA, of which the
- * platform recognises only the current one (`identitySerial`) and, until the new one is first used, the one it replaced.
- * A revoked Agent is kept as a record and authenticates no more.
+ * for the platform there. It authenticates with a bearer credential made at Agent Registration, of which the platform
+ * keeps only the hash and recognises only the current one and, until the new one is first used, the one it replaced
+ * (ADR 0006). A revoked Agent is kept as a record and authenticates no more.
  */
 export const agent = pgTable(
   "agent",
@@ -430,9 +415,11 @@ export const agent = pgTable(
     arch: text("arch").$type<AgentArch>().notNull(),
     /** What it last reported: at registration, then with every poll. */
     version: text("version").notNull(),
-    /** Upper-case hex serials of the identity certificate in use and, after a rotation and before the new one is used, the one before. */
-    identitySerial: text("identity_serial").notNull(),
-    previousIdentitySerial: text("previous_identity_serial"),
+    /** SHA-256 (hex) of the credential in use and, after a rotation and before the new one is used, of the one before; the credentials themselves are never kept. */
+    credentialHash: text("credential_hash").notNull(),
+    credentialExpiresAt: timestamp("credential_expires_at", { withTimezone: true }).notNull(),
+    previousCredentialHash: text("previous_credential_hash"),
+    previousCredentialExpiresAt: timestamp("previous_credential_expires_at", { withTimezone: true }),
     registeredAt: timestamp("registered_at", { withTimezone: true }).notNull(),
     /** The last time it polled; its registration, until it does. */
     lastContactAt: timestamp("last_contact_at", { withTimezone: true }).notNull(),
@@ -442,10 +429,12 @@ export const agent = pgTable(
   },
   (t) => [
     index("agent_org_idx").on(t.organizationId, t.registeredAt),
-    check("agent_os", sql`${t.os} in ('linux', 'windows')`),
+    check("agent_os", sql`${t.os} in ('linux', 'windows', 'macos')`),
     check("agent_arch", sql`${t.arch} in ('amd64', 'arm64')`),
     // Lets other tables reference an Agent together with its Organization, so none can point at another's.
     unique("agent_id_organization_unique").on(t.id, t.organizationId),
+    unique("agent_credential_hash_unique").on(t.credentialHash),
+    index("agent_previous_credential_idx").on(t.previousCredentialHash),
   ],
 );
 

@@ -26,7 +26,6 @@ const { app, auth, db, issuances, renewals } = createApp({
     // An Agent's poll waits for work this long, so that relayed DNS operations reach it at once (see AgentGatewayConfig).
     longPollSeconds: Number(process.env.AGENT_LONG_POLL_SECONDS ?? 20),
     ...(process.env.AGENT_LATEST_VERSION && { latestVersion: process.env.AGENT_LATEST_VERSION }),
-    ...(process.env.AGENT_GATEWAY_SECRET && { terminatorSecret: process.env.AGENT_GATEWAY_SECRET }),
   },
 });
 await runMigrations(pool);
@@ -47,5 +46,16 @@ if (process.env.OPERATOR_EMAIL && process.env.OPERATOR_PASSWORD) {
   });
 }
 
+// The platform serves TLS itself when given a certificate and key (PEM files), which Agents require outside development (ADR 0006);
+// without them it serves plain HTTP, for development or behind a TLS terminator that is not the platform's concern.
+const tlsCertFile = process.env.TLS_CERT_FILE;
+const tlsKeyFile = process.env.TLS_KEY_FILE;
+if (!!tlsCertFile !== !!tlsKeyFile) throw new Error("TLS_CERT_FILE and TLS_KEY_FILE must be set together");
+
 // An idle connection is closed after `idleTimeout` seconds, which must outlast a long poll (Bun allows at most 255).
-export default { port: Number(process.env.PORT ?? 3000), fetch: app.fetch, idleTimeout: 60 };
+export default {
+  port: Number(process.env.PORT ?? 3000),
+  fetch: app.fetch,
+  idleTimeout: 60,
+  ...(tlsCertFile && tlsKeyFile && { tls: { cert: Bun.file(tlsCertFile), key: Bun.file(tlsKeyFile) } }),
+};

@@ -108,7 +108,7 @@ The platform **never holds private keys**. The key either stays with the Owner, 
 59. As an Organization Administrator, I want to create a single-use Agent Registration token for my Organization, so that I can install and register an Agent securely.
 60. As an Organization Administrator, I want to install the Agent as a service on Windows or Linux (amd64 or arm64), so that it runs unattended and survives reboots.
 61. As an Organization Administrator, I want Agents to only ever connect outbound to the platform, so that I don't have to open any inbound firewall rules.
-62. As an Organization Administrator, I want each Agent to authenticate with its own identity certificate that rotates automatically, so that a stolen registration token can't be reused and Agent credentials don't expire unnoticed.
+62. As an Organization Administrator, I want each Agent to authenticate with its own credential that rotates automatically, so that a stolen registration token can't be reused and Agent credentials don't expire unnoticed.
 63. As an Organization Administrator, I want to see every Agent with its host name, OS, version, last contact time and online or offline status, so that I know the state of my automation.
 64. As an Organization Administrator, I want Agents running an old version to be flagged, so that I know which ones to upgrade.
 65. As an Organization Administrator, I want to revoke an Agent, so that a decommissioned or compromised host can no longer act for my Organization.
@@ -183,11 +183,11 @@ The platform **never holds private keys**. The key either stays with the Owner, 
 - **Renewal Scheduler.** Each automatic Managed Certificate becomes due at the **earlier** of two times: the Renewal Policy's number of days before its current Certificate expires, or a time chosen within the CA's ACME Renewal Information (ARI) suggested window. The scheduler polls ARI for current Certificates (respecting the CA's `Retry-After`), and it reacts when the CA moves the window earlier, for example ahead of a revocation event. Renewal orders identify the Certificate they replace, so the CA can treat them as ARI-coordinated. When the CA offers no ARI, only the days-before-expiry rule applies. The scheduler enqueues Renewals and retries failures with backoff. For Agent custody, Renewals wait while the Agent is offline. Its time source is injectable, so tests can control time.
 - **Agent Gateway.** The platform side of the Agent protocol:
   - Agent Registration with a single-use token scoped to one Organization
-  - an Agent identity certificate issued by a platform-internal CA that exists only for Agent identity (it is not a Private CA), used for mTLS and rotated automatically
+  - an Agent credential made at registration (a bearer secret over TLS, of which the platform keeps only the hash; ADR 0006) and rotated automatically
   - long-poll or polling **work items** (generate a key and CSR, deliver a Certificate and run a Deployment, perform a DNS Provider operation)
   - result reporting, heartbeat, version and online/offline status
 - **Deployments and Deployment Scripts.** A script library per Organization. Only Organization Administrators can upload. Script versions are immutable and identified by hash. A **Deployment** binds one Agent, one Managed Certificate with Agent custody, one script version and the Renewal Policy, and it is set up through the guided administrator flow. Every execution produces a **Deployment Run** record: time, Certificate fingerprint, exit code, and output truncated to a limit. The Agent checks the script hash before running it (ADR 0004).
-- **Agent (Go).** Generates keys locally using the algorithm on the Managed Certificate, in a store readable only by the service account, and submits CSRs. It never sends a private key to the platform (ADR 0002). It fetches Certificates and runs the Bash or PowerShell script with environment variables pointing to the key, leaf, chain and full-chain files plus the Managed Certificate's identifiers. It reports Deployment Runs and executes relayed DNS Provider operations. It only ever connects outbound over HTTPS with mTLS.
+- **Agent (Go).** Generates keys locally using the algorithm on the Managed Certificate, in a store readable only by the service account, and submits CSRs. It never sends a private key to the platform (ADR 0002). It fetches Certificates and runs the Bash or PowerShell script with environment variables pointing to the key, leaf, chain and full-chain files plus the Managed Certificate's identifiers. It reports Deployment Runs and executes relayed DNS Provider operations. It only ever connects outbound over HTTPS, authenticating with its credential. It runs on Linux, Windows and macOS.
 - **Export.** Encodes a Certificate as PEM, DER or PKCS#7 (P7B), with leaf only, leaf plus intermediates, or leaf plus intermediates plus root. It never produces PFX or JKS, because the platform holds no keys.
 - **Notifications.** Fans events (upcoming expiry, Renewal succeeded or failed, Deployment Run failed, Agent offline, Approval decided) out to a Managed Certificate's Subscribers. v1 channels are email and webhook. There are no default Subscribers.
 - **Audit.** An append-only log scoped to each Organization, written in the same transaction as the state change it records. It has a stable JSON event schema, search and filter in the UI, SIEM forwarding by webhook and syslog, and no retention limit. Platform Operator actions are logged on the platform side. **Impersonation is not audited by default:** impersonation sessions starting and ending are not recorded, and actions taken while impersonating are attributed to the impersonated user. A platform-wide setting controlled by the Platform Operator turns on impersonation auditing. When it's on, sessions starting and ending are recorded and actions taken during impersonation also name the impersonating Platform Operator.
@@ -243,7 +243,7 @@ The platform **never holds private keys**. The key either stays with the Owner, 
   - the environment variables and files the script receives
   - Deployment Run reporting (exit code, output truncation)
   - relayed DNS Provider operations
-  - mTLS identity rotation
+  - credential rotation
   - offline and retry behavior
 - **End-to-end smoke tests (few):** the platform, a real Agent and Pebble together, run through browser automation, cover the headline paths: the administrator's guided Deployment, and Owner CSR proposal → Approval → download.
 - **Prior art:** none in this repository yet, since it's a new codebase. Pebble and its challenge test server are the standard harness for ACME clients and should be the model for tests of Issuance and DCV.
@@ -260,7 +260,7 @@ The platform **never holds private keys**. The key either stays with the Owner, 
 - Mapping identity provider groups to Teams or roles, and SCIM.
 - Self-service Organization signup.
 - Billing, metering and quotas.
-- macOS Agents and Agent self-update.
+- Agent self-update.
 - Notification channels beyond email and webhook (Microsoft Teams and Slack are reached through webhooks).
 - Enforcing cross-Organization DCV isolation beyond giving each Organization its own accounts, credentials and Validation Zones (ADR 0003).
 

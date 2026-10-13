@@ -29,8 +29,8 @@ func TestTheStubRefusesAndRecordsWhatTheContractDoesNotAllow(t *testing.T) {
 
 	for name, body := range map[string]string{
 		"missing fields": `{}`,
-		"wrong type":     `{"token":1,"csr":"x","hostName":"h","os":"linux","arch":"amd64","version":"1"}`,
-		"outside enum":   `{"token":"t","csr":"x","hostName":"h","os":"darwin","arch":"amd64","version":"1"}`,
+		"wrong type":     `{"token":1,"hostName":"h","os":"linux","arch":"amd64","version":"1"}`,
+		"outside enum":   `{"token":"t","hostName":"h","os":"darwin","arch":"amd64","version":"1"}`,
 		"not JSON":       `nope`,
 	} {
 		before := len(stub.ContractViolations())
@@ -55,8 +55,9 @@ func TestTheStubRefusesAndRecordsWhatTheContractDoesNotAllow(t *testing.T) {
 	}
 }
 
-// The routes that need the Agent's identity are the ones the contract marks as secured; without a certificate they are refused.
-func TestTheStubTakesWhichRoutesNeedAnIdentityFromTheContract(t *testing.T) {
+// The routes that need the Agent's credential are the ones the contract marks as secured; without one, or with one the platform
+// did not issue, they are refused.
+func TestTheStubTakesWhichRoutesNeedACredentialFromTheContract(t *testing.T) {
 	stub, err := platformstub.Start(platformstub.Options{Clock: realClock{}})
 	if err != nil {
 		t.Fatal(err)
@@ -65,18 +66,27 @@ func TestTheStubTakesWhichRoutesNeedAnIdentityFromTheContract(t *testing.T) {
 	roots := x509.NewCertPool()
 	roots.AppendCertsFromPEM(stub.ServerCertificatePEM())
 	client := &http.Client{Transport: &http.Transport{TLSClientConfig: &tls.Config{RootCAs: roots}}}
-	for _, path := range []string{"/api/agent/poll", "/api/agent/identity"} {
-		body := `{"version":"1"}`
-		if strings.HasSuffix(path, "identity") {
-			body = `{"csr":"x"}`
-		}
-		res, err := client.Post(stub.URL()+path, "application/json", strings.NewReader(body))
-		if err != nil {
-			t.Fatal(err)
-		}
-		res.Body.Close()
-		if res.StatusCode != 401 {
-			t.Fatalf("%s without a certificate answered %d", path, res.StatusCode)
+	for _, path := range []string{"/api/agent/poll", "/api/agent/credential"} {
+		for _, authorization := range []string{"", "Bearer agk_unknown", "Basic agk_unknown"} {
+			body := ""
+			if path == "/api/agent/poll" {
+				body = `{"version":"1"}`
+			}
+			req, _ := http.NewRequest("POST", stub.URL()+path, strings.NewReader(body))
+			if body != "" {
+				req.Header.Set("content-type", "application/json")
+			}
+			if authorization != "" {
+				req.Header.Set("authorization", authorization)
+			}
+			res, err := client.Do(req)
+			if err != nil {
+				t.Fatal(err)
+			}
+			res.Body.Close()
+			if res.StatusCode != 401 {
+				t.Fatalf("%s with %q answered %d", path, authorization, res.StatusCode)
+			}
 		}
 	}
 	if v := stub.ContractViolations(); len(v) != 0 {

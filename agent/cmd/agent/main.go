@@ -1,6 +1,7 @@
 // The Agent: software an Organization installs inside its network to act for the platform there. It only ever connects
-// outbound to the platform, over HTTPS, and authenticates with an identity certificate that it generated the key for and
-// rotates itself.
+// outbound to the platform, over HTTPS (plain HTTP only to a loopback address, for development), and authenticates with a
+// bearer credential that the platform made for it at registration and that it rotates itself (ADR 0006). It runs on Linux,
+// Windows and macOS, on amd64 and arm64.
 //
 //	agent register --platform https://certs.example.com --token agt_...   once, with a token an Organization Administrator made
 //	agent run                                                             then, as a service
@@ -44,12 +45,12 @@ func run(args []string) error {
 		return nil
 	}
 	flags := flag.NewFlagSet(command, flag.ContinueOnError)
-	stateDir := flags.String("state-dir", envOr("AGENT_STATE_DIR", defaultStateDir()), "where the Agent keeps its identity (readable only by its service account)")
+	stateDir := flags.String("state-dir", envOr("AGENT_STATE_DIR", defaultStateDir()), "where the Agent keeps its credential (readable only by its service account)")
 	caFile := flags.String("ca-file", os.Getenv("AGENT_CA_FILE"), "extra root certificates (PEM) to trust the platform's TLS certificate with, besides the host's")
-	platformURL := flags.String("platform", os.Getenv("AGENT_PLATFORM_URL"), "register: the platform's URL, https")
+	platformURL := flags.String("platform", os.Getenv("AGENT_PLATFORM_URL"), "register: the platform's URL, https (http only for a loopback address such as http://localhost:3000)")
 	token := flags.String("token", "", "register: the registration token (or set AGENT_REGISTRATION_TOKEN, which keeps it out of the process list)")
 	hostName := flags.String("host-name", "", "register: the name to show for this host (default: its host name)")
-	osName := flags.String("os", runtime.GOOS, "register: the operating system to report (linux or windows); the host's, except to test against a stub")
+	osName := flags.String("os", agent.PlatformOS(runtime.GOOS), "register: the operating system to report (linux, windows or macos); the host's, except to test against a stub")
 	arch := flags.String("arch", runtime.GOARCH, "register: the architecture to report (amd64 or arm64); the host's, except to test against a stub")
 	if err := flags.Parse(args); err != nil {
 		return err
@@ -57,6 +58,9 @@ func run(args []string) error {
 	roots, err := roots(*caFile)
 	if err != nil {
 		return err
+	}
+	if command == "register" && *osName != "linux" && *osName != "windows" && *osName != "macos" {
+		return fmt.Errorf("--os must be linux, windows or macos, not %q", *osName)
 	}
 	cfg := agent.Config{StateDir: *stateDir, Version: version, RootCAs: roots, OS: *osName, Arch: *arch, Log: slog.New(slog.NewTextHandler(os.Stderr, nil))}
 
@@ -95,8 +99,11 @@ func envOr(name, fallback string) string {
 }
 
 func defaultStateDir() string {
-	if runtime.GOOS == "windows" {
+	switch runtime.GOOS {
+	case "windows":
 		return filepath.Join(envOr("ProgramData", `C:\ProgramData`), "CertificateAgent")
+	case "darwin":
+		return "/Library/Application Support/CertificateAgent"
 	}
 	return "/var/lib/certificate-agent"
 }

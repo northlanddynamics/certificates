@@ -1,7 +1,7 @@
 // What an Agent says about the machine it runs on, and how its version is judged against the latest the platform knows.
 
-/** Agents run on Windows and Linux (macOS is out of scope for v1). */
-export const AGENT_OSES = ["linux", "windows"] as const;
+/** Agents run on Linux, Windows and macOS. */
+export const AGENT_OSES = ["linux", "windows", "macos"] as const;
 export type AgentOs = (typeof AGENT_OSES)[number];
 export const AGENT_ARCHES = ["amd64", "arm64"] as const;
 export type AgentArch = (typeof AGENT_ARCHES)[number];

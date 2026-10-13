@@ -5,7 +5,6 @@ import type { Context } from "hono";
 import type { Pool } from "pg";
 import { registerAcmeAccounts } from "./acme-accounts";
 import { DEFAULT_AGENT_GATEWAY, registerAgentGateway, type AgentGatewayConfig } from "./agent-gateway";
-import { createAgentIdentityCa } from "./agent-identity-ca";
 import { registerAgents } from "./agents";
 import { registerApiKeys } from "./api-keys";
 import { PLATFORM_OPERATOR_ROLE, createAuth } from "./auth";
@@ -273,7 +272,7 @@ export function createApp(deps: AppDeps) {
   registerDeploymentScripts({ app, db, requireUser, authorize, unitOfWork });
   registerDeployments({ app, db, requireUser, authorize, unitOfWork, workItems, issuances });
   registerAgents({ app, db, requireUser, authorize, unitOfWork, clock, config: agentGateway });
-  registerAgentGateway({ app, db, unitOfWork, identityCa: createAgentIdentityCa({ db, kms: deps.kms, clock }), workItems, clock, config: agentGateway });
+  registerAgentGateway({ app, db, unitOfWork, workItems, clock, config: agentGateway });
 
   app.doc("/api/openapi.json", {
     openapi: "3.1.0",

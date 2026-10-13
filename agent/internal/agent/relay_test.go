@@ -246,13 +246,13 @@ func TestTheProvidersSecretIsNeverSentBackLoggedOrKept(t *testing.T) {
 	w.stub.Enqueue(dnsItem("a", "dns.present", rfc2136Provider(dnsServer, tsigSecret), txtRecord("_acme-challenge."+zone, "v")))
 	w.runUntilReported(1)
 	assertNoSecret(t, w, logs, tsigSecret)
-	// Nor is it kept: the state directory holds the identity and nothing else.
+	// Nor is it kept: the state directory holds the credential and nothing else.
 	entries, err := readDir(w.cfg.StateDir)
 	if err != nil {
 		t.Fatal(err)
 	}
 	for _, e := range entries {
-		if e != "identity.pem" && e != "agent.json" {
+		if e != "credential.json" {
 			t.Fatalf("the Agent keeps %s", e)
 		}
 	}

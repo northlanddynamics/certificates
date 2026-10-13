@@ -16,7 +16,7 @@ import { useAction } from "@/lib/use-action";
 const ROUTE = "/app/organizations/$orgId/agents";
 const STATUS_LABEL: Record<Agent["status"], string> = { online: "Online", offline: "Offline", revoked: "Revoked" };
 const STATUS_VARIANT: Record<Agent["status"], "default" | "secondary" | "destructive"> = { online: "default", offline: "secondary", revoked: "destructive" };
-const OS_LABEL: Record<Agent["os"], string> = { linux: "Linux", windows: "Windows" };
+const OS_LABEL: Record<Agent["os"], string> = { linux: "Linux", windows: "Windows", macos: "macOS" };
 
 // Paging and narrowing are the server's (Page<Agent>); the table lays out the page it was given.
 const features = tableFeatures({ rowPaginationFeature });
@@ -151,7 +151,7 @@ function RevokeAgent({ agent }: { agent: Agent }) {
           if (!next) revoke.reset();
         }}
         title={`Revoke ${agent.hostName}?`}
-        description="Its identity is accepted no more. This cannot be undone: a new Agent registers with a new token."
+        description="Its credential is accepted no more. This cannot be undone: a new Agent registers with a new token."
         confirmLabel="Revoke"
         pending={revoke.isPending}
         error={revoke.error}

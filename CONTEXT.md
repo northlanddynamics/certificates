@@ -143,16 +143,16 @@ Software an Organization installs inside its own network that acts for the platf
 _Avoid_: client, daemon, connector, relay
 
 **Agent Registration**:
-The one-time binding of a newly installed Agent to an Organization using a single-use token that an Organization Administrator made, which expires if it is not used. The Agent sends a CSR for a key it generated and is given an identity certificate.
+The one-time binding of a newly installed Agent to an Organization using a single-use token that an Organization Administrator made, which expires if it is not used. The Agent is given its credential.
 _Avoid_: enrollment (reserved for Enrollment Profiles), onboarding
 
 **Work Item**:
 One thing the platform asks one Agent to do, which the Agent finds by polling and answers with a result, such as carrying out a relayed DNS Provider operation. What an Agent needs in order to do it, such as a DNS Provider's credentials, is added only when the Agent is given it.
 _Avoid_: job, task, command
 
-**Agent identity certificate**:
-The mTLS client certificate by which an Agent authenticates, issued by the platform's own Agent identity CA (which is not a Private CA and issues nothing else) for a key the Agent keeps, and rotated by the Agent before it ends. Revoking an Agent ends its identity at once.
-_Avoid_: agent credential, agent token (the registration token is used once and is not what an Agent authenticates with)
+**Agent credential**:
+The bearer secret by which an Agent authenticates, made by the platform at Agent Registration and kept by the Agent; the platform keeps only its hash. The Agent replaces it before it ends. Revoking an Agent ends its credential at once.
+_Avoid_: agent token (the registration token is used once and is not what an Agent authenticates with), identity certificate (Agents no longer authenticate with certificates)
 
 ### Audit
 

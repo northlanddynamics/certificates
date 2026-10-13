@@ -200,6 +200,27 @@ export interface AcmeAccount {
   accountUrl: string;
   contactEmail: string | null;
 }
+export const TSIG_ALGORITHMS = ["hmac-sha256", "hmac-sha384", "hmac-sha512", "hmac-sha1", "hmac-md5"] as const;
+export interface Rfc2136Settings {
+  server: string;
+  port: number;
+  zone: string;
+  keyName: string;
+  algorithm: (typeof TSIG_ALGORITHMS)[number];
+}
+export interface InfobloxSettings {
+  url: string;
+  zone: string;
+  view: string;
+  caCertificate?: string;
+}
+/** An Organization's connection to a DNS service; its secret (a TSIG key, a WAPI password) is never returned. */
+export type DnsProvider = { id: string; name: string; relayAgentIds: string[] } & (
+  | { type: "rfc2136"; settings: Rfc2136Settings }
+  | { type: "infoblox"; settings: InfobloxSettings }
+);
+export type DnsProviderType = DnsProvider["type"];
+export type DnsProviderSettings = DnsProvider["settings"];
 /** One version of a Deployment Script, identified by the SHA-256 of its content. */
 export interface DeploymentScriptVersion {
   version: number;
@@ -260,7 +281,7 @@ export interface NewDeployment {
 export interface Agent {
   id: string;
   hostName: string;
-  os: "linux" | "windows";
+  os: "linux" | "windows" | "macos";
   arch: "amd64" | "arm64";
   version: string;
   /** Older than the latest version the platform knows of. */
@@ -393,6 +414,17 @@ export const api = {
     call<AcmeAccount>(`/api/organizations/${orgId}/acme-accounts`, { body: { ...body, termsOfServiceAgreed: true } }),
   testAcmeAccount: (orgId: string, accountId: string) =>
     call<{ ok: boolean; error?: string }>(`/api/organizations/${orgId}/acme-accounts/${accountId}/test`, { method: "POST", body: {} }),
+  dnsProviders: (orgId: string) => call<{ items: DnsProvider[] }>(`/api/organizations/${orgId}/dns-providers`),
+  createDnsProvider: (orgId: string, body: { name: string; type: DnsProviderType; settings: DnsProviderSettings; secret: string; relayAgentIds: string[] }) =>
+    call<DnsProvider>(`/api/organizations/${orgId}/dns-providers`, { body }),
+  changeDnsProvider: (orgId: string, providerId: string, body: { name: string; settings: DnsProviderSettings }) =>
+    call<DnsProvider>(`/api/organizations/${orgId}/dns-providers/${providerId}`, { method: "PUT", body }),
+  replaceDnsProviderSecret: (orgId: string, providerId: string, secret: string) =>
+    call<DnsProvider>(`/api/organizations/${orgId}/dns-providers/${providerId}/secret`, { method: "PUT", body: { secret } }),
+  setDnsProviderRelay: (orgId: string, providerId: string, agentIds: string[]) =>
+    call<DnsProvider>(`/api/organizations/${orgId}/dns-providers/${providerId}/relay`, { method: "PUT", body: { agentIds } }),
+  testDnsProvider: (orgId: string, providerId: string) =>
+    call<{ ok: boolean; error?: string }>(`/api/organizations/${orgId}/dns-providers/${providerId}/test`, { method: "POST", body: {} }),
   platformOrganizations: () => call<{ items: { id: string; name: string; slug: string }[] }>("/api/platform/organizations"),
   createOrganization: (body: { name: string; slug: string; adminEmail: string }) =>
     call<{ id: string; invitationId: string }>("/api/platform/organizations", { body }),

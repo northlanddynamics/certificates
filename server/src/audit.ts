@@ -49,7 +49,7 @@ export type AuditAction =
   | "api_key.used"
   | "agent_registration_token.created"
   | "agent.registered"
-  | "agent.identity_rotated"
+  | "agent.credential_rotated"
   | "agent.revoked"
   | "deployment_script.uploaded"
   | "deployment.created"

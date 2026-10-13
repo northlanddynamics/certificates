@@ -4,6 +4,7 @@ import (
 	"os"
 	"os/exec"
 	"path/filepath"
+	"runtime"
 	"strings"
 	"testing"
 	"time"
@@ -17,7 +18,7 @@ func (realClock) Now() time.Time { return time.Now() }
 
 // The Agent as a process: built as the release is (with its version set), registered and run from the command line against
 // the stub platform.
-func TestTheAgentBinaryRegistersAndPollsWithItsIdentity(t *testing.T) {
+func TestTheAgentBinaryRegistersAndPollsWithItsCredential(t *testing.T) {
 	dir := t.TempDir()
 	binary := filepath.Join(dir, "agent")
 	build := exec.Command("go", "build", "-ldflags", "-X main.version=9.9.9", "-o", binary, ".")
@@ -64,11 +65,14 @@ func TestTheAgentBinaryRegistersAndPollsWithItsIdentity(t *testing.T) {
 		t.Fatalf("the Agent polled %d times in 20s: %v", polls, stub.Calls())
 	}
 	for _, r := range stub.Requests() {
-		if r.Path == "/api/agent/poll" && r.ClientCertificate == "" {
-			t.Fatal("a poll without the Agent's identity certificate")
+		if r.Path == "/api/agent/poll" && !strings.HasPrefix(r.Credential, "agk_") {
+			t.Fatal("a poll without the Agent's credential")
 		}
 	}
 	host, version, _ := stub.Agent(stub.AgentIDs()[0])
+	if os, arch := stub.AgentPlatform(stub.AgentIDs()[0]); os != "linux" || arch != "amd64" {
+		t.Fatalf("the platform knows the Agent as %s/%s", os, arch)
+	}
 	if host != "cli-host" || version != "9.9.9" {
 		t.Fatalf("the platform knows the Agent as %q running %q", host, version)
 	}
@@ -78,6 +82,37 @@ func TestTheAgentBinaryRegistersAndPollsWithItsIdentity(t *testing.T) {
 	}
 	if err := run.Wait(); err != nil {
 		t.Fatalf("the Agent did not stop cleanly: %v", err)
+	}
+	if v := stub.ContractViolations(); len(v) != 0 {
+		t.Fatalf("%v", v)
+	}
+}
+
+// Development: a platform on the same host, over plain HTTP, needs no certificate and no --ca-file, and the Agent reports the
+// host's own operating system by default.
+func TestTheAgentBinaryRegistersWithALoopbackPlatformOverPlainHTTP(t *testing.T) {
+	dir := t.TempDir()
+	binary := filepath.Join(dir, "agent")
+	if out, err := exec.Command("go", "build", "-o", binary, ".").CombinedOutput(); err != nil {
+		t.Fatalf("build: %v\n%s", err, out)
+	}
+	stub, err := platformstub.Start(platformstub.Options{Clock: realClock{}, PlainHTTP: true})
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer stub.Close()
+	stub.AddToken("agt_dev")
+	register := exec.Command(binary, "register", "--platform", stub.URL(), "--state-dir", filepath.Join(dir, "state"))
+	register.Env = append(os.Environ(), "AGENT_REGISTRATION_TOKEN=agt_dev")
+	if out, err := register.CombinedOutput(); err != nil {
+		t.Fatalf("register: %v\n%s", err, out)
+	}
+	want := map[string]string{"darwin": "macos"}[runtime.GOOS]
+	if want == "" {
+		want = runtime.GOOS
+	}
+	if os, arch := stub.AgentPlatform(stub.AgentIDs()[0]); os != want || arch != runtime.GOARCH {
+		t.Fatalf("the platform knows the Agent as %s/%s, want %s/%s", os, arch, want, runtime.GOARCH)
 	}
 	if v := stub.ContractViolations(); len(v) != 0 {
 		t.Fatalf("%v", v)
@@ -94,6 +129,11 @@ func TestTheAgentBinaryRefusesAPlatformOverPlainHTTPAndAnUnregisteredRun(t *test
 	out, err := register.CombinedOutput()
 	if err == nil || !strings.Contains(string(out), "https") {
 		t.Fatalf("register over http: %v\n%s", err, out)
+	}
+	// Only the platform's names for operating systems: macos, not darwin.
+	out, err = exec.Command(binary, "register", "--platform", "https://platform.example", "--token", "agt_x", "--os", "darwin", "--state-dir", filepath.Join(dir, "state")).CombinedOutput()
+	if err == nil || !strings.Contains(string(out), "macos") {
+		t.Fatalf("register as darwin: %v\n%s", err, out)
 	}
 	out, err = exec.Command(binary, "run", "--state-dir", filepath.Join(dir, "state")).CombinedOutput()
 	if err == nil || !strings.Contains(string(out), "not registered") {

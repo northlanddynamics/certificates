@@ -1,44 +1,13 @@
-// An Agent as the platform sees it, for Seam A: it makes its own identity key, registers, and speaks the protocol
-// with its identity certificate in the header a TLS terminator would pass it in. (The real Agent is the Go program
-// in agent/, which Seam B runs against a stub of the platform.)
-import * as x509 from "@peculiar/x509";
+// An Agent as the platform sees it, for Seam A: it registers and speaks the protocol with the credential it was given
+// (ADR 0006). (The real Agent is the Go program in agent/, which Seam B runs against a stub of the platform.)
 import * as acme from "acme-client";
-import { createHash, webcrypto } from "node:crypto";
+import { createHash } from "node:crypto";
 import { DnsProviderError } from "../src/dns-provider";
 import { DNS_PROVIDER_KINDS } from "../src/dns-provider-kinds";
 import type { Harness } from "./harness";
 
-x509.cryptoProvider.set(webcrypto as unknown as Crypto);
-
-export const CERTIFICATE_HEADER = "x-client-cert";
-const SIGNING = { name: "ECDSA", hash: "SHA-256" } as const;
-
-/** A fresh key with a CSR for it, as an Agent would send; `curve` is P-256 unless a test wants a key the platform must refuse. */
-export async function newIdentityRequest(curve: "P-256" | "P-384" = "P-256") {
-  const keys = await webcrypto.subtle.generateKey({ name: "ECDSA", namedCurve: curve }, true, ["sign", "verify"]);
-  const csr = await x509.Pkcs10CertificateRequestGenerator.create({
-    name: "CN=agent",
-    keys,
-    signingAlgorithm: { name: "ECDSA", hash: curve === "P-256" ? "SHA-256" : "SHA-384" },
-  } as Parameters<typeof x509.Pkcs10CertificateRequestGenerator.create>[0]);
-  return { keys, csr: csr.toString("pem") };
-}
-
-/** A certificate for `agentId` that the identity CA never issued: signed by a CA of the test's own. */
-export async function forgedIdentity(agentId: string) {
-  const keys = await webcrypto.subtle.generateKey({ name: "ECDSA", namedCurve: "P-256" }, true, ["sign", "verify"]);
-  const cert = await x509.X509CertificateGenerator.createSelfSigned({
-    serialNumber: "01",
-    name: `CN=${agentId}`,
-    notBefore: new Date("2025-01-01"),
-    notAfter: new Date("2030-01-01"),
-    signingAlgorithm: SIGNING,
-    keys,
-  } as Parameters<typeof x509.X509CertificateGenerator.createSelfSigned>[0]);
-  return cert.toString("pem");
-}
-
-export const asHeader = (certificatePem: string) => ({ [CERTIFICATE_HEADER]: encodeURIComponent(certificatePem) });
+/** The headers of a call that carries `credential`. */
+export const asBearer = (credential: string) => ({ authorization: `Bearer ${credential}` });
 
 export interface Registration {
   token: string;
@@ -98,17 +67,17 @@ export class TestAgent {
     private readonly h: Harness,
     readonly id: string,
     readonly organizationId: string,
-    /** The identity certificate it presents (PEM). */
-    public certificate: string,
-    public notAfter: string,
+    /** The credential it presents. */
+    public credential: string,
+    public expiresAt: string,
   ) {}
 
   /** Registers an Agent with the token, as the Agent does; returns it, or the refusal. */
-  static async register(h: Harness, reg: Registration, csr?: string) {
+  static async register(h: Harness, reg: Registration) {
     const res = await h.api("/api/agent/registration", {
-      body: { token: reg.token, csr: csr ?? (await newIdentityRequest()).csr, hostName: reg.hostName ?? "host-1", os: reg.os ?? "linux", arch: reg.arch ?? "amd64", version: reg.version ?? "0.1.0" },
+      body: { token: reg.token, hostName: reg.hostName ?? "host-1", os: reg.os ?? "linux", arch: reg.arch ?? "amd64", version: reg.version ?? "0.1.0" },
     });
-    return { res, agent: res.status === 201 ? new TestAgent(h, res.body.agentId, "", res.body.certificate, res.body.notAfter) : undefined };
+    return { res, agent: res.status === 201 ? new TestAgent(h, res.body.agentId, "", res.body.credential, res.body.expiresAt) : undefined };
   }
 
   /** Registers with a token made by the Organization's administrator; throws when it is refused. */
@@ -120,18 +89,18 @@ export class TestAgent {
     return agent;
   }
 
-  /** A call to the Agent protocol with a certificate in the terminator's header: this Agent's, unless given another (or none). */
-  call(path: string, body: unknown, certificate: string | null = this.certificate) {
-    return this.h.api(path, { body, headers: certificate ? asHeader(certificate) : undefined });
+  /** A call to the Agent protocol with a credential: this Agent's, unless given another (or none). */
+  call(path: string, body: unknown, credential: string | null = this.credential) {
+    return this.h.api(path, { method: "POST", body: body ?? undefined, headers: credential ? asBearer(credential) : undefined });
   }
 
-  poll(version = "0.1.0", certificate?: string | null) {
-    return this.call("/api/agent/poll", { version }, certificate);
+  poll(version = "0.1.0", credential?: string | null) {
+    return this.call("/api/agent/poll", { version }, credential);
   }
 
   /** Reports how a work item went. */
-  report(id: string, result: Record<string, unknown> & { ok: boolean }, certificate: string | null = this.certificate) {
-    return this.call(`/api/agent/work-items/${id}/result`, result, certificate);
+  report(id: string, result: Record<string, unknown> & { ok: boolean }, credential: string | null = this.credential) {
+    return this.call(`/api/agent/work-items/${id}/result`, result, credential);
   }
 
   /**
@@ -208,12 +177,12 @@ export class TestAgent {
     };
   }
 
-  /** Asks for a new identity certificate for a new key; this Agent takes the new one when it is issued. */
-  async rotate(certificate: string | null = this.certificate) {
-    const res = await this.call("/api/agent/identity", { csr: (await newIdentityRequest()).csr }, certificate);
+  /** Asks for a new credential; this Agent takes the new one when it is issued. */
+  async rotate(credential: string | null = this.credential) {
+    const res = await this.call("/api/agent/credential", undefined, credential);
     if (res.status === 200) {
-      this.certificate = res.body.certificate;
-      this.notAfter = res.body.notAfter;
+      this.credential = res.body.credential;
+      this.expiresAt = res.body.expiresAt;
     }
     return res;
   }

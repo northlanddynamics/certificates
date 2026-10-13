@@ -1,17 +1,11 @@
 // Seam B: the Agent at its process boundary, run against a stub of the platform built from the platform's own contract
-// (internal/platformstub), over real TLS with mutual authentication. Time is a clock the tests move, so rotating an
-// identity that lasts 30 days, or waiting out a platform that is down, takes no time.
+// (internal/platformstub), over real TLS, authenticating with a bearer credential (ADR 0006). Time is a clock the tests move,
+// so rotating a credential that lasts 30 days, or waiting out a platform that is down, takes no time.
 package agent_test
 
 import (
-	"bytes"
 	"context"
-	"crypto/ecdsa"
-	"crypto/elliptic"
 	"crypto/x509"
-	"encoding/base64"
-	"encoding/hex"
-	"encoding/pem"
 	"errors"
 	"io"
 	"log/slog"
@@ -24,7 +18,7 @@ import (
 	"time"
 
 	"certificate-platform/agent/internal/agent"
-	"certificate-platform/agent/internal/identity"
+	"certificate-platform/agent/internal/credential"
 	"certificate-platform/agent/internal/platform"
 	"certificate-platform/agent/internal/platformstub"
 )
@@ -133,16 +127,28 @@ func (w *world) runUntil(stop func() bool) error {
 	}
 }
 
-func (w *world) loadIdentity() *identity.Identity {
+func (w *world) loadRecord() credential.Record {
 	w.t.Helper()
-	id, _, err := (identity.Store{Dir: w.cfg.StateDir}).Load()
+	record, err := (credential.Store{Dir: w.cfg.StateDir}).Load()
 	if err != nil {
 		w.t.Fatal(err)
 	}
-	return id
+	return record
 }
 
-func serialOf(c *x509.Certificate) string { return strings.ToUpper(c.SerialNumber.Text(16)) }
+// acceptedBy is whether the platform accepts the credential: whether a poll that presents it is answered, not refused.
+func (w *world) acceptedBy(value string) bool {
+	w.t.Helper()
+	client, err := platform.NewClient(w.stub.URL(), platform.Options{RootCAs: w.cfg.RootCAs, Credential: func() string { return value }})
+	if err != nil {
+		w.t.Fatal(err)
+	}
+	_, err = client.Poll(context.Background(), "probe")
+	if err != nil && !platform.Rejected(err) {
+		w.t.Fatal(err)
+	}
+	return err == nil
+}
 
 func count(calls []string, path string) int {
 	n := 0
@@ -157,10 +163,10 @@ func count(calls []string, path string) int {
 const (
 	registration = "/api/agent/registration"
 	poll         = "/api/agent/poll"
-	rotation     = "/api/agent/identity"
+	rotation     = "/api/agent/credential"
 )
 
-func TestRegistrationSendsAMachineIdentityRequestAndNeverTheKey(t *testing.T) {
+func TestRegistrationSendsNoKeyAndStoresTheCredentialThePlatformIssued(t *testing.T) {
 	w := newWorld(t, platformstub.Options{})
 	w.register()
 
@@ -168,52 +174,52 @@ func TestRegistrationSendsAMachineIdentityRequestAndNeverTheKey(t *testing.T) {
 	if len(requests) != 1 || requests[0].Path != registration {
 		t.Fatalf("expected one registration, got %v", w.stub.Calls())
 	}
-	if requests[0].ClientCertificate != "" {
-		t.Fatal("registration presented a client certificate, which the Agent does not have yet")
+	if requests[0].Credential != "" {
+		t.Fatal("registration presented a credential, which the Agent does not have yet")
+	}
+	var sent map[string]string
+	decodeJSON(t, requests[0].Body, &sent)
+	if len(sent) != 5 || sent["token"] != "agt_good" || sent["hostName"] != "web-01" || sent["os"] != "linux" || sent["arch"] != "amd64" || sent["version"] != "1.2.3" {
+		t.Fatalf("registration said %v", sent)
 	}
 
-	id := w.loadIdentity()
-	if id.Key.Curve != elliptic.P256() {
-		t.Fatalf("the identity key is on %s, not P-256", id.Key.Curve.Params().Name)
+	record := w.loadRecord()
+	if !strings.HasPrefix(record.Credential, "agk_") || record.PlatformURL != w.stub.URL() {
+		t.Fatalf("the stored registration is %v", record)
 	}
-	// The CSR the platform was sent is for the key the Agent kept.
-	var sent struct{ CSR, HostName, OS, Arch, Version string }
-	decodeJSON(t, requests[0].Body, &sent)
-	block, _ := pem.Decode([]byte(sent.CSR))
-	csr, err := x509.ParseCertificateRequest(block.Bytes)
-	if err != nil || csr.CheckSignature() != nil {
-		t.Fatalf("the CSR is not good: %v", err)
+	if want := record.IssuedAt.Add(30 * 24 * time.Hour); !record.ExpiresAt.Equal(want) {
+		t.Fatalf("the credential ends %v, want %v", record.ExpiresAt, want)
 	}
-	if !csr.PublicKey.(*ecdsa.PublicKey).Equal(&id.Key.PublicKey) {
-		t.Fatal("the CSR is not for the identity key the Agent stored")
-	}
-	if sent.HostName != "web-01" || sent.OS != "linux" || sent.Arch != "amd64" || sent.Version != "1.2.3" {
-		t.Fatalf("registration said %+v", sent)
-	}
-	assertNoPrivateKeySent(t, w.stub, id)
-	if host, version, ok := w.stub.Agent(id.Cert.Subject.CommonName); !ok || host != "web-01" || version != "1.2.3" {
+	if host, version, ok := w.stub.Agent(record.AgentID); !ok || host != "web-01" || version != "1.2.3" {
 		t.Fatalf("the platform knows the Agent as %q %q %v", host, version, ok)
+	}
+	if !w.acceptedBy(record.Credential) {
+		t.Fatal("the platform does not accept the stored credential")
 	}
 }
 
-func TestIdentityIsStoredForTheServiceAccountAlone(t *testing.T) {
+func TestTheCredentialIsStoredForTheServiceAccountAlone(t *testing.T) {
 	if runtime.GOOS == "windows" {
 		t.Skip("file modes do not protect files on Windows; the installer sets the directory's ACL")
 	}
 	w := newWorld(t, platformstub.Options{})
 	w.register()
-	for path, want := range map[string]os.FileMode{w.cfg.StateDir: 0o700, filepath.Join(w.cfg.StateDir, "identity.pem"): 0o600} {
-		info, err := os.Stat(path)
+	path := filepath.Join(w.cfg.StateDir, "credential.json")
+	for p, want := range map[string]os.FileMode{w.cfg.StateDir: 0o700, path: 0o600} {
+		info, err := os.Stat(p)
 		if err != nil || info.Mode().Perm() != want {
-			t.Fatalf("%s: mode %v, %v; want %v", path, info.Mode().Perm(), err, want)
+			t.Fatalf("%s: mode %v, %v; want %v", p, info.Mode().Perm(), err, want)
 		}
 	}
 	// A store others can read is refused, not used.
-	if err := os.Chmod(filepath.Join(w.cfg.StateDir, "identity.pem"), 0o644); err != nil {
+	if err := os.Chmod(path, 0o644); err != nil {
 		t.Fatal(err)
 	}
-	if _, _, err := (identity.Store{Dir: w.cfg.StateDir}).Load(); err == nil {
-		t.Fatal("a key readable by others was loaded")
+	if _, err := (credential.Store{Dir: w.cfg.StateDir}).Load(); err == nil {
+		t.Fatal("a credential readable by others was loaded")
+	}
+	if err := agent.Run(context.Background(), w.cfg); err == nil {
+		t.Fatal("the Agent ran on a credential readable by others")
 	}
 }
 
@@ -223,8 +229,8 @@ func TestRegistrationWithAnUnknownOrUsedTokenIsRefusedAndStoresNothing(t *testin
 	if !platform.Rejected(errors.Unwrap(err)) && !platform.Rejected(err) {
 		t.Fatalf("expected the platform's refusal, got %v", err)
 	}
-	if _, _, err := (identity.Store{Dir: w.cfg.StateDir}).Load(); !errors.Is(err, identity.ErrNotRegistered) {
-		t.Fatalf("an identity was stored: %v", err)
+	if _, err := (credential.Store{Dir: w.cfg.StateDir}).Load(); !errors.Is(err, credential.ErrNotRegistered) {
+		t.Fatalf("a credential was stored: %v", err)
 	}
 	w.register()
 	if err := agent.Register(context.Background(), w.cfg, w.stub.URL(), "agt_good", "web-02"); err == nil {
@@ -232,33 +238,92 @@ func TestRegistrationWithAnUnknownOrUsedTokenIsRefusedAndStoresNothing(t *testin
 	}
 }
 
-func TestTheAgentSpeaksOnlyHTTPS(t *testing.T) {
-	w := newWorld(t, platformstub.Options{})
-	err := agent.Register(context.Background(), w.cfg, strings.Replace(w.stub.URL(), "https://", "http://", 1), "agt_good", "web-01")
-	if err == nil || !strings.Contains(err.Error(), "https") {
-		t.Fatalf("expected a refusal to speak in the clear, got %v", err)
+func TestRegistrationReportsTheOperatingSystemAsThePlatformNamesIt(t *testing.T) {
+	for goos, want := range map[string]string{"linux": "linux", "windows": "windows", "darwin": "macos"} {
+		if got := agent.PlatformOS(goos); got != want {
+			t.Fatalf("%s is reported as %q, not %q", goos, got, want)
+		}
 	}
+	for _, p := range []struct{ os, arch string }{{"macos", "arm64"}, {"macos", "amd64"}, {"windows", "amd64"}, {"linux", "arm64"}} {
+		w := newWorld(t, platformstub.Options{})
+		w.cfg.OS, w.cfg.Arch = p.os, p.arch
+		w.register()
+		os, arch := w.stub.AgentPlatform(w.stub.AgentIDs()[0])
+		if os != p.os || arch != p.arch {
+			t.Fatalf("registered as %s/%s, the platform has %s/%s", p.os, p.arch, os, arch)
+		}
+	}
+	// What the platform has no name for is refused before anything is sent: not Go's own "darwin" either.
+	for _, p := range []struct{ os, arch string }{{"darwin", "arm64"}, {"freebsd", "amd64"}, {"linux", "386"}} {
+		w := newWorld(t, platformstub.Options{})
+		w.stub.AddToken("agt_good")
+		w.cfg.OS, w.cfg.Arch = p.os, p.arch
+		if err := agent.Register(context.Background(), w.cfg, w.stub.URL(), "agt_good", "web-01"); err == nil {
+			t.Fatalf("registered as %s/%s", p.os, p.arch)
+		}
+		if n := len(w.stub.Requests()); n != 0 {
+			t.Fatalf("%d requests for %s/%s", n, p.os, p.arch)
+		}
+	}
+}
+
+func TestTheAgentSpeaksOnlyHTTPSExceptToALoopbackAddress(t *testing.T) {
+	w := newWorld(t, platformstub.Options{})
+	for _, url := range []string{"http://platform.example", "http://192.0.2.10:3000", "http://[2001:db8::1]", "ftp://localhost"} {
+		err := agent.Register(context.Background(), w.cfg, url, "agt_good", "web-01")
+		if err == nil || !strings.Contains(err.Error(), "https") {
+			t.Fatalf("%s: expected a refusal to speak in the clear, got %v", url, err)
+		}
+	}
+	// The stub's own address, over plain http, is a loopback address, but it speaks TLS, so nothing is exchanged.
 	if n := len(w.stub.Requests()); n != 0 {
 		t.Fatalf("the Agent connected anyway: %d requests", n)
 	}
 }
 
-func TestAgentPollsWithItsIdentityCertificateAndReportsItsVersion(t *testing.T) {
+func TestOnLoopbackAnAgentRegistersAndPollsOverPlainHTTP(t *testing.T) {
+	c := &clock{now: time.Now().UTC().Truncate(time.Second)}
+	stub, err := platformstub.Start(platformstub.Options{Clock: c, PlainHTTP: true})
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer stub.Close()
+	if !strings.HasPrefix(stub.URL(), "http://127.0.0.1:") {
+		t.Fatalf("the stub is at %s", stub.URL())
+	}
+	// No root certificates and no certificate: development needs none.
+	cfg := agent.Config{StateDir: filepath.Join(t.TempDir(), "state"), Version: "1.2.3", Clock: c, Log: slog.New(slog.NewTextHandler(io.Discard, nil)), OS: "macos", Arch: "arm64"}
+	stub.AddToken("agt_dev")
+	if err := agent.Register(context.Background(), cfg, stub.URL(), "agt_dev", "laptop"); err != nil {
+		t.Fatal(err)
+	}
+	ctx, cancel := context.WithCancel(context.Background())
+	c.afterEach = func(int) { cancel() }
+	if err := agent.Run(ctx, cfg); err != nil {
+		t.Fatal(err)
+	}
+	if count(stub.Calls(), poll) != 1 {
+		t.Fatalf("calls: %v", stub.Calls())
+	}
+	if v := stub.ContractViolations(); len(v) != 0 {
+		t.Fatalf("%v", v)
+	}
+}
+
+func TestAgentPollsWithItsCredentialAndReportsItsVersion(t *testing.T) {
 	w := newWorld(t, platformstub.Options{PollAfterSeconds: 30})
 	w.register()
-	id := w.loadIdentity()
+	record := w.loadRecord()
 
 	if err := w.runUntil(func() bool { return count(w.stub.Calls(), poll) >= 3 }); err != nil {
 		t.Fatal(err)
 	}
-	polls := 0
 	for _, r := range w.stub.Requests() {
 		if r.Path != poll {
 			continue
 		}
-		polls++
-		if r.ClientCertificate != serialOf(id.Cert) {
-			t.Fatalf("poll presented certificate %q, not the Agent's identity %q", r.ClientCertificate, serialOf(id.Cert))
+		if r.Credential != record.Credential {
+			t.Fatal("a poll did not present the Agent's credential")
 		}
 		var body struct{ Version string }
 		decodeJSON(t, r.Body, &body)
@@ -272,14 +337,14 @@ func TestAgentPollsWithItsIdentityCertificateAndReportsItsVersion(t *testing.T) 
 			t.Fatalf("slept %v between polls, not 30s", d)
 		}
 	}
-	if _, version, _ := w.stub.Agent(id.Cert.Subject.CommonName); version != "1.2.3" {
+	if _, version, _ := w.stub.Agent(record.AgentID); version != "1.2.3" {
 		t.Fatalf("the platform has version %q", version)
 	}
 }
 
 func TestAnAgentThatIsNotRegisteredDoesNotRun(t *testing.T) {
 	w := newWorld(t, platformstub.Options{})
-	if err := agent.Run(context.Background(), w.cfg); !errors.Is(err, identity.ErrNotRegistered) {
+	if err := agent.Run(context.Background(), w.cfg); !errors.Is(err, credential.ErrNotRegistered) {
 		t.Fatalf("got %v", err)
 	}
 	if n := len(w.stub.Requests()); n != 0 {
@@ -287,10 +352,10 @@ func TestAnAgentThatIsNotRegisteredDoesNotRun(t *testing.T) {
 	}
 }
 
-func TestIdentityRotatesBeforeItEndsWithANewKeyThatNeverLeavesTheHost(t *testing.T) {
-	w := newWorld(t, platformstub.Options{IdentityLife: 30 * 24 * time.Hour})
+func TestTheCredentialRotatesBeforeItEndsAndTheOldOneStopsWorkingOnceTheNewIsUsed(t *testing.T) {
+	w := newWorld(t, platformstub.Options{CredentialLife: 30 * 24 * time.Hour})
 	w.register()
-	before := w.loadIdentity()
+	before := w.loadRecord()
 
 	// Not yet: with more than a third of its life left, it is not rotated.
 	w.clock.Advance(19 * 24 * time.Hour)
@@ -311,34 +376,38 @@ func TestIdentityRotatesBeforeItEndsWithANewKeyThatNeverLeavesTheHost(t *testing
 		t.Fatalf("rotated %d times, want once: %v", n, w.stub.Calls())
 	}
 
-	after := w.loadIdentity()
-	if serialOf(after.Cert) == serialOf(before.Cert) || after.Key.Equal(before.Key) {
-		t.Fatal("the stored identity is not a new key with a new certificate")
+	after := w.loadRecord()
+	if after.Credential == before.Credential || !strings.HasPrefix(after.Credential, "agk_") {
+		t.Fatal("the stored credential is not a new one")
 	}
-	if !after.Cert.NotAfter.After(before.Cert.NotAfter) {
-		t.Fatal("the new certificate does not last longer")
+	if !after.ExpiresAt.After(before.ExpiresAt) || after.AgentID != before.AgentID || after.PlatformURL != before.PlatformURL {
+		t.Fatalf("the new registration is %v, the old %v", after, before)
 	}
-	// The rotation was asked for with the old certificate and the polls after it use the new one.
+	// The rotation was asked for with the old credential and the polls after it use the new one.
 	rotated := false
 	for _, r := range w.stub.Requests()[1:] {
 		switch {
 		case r.Path == rotation:
 			rotated = true
-			if r.ClientCertificate != serialOf(before.Cert) {
-				t.Fatalf("rotation presented %q, not the identity it replaces", r.ClientCertificate)
+			if r.Credential != before.Credential {
+				t.Fatal("the rotation did not present the credential it replaces")
 			}
-		case r.Path == poll && rotated && r.ClientCertificate != serialOf(after.Cert):
-			t.Fatalf("a poll after the rotation presented %q, not the new identity", r.ClientCertificate)
+		case r.Path == poll && rotated && r.Credential != after.Credential:
+			t.Fatal("a poll after the rotation did not present the new credential")
 		}
 	}
-	assertNoPrivateKeySent(t, w.stub, before)
-	assertNoPrivateKeySent(t, w.stub, after)
+	if !rotated {
+		t.Fatal("no rotation")
+	}
+	if w.acceptedBy(before.Credential) || !w.acceptedBy(after.Credential) {
+		t.Fatal("the platform should accept the new credential and no longer the old")
+	}
 }
 
-func TestARotationThatFailsLeavesTheIdentityAloneAndIsRetriedWhileTheAgentKeepsPolling(t *testing.T) {
+func TestARotationThatFailsLeavesTheCredentialAloneAndIsRetriedWhileTheAgentKeepsPolling(t *testing.T) {
 	w := newWorld(t, platformstub.Options{})
 	w.register()
-	before := w.loadIdentity()
+	before := w.loadRecord()
 	w.clock.Advance(25 * 24 * time.Hour)
 	w.stub.SetRotationFailing(true)
 
@@ -348,8 +417,8 @@ func TestARotationThatFailsLeavesTheIdentityAloneAndIsRetriedWhileTheAgentKeepsP
 	if n := count(w.stub.Calls(), poll); n < 3 {
 		t.Fatalf("the Agent stopped polling while its rotation failed: %d polls", n)
 	}
-	if serialOf(w.loadIdentity().Cert) != serialOf(before.Cert) {
-		t.Fatal("a failed rotation changed the stored identity")
+	if w.loadRecord().Credential != before.Credential {
+		t.Fatal("a failed rotation changed the stored credential")
 	}
 
 	w.stub.SetRotationFailing(false)
@@ -357,15 +426,88 @@ func TestARotationThatFailsLeavesTheIdentityAloneAndIsRetriedWhileTheAgentKeepsP
 	if err := w.runUntil(func() bool { return count(w.stub.Calls(), rotation) > rotations }); err != nil {
 		t.Fatal(err)
 	}
-	if serialOf(w.loadIdentity().Cert) == serialOf(before.Cert) {
+	if w.loadRecord().Credential == before.Credential {
 		t.Fatal("the rotation was not retried to success")
+	}
+}
+
+// The platform rotated, but the answer never arrived: the Agent has only the old credential, which the platform still accepts
+// until a new one is used, so it asks again with the old one and carries on.
+func TestARotationWhoseAnswerWasLostIsAskedAgainWithTheOldCredential(t *testing.T) {
+	w := newWorld(t, platformstub.Options{})
+	w.register()
+	before := w.loadRecord()
+	w.clock.Advance(25 * 24 * time.Hour)
+	w.stub.SetRotationAnswerLost(true)
+
+	if err := w.runUntil(func() bool { return count(w.stub.Calls(), rotation) >= 3 }); err != nil {
+		t.Fatalf("an Agent whose rotation was lost returned %v", err)
+	}
+	if w.loadRecord().Credential != before.Credential {
+		t.Fatal("the stored credential changed without an answer")
+	}
+	for _, r := range w.stub.Requests() {
+		if r.Credential != "" && r.Credential != before.Credential {
+			t.Fatal("the Agent presented a credential it was never given")
+		}
+	}
+
+	w.stub.SetRotationAnswerLost(false)
+	rotations := count(w.stub.Calls(), rotation)
+	polled := count(w.stub.Calls(), poll)
+	if err := w.runUntil(func() bool { return count(w.stub.Calls(), poll) >= polled+3 }); err != nil {
+		t.Fatalf("got %v", err)
+	}
+	if n := count(w.stub.Calls(), rotation); n != rotations+1 {
+		t.Fatalf("rotated %d more times, want once", n-rotations)
+	}
+	after := w.loadRecord()
+	if after.Credential == before.Credential || !w.acceptedBy(after.Credential) || w.acceptedBy(before.Credential) {
+		t.Fatal("the Agent did not end up on the credential the platform issued last")
+	}
+}
+
+// The new credential is stored before it is used: one that cannot be stored is not used, and the Agent stays on the old one,
+// which the platform still accepts, instead of being locked out by a credential it would lose at a restart.
+func TestACredentialThatCannotBeStoredIsNotUsed(t *testing.T) {
+	w := newWorld(t, platformstub.Options{})
+	w.register()
+	before := w.loadRecord()
+	path := filepath.Join(w.cfg.StateDir, "credential.json")
+	ctx, cancel := context.WithCancel(context.Background())
+	defer cancel()
+	w.clock.afterEach = func(slept int) {
+		if slept == 1 {
+			// Nothing can be renamed onto a directory, so the Agent can no longer store a credential; and its rotation is due.
+			if err := os.Remove(path); err != nil {
+				t.Error(err)
+			}
+			if err := os.Mkdir(path, 0o700); err != nil {
+				t.Error(err)
+			}
+			w.clock.Advance(25 * 24 * time.Hour)
+		}
+		if count(w.stub.Calls(), poll) >= 5 {
+			cancel()
+		}
+	}
+	if err := agent.Run(ctx, w.cfg); err != nil {
+		t.Fatalf("got %v", err)
+	}
+	if n := count(w.stub.Calls(), rotation); n < 2 {
+		t.Fatalf("expected the rotation to be tried again, %d tries", n)
+	}
+	for _, r := range w.stub.Requests() {
+		if r.Credential != "" && r.Credential != before.Credential {
+			t.Fatal("the Agent used a credential it could not store")
+		}
 	}
 }
 
 func TestAPlatformThatIsDownIsWaitedForWithGrowingPausesAndTheAgentResumes(t *testing.T) {
 	w := newWorld(t, platformstub.Options{PollAfterSeconds: 30})
 	w.register()
-	before := w.loadIdentity()
+	before := w.loadRecord()
 	w.stub.SetDown(true)
 	w.clock.afterEach = nil
 
@@ -395,8 +537,8 @@ func TestAPlatformThatIsDownIsWaitedForWithGrowingPausesAndTheAgentResumes(t *te
 	if n := count(w.stub.Calls(), registration); n != 1 {
 		t.Fatalf("the Agent registered again: %d registrations", n)
 	}
-	if serialOf(w.loadIdentity().Cert) != serialOf(before.Cert) {
-		t.Fatal("an outage cost the Agent its identity")
+	if w.loadRecord().Credential != before.Credential {
+		t.Fatal("an outage cost the Agent its credential")
 	}
 }
 
@@ -416,45 +558,54 @@ func TestAnUnreachablePlatformIsRetriedAndStoppingTheAgentIsNotAnError(t *testin
 func TestAnAgentThePlatformHasRevokedStopsInsteadOfRetryingForever(t *testing.T) {
 	w := newWorld(t, platformstub.Options{})
 	w.register()
-	w.stub.Revoke(w.loadIdentity().Cert.Subject.CommonName)
+	w.stub.Revoke(w.loadRecord().AgentID)
 
 	err := w.runUntil(func() bool { return false })
-	if !errors.Is(err, agent.ErrIdentityRejected) {
-		t.Fatalf("got %v, want the identity to be rejected", err)
+	if !errors.Is(err, agent.ErrCredentialRejected) {
+		t.Fatalf("got %v, want the credential to be rejected", err)
 	}
 	if n := count(w.stub.Calls(), poll); n != 1 {
 		t.Fatalf("polled %d times after being refused", n)
 	}
 }
 
-func TestAnIdentityThatEndedWhileTheAgentWasAwayIsRejected(t *testing.T) {
-	w := newWorld(t, platformstub.Options{IdentityLife: 24 * time.Hour})
+func TestACredentialThatEndedWhileTheAgentWasAwayIsRejected(t *testing.T) {
+	w := newWorld(t, platformstub.Options{CredentialLife: 24 * time.Hour})
 	w.register()
 	w.clock.Advance(48 * time.Hour)
-	if err := w.runUntil(func() bool { return false }); !errors.Is(err, agent.ErrIdentityRejected) {
+	if err := w.runUntil(func() bool { return false }); !errors.Is(err, agent.ErrCredentialRejected) {
 		t.Fatalf("got %v", err)
 	}
 }
 
-// assertNoPrivateKeySent fails if anything the platform was sent holds the private key, in any encoding the Agent could have used.
-func assertNoPrivateKeySent(t *testing.T, stub *platformstub.Stub, id *identity.Identity) {
-	t.Helper()
-	der, err := x509.MarshalPKCS8PrivateKey(id.Key)
-	if err != nil {
+// The credential is a secret: whatever the Agent logs, and whatever errors it returns, it is in none of it.
+func TestTheCredentialIsNeverLoggedOrReturnedInAnError(t *testing.T) {
+	w, logs := relayWorld(t)
+	first := w.loadRecord().Credential
+	w.clock.Advance(25 * 24 * time.Hour)
+	w.stub.SetRotationFailing(true)
+	if err := w.runUntil(func() bool { return count(w.stub.Calls(), rotation) >= 2 }); err != nil {
 		t.Fatal(err)
 	}
-	ec, _ := x509.MarshalECPrivateKey(id.Key)
-	d := id.Key.D.Bytes()
-	secrets := map[string][]byte{
-		"the PKCS#8 key": der, "the SEC1 key": ec,
-		"its base64": []byte(base64.StdEncoding.EncodeToString(der)), "its base64url": []byte(base64.RawURLEncoding.EncodeToString(d)),
-		"the scalar in hex": []byte(hex.EncodeToString(d)), "the scalar in base64": []byte(base64.StdEncoding.EncodeToString(d)), "a PEM key": []byte("PRIVATE KEY"),
+	w.stub.SetRotationFailing(false)
+	if err := w.runUntil(func() bool { return count(w.stub.Calls(), rotation) >= 3 }); err != nil {
+		t.Fatal(err)
 	}
-	for _, r := range stub.Requests() {
-		for what, secret := range secrets {
-			if bytes.Contains(r.Body, secret) {
-				t.Fatalf("a request to %s contains %s", r.Path, what)
-			}
+	second := w.loadRecord().Credential
+	if second == first {
+		t.Fatal("no rotation")
+	}
+	w.stub.Revoke(w.loadRecord().AgentID)
+	err := w.runUntil(func() bool { return false })
+	if !errors.Is(err, agent.ErrCredentialRejected) {
+		t.Fatalf("got %v", err)
+	}
+	for _, secret := range []string{first, second} {
+		if strings.Contains(logs.String(), secret) || strings.Contains(err.Error(), secret) {
+			t.Fatal("the Agent logged or returned a credential")
 		}
+	}
+	if !strings.Contains(logs.String(), "rotated the credential") {
+		t.Fatalf("the rotation was not logged: %s", logs.String())
 	}
 }

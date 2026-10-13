@@ -1,17 +1,13 @@
 // The platform's side of the Agent protocol, which an Agent speaks only outbound, over HTTPS:
-//  - Agent Registration: an Agent with a single-use token sends a CSR for a key it generated, and is given an identity
-//    certificate from the Agent identity CA (agent-identity-ca.ts). The only call that needs no certificate.
-//  - everything after authenticates with that certificate (mTLS): polling, which is also the heartbeat and carries the
-//    version and brings the Agent its work items, and rotating the identity before it expires.
-// The TLS terminator in front of the platform requires and verifies the client certificate against the identity CA
-// (`GET /api/agent/identity-ca`) and passes the verified one on in a header (ADR 0005); the platform checks it again and
-// whether it is the one the Agent is meant to be using.
+//  - Agent Registration: an Agent with a single-use token is given a credential for itself. The only call that needs no credential.
+//  - everything after authenticates with that credential, as a bearer token (ADR 0006): polling, which is also the
+//    heartbeat and carries the version and brings the Agent its work items, and rotating the credential before it ends.
+// Only the credential's SHA-256 is kept, so the platform cannot be made to reveal one.
 import { OpenAPIHono, createRoute, z } from "@hono/zod-openapi";
-import { createHash, randomBytes, timingSafeEqual } from "node:crypto";
-import { and, eq, gt, isNull } from "drizzle-orm";
+import { createHash, randomBytes } from "node:crypto";
+import { and, eq, gt, isNull, or } from "drizzle-orm";
 import type { Context } from "hono";
 import { AGENT_ARCHES, AGENT_OSES, LATEST_AGENT_VERSION } from "./agent-kinds";
-import { AgentCsrError, type AgentIdentityCa } from "./agent-identity-ca";
 import type { Db } from "./db/client";
 import { agent, agentRegistrationToken } from "./db/schema";
 import { MAX_CSR_LENGTH } from "./csr";
@@ -23,8 +19,8 @@ import type { WorkItems } from "./work-items";
 export interface AgentGatewayConfig {
   /** The newest Agent version the platform knows of; older ones are flagged. */
   latestVersion: string;
-  /** How long an identity certificate lasts. An Agent replaces it well before: it rotates once a third of its life is left. */
-  identityValidityDays: number;
+  /** How long a credential lasts. An Agent replaces it well before: it rotates once a third of its life is left. */
+  credentialValidityDays: number;
   /** How long a Registration token may wait to be used. */
   registrationTokenDays: number;
   /** How often an Agent is told to poll, and how long it may be silent before it counts as offline. */
@@ -35,37 +31,30 @@ export interface AgentGatewayConfig {
    * being asked for rather than a poll later. Zero answers at once. An Agent polls again straight after a long poll.
    */
   longPollSeconds: number;
-  /** The request header in which the TLS terminator passes the client certificate it verified: PEM, URL-encoded (nginx's `$ssl_client_escaped_cert`). */
-  clientCertificateHeader: string;
-  /**
-   * When set, every call that carries an identity must also send it in `x-agent-gateway-secret`: the TLS terminator adds it, so a
-   * client certificate in the header is trusted only from the terminator, even if the platform's port can be reached some other way.
-   */
-  terminatorSecret?: string;
 }
 
 export const DEFAULT_AGENT_GATEWAY: AgentGatewayConfig = {
   latestVersion: LATEST_AGENT_VERSION,
-  identityValidityDays: 30,
+  credentialValidityDays: 30,
   registrationTokenDays: 7,
   pollAfterSeconds: 30,
   offlineAfterSeconds: 120,
   longPollSeconds: 0,
-  clientCertificateHeader: "x-client-cert",
 };
 
 /** How often a long poll looks for work. */
 const LONG_POLL_CHECK_MS = 250;
-export const TERMINATOR_SECRET_HEADER = "x-agent-gateway-secret";
 export const REGISTRATION_TOKEN_PREFIX = "agt_";
+export const AGENT_CREDENTIAL_PREFIX = "agk_";
 export const hashToken = (token: string) => createHash("sha256").update(token).digest("hex");
 export const newRegistrationToken = () => REGISTRATION_TOKEN_PREFIX + randomBytes(32).toString("base64url");
+const newCredential = () => AGENT_CREDENTIAL_PREFIX + randomBytes(32).toString("base64url");
 
-const SECURITY = [{ agentIdentity: [] }];
-const IDENTITY_NOT_ACCEPTED = "the Agent's identity is not accepted";
-const Certificate = z.object({
-  certificate: z.string().openapi({ description: "The Agent's identity certificate, PEM." }),
-  notAfter: z.string().openapi({ description: "When it ends. The Agent rotates it once a third of its life is left." }),
+const SECURITY = [{ agentCredential: [] }];
+const CREDENTIAL_NOT_ACCEPTED = "the Agent's credential is not accepted";
+const Credential = z.object({
+  credential: z.string().openapi({ description: "The Agent's credential, sent as `Authorization: Bearer <credential>`. It is shown only in this response: the platform keeps only its hash." }),
+  expiresAt: z.string().openapi({ description: "When it ends. The Agent rotates it once a third of its life is left." }),
 });
 const WorkItem = z.object({
   id: z.string(),
@@ -98,60 +87,38 @@ const WorkResult = z.object({
     .openapi({ description: "For `deployment.run`: how the script went. `ok` is whether it succeeded (exit code 0)." }),
 });
 
-export function registerAgentGateway(ctx: { app: OpenAPIHono; db: Db; unitOfWork: UnitOfWork; identityCa: AgentIdentityCa; workItems: WorkItems; clock: () => Date; config: AgentGatewayConfig }) {
-  const { app, db, unitOfWork, identityCa, workItems, clock, config } = ctx;
+export function registerAgentGateway(ctx: { app: OpenAPIHono; db: Db; unitOfWork: UnitOfWork; workItems: WorkItems; clock: () => Date; config: AgentGatewayConfig }) {
+  const { app, db, unitOfWork, workItems, clock, config } = ctx;
 
-  app.openAPIRegistry.registerComponent("securitySchemes", "agentIdentity", {
-    type: "mutualTLS",
-    description: "The Agent's identity certificate, from Agent Registration or its latest rotation.",
-  } as never);
+  app.openAPIRegistry.registerComponent("securitySchemes", "agentCredential", {
+    type: "http",
+    scheme: "bearer",
+    description: "The Agent's credential, from Agent Registration or its latest rotation.",
+  });
 
-  /** An identity certificate for the CSR, or the 400 that says what is wrong with it. */
-  async function issueIdentity(csr: string, agentId: string, now: Date) {
-    try {
-      return await identityCa.issue({ csr, agentId, now, validityDays: config.identityValidityDays });
-    } catch (err) {
-      if (err instanceof AgentCsrError) throw new HttpError(400, err.message);
-      throw err;
-    }
+  /** A new credential and when it ends, for a change that happened at `now`. */
+  function issueCredential(now: Date) {
+    const credential = newCredential();
+    return { credential, hash: hashToken(credential), expiresAt: new Date(now.getTime() + config.credentialValidityDays * 24 * 3600_000) };
   }
 
-  /** The Agent whose identity certificate the request carries, or a 401: no certificate, one that is not the identity CA's or is not valid now, one that is no longer the Agent's, or an Agent that is revoked. */
+  /**
+   * The Agent whose credential the request carries, or a 401: no credential, one that is not an Agent's, one that has
+   * ended (the one an Agent replaced is accepted until its replacement is first used, but not past its own end), or an
+   * Agent that is revoked. `hash` is the one presented, which says whether it was the current one.
+   */
   async function authenticate(c: Context) {
-    const refused = new HttpError(401, IDENTITY_NOT_ACCEPTED);
-    if (config.terminatorSecret !== undefined) {
-      const sent = Buffer.from(c.req.header(TERMINATOR_SECRET_HEADER) ?? "");
-      const expected = Buffer.from(config.terminatorSecret);
-      if (sent.length !== expected.length || !timingSafeEqual(sent, expected)) throw refused;
-    }
-    const header = c.req.header(config.clientCertificateHeader);
-    if (!header) throw new HttpError(401, "an Agent identity certificate is required");
-    let pem: string;
-    try {
-      pem = decodeURIComponent(header);
-    } catch {
-      throw refused;
-    }
+    const refused = new HttpError(401, CREDENTIAL_NOT_ACCEPTED);
+    const presented = /^Bearer\s+(\S+)$/i.exec(c.req.header("authorization") ?? "")?.[1];
+    if (!presented) throw new HttpError(401, "an Agent credential is required");
+    const hash = hashToken(presented);
     const now = clock();
-    const identity = await identityCa.verify(pem, now);
-    if (!identity) throw refused;
-    const [row] = await db.select().from(agent).where(eq(agent.id, identity.agentId));
+    const [row] = await db.select().from(agent).where(or(eq(agent.credentialHash, hash), eq(agent.previousCredentialHash, hash)));
     if (!row || row.revokedAt) throw refused;
-    if (identity.serial !== row.identitySerial && identity.serial !== row.previousIdentitySerial) throw refused;
-    return { row, serial: identity.serial, now };
+    const endsAt = hash === row.credentialHash ? row.credentialExpiresAt : row.previousCredentialExpiresAt;
+    if (!endsAt || endsAt <= now) throw refused;
+    return { row, hash, now };
   }
-
-  app.openapi(
-    createRoute({
-      method: "get",
-      path: "/api/agent/identity-ca",
-      tags: ["Agent protocol"],
-      summary: "The Agent identity CA's certificate",
-      description: "What a TLS terminator in front of the platform verifies Agents' client certificates against. Public.",
-      responses: { 200: json(z.object({ certificate: z.string().openapi({ description: "PEM." }) })) },
-    }),
-    async (c) => c.json({ certificate: await identityCa.certificate() }, 200),
-  );
 
   app.openapi(
     createRoute({
@@ -161,14 +128,13 @@ export function registerAgentGateway(ctx: { app: OpenAPIHono; db: Db; unitOfWork
       summary: "Agent Registration: bind a newly installed Agent to an Organization with a single-use token",
       description:
         "The token is the one an Organization Administrator made for the Organization; it is used up by this call, and used or expired ones are refused. " +
-        "The Agent generates an ECDSA P-256 key, keeps it, and sends only a CSR for it (ADR 0002); the response is its identity certificate, which it presents from then on.",
+        "The response holds the Agent's credential, which it keeps and presents from then on (ADR 0006); the platform keeps only its hash, so it is not shown again.",
       request: {
         body: {
           content: {
             "application/json": {
               schema: z.object({
                 token: z.string().min(1).max(200),
-                csr: z.string().min(1).openapi({ description: "PEM, for the Agent's new identity key." }),
                 hostName: z.string().trim().min(1).max(255),
                 os: z.enum(AGENT_OSES),
                 arch: z.enum(AGENT_ARCHES),
@@ -178,7 +144,7 @@ export function registerAgentGateway(ctx: { app: OpenAPIHono; db: Db; unitOfWork
           },
         },
       },
-      responses: { 201: json(Certificate.extend({ agentId: z.string(), pollAfterSeconds: z.number().int() }), "Registered"), ...errors(400, 401) },
+      responses: { 201: json(Credential.extend({ agentId: z.string(), pollAfterSeconds: z.number().int() }), "Registered"), ...errors(400, 401) },
     }),
     async (c) => {
       const body = c.req.valid("json");
@@ -191,8 +157,7 @@ export function registerAgentGateway(ctx: { app: OpenAPIHono; db: Db; unitOfWork
           .returning();
         if (!token) throw new HttpError(401, "the registration token is not valid: it is unknown, used or expired");
         const agentId = crypto.randomUUID();
-        // A CSR that is refused rolls the transaction back, so the token is not spent on a request that could not be served.
-        const issued = await issueIdentity(body.csr, agentId, change.occurredAt);
+        const issued = issueCredential(change.occurredAt);
         await tx.insert(agent).values({
           id: agentId,
           organizationId: token.organizationId,
@@ -200,7 +165,8 @@ export function registerAgentGateway(ctx: { app: OpenAPIHono; db: Db; unitOfWork
           os: body.os,
           arch: body.arch,
           version: body.version,
-          identitySerial: issued.serial,
+          credentialHash: issued.hash,
+          credentialExpiresAt: issued.expiresAt,
           registeredAt: change.occurredAt,
           lastContactAt: change.occurredAt,
         });
@@ -211,7 +177,7 @@ export function registerAgentGateway(ctx: { app: OpenAPIHono; db: Db; unitOfWork
           target: { type: "agent", id: agentId },
           detail: { hostName: body.hostName, os: body.os, arch: body.arch, version: body.version, registrationTokenId: token.id },
         });
-        return { agentId, certificate: issued.certificate, notAfter: issued.notAfter.toISOString(), pollAfterSeconds: config.pollAfterSeconds };
+        return { agentId, credential: issued.credential, expiresAt: issued.expiresAt.toISOString(), pollAfterSeconds: config.pollAfterSeconds };
       });
       return c.json(registered, 201);
     },
@@ -230,12 +196,12 @@ export function registerAgentGateway(ctx: { app: OpenAPIHono; db: Db; unitOfWork
     }),
     async (c) => {
       const { version } = c.req.valid("json");
-      const { row, serial, now } = await authenticate(c);
+      const { row, hash, now } = await authenticate(c);
       // A heartbeat records no Audit Event, but it is a change like any other and goes through the unit of work.
       await unitOfWork.run(null, (tx) =>
         tx
           .update(agent)
-          .set({ version, lastContactAt: now, ...(serial === row.identitySerial && row.previousIdentitySerial ? { previousIdentitySerial: null } : {}) })
+          .set({ version, lastContactAt: now, ...(hash === row.credentialHash && row.previousCredentialHash ? { previousCredentialHash: null, previousCredentialExpiresAt: null } : {}) })
           .where(eq(agent.id, row.id)),
       );
       // Each item is given once. When there is none the call may wait for one: it ends with the first, or after `longPollSeconds`.
@@ -274,33 +240,40 @@ export function registerAgentGateway(ctx: { app: OpenAPIHono; db: Db; unitOfWork
   app.openapi(
     createRoute({
       method: "post",
-      path: "/api/agent/identity",
+      path: "/api/agent/credential",
       tags: ["Agent protocol"],
-      summary: "Rotate the Agent's identity certificate",
+      summary: "Rotate the Agent's credential",
       description:
-        "The Agent sends a CSR for a new key it generated and receives a new certificate, which replaces the one it presented. " +
+        "The Agent receives a new credential, which replaces the one it presented. " +
         "That one stays accepted until the new one is first used, so an Agent that never received the response can try again.",
       security: SECURITY,
-      request: { body: { content: { "application/json": { schema: z.object({ csr: z.string().min(1) }) } } } },
-      responses: { 200: json(Certificate), ...errors(400, 401) },
+      responses: { 200: json(Credential), ...errors(401) },
     }),
     async (c) => {
-      const { csr } = c.req.valid("json");
-      const { row, serial } = await authenticate(c);
+      const { row, hash } = await authenticate(c);
       const rotated = await unitOfWork.run(null, async (tx, change) => {
         // Under the Agent's row, so a revocation or another rotation in flight has finished.
         const [current] = await tx.select().from(agent).where(eq(agent.id, row.id)).for("update");
-        // The certificate presented must still be one of the Agent's now, not one that another rotation has just replaced.
-        if (!current || current.revokedAt || (serial !== current.identitySerial && serial !== current.previousIdentitySerial)) throw new HttpError(401, IDENTITY_NOT_ACCEPTED);
-        const issued = await issueIdentity(csr, row.id, change.occurredAt);
-        await tx.update(agent).set({ identitySerial: issued.serial, previousIdentitySerial: current.identitySerial, lastContactAt: change.occurredAt }).where(eq(agent.id, row.id));
+        // The credential presented must still be one of the Agent's now, not one that another rotation has just replaced.
+        if (!current || current.revokedAt || (hash !== current.credentialHash && hash !== current.previousCredentialHash)) throw new HttpError(401, CREDENTIAL_NOT_ACCEPTED);
+        const issued = issueCredential(change.occurredAt);
+        await tx
+          .update(agent)
+          .set({
+            credentialHash: issued.hash,
+            credentialExpiresAt: issued.expiresAt,
+            previousCredentialHash: current.credentialHash,
+            previousCredentialExpiresAt: current.credentialExpiresAt,
+            lastContactAt: change.occurredAt,
+          })
+          .where(eq(agent.id, row.id));
         await change.audit({
           organizationId: row.organizationId,
-          action: "agent.identity_rotated",
+          action: "agent.credential_rotated",
           target: { type: "agent", id: row.id },
-          detail: { hostName: row.hostName, notAfter: issued.notAfter.toISOString() },
+          detail: { hostName: row.hostName, expiresAt: issued.expiresAt.toISOString() },
         });
-        return { certificate: issued.certificate, notAfter: issued.notAfter.toISOString() };
+        return { credential: issued.credential, expiresAt: issued.expiresAt.toISOString() };
       });
       return c.json(rotated, 200);
     },

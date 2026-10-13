@@ -5,6 +5,13 @@ Domain language: [CONTEXT.md](CONTEXT.md). Spec and tickets: `.scratch/certifica
 ## Develop
 
 ```bash
+make dev    # Docker services, dependencies, a generated .env, then the API (:3000) and the web UI (:5173); Ctrl-C stops both
+make help   # the other targets: setup, server, web, migrate, creds, test, check, down, clean, and agent-build, agent-test, agent-register, agent-run, agent-reset for a local Agent
+```
+
+`make dev` writes `.env` once (generated `AUTH_SECRET`, `LOCAL_KMS_KEY` and Operator password; `make creds` shows the Operator's) and keeps it: `LOCAL_KMS_KEY` wraps each Organization's data key, so a new one would make stored secrets in an existing database unreadable. `make clean` resets both the database and `.env`. To run an Agent against it, make a registration token on the Agents page, then `make agent-register TOKEN=agt_...` once and `make agent-run` in another terminal (state under `.dev/`). The same steps by hand:
+
+```bash
 docker compose up -d --wait        # Postgres on localhost:5433 (databases: certs, certs_test); Pebble on localhost:14000; BIND on localhost:5354
 bun install
 export DATABASE_URL=postgres://postgres:postgres@localhost:5433/certs
@@ -26,14 +33,14 @@ Identity routes under `/api/auth/*` belong to Better Auth. The page loads the Sc
 
 ## The Agent
 
-`agent/` is the Go Agent, a separate module (`cd agent && go test ./...`). It only connects outbound over HTTPS, registers once with a single-use token that an Organization Administrator makes on the Agents page, and then polls the platform, authenticating with an identity certificate that it rotates before it ends.
+`agent/` is the Go Agent, a separate module (`cd agent && go test ./...`). It only connects outbound over HTTPS, registers once with a single-use token that an Organization Administrator makes on the Agents page, and then polls the platform, authenticating with a bearer credential that it rotates before it ends (ADR 0006). It runs on Linux, Windows and macOS (amd64 and arm64).
 
 ```bash
 agent register --platform https://certs.example.com --token agt_...   # or AGENT_REGISTRATION_TOKEN; once
-agent run                                                             # as a service; state in /var/lib/certificate-agent or %ProgramData%\CertificateAgent
+agent run                                                             # as a service; state in /var/lib/certificate-agent, /Library/Application Support/CertificateAgent or %ProgramData%\CertificateAgent
 ```
 
-The Agent's protocol is the routes under `/api/agent`. Their OpenAPI contract is generated from the route schemas into `agent/contract/openapi.json` (`bun run contract:export`); a platform test fails while that copy is stale. Seam B runs the Agent against `agent/internal/platformstub`, a stub platform built from that contract, over real mutual TLS, with a clock the tests move; it holds both sides to the contract. The platform must run behind a TLS terminator that verifies Agents' client certificates and passes them in a header: see ADR 0005. `AGENT_GATEWAY_SECRET` makes the platform trust that header only from a terminator that sends the secret in `x-agent-gateway-secret`. `AGENT_LATEST_VERSION` sets the Agent version below which the Agents list flags an Agent as outdated.
+The Agent's protocol is the routes under `/api/agent`. Their OpenAPI contract is generated from the route schemas into `agent/contract/openapi.json` (`bun run contract:export`); a platform test fails while that copy is stale. Seam B runs the Agent against `agent/internal/platformstub`, a stub platform built from that contract, with a clock the tests move; it holds both sides to the contract. An Agent authenticates with `Authorization: Bearer <credential>`, so the platform needs only ordinary TLS: set `TLS_CERT_FILE` and `TLS_KEY_FILE` (PEM) for it to serve HTTPS itself, or put it behind any TLS terminator. An Agent refuses a plain-HTTP platform URL unless the host is loopback, so development needs no certificate. `AGENT_LATEST_VERSION` sets the Agent version below which the Agents list flags an Agent as outdated.
 
 An Organization Administrator can have Agents relay a DNS Provider (`PUT /api/organizations/{orgId}/dns-providers/{id}/relay`), so DNS the hosted platform cannot reach, such as on-prem BIND or Infoblox, still serves DCV. Publishing, removing and testing then become work items (`dns.present`, `dns.cleanup`, `dns.test`) for one online relay Agent, which carries them out with its own RFC 2136 and Infoblox providers (`agent/internal/dnsrelay`, which behave as `server/src/rfc2136.ts` and `server/src/infoblox.ts` do) and reports the result; an offline Agent is passed over, and one that does not answer within 45 seconds is given up on for the next. The provider's credentials are put into a work item only when the Agent is given it, are never stored in it, and are never shown. `AGENT_LONG_POLL_SECONDS` (default 20) is how long an idle poll waits for work, so that relayed operations reach an Agent at once; set it to 0 to answer polls immediately.
 

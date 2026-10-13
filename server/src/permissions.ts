@@ -32,7 +32,7 @@ const statements = {
   // those who hold it may, so not its Owners).
   managedCertificate: ["read", "create", "propose", "issue", "changeOwners", "renew", "setRenewalPolicy", "replaceCsr", "proposeNameChange", "changeNames", "download", "revoke", "archive"],
   approval: ["read", "decide"],
-  // Agents: `register` makes the single-use token by which one registers into the Organization, `read` lists them, `revoke` ends one's identity.
+  // Agents: `register` makes the single-use token by which one registers into the Organization, `read` lists them, `revoke` ends one's credential.
   agent: ["read", "register", "revoke"],
   // Deployment Scripts: what Agents run on their hosts (ADR 0004), so only Organization Administrators hold any of this.
   // `read` sees the library and every version's content; `upload` adds a script or a new version of one.

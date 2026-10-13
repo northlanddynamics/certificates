@@ -1,6 +1,7 @@
-// Package platformstub is a stand-in for the platform's Agent Gateway, for Seam B: the Agent runs against it as against the
-// real platform, over real TLS with mutual authentication. It is built from the contract (agent/contract/openapi.json):
-// which routes exist, which of them need the Agent's identity certificate, and what their requests and responses look like
+// Package platformstub is a stand-in for the platform's Agent protocol, for Seam B: the Agent runs against it as against the
+// real platform, over real TLS (or plain HTTP on loopback, as in development), authenticating with a bearer credential. It is
+// built from the contract (agent/contract/openapi.json): which routes exist, which of them need the Agent's credential, and
+// what their requests and responses look like
 // are read from it, and every request it receives and every response it sends is validated against it, so an Agent that drifts
 // from the contract, and a stub that does, both fail. The behaviour behind the routes is the minimum the Agent's tests need.
 package platformstub
@@ -13,6 +14,7 @@ import (
 	"crypto/tls"
 	"crypto/x509"
 	"crypto/x509/pkix"
+	"encoding/base64"
 	"encoding/json"
 	"encoding/pem"
 	"fmt"
@@ -30,7 +32,7 @@ import (
 	"github.com/santhosh-tekuri/jsonschema/v6"
 )
 
-// Clock is the time the stub works in: certificates are issued and checked against it.
+// Clock is the time the stub works in: credentials are issued and checked against it.
 type Clock interface{ Now() time.Time }
 
 // Request is one call the stub received.
@@ -38,8 +40,8 @@ type Request struct {
 	Method string
 	Path   string
 	Body   []byte
-	// ClientCertificate is the serial (upper-case hex) of the client certificate presented, empty when there was none.
-	ClientCertificate string
+	// Credential is the bearer credential presented, empty when there was none.
+	Credential string
 }
 
 // WorkItem is something the stub asks an Agent to do, as the platform does: its payload is what the Agent is sent.
@@ -69,28 +71,34 @@ type Result struct {
 	Run *Run
 }
 
+// issued is a credential the stub made, with when it ends.
+type issued struct {
+	value     string
+	expiresAt time.Time
+}
+
 type agentRecord struct {
-	id       string
-	current  string
-	previous string
+	id string
+	// current is the latest credential; previous is the one it replaced, accepted until current is first used.
+	current  issued
+	previous *issued
 	revoked  bool
 	hostName string
+	os, arch string
 	version  string
 	lastSeen time.Time
 }
 
 type operation struct {
-	needsIdentity bool
-	request       *jsonschema.Schema
-	responses     map[int]*jsonschema.Schema
+	needsCredential bool
+	request         *jsonschema.Schema
+	responses       map[int]*jsonschema.Schema
 }
 
 // Stub is a running stub platform.
 type Stub struct {
 	clock  Clock
 	server *httptest.Server
-	ca     *x509.Certificate
-	caKey  *ecdsa.PrivateKey
 	ops    map[string]*operation
 
 	mu       sync.Mutex
@@ -103,29 +111,33 @@ type Stub struct {
 	given   map[string]bool
 	results []Result
 	down    bool
-	// rotationFailing makes rotating an identity fail with a 500.
+	// rotationFailing makes rotating a credential fail with a 500, before anything is rotated.
 	rotationFailing bool
-	// identityLife is how long the identity certificates it issues last.
-	identityLife time.Duration
-	pollSeconds  int
-	serverCert   tls.Certificate
-	serverPEM    []byte
+	// rotationAnswerLost makes the stub rotate the credential and then drop the connection, so the Agent never gets the answer.
+	rotationAnswerLost bool
+	// credentialLife is how long the credentials it issues last.
+	credentialLife time.Duration
+	pollSeconds    int
+	serverCert     tls.Certificate
+	serverPEM      []byte
 }
 
 // Options are what a test may choose.
 type Options struct {
 	Clock Clock
-	// IdentityLife is how long identity certificates last; 30 days like the platform's by default.
-	IdentityLife time.Duration
+	// CredentialLife is how long credentials last; 30 days like the platform's by default.
+	CredentialLife time.Duration
+	// PlainHTTP serves plain HTTP on a loopback address instead of TLS, as a platform in development is.
+	PlainHTTP bool
 	// PollAfterSeconds is what polls are told; 30 by default.
 	PollAfterSeconds int
 }
 
 // Start runs a stub on a local port. Close it when done.
 func Start(opts Options) (*Stub, error) {
-	s := &Stub{clock: opts.Clock, tokens: map[string]bool{}, agents: map[string]*agentRecord{}, given: map[string]bool{}, identityLife: opts.IdentityLife, pollSeconds: opts.PollAfterSeconds}
-	if s.identityLife == 0 {
-		s.identityLife = 30 * 24 * time.Hour
+	s := &Stub{clock: opts.Clock, tokens: map[string]bool{}, agents: map[string]*agentRecord{}, given: map[string]bool{}, credentialLife: opts.CredentialLife, pollSeconds: opts.PollAfterSeconds}
+	if s.credentialLife == 0 {
+		s.credentialLife = 30 * 24 * time.Hour
 	}
 	if s.pollSeconds == 0 {
 		s.pollSeconds = 30
@@ -133,17 +145,15 @@ func Start(opts Options) (*Stub, error) {
 	if err := s.loadContract(); err != nil {
 		return nil, err
 	}
-	if err := s.makeAuthorities(); err != nil {
+	s.server = httptest.NewUnstartedServer(http.HandlerFunc(s.handle))
+	if opts.PlainHTTP {
+		s.server.Start()
+		return s, nil
+	}
+	if err := s.makeServerCertificate(); err != nil {
 		return nil, err
 	}
-	s.server = httptest.NewUnstartedServer(http.HandlerFunc(s.handle))
-	s.server.TLS = &tls.Config{
-		Certificates: []tls.Certificate{s.serverCert},
-		// The Agent registers without a certificate, so one is asked for, not required; the routes that need it check it.
-		ClientAuth: tls.RequestClientCert,
-		Time:       s.clock.Now,
-		MinVersion: tls.VersionTLS12,
-	}
+	s.server.TLS = &tls.Config{Certificates: []tls.Certificate{s.serverCert}, MinVersion: tls.VersionTLS12}
 	s.server.StartTLS()
 	return s, nil
 }
@@ -170,14 +180,22 @@ func (s *Stub) SetDown(down bool) {
 	s.down = down
 }
 
-// SetRotationFailing makes the stub fail identity rotations (and only those) with a 500.
+// SetRotationFailing makes the stub fail credential rotations (and only those) with a 500, rotating nothing.
 func (s *Stub) SetRotationFailing(failing bool) {
 	s.mu.Lock()
 	defer s.mu.Unlock()
 	s.rotationFailing = failing
 }
 
-// Revoke makes the stub refuse the Agent's identity from now on.
+// SetRotationAnswerLost makes the stub carry out credential rotations but never deliver the answer: it drops the connection,
+// as a network that fails at the wrong moment does.
+func (s *Stub) SetRotationAnswerLost(lost bool) {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	s.rotationAnswerLost = lost
+}
+
+// Revoke makes the stub refuse the Agent's credential from now on.
 func (s *Stub) Revoke(agentID string) {
 	s.mu.Lock()
 	defer s.mu.Unlock()
@@ -232,6 +250,16 @@ func (s *Stub) Agent(id string) (hostName, version string, ok bool) {
 	return a.hostName, a.version, true
 }
 
+// AgentPlatform is the operating system and architecture an Agent registered as running on.
+func (s *Stub) AgentPlatform(id string) (os, arch string) {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	if a, ok := s.agents[id]; ok {
+		return a.os, a.arch
+	}
+	return "", ""
+}
+
 // AgentIDs are the Agents registered so far.
 func (s *Stub) AgentIDs() []string {
 	s.mu.Lock()
@@ -281,7 +309,7 @@ func (s *Stub) loadContract() error {
 			if err := json.Unmarshal(raw, &detail); err != nil {
 				return err
 			}
-			compiled.needsIdentity = len(detail.Security) > 0
+			compiled.needsCredential = len(detail.Security) > 0
 			if detail.RequestBody != nil && detail.RequestBody.Content["application/json"] != nil {
 				if compiled.request, err = compiler.Compile(pointer("paths", path, method, "requestBody", "content", "application/json", "schema")); err != nil {
 					return fmt.Errorf("the request schema of %s %s: %w", method, path, err)
@@ -305,24 +333,8 @@ func (s *Stub) loadContract() error {
 	return nil
 }
 
-func (s *Stub) makeAuthorities() error {
+func (s *Stub) makeServerCertificate() error {
 	now := s.clock.Now()
-	var err error
-	if s.caKey, err = ecdsa.GenerateKey(elliptic.P256(), rand.Reader); err != nil {
-		return err
-	}
-	caTemplate := &x509.Certificate{
-		SerialNumber: big.NewInt(1), Subject: pkix.Name{CommonName: "Stub Agent identity CA"},
-		NotBefore: now.Add(-time.Hour), NotAfter: now.Add(20 * 365 * 24 * time.Hour),
-		IsCA: true, BasicConstraintsValid: true, KeyUsage: x509.KeyUsageCertSign,
-	}
-	der, err := x509.CreateCertificate(rand.Reader, caTemplate, caTemplate, &s.caKey.PublicKey, s.caKey)
-	if err != nil {
-		return err
-	}
-	if s.ca, err = x509.ParseCertificate(der); err != nil {
-		return err
-	}
 	serverKey, err := ecdsa.GenerateKey(elliptic.P256(), rand.Reader)
 	if err != nil {
 		return err
@@ -350,12 +362,9 @@ func (s *Stub) violation(format string, args ...any) {
 
 func (s *Stub) handle(w http.ResponseWriter, r *http.Request) {
 	body, _ := io.ReadAll(io.LimitReader(r.Body, 1<<20))
-	serial := ""
-	if r.TLS != nil && len(r.TLS.PeerCertificates) > 0 {
-		serial = strings.ToUpper(r.TLS.PeerCertificates[0].SerialNumber.Text(16))
-	}
+	bearer := bearerOf(r)
 	s.mu.Lock()
-	s.requests = append(s.requests, Request{Method: r.Method, Path: r.URL.Path, Body: body, ClientCertificate: serial})
+	s.requests = append(s.requests, Request{Method: r.Method, Path: r.URL.Path, Body: body, Credential: bearer})
 	down := s.down
 	s.mu.Unlock()
 
@@ -384,9 +393,9 @@ func (s *Stub) handle(w http.ResponseWriter, r *http.Request) {
 		}
 	}
 	var agent *agentRecord
-	if op.needsIdentity {
-		if agent = s.authenticate(r); agent == nil {
-			s.reply(w, r, 401, map[string]string{"error": "the Agent's identity is not accepted"}, op)
+	if op.needsCredential {
+		if agent = s.authenticate(bearer); agent == nil {
+			s.reply(w, r, 401, map[string]string{"error": "the Agent's credential is not accepted"}, op)
 			return
 		}
 	}
@@ -400,9 +409,6 @@ func (s *Stub) handle(w http.ResponseWriter, r *http.Request) {
 		s.mu.Lock()
 		agent.version, _ = payload["version"].(string)
 		agent.lastSeen = s.clock.Now()
-		if agent.previous != "" && serial == agent.current {
-			agent.previous = ""
-		}
 		items := []WorkItem{}
 		for _, item := range s.queued {
 			s.given[item.ID] = true
@@ -414,15 +420,19 @@ func (s *Stub) handle(w http.ResponseWriter, r *http.Request) {
 	case "/api/agent/work-items/{id}/result":
 		status, answer := s.report(strings.TrimSuffix(strings.TrimPrefix(r.URL.Path, "/api/agent/work-items/"), "/result"), payload)
 		s.reply(w, r, status, answer, op)
-	case "/api/agent/identity":
+	case "/api/agent/credential":
 		s.mu.Lock()
-		failing := s.rotationFailing
+		failing, lost := s.rotationFailing, s.rotationAnswerLost
 		s.mu.Unlock()
 		if failing {
 			s.reply(w, r, 500, map[string]string{"error": "internal error"}, nil)
 			return
 		}
-		status, answer := s.rotate(agent, payload)
+		status, answer := s.rotate(agent, bearer)
+		if lost {
+			s.dropConnection(w)
+			return
+		}
 		s.reply(w, r, status, answer, op)
 	default:
 		s.reply(w, r, 501, map[string]string{"error": "the stub does not implement this route"}, nil)
@@ -487,56 +497,46 @@ func (s *Stub) report(id string, payload map[string]any) (int, any) {
 	return 200, map[string]any{"received": true}
 }
 
-// authenticate is mutual TLS as the platform does it: a certificate the identity CA issued, valid now, that is the Agent's
-// current identity or the one it replaced, for an Agent that is not revoked.
-func (s *Stub) authenticate(r *http.Request) *agentRecord {
-	if r.TLS == nil || len(r.TLS.PeerCertificates) == 0 {
-		return nil
+func bearerOf(r *http.Request) string {
+	scheme, credential, _ := strings.Cut(r.Header.Get("authorization"), " ")
+	if !strings.EqualFold(scheme, "bearer") {
+		return ""
 	}
-	cert := r.TLS.PeerCertificates[0]
-	pool := x509.NewCertPool()
-	pool.AddCert(s.ca)
-	if _, err := cert.Verify(x509.VerifyOptions{Roots: pool, CurrentTime: s.clock.Now(), KeyUsages: []x509.ExtKeyUsage{x509.ExtKeyUsageClientAuth}}); err != nil {
-		return nil
-	}
-	s.mu.Lock()
-	defer s.mu.Unlock()
-	agent := s.agents[cert.Subject.CommonName]
-	serial := strings.ToUpper(cert.SerialNumber.Text(16))
-	if agent == nil || agent.revoked || (serial != agent.current && serial != agent.previous) {
-		return nil
-	}
-	return agent
+	return strings.TrimSpace(credential)
 }
 
-func (s *Stub) issue(agentID string, csrPEM string) (certPEM string, serial string, notAfter time.Time, err error) {
-	block, _ := pem.Decode([]byte(csrPEM))
-	if block == nil {
-		return "", "", time.Time{}, fmt.Errorf("not a CSR")
+// authenticate is the platform's check of a bearer credential: it is an Agent's current credential, or the one it replaced
+// while the new one has not been used yet, it has not ended, and the Agent is not revoked. Using the current credential
+// retires the one it replaced.
+func (s *Stub) authenticate(bearer string) *agentRecord {
+	if !strings.HasPrefix(bearer, "agk_") {
+		return nil
 	}
-	csr, err := x509.ParseCertificateRequest(block.Bytes)
-	if err != nil || csr.CheckSignature() != nil {
-		return "", "", time.Time{}, fmt.Errorf("not a CSR with a good signature")
-	}
-	if key, ok := csr.PublicKey.(*ecdsa.PublicKey); !ok || key.Curve != elliptic.P256() {
-		return "", "", time.Time{}, fmt.Errorf("an Agent's identity key must be ECDSA P-256")
-	}
-	number, err := rand.Int(rand.Reader, new(big.Int).Lsh(big.NewInt(1), 120))
-	if err != nil {
-		return "", "", time.Time{}, err
-	}
-	number.Add(number, big.NewInt(1))
 	now := s.clock.Now()
-	template := &x509.Certificate{
-		SerialNumber: number, Subject: pkix.Name{CommonName: agentID},
-		NotBefore: now.Add(-5 * time.Minute), NotAfter: now.Add(s.identityLife),
-		KeyUsage: x509.KeyUsageDigitalSignature, ExtKeyUsage: []x509.ExtKeyUsage{x509.ExtKeyUsageClientAuth},
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	for _, agent := range s.agents {
+		if agent.revoked {
+			continue
+		}
+		if bearer == agent.current.value && now.Before(agent.current.expiresAt) {
+			agent.previous = nil
+			return agent
+		}
+		if agent.previous != nil && bearer == agent.previous.value && now.Before(agent.previous.expiresAt) {
+			return agent
+		}
 	}
-	der, err := x509.CreateCertificate(rand.Reader, template, s.ca, csr.PublicKey, s.caKey)
-	if err != nil {
-		return "", "", time.Time{}, err
+	return nil
+}
+
+// issue makes a credential, which the platform would show once and keep only the hash of.
+func (s *Stub) issue() (issued, error) {
+	random := make([]byte, 32)
+	if _, err := rand.Read(random); err != nil {
+		return issued{}, err
 	}
-	return string(pem.EncodeToMemory(&pem.Block{Type: "CERTIFICATE", Bytes: der})), strings.ToUpper(number.Text(16)), template.NotAfter, nil
+	return issued{value: "agk_" + base64.RawURLEncoding.EncodeToString(random), expiresAt: s.clock.Now().Add(s.credentialLife)}, nil
 }
 
 func (s *Stub) register(payload map[string]any) (int, any) {
@@ -548,26 +548,43 @@ func (s *Stub) register(payload map[string]any) (int, any) {
 		return 401, map[string]string{"error": "the registration token is not valid: it is unknown, used or expired"}
 	}
 	id := fmt.Sprintf("00000000-0000-4000-8000-%012d", len(s.AgentIDs())+1)
-	certPEM, serial, notAfter, err := s.issue(id, payload["csr"].(string))
+	credential, err := s.issue()
 	if err != nil {
-		return 400, map[string]string{"error": err.Error()}
+		return 500, map[string]string{"error": err.Error()}
 	}
 	s.mu.Lock()
 	defer s.mu.Unlock()
 	delete(s.tokens, token)
-	s.agents[id] = &agentRecord{id: id, current: serial, hostName: payload["hostName"].(string), version: payload["version"].(string), lastSeen: s.clock.Now()}
-	return 201, map[string]any{"agentId": id, "certificate": certPEM, "notAfter": notAfter.UTC().Format(time.RFC3339), "pollAfterSeconds": s.pollSeconds}
+	s.agents[id] = &agentRecord{
+		id: id, current: credential, hostName: payload["hostName"].(string), version: payload["version"].(string), lastSeen: s.clock.Now(),
+		os: payload["os"].(string), arch: payload["arch"].(string),
+	}
+	return 201, map[string]any{"agentId": id, "credential": credential.value, "expiresAt": credential.expiresAt.UTC().Format(time.RFC3339), "pollAfterSeconds": s.pollSeconds}
 }
 
-func (s *Stub) rotate(agent *agentRecord, payload map[string]any) (int, any) {
-	certPEM, serial, notAfter, err := s.issue(agent.id, payload["csr"].(string))
+// rotate makes the Agent's new credential. The one presented is kept as the previous, accepted until the new one is first
+// used; so an Agent that never got the answer, and asks again with the same credential, gets another new one.
+func (s *Stub) rotate(agent *agentRecord, presented string) (int, any) {
+	next, err := s.issue()
 	if err != nil {
-		return 400, map[string]string{"error": err.Error()}
+		return 500, map[string]string{"error": err.Error()}
 	}
 	s.mu.Lock()
 	defer s.mu.Unlock()
-	agent.previous, agent.current = agent.current, serial
-	return 200, map[string]any{"certificate": certPEM, "notAfter": notAfter.UTC().Format(time.RFC3339)}
+	if presented == agent.current.value {
+		replaced := agent.current
+		agent.previous = &replaced
+	}
+	agent.current = next
+	return 200, map[string]any{"credential": next.value, "expiresAt": next.expiresAt.UTC().Format(time.RFC3339)}
+}
+
+// dropConnection ends the call without an answer.
+func (s *Stub) dropConnection(w http.ResponseWriter) {
+	conn, _, err := w.(http.Hijacker).Hijack()
+	if err == nil {
+		conn.Close()
+	}
 }
 
 // reply validates the answer against the contract before sending it: the stub holds itself to the contract too.

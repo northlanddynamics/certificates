@@ -10,6 +10,7 @@ import { CertificatesPage } from "./pages/certificates";
 import { CsrToolsPage } from "./pages/csr-tools";
 import { DeploymentScriptsPage } from "./pages/deployment-scripts";
 import { DeploymentsPage } from "./pages/deployments";
+import { DnsProvidersPage } from "./pages/dns-providers";
 import { HomePage } from "./pages/home";
 import { ManagedCertificateDetailsPage } from "./pages/managed-certificate-details";
 import { ManagedCertificateOverview } from "./pages/managed-certificate-overview";
@@ -117,6 +118,12 @@ const acmeAccountsRoute = createRoute({
   component: AcmeAccountsPage,
 });
 
+const dnsProvidersRoute = createRoute({
+  getParentRoute: () => appRoute,
+  path: "/organizations/$orgId/dns-providers",
+  component: DnsProvidersPage,
+});
+
 const csrToolsRoute = createRoute({
   getParentRoute: () => appRoute,
   path: "/organizations/$orgId/tools/csr",
@@ -142,7 +149,7 @@ const routeTree = rootRoute.addChildren([
       certificateNotificationsRoute,
       certificateUnknownTabRoute,
     ]),
-    membersRoute, teamsRoute, apiKeysRoute, agentsRoute, deploymentsRoute, deploymentScriptsRoute, acmeAccountsRoute, csrToolsRoute,
+    membersRoute, teamsRoute, apiKeysRoute, agentsRoute, deploymentsRoute, deploymentScriptsRoute, acmeAccountsRoute, dnsProvidersRoute, csrToolsRoute,
     platformOrganizationsRoute,
   ]),
 ]);

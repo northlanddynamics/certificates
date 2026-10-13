@@ -162,6 +162,20 @@
       "when": 1791895282005,
       "tag": "0022_tidy_lightspeed",
       "breakpoints": true
+    },
+    {
+      "idx": 23,
+      "version": "7",
+      "when": 1791899772842,
+      "tag": "0023_agent_credentials",
+      "breakpoints": true
+    },
+    {
+      "idx": 24,
+      "version": "7",
+      "when": 1791899779658,
+      "tag": "0024_drop_agent_identity",
+      "breakpoints": true
     }
   ]
 }

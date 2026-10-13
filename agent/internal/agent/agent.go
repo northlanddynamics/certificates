@@ -1,21 +1,20 @@
-// Package agent is what the Agent does: register with the platform once, then keep its identity and poll for work, only ever
-// connecting outbound. Registration generates the identity key here and sends the platform a CSR, never the key (ADR 0002).
+// Package agent is what the Agent does: register with the platform once, then keep its credential and poll for work, only
+// ever connecting outbound. The credential is a secret (ADR 0006): it is stored before it is used and never logged.
 package agent
 
 import (
 	"context"
-	"crypto/tls"
 	"crypto/x509"
 	"errors"
 	"fmt"
 	"log/slog"
 	"math/rand/v2"
 	"runtime"
-	"sync/atomic"
+	"sync"
 	"time"
 
+	"certificate-platform/agent/internal/credential"
 	"certificate-platform/agent/internal/dnsrelay"
-	"certificate-platform/agent/internal/identity"
 	"certificate-platform/agent/internal/platform"
 )
 
@@ -42,7 +41,7 @@ func (realClock) Sleep(ctx context.Context, d time.Duration) error {
 
 // Config is what the Agent is run with.
 type Config struct {
-	// StateDir holds the identity: only the service account may read it.
+	// StateDir holds the credential: only the service account may read it.
 	StateDir string
 	// Version is what the Agent reports to the platform.
 	Version string
@@ -52,7 +51,8 @@ type Config struct {
 	Log     *slog.Logger
 	// BackoffMin and BackoffMax bound the wait after a failure, which doubles from the first up to the second.
 	BackoffMin, BackoffMax time.Duration
-	// OS and Arch are what registration reports; they default to the host's.
+	// OS and Arch are what registration reports (the platform's names: linux, windows or macos; amd64 or arm64); they default
+	// to the host's.
 	OS, Arch string
 	// ScriptTimeout stops a Deployment Script that has not ended; ten minutes when zero.
 	ScriptTimeout time.Duration
@@ -72,81 +72,94 @@ func (c *Config) defaults() {
 		c.BackoffMax = 5 * time.Minute
 	}
 	if c.OS == "" {
-		c.OS = runtime.GOOS
+		c.OS = PlatformOS(runtime.GOOS)
 	}
 	if c.Arch == "" {
 		c.Arch = runtime.GOARCH
 	}
 }
 
-// ErrIdentityRejected means the platform no longer accepts this Agent: it was revoked, or it was away so long that its
-// identity certificate ended. Only registering again, with a new token, brings it back.
-var ErrIdentityRejected = errors.New("the platform no longer accepts this Agent's identity: it was revoked or its identity certificate has ended; register it again with a new token")
+// PlatformOS is the name the platform has for a Go operating system: linux, windows, and macos for darwin. Any other is
+// returned as it is, for Register to refuse.
+func PlatformOS(goos string) string {
+	if goos == "darwin" {
+		return "macos"
+	}
+	return goos
+}
 
-// Register binds the Agent to the Organization the token belongs to, and stores the identity the platform issues.
+// ErrCredentialRejected means the platform no longer accepts this Agent: it was revoked, or it was away so long that its
+// credential ended. Only registering again, with a new token, brings it back.
+var ErrCredentialRejected = errors.New("the platform no longer accepts this Agent's credential: it was revoked or its credential has ended; register it again with a new token")
+
+// expiry is when a credential ends, as the platform wrote it.
+func expiry(raw string) (time.Time, error) {
+	t, err := time.Parse(time.RFC3339, raw)
+	if err != nil {
+		return time.Time{}, errors.New("the platform's answer holds no valid expiry for the credential")
+	}
+	return t, nil
+}
+
+// Register binds the Agent to the Organization the token belongs to, and stores the credential the platform issues.
 func Register(ctx context.Context, cfg Config, platformURL, token, hostName string) error {
 	cfg.defaults()
-	client, err := platform.NewClient(platformURL, platform.Options{RootCAs: cfg.RootCAs, Now: cfg.Clock.Now})
+	client, err := platform.NewClient(platformURL, platform.Options{RootCAs: cfg.RootCAs})
 	if err != nil {
 		return err
 	}
-	if (cfg.OS != "linux" && cfg.OS != "windows") || (cfg.Arch != "amd64" && cfg.Arch != "arm64") {
-		return fmt.Errorf("the Agent runs on Linux and Windows, on amd64 and arm64, not on %s/%s", cfg.OS, cfg.Arch)
-	}
-	key, err := identity.NewKey()
-	if err != nil {
-		return err
-	}
-	csr, err := identity.CSR(key)
-	if err != nil {
-		return err
+	if (cfg.OS != "linux" && cfg.OS != "windows" && cfg.OS != "macos") || (cfg.Arch != "amd64" && cfg.Arch != "arm64") {
+		return fmt.Errorf("the Agent runs on Linux, Windows and macOS, on amd64 and arm64, not on %s/%s", cfg.OS, cfg.Arch)
 	}
 	res, err := client.Register(ctx, platform.RegistrationRequest{
-		Token: token, CSR: string(csr), HostName: hostName, OS: cfg.OS, Arch: cfg.Arch, Version: cfg.Version,
+		Token: token, HostName: hostName, OS: cfg.OS, Arch: cfg.Arch, Version: cfg.Version,
 	})
 	if err != nil {
 		return fmt.Errorf("registration failed: %w", err)
 	}
-	id, err := identity.New(key, []byte(res.Certificate))
-	if err != nil {
-		return fmt.Errorf("registration failed: %w", err)
+	expiresAt, err := expiry(res.ExpiresAt)
+	if err != nil || res.Credential == "" {
+		return errors.New("registration failed: the platform's answer holds no credential")
 	}
-	if err := (identity.Store{Dir: cfg.StateDir}).Save(id, identity.Meta{PlatformURL: platformURL, AgentID: res.AgentID}); err != nil {
-		return fmt.Errorf("the identity could not be stored: %w", err)
+	record := credential.Record{PlatformURL: platformURL, AgentID: res.AgentID, Credential: res.Credential, IssuedAt: cfg.Clock.Now(), ExpiresAt: expiresAt}
+	if err := (credential.Store{Dir: cfg.StateDir}).Save(record); err != nil {
+		// The credential is shown only once, so the Agent cannot be used: the token is spent and it must register again.
+		return fmt.Errorf("the credential could not be stored (the registration token is used up, so register again with a new one): %w", err)
 	}
-	cfg.Log.Info("registered", "agentId", res.AgentID, "identityNotAfter", id.Cert.NotAfter)
+	cfg.Log.Info("registered", "agentId", res.AgentID, "credentialExpiresAt", expiresAt)
 	return nil
 }
 
-// Run polls the platform until the context ends, rotating its identity certificate before it expires. A platform it cannot
-// reach is waited for with growing pauses, not given up on; only the platform refusing the Agent's identity ends it.
+// Run polls the platform until the context ends, rotating its credential before it expires. A platform it cannot
+// reach is waited for with growing pauses, not given up on; only the platform refusing the Agent's credential ends it.
 func Run(ctx context.Context, cfg Config) error {
 	cfg.defaults()
-	store := identity.Store{Dir: cfg.StateDir}
-	id, meta, err := store.Load()
+	store := credential.Store{Dir: cfg.StateDir}
+	record, err := store.Load()
 	if err != nil {
 		return err
 	}
-	var current atomic.Pointer[tls.Certificate]
-	current.Store(id.TLS())
-	client, err := platform.NewClient(meta.PlatformURL, platform.Options{
-		RootCAs:  cfg.RootCAs,
-		Identity: current.Load,
-		Now:      cfg.Clock.Now,
-	})
+	r := &runner{cfg: cfg, store: store, record: record}
+	// The client asks the runner for the credential on every call, so a rotation takes effect on the next.
+	r.client, err = platform.NewClient(record.PlatformURL, platform.Options{RootCAs: cfg.RootCAs, Credential: r.credential})
 	if err != nil {
 		return err
 	}
-	r := &runner{cfg: cfg, store: store, client: client, id: id, current: &current}
 	return r.run(ctx)
 }
 
 type runner struct {
-	cfg     Config
-	store   identity.Store
-	client  *platform.Client
-	id      *identity.Identity
-	current *atomic.Pointer[tls.Certificate]
+	cfg    Config
+	store  credential.Store
+	client *platform.Client
+	mu     sync.RWMutex
+	record credential.Record
+}
+
+func (r *runner) credential() string {
+	r.mu.RLock()
+	defer r.mu.RUnlock()
+	return r.record.Credential
 }
 
 func (r *runner) run(ctx context.Context) error {
@@ -157,7 +170,7 @@ func (r *runner) run(ctx context.Context) error {
 		case ctx.Err() != nil:
 			return nil
 		case platform.Rejected(err):
-			return ErrIdentityRejected
+			return ErrCredentialRejected
 		case err != nil:
 			failures++
 			wait = r.backoff(failures)
@@ -171,15 +184,15 @@ func (r *runner) run(ctx context.Context) error {
 	}
 }
 
-// cycle is one pass: rotate the identity if it is due, then poll. It returns how long to wait before the next.
+// cycle is one pass: rotate the credential if it is due, then poll. It returns how long to wait before the next.
 func (r *runner) cycle(ctx context.Context) (time.Duration, error) {
-	// A failed rotation is tried again next pass; the Agent keeps polling on the identity it has until then.
+	// A failed rotation is tried again next pass; the Agent keeps polling on the credential it has until then.
 	rotationErr := r.rotateIfDue(ctx)
 	if platform.Rejected(rotationErr) {
 		return 0, rotationErr
 	}
 	if rotationErr != nil {
-		r.cfg.Log.Warn("the identity certificate could not be rotated", "error", rotationErr)
+		r.cfg.Log.Warn("the credential could not be rotated", "error", rotationErr)
 	}
 	res, err := r.client.Poll(ctx, r.cfg.Version)
 	if err != nil {
@@ -197,7 +210,7 @@ func (r *runner) cycle(ctx context.Context) (time.Duration, error) {
 	return wait, nil
 }
 
-// handle carries out a work item and reports how it went. Only the platform refusing the Agent's identity is an error: an
+// handle carries out a work item and reports how it went. Only the platform refusing the Agent's credential is an error: an
 // item that failed has been reported as failed, and one that could not be reported is the platform's to give up on.
 func (r *runner) handle(ctx context.Context, item platform.WorkItem) error {
 	var result platform.WorkResult
@@ -233,41 +246,32 @@ func (r *runner) relayDNS(ctx context.Context, item platform.WorkItem) platform.
 	return platform.WorkResult{OK: true}
 }
 
-// due is when the identity certificate is rotated: with a third of its life left.
-func due(cert *x509.Certificate) time.Time {
-	life := cert.NotAfter.Sub(cert.NotBefore)
-	return cert.NotBefore.Add(life * 2 / 3)
-}
-
+// rotateIfDue replaces the credential once a third of its life is left. A rotation whose answer never arrived has left the
+// platform accepting the old credential as well as a new one the Agent does not have, so it is asked again with the old, on
+// the next pass, until an answer arrives.
 func (r *runner) rotateIfDue(ctx context.Context) error {
-	if r.cfg.Clock.Now().Before(due(r.id.Cert)) {
+	if r.cfg.Clock.Now().Before(r.record.RotationDue()) {
 		return nil
 	}
-	// A new key every time, which never leaves the host; only its CSR does.
-	key, err := identity.NewKey()
+	res, err := r.client.RotateCredential(ctx)
 	if err != nil {
 		return err
 	}
-	csr, err := identity.CSR(key)
-	if err != nil {
-		return err
+	expiresAt, err := expiry(res.ExpiresAt)
+	if err != nil || res.Credential == "" {
+		return errors.New("the platform's answer to the rotation holds no credential")
 	}
-	res, err := r.client.RotateIdentity(ctx, string(csr))
-	if err != nil {
-		return err
+	next := r.record
+	next.Credential, next.IssuedAt, next.ExpiresAt = res.Credential, r.cfg.Clock.Now(), expiresAt
+	// Stored before it is used, so a restart finds the credential the platform will accept, and a credential that could not be
+	// stored is not used: the old one still works until the new one is first used.
+	if err := r.store.Save(next); err != nil {
+		return fmt.Errorf("the new credential could not be stored: %w", err)
 	}
-	next, err := identity.New(key, []byte(res.Certificate))
-	if err != nil {
-		return err
-	}
-	// Stored before it is used, so a restart finds the identity the platform will accept.
-	if err := r.store.SaveIdentity(next); err != nil {
-		return fmt.Errorf("the new identity could not be stored: %w", err)
-	}
-	r.id = next
-	r.current.Store(next.TLS())
-	r.client.Reset()
-	r.cfg.Log.Info("rotated the identity certificate", "notAfter", next.Cert.NotAfter)
+	r.mu.Lock()
+	r.record = next
+	r.mu.Unlock()
+	r.cfg.Log.Info("rotated the credential", "expiresAt", expiresAt)
 	return nil
 }
 
