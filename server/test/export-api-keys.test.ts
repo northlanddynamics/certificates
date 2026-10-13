@@ -344,6 +344,18 @@ describe("API keys", () => {
     expect((await download({ apiKey: key }, org.orgId, mc.id)).status).toBe(401);
   });
 
+  test("pages the keys a person sees, with the total in all", async () => {
+    const alice = await join("alice@acme.test", "member");
+    for (const name of ["one", "two", "three"]) await createKey(alice, { name });
+
+    const second = await h.api(`${keysPath()}?pageSize=2&page=2`, { cookie: alice });
+
+    expect(second.status).toBe(200);
+    expect(second.body).toMatchObject({ total: 3, page: 2, pageSize: 2 });
+    expect(second.body.items.map((k: any) => k.name)).toEqual(["three"]);
+    expect((await h.api(`${keysPath()}?pageSize=101`, { cookie: alice })).status).toBe(400);
+  });
+
   test("people see and revoke only their own keys, and only members can make them", async () => {
     const alice = await join("alice@acme.test", "member");
     const bob = await join("bob@acme.test", "member");

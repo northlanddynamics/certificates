@@ -4,13 +4,13 @@
 // interpreter; what it says is kept as versions that are only ever added, each identified by the SHA-256 of its content,
 // which is what an Agent checks before it runs one.
 import { OpenAPIHono, createRoute, z } from "@hono/zod-openapi";
-import { and, asc, desc, eq, max } from "drizzle-orm";
+import { and, asc, desc, eq, inArray, max } from "drizzle-orm";
 import { createHash } from "node:crypto";
 import type { Authorizer } from "./authorization";
 import type { Db, Tx } from "./db/client";
 import { deploymentScript, deploymentScriptVersion } from "./db/schema";
 import { SCRIPT_INTERPRETERS } from "./deployment-script-kinds";
-import { HttpError, OrgParam, errors, isUniqueViolation, json } from "./http";
+import { HttpError, OrgParam, PageQuery, errors, isUniqueViolation, json, pageOf } from "./http";
 import type { Actor, Change, UnitOfWork } from "./unit-of-work";
 
 
@@ -97,16 +97,21 @@ export function registerDeploymentScripts(ctx: {
       method: "get",
       path: "/api/organizations/{orgId}/deployment-scripts",
       tags: ["Deployment Scripts"],
-      summary: "List the Deployment Scripts",
-      description: "Each with its latest version; the content is not included, ask for a version to see it.",
-      request: { params: OrgParam },
-      responses: { 200: json(z.object({ items: z.array(Script) })), ...errors(401, 403, 404) },
+      summary: "List the Deployment Scripts, oldest first, a page at a time",
+      description: "Each with its latest version; the content is not included, ask for a version to see it. `total` is how many there are, whatever the page.",
+      request: { params: OrgParam, query: PageQuery },
+      responses: { 200: json(pageOf(Script)), ...errors(400, 401, 403, 404) },
     }),
     async (c) => {
       const { orgId } = c.req.valid("param");
       await authorize(await requireUser(c), orgId, { deploymentScript: ["read"] });
-      const scripts = await db.select().from(deploymentScript).where(eq(deploymentScript.organizationId, orgId)).orderBy(asc(deploymentScript.createdAt), asc(deploymentScript.id));
-      const latest = await db
+      const { page, pageSize } = c.req.valid("query");
+      const where = eq(deploymentScript.organizationId, orgId);
+      const [total, scripts] = await Promise.all([
+        db.$count(deploymentScript, where),
+        db.select().from(deploymentScript).where(where).orderBy(asc(deploymentScript.createdAt), asc(deploymentScript.id)).limit(pageSize).offset((page - 1) * pageSize),
+      ]);
+      const latest = scripts.length === 0 ? [] : await db
         .selectDistinctOn([deploymentScriptVersion.scriptId], {
           scriptId: deploymentScriptVersion.scriptId,
           version: deploymentScriptVersion.version,
@@ -116,10 +121,15 @@ export function registerDeploymentScripts(ctx: {
           uploadedAt: deploymentScriptVersion.uploadedAt,
         })
         .from(deploymentScriptVersion)
-        .where(eq(deploymentScriptVersion.organizationId, orgId))
+        .where(
+          and(
+            eq(deploymentScriptVersion.organizationId, orgId),
+            inArray(deploymentScriptVersion.scriptId, scripts.map((s) => s.id)),
+          ),
+        )
         .orderBy(deploymentScriptVersion.scriptId, desc(deploymentScriptVersion.version));
       const latestOf = new Map(latest.map((v) => [v.scriptId, v]));
-      return c.json({ items: scripts.map((script) => toScript(script, latestOf.get(script.id) as VersionRow)) }, 200);
+      return c.json({ items: scripts.map((script) => toScript(script, latestOf.get(script.id) as VersionRow)), total, page, pageSize }, 200);
     },
   );
 

@@ -310,7 +310,9 @@ export const api = {
   /** Where a Certificate downloads from: the current one, or the one with `certificateId`. */
   certificateDownloadUrl: (orgId: string, id: string, form: { format: string; chain: string }, certificateId?: string) =>
     `/api/organizations/${orgId}/managed-certificates/${id}/${certificateId ? `certificates/${certificateId}/download` : "certificate"}?${new URLSearchParams(form)}`,
-  apiKeys: (orgId: string) => call<{ items: ApiKey[] }>(`/api/organizations/${orgId}/api-keys`),
+  /** One page of the API keys the caller may see, oldest first; `page` is from 1. */
+  apiKeys: (orgId: string, paging: { page: number; pageSize: number }) =>
+    call<Page<ApiKey>>(`/api/organizations/${orgId}/api-keys?${new URLSearchParams({ page: String(paging.page), pageSize: String(paging.pageSize) })}`),
   createApiKey: (orgId: string, body: { name: string; type: ApiKey["type"]; expiresInDays?: number }) =>
     call<ApiKey & { key: string }>(`/api/organizations/${orgId}/api-keys`, { body }),
   revokeApiKey: (orgId: string, keyId: string) => call(`/api/organizations/${orgId}/api-keys/${keyId}`, { method: "DELETE" }),
@@ -325,7 +327,9 @@ export const api = {
   createAgentRegistrationToken: (orgId: string) =>
     call<{ token: string; expiresAt: string }>(`/api/organizations/${orgId}/agent-registration-tokens`, { method: "POST", body: {} }),
   revokeAgent: (orgId: string, agentId: string) => call<Agent>(`/api/organizations/${orgId}/agents/${agentId}/revoke`, { method: "POST", body: {} }),
-  deploymentScripts: (orgId: string) => call<{ items: DeploymentScript[] }>(`/api/organizations/${orgId}/deployment-scripts`),
+  /** One page of the Deployment Scripts, oldest first; `page` is from 1. */
+  deploymentScripts: (orgId: string, paging: { page: number; pageSize: number }) =>
+    call<Page<DeploymentScript>>(`/api/organizations/${orgId}/deployment-scripts?${new URLSearchParams({ page: String(paging.page), pageSize: String(paging.pageSize) })}`),
   deploymentScript: (orgId: string, scriptId: string) =>
     call<DeploymentScript & { versions: DeploymentScriptVersion[] }>(`/api/organizations/${orgId}/deployment-scripts/${scriptId}`),
   deploymentScriptVersion: (orgId: string, scriptId: string, hash: string) =>

@@ -1,7 +1,10 @@
-import { useQuery } from "@tanstack/react-query";
+import { keepPreviousData, useQuery } from "@tanstack/react-query";
 import { useParams } from "@tanstack/react-router";
+import { createColumnHelper, rowPaginationFeature, tableFeatures, useTable, type PaginationState } from "@tanstack/react-table";
 import { PlusIcon } from "lucide-react";
 import { useState, type FormEvent } from "react";
+import { DataTable } from "@/components/data-table/data-table";
+import { DataTablePagination } from "@/components/data-table/data-table-pagination";
 import { Badge } from "@/components/ui/badge";
 import { Button } from "@/components/ui/button";
 import { Dialog, DialogClose, DialogContent, DialogDescription, DialogFooter, DialogHeader, DialogTitle, DialogTrigger } from "@/components/ui/dialog";
@@ -17,6 +20,35 @@ const INTERPRETERS: DeploymentScript["interpreter"][] = ["bash", "powershell"];
 const INTERPRETER_LABEL: Record<DeploymentScript["interpreter"], string> = { bash: "Bash", powershell: "PowerShell" };
 const shortHash = (hash: string) => hash.slice(0, 12);
 
+// Paging is the server's (Page<DeploymentScript>); the table lays out the page it was given.
+const features = tableFeatures({ rowPaginationFeature });
+const columnHelper = createColumnHelper<typeof features, DeploymentScript>();
+const columns = columnHelper.columns([
+  columnHelper.accessor("name", { header: "Name", cell: ({ cell }) => <span className="font-medium">{cell.getValue()}</span> }),
+  columnHelper.accessor("interpreter", { header: "Interpreter", cell: ({ cell }) => <Badge variant="secondary">{INTERPRETER_LABEL[cell.getValue()]}</Badge> }),
+  columnHelper.accessor((s) => s.latestVersion.version, {
+    id: "latestVersion",
+    header: "Latest version",
+    cell: ({ row }) => (
+      <span className="flex items-center gap-2">
+        {row.original.latestVersion.version}
+        <span className="font-mono text-xs text-muted-foreground">{shortHash(row.original.latestVersion.hash)}</span>
+      </span>
+    ),
+  }),
+  columnHelper.accessor((s) => s.latestVersion.uploadedAt, {
+    id: "uploaded",
+    header: "Uploaded",
+    cell: ({ row }) => (
+      <span>
+        {row.original.latestVersion.uploadedBy}, <time dateTime={row.original.latestVersion.uploadedAt}>{new Date(row.original.latestVersion.uploadedAt).toLocaleString()}</time>
+      </span>
+    ),
+  }),
+  columnHelper.display({ id: "actions", header: () => <span className="sr-only">Actions</span>, cell: ({ row }) => <ScriptActions script={row.original} /> }),
+]);
+const noRows: DeploymentScript[] = [];
+
 /**
  * The Organization's Deployment Scripts: what an Agent runs to put a Certificate to use. Agents run them on their hosts, so
  * only Organization Administrators see or change the library. A change is a new version, and no version is ever altered:
@@ -26,8 +58,23 @@ export function DeploymentScriptsPage() {
   const { orgId } = useParams({ from: ROUTE });
   const org = useQuery({ queryKey: ["me"], queryFn: api.me, select: (me) => me.organizations.find((o) => o.id === orgId) }).data;
   const allowed = org ? can(org, "deploymentScript", "read") : false;
-  const scripts = useQuery({ queryKey: ["deployment-scripts", orgId], queryFn: () => api.deploymentScripts(orgId), enabled: allowed });
-  const items = scripts.data?.items ?? [];
+  const [pagination, setPagination] = useState<PaginationState>({ pageIndex: 0, pageSize: 25 });
+  const scripts = useQuery({
+    queryKey: ["deployment-scripts", orgId, pagination],
+    queryFn: () => api.deploymentScripts(orgId, { page: pagination.pageIndex + 1, pageSize: pagination.pageSize }),
+    enabled: allowed,
+    placeholderData: keepPreviousData,
+  });
+  const table = useTable({
+    features,
+    columns,
+    data: scripts.data?.items ?? noRows,
+    rowCount: scripts.data?.total,
+    manualPagination: true,
+    state: { pagination },
+    onPaginationChange: setPagination,
+    getRowId: (s) => s.id,
+  });
   const mayUpload = org ? can(org, "deploymentScript", "upload") : false;
 
   return (
@@ -44,51 +91,28 @@ export function DeploymentScriptsPage() {
         <p className="text-sm text-muted-foreground">Only Organization Administrators see the Deployment Scripts.</p>
       ) : (
         <div className="flex flex-col gap-4">
-          <Table>
-            <TableHeader>
-              <TableRow>
-                <TableHead>Name</TableHead>
-                <TableHead>Interpreter</TableHead>
-                <TableHead>Latest version</TableHead>
-                <TableHead>Uploaded</TableHead>
-                <TableHead>
-                  <span className="sr-only">Actions</span>
-                </TableHead>
-              </TableRow>
-            </TableHeader>
-            <TableBody>
-              {items.map((script) => (
-                <TableRow key={script.id}>
-                  <TableCell className="font-medium">{script.name}</TableCell>
-                  <TableCell>
-                    <Badge variant="secondary">{INTERPRETER_LABEL[script.interpreter]}</Badge>
-                  </TableCell>
-                  <TableCell>
-                    <span>{script.latestVersion.version}</span> <span className="font-mono text-xs text-muted-foreground">{shortHash(script.latestVersion.hash)}</span>
-                  </TableCell>
-                  <TableCell className="text-sm">
-                    {script.latestVersion.uploadedBy}, {new Date(script.latestVersion.uploadedAt).toLocaleString()}
-                  </TableCell>
-                  <TableCell className="text-right">
-                    <div className="flex items-center justify-end gap-2">
-                      <VersionsDialog orgId={orgId} script={script} />
-                      {mayUpload && <NewVersionDialog orgId={orgId} script={script} />}
-                    </div>
-                  </TableCell>
-                </TableRow>
-              ))}
-              {items.length === 0 && (
-                <TableRow>
-                  <TableCell colSpan={5} className="text-center text-muted-foreground">
-                    {scripts.isPending ? "Loading…" : "No Deployment Script is uploaded yet."}
-                  </TableCell>
-                </TableRow>
-              )}
-            </TableBody>
-          </Table>
+          <DataTable table={table} empty={scripts.isPending ? "Loading…" : "No Deployment Script is uploaded yet."} />
+          <DataTablePagination
+            pageIndex={pagination.pageIndex}
+            pageSize={pagination.pageSize}
+            rowCount={scripts.data?.total ?? 0}
+            onPageIndexChange={(pageIndex) => setPagination({ ...pagination, pageIndex })}
+            onPageSizeChange={(pageSize) => setPagination({ pageIndex: 0, pageSize })}
+          />
           {scripts.error && <p className="text-sm text-destructive">{scripts.error.message}</p>}
         </div>
       )}
+    </div>
+  );
+}
+
+function ScriptActions({ script }: { script: DeploymentScript }) {
+  const { orgId } = useParams({ from: ROUTE });
+  const org = useQuery({ queryKey: ["me"], queryFn: api.me, select: (me) => me.organizations.find((o) => o.id === orgId) }).data;
+  return (
+    <div className="flex items-center justify-end gap-2">
+      <VersionsDialog orgId={orgId} script={script} />
+      {org && can(org, "deploymentScript", "upload") && <NewVersionDialog orgId={orgId} script={script} />}
     </div>
   );
 }
@@ -125,34 +149,36 @@ function Versions({ orgId, script }: { orgId: string; script: DeploymentScript }
   });
   return (
     <div className="flex flex-col gap-4">
-      <Table>
-        <TableHeader>
-          <TableRow>
-            <TableHead>Version</TableHead>
-            <TableHead>Hash</TableHead>
-            <TableHead>Uploaded</TableHead>
-            <TableHead>
-              <span className="sr-only">Actions</span>
-            </TableHead>
-          </TableRow>
-        </TableHeader>
-        <TableBody>
-          {detail.data?.versions.map((v) => (
-            <TableRow key={v.hash} data-state={v.hash === hash ? "selected" : undefined}>
-              <TableCell>{v.version}</TableCell>
-              <TableCell className="break-all font-mono text-xs">{v.hash}</TableCell>
-              <TableCell className="text-sm">
-                {v.uploadedBy}, {new Date(v.uploadedAt).toLocaleString()}
-              </TableCell>
-              <TableCell className="text-right">
-                <Button variant="ghost" size="sm" aria-label={`View version ${v.version}`} aria-pressed={v.hash === hash} onClick={() => setShown(v.hash)}>
-                  View
-                </Button>
-              </TableCell>
+      <div className="rounded-md border">
+        <Table>
+          <TableHeader>
+            <TableRow>
+              <TableHead>Version</TableHead>
+              <TableHead>Hash</TableHead>
+              <TableHead>Uploaded</TableHead>
+              <TableHead>
+                <span className="sr-only">Actions</span>
+              </TableHead>
             </TableRow>
-          ))}
-        </TableBody>
-      </Table>
+          </TableHeader>
+          <TableBody>
+            {detail.data?.versions.map((v) => (
+              <TableRow key={v.hash} data-state={v.hash === hash ? "selected" : undefined}>
+                <TableCell>{v.version}</TableCell>
+                <TableCell className="break-all font-mono text-xs">{v.hash}</TableCell>
+                <TableCell className="text-sm">
+                  {v.uploadedBy}, {new Date(v.uploadedAt).toLocaleString()}
+                </TableCell>
+                <TableCell className="text-right">
+                  <Button variant="ghost" size="sm" aria-label={`View version ${v.version}`} aria-pressed={v.hash === hash} onClick={() => setShown(v.hash)}>
+                    View
+                  </Button>
+                </TableCell>
+              </TableRow>
+            ))}
+          </TableBody>
+        </Table>
+      </div>
       {detail.error && <p className="text-sm text-destructive">{detail.error.message}</p>}
       {content.data && (
         <pre aria-label={`Content of version ${content.data.version}`} className="max-h-80 overflow-auto rounded-md border bg-muted p-3 font-mono text-xs">

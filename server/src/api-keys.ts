@@ -15,7 +15,7 @@ import { API_KEY_CONFIG, API_KEY_HEADER, createAuth, type Auth, type AuthConfig 
 import type { Authorizer } from "./authorization";
 import type { Db } from "./db/client";
 import { user } from "./db/schema";
-import { HttpError, OrgParam, errors, json } from "./http";
+import { HttpError, OrgParam, PageQuery, errors, json, pageOf } from "./http";
 import { carries, permissionsOf, roleCan, type Permissions } from "./permissions";
 import type { Actor, UnitOfWork } from "./unit-of-work";
 
@@ -211,16 +211,19 @@ export function registerApiKeys(ctx: {
       method: "get",
       path: "/api/organizations/{orgId}/api-keys",
       tags: ["API keys"],
-      summary: "The API keys the caller may see in the Organization",
+      summary: "The API keys the caller may see in the Organization, oldest first, a page at a time",
       description:
-        "The caller's own keys and, for an Organization Administrator, the Organization's keys. Not even an Organization Administrator sees another person's own keys. Their values are never shown.",
-      request: { params: OrgParam },
-      responses: { 200: json(z.object({ items: z.array(ApiKeyView) })), ...errors(401, 404) },
+        "The caller's own keys and, for an Organization Administrator, the Organization's keys. Not even an Organization Administrator sees another person's own keys. Their values are never shown. `total` is how many the caller may see, whatever the page.",
+      request: { params: OrgParam, query: PageQuery },
+      responses: { 200: json(pageOf(ApiKeyView)), ...errors(400, 401, 404) },
     }),
     async (c) => {
       const { orgId } = c.req.valid("param");
+      const { page, pageSize } = c.req.valid("query");
       const { role } = await authorize(await requireUser(c), orgId);
-      return c.json({ items: (await keysOf(c, role, orgId)).map(toView) }, 200);
+      // The plugin lists a person's keys in one go, so the page is cut from the whole.
+      const keys = await keysOf(c, role, orgId);
+      return c.json({ items: keys.slice((page - 1) * pageSize, page * pageSize).map(toView), total: keys.length, page, pageSize }, 200);
     },
   );
 

@@ -185,6 +185,23 @@ describe("viewing the library", () => {
     expect(JSON.stringify(listed.body)).not.toContain("echo");
   });
 
+  test("pages the library, each page with its scripts' latest versions and the total in all", async () => {
+    for (const name of ["s1", "s2", "s3"]) {
+      h.setNow(new Date(`2026-01-01T00:0${name.slice(1)}:00Z`));
+      const { id } = await uploadHello(name);
+      if (name === "s2") await addVersion(id, GOODBYE.content);
+    }
+
+    const second = await h.api(`${scriptsOf()}?pageSize=2&page=2`, { cookie: acmeOrg.cookie });
+
+    expect(second.status).toBe(200);
+    expect(second.body).toMatchObject({ total: 3, page: 2, pageSize: 2 });
+    expect(second.body.items.map((s: any) => [s.name, s.latestVersion.version])).toEqual([["s3", 1]]);
+    const first = await h.api(`${scriptsOf()}?pageSize=2`, { cookie: acmeOrg.cookie });
+    expect(first.body.items.map((s: any) => [s.name, s.latestVersion.version])).toEqual([["s1", 1], ["s2", 2]]);
+    for (const query of ["?page=0", "?pageSize=101"]) expect((await h.api(`${scriptsOf()}${query}`, { cookie: acmeOrg.cookie })).status).toBe(400);
+  });
+
   test("a previous version stays viewable, with its content, by its hash", async () => {
     const { id } = await uploadHello();
     await addVersion(id, GOODBYE.content);

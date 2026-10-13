@@ -1,19 +1,34 @@
 import { useMutation, useQuery } from "@tanstack/react-query";
 import { useParams } from "@tanstack/react-router";
+import { createColumnHelper, tableFeatures, useTable } from "@tanstack/react-table";
 import { PlusIcon } from "lucide-react";
 import { useState, type FormEvent } from "react";
+import { DataTable } from "@/components/data-table/data-table";
 import { Badge } from "@/components/ui/badge";
 import { Button } from "@/components/ui/button";
 import { Dialog, DialogClose, DialogContent, DialogDescription, DialogFooter, DialogHeader, DialogTitle, DialogTrigger } from "@/components/ui/dialog";
 import { Input } from "@/components/ui/input";
 import { Label } from "@/components/ui/label";
-import { Table, TableBody, TableCell, TableHead, TableHeader, TableRow } from "@/components/ui/table";
 import { api, can, type AcmeAccount } from "@/lib/api";
 import { useAction } from "@/lib/use-action";
 
 const ROUTE = "/app/organizations/$orgId/acme-accounts";
 const ENVIRONMENTS: AcmeAccount["environment"][] = ["staging", "production"];
 const ENVIRONMENT_LABEL: Record<AcmeAccount["environment"], string> = { staging: "Staging", production: "Production" };
+
+// The server lists every account (at most one per environment), so there is nothing to page.
+const features = tableFeatures({});
+const columnHelper = createColumnHelper<typeof features, AcmeAccount>();
+const columns = columnHelper.columns([
+  columnHelper.accessor("environment", {
+    header: "Environment",
+    cell: ({ cell }) => <Badge variant={cell.getValue() === "production" ? "default" : "secondary"}>{ENVIRONMENT_LABEL[cell.getValue()]}</Badge>,
+  }),
+  columnHelper.accessor("accountUrl", { header: "Account", cell: ({ cell }) => <span className="break-all font-mono text-xs">{cell.getValue()}</span> }),
+  columnHelper.accessor("contactEmail", { header: "Contact", cell: ({ cell }) => cell.getValue() ?? <span className="text-muted-foreground">None</span> }),
+  columnHelper.display({ id: "actions", header: () => <span className="sr-only">Actions</span>, cell: ({ row }) => <TestAccount account={row.original} /> }),
+]);
+const noRows: AcmeAccount[] = [];
 
 /**
  * The Organization's account with the CA, one for staging and one for production: a Managed Certificate is issued under
@@ -25,8 +40,9 @@ export function AcmeAccountsPage() {
   const org = useQuery({ queryKey: ["me"], queryFn: api.me, select: (me) => me.organizations.find((o) => o.id === orgId) }).data;
   const allowed = org ? can(org, "acmeAccount", "read") : false;
   const accounts = useQuery({ queryKey: ["acme-accounts", orgId], queryFn: () => api.acmeAccounts(orgId), enabled: allowed });
-  const items = accounts.data?.items ?? [];
+  const items = accounts.data?.items ?? noRows;
   const missing = ENVIRONMENTS.filter((environment) => !items.some((a) => a.environment === environment));
+  const table = useTable({ features, columns, data: items, getRowId: (a) => a.id });
 
   return (
     <div className="flex flex-col gap-6">
@@ -42,37 +58,7 @@ export function AcmeAccountsPage() {
         <p className="text-sm text-muted-foreground">Only Organization Administrators see the ACME accounts.</p>
       ) : (
         <div className="flex flex-col gap-4">
-          <Table>
-            <TableHeader>
-              <TableRow>
-                <TableHead>Environment</TableHead>
-                <TableHead>Account</TableHead>
-                <TableHead>Contact</TableHead>
-                <TableHead>
-                  <span className="sr-only">Actions</span>
-                </TableHead>
-              </TableRow>
-            </TableHeader>
-            <TableBody>
-              {items.map((account) => (
-                <TableRow key={account.id}>
-                  <TableCell>
-                    <Badge variant={account.environment === "production" ? "default" : "secondary"}>{ENVIRONMENT_LABEL[account.environment]}</Badge>
-                  </TableCell>
-                  <TableCell className="break-all font-mono text-xs">{account.accountUrl}</TableCell>
-                  <TableCell>{account.contactEmail ?? <span className="text-muted-foreground">None</span>}</TableCell>
-                  <TableCell className="text-right">{org && can(org, "acmeAccount", "test") && <TestAccount orgId={orgId} account={account} />}</TableCell>
-                </TableRow>
-              ))}
-              {items.length === 0 && (
-                <TableRow>
-                  <TableCell colSpan={4} className="text-center text-muted-foreground">
-                    {accounts.isPending ? "Loading…" : "No ACME account is registered yet."}
-                  </TableCell>
-                </TableRow>
-              )}
-            </TableBody>
-          </Table>
+          <DataTable table={table} empty={accounts.isPending ? "Loading…" : "No ACME account is registered yet."} />
           {missing.length > 0 && !accounts.isPending && (
             <p className="text-sm text-muted-foreground">No {missing.join(" or ")} account: a Managed Certificate in {missing.length > 1 ? "either" : "that"} environment cannot be issued yet.</p>
           )}
@@ -83,8 +69,11 @@ export function AcmeAccountsPage() {
   );
 }
 
-function TestAccount({ orgId, account }: { orgId: string; account: AcmeAccount }) {
+function TestAccount({ account }: { account: AcmeAccount }) {
+  const { orgId } = useParams({ from: ROUTE });
+  const org = useQuery({ queryKey: ["me"], queryFn: api.me, select: (me) => me.organizations.find((o) => o.id === orgId) }).data;
   const test = useMutation({ mutationFn: () => api.testAcmeAccount(orgId, account.id) });
+  if (!org || !can(org, "acmeAccount", "test")) return null;
   return (
     <div className="flex items-center justify-end gap-3">
       {test.data && (test.data.ok ? <span role="status" className="text-sm">The CA accepts the key.</span> : <span role="alert" className="text-sm text-destructive">{test.data.error}</span>)}
