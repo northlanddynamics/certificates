@@ -208,7 +208,8 @@ describe("viewing the library", () => {
     const names = async (query: string) => {
       const listed = await h.api(`${scriptsOf()}?${query}`, { cookie: acmeOrg.cookie });
       expect(listed.status).toBe(200);
-      return [listed.body.total, listed.body.items.map((s: any) => s.name)];
+      // Uploaded at the same moment, so in no order of their own.
+      return [listed.body.total, listed.body.items.map((s: any) => s.name).sort()];
     };
 
     expect(await names("interpreter=powershell")).toEqual([1, ["powershell-script"]]);
