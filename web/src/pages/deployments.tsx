@@ -1,8 +1,10 @@
 import { keepPreviousData, useQuery } from "@tanstack/react-query";
 import { Link, useParams } from "@tanstack/react-router";
 import { createColumnHelper, rowPaginationFeature, tableFeatures, useTable, type PaginationState } from "@tanstack/react-table";
+import { XIcon } from "lucide-react";
 import { useMemo, useState } from "react";
 import { DataTable } from "@/components/data-table/data-table";
+import { DataTableFacetedFilter } from "@/components/data-table/data-table-faceted-filter";
 import { DataTablePagination } from "@/components/data-table/data-table-pagination";
 import { Badge } from "@/components/ui/badge";
 import { Button } from "@/components/ui/button";
@@ -24,10 +26,11 @@ const STATE: Record<DeploymentState, { label: string; hint: string; variant: "de
 };
 /** The states that move on without anyone: worth looking at again soon. */
 const MOVING: DeploymentState[] = ["awaiting_key", "issuing", "awaiting_deployment"];
+const STATE_FACETS = (Object.keys(STATE) as DeploymentState[]).map((value) => ({ value, label: STATE[value].label }));
 
 const shortHash = (hash: string) => hash.slice(0, 12);
 
-// Paging is the server's (Page<Deployment>); the table lays out the page it was given.
+// Paging and narrowing are the server's (Page<Deployment>); the table lays out the page it was given.
 const features = tableFeatures({ rowPaginationFeature });
 const columnHelper = createColumnHelper<typeof features, Deployment>();
 const noRows: Deployment[] = [];
@@ -49,15 +52,34 @@ export function DeploymentsPage() {
   const { orgId } = useParams({ from: ROUTE });
   const org = useQuery({ queryKey: ["me"], queryFn: api.me, select: (me) => me.organizations.find((o) => o.id === orgId) }).data;
   const allowed = org ? can(org, "deployment", "read") : false;
+  const [state, setState] = useState<string[]>([]);
+  const [agentId, setAgentId] = useState<string[]>([]);
+  const [scriptId, setScriptId] = useState<string[]>([]);
   const [pagination, setPagination] = useState<PaginationState>({ pageIndex: 0, pageSize: 25 });
+  const filters = { state, agentId, scriptId };
   const deployments = useQuery({
-    queryKey: ["deployments", orgId, pagination],
-    queryFn: () => api.deployments(orgId, { page: pagination.pageIndex + 1, pageSize: pagination.pageSize }),
+    queryKey: ["deployments", orgId, filters, pagination],
+    queryFn: () => api.deployments(orgId, filters, { page: pagination.pageIndex + 1, pageSize: pagination.pageSize }),
     enabled: allowed,
     placeholderData: keepPreviousData,
     // The Agent does its part when it next polls: look again until nothing is waiting on it.
     refetchInterval: (query) => (query.state.data?.items.some((d) => MOVING.includes(d.state) || d.runPending) ? 3000 : 30_000),
   });
+  // The same lists the New Deployment dialog chooses from.
+  const agents = useQuery({
+    queryKey: ["agents", orgId, "choices"],
+    queryFn: () => api.agents(orgId, { status: [], os: [], outdated: false }, { page: 1, pageSize: 100 }),
+    enabled: allowed,
+  });
+  const scripts = useQuery({ queryKey: ["deployment-scripts", orgId, "choices"], queryFn: () => api.deploymentScripts(orgId, { page: 1, pageSize: 100 }), enabled: allowed });
+  const agentFacets = (agents.data?.items ?? []).map((a) => ({ value: a.id, label: a.hostName }));
+  const scriptFacets = (scripts.data?.items ?? []).map((s) => ({ value: s.id, label: s.name }));
+  const narrowed = state.length > 0 || agentId.length > 0 || scriptId.length > 0;
+  // A new narrowing starts again from the first page.
+  const narrow = (set: (values: string[]) => void) => (values: string[]) => {
+    set(values);
+    setPagination({ ...pagination, pageIndex: 0 });
+  };
   const columns = useMemo(
     () =>
       columnHelper.columns([
@@ -137,7 +159,27 @@ export function DeploymentsPage() {
         <p className="text-sm text-muted-foreground">Only Organization Administrators see the Deployments.</p>
       ) : (
         <div className="flex flex-col gap-4">
-          <DataTable table={table} empty={deployments.isPending ? "Loading…" : "No Deployment is set up yet."} />
+          <div className="flex flex-wrap items-center gap-2">
+            <DataTableFacetedFilter title="State" options={STATE_FACETS} value={state} onChange={narrow(setState)} />
+            <DataTableFacetedFilter title="Agent" options={agentFacets} value={agentId} onChange={narrow(setAgentId)} />
+            <DataTableFacetedFilter title="Script" options={scriptFacets} value={scriptId} onChange={narrow(setScriptId)} />
+            {narrowed && (
+              <Button
+                variant="ghost"
+                size="sm"
+                onClick={() => {
+                  setState([]);
+                  setAgentId([]);
+                  setScriptId([]);
+                  setPagination({ ...pagination, pageIndex: 0 });
+                }}
+              >
+                Reset
+                <XIcon />
+              </Button>
+            )}
+          </div>
+          <DataTable table={table} empty={deployments.isPending ? "Loading…" : narrowed ? "No Deployments match." : "No Deployment is set up yet."} />
           <DataTablePagination
             pageIndex={pagination.pageIndex}
             pageSize={pagination.pageSize}

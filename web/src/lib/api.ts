@@ -514,8 +514,12 @@ export const api = {
     call<{ token: string; expiresAt: string }>(`/api/organizations/${orgId}/agent-registration-tokens`, { method: "POST", body: {} }),
   revokeAgent: (orgId: string, agentId: string) => call<Agent>(`/api/organizations/${orgId}/agents/${agentId}/revoke`, { method: "POST", body: {} }),
   /** One page of the Deployment Scripts, oldest first; `page` is from 1. */
-  deploymentScripts: (orgId: string, paging: { page: number; pageSize: number }) =>
-    call<Page<DeploymentScript>>(`/api/organizations/${orgId}/deployment-scripts?${new URLSearchParams({ page: String(paging.page), pageSize: String(paging.pageSize) })}`),
+  /** One page of the Deployment Scripts, oldest first, narrowed to those run by any of `interpreter`; `page` is from 1. */
+  deploymentScripts: (orgId: string, paging: { page: number; pageSize: number }, filters: { interpreter?: string[] } = {}) => {
+    const query = new URLSearchParams({ page: String(paging.page), pageSize: String(paging.pageSize) });
+    if (filters.interpreter?.length) query.set("interpreter", filters.interpreter.join(","));
+    return call<Page<DeploymentScript>>(`/api/organizations/${orgId}/deployment-scripts?${query}`);
+  },
   deploymentScript: (orgId: string, scriptId: string) =>
     call<DeploymentScript & { versions: DeploymentScriptVersion[] }>(`/api/organizations/${orgId}/deployment-scripts/${scriptId}`),
   deploymentScriptVersion: (orgId: string, scriptId: string, hash: string) =>
@@ -525,8 +529,14 @@ export const api = {
   uploadDeploymentScriptVersion: (orgId: string, scriptId: string, content: string) =>
     call<DeploymentScript>(`/api/organizations/${orgId}/deployment-scripts/${scriptId}/versions`, { body: { content } }),
   /** One page of the Deployments, newest first; `page` is from 1. */
-  deployments: (orgId: string, paging: { page: number; pageSize: number }) =>
-    call<Page<Deployment>>(`/api/organizations/${orgId}/deployments?${new URLSearchParams({ page: String(paging.page), pageSize: String(paging.pageSize) })}`),
+  /** One page of the Deployments, newest first, narrowed to those in any of `state`, on any of `agentId` and running any of `scriptId`; `page` is from 1. */
+  deployments: (orgId: string, filters: { state: string[]; agentId: string[]; scriptId: string[] }, paging: { page: number; pageSize: number }) => {
+    const query = new URLSearchParams({ page: String(paging.page), pageSize: String(paging.pageSize) });
+    if (filters.state.length > 0) query.set("state", filters.state.join(","));
+    if (filters.agentId.length > 0) query.set("agentId", filters.agentId.join(","));
+    if (filters.scriptId.length > 0) query.set("scriptId", filters.scriptId.join(","));
+    return call<Page<Deployment>>(`/api/organizations/${orgId}/deployments?${query}`);
+  },
   createDeployment: (orgId: string, body: NewDeployment) => call<Deployment>(`/api/organizations/${orgId}/deployments`, { body }),
   /** One page of a Deployment's runs, newest first; `page` is from 1. */
   deploymentRuns: (orgId: string, id: string, paging: { page: number; pageSize: number }) =>

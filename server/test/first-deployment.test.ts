@@ -261,6 +261,37 @@ describe("one Agent serves many Deployments", () => {
   });
 });
 
+describe("narrowing the Deployments", () => {
+  test("by where each has got to, its Agent and its script, the filters combining and the total counting what matches", async () => {
+    await readyToIssue();
+    const [web, mail] = [await agentIn(acmeOrg, "web"), await agentIn(acmeOrg, "mail")];
+    const other = await script(acmeOrg, "other", "#!/usr/bin/env bash\ntrue\n");
+    const failed = (await setUp(acmeOrg, await deploymentRequest(web))).body;
+    const onWebOther = (await setUp(acmeOrg, await deploymentRequest(web, { scriptId: other.id }))).body;
+    const onMail = (await setUp(acmeOrg, await deploymentRequest(mail))).body;
+    const item = ((await web.poll()).body.items as { id: string; payload: { deploymentId: string } }[]).find((i) => i.payload.deploymentId === failed.id)!;
+    expect((await web.report(item.id, { ok: false, error: "the key store is not writable" })).status).toBe(200);
+    // Set up at the same moment, so in no order of their own: compare the ids as sets.
+    const listed = async (query: string) => {
+      const res = await api(acmeOrg, `/deployments?${query}`);
+      expect(res.status).toBe(200);
+      return { total: res.body.total, ids: (res.body.items as { id: string }[]).map((d) => d.id).sort() };
+    };
+    const ids = (...ds: { id: string }[]) => ds.map((d) => d.id).sort();
+
+    expect(await listed("state=key_failed")).toEqual({ total: 1, ids: [failed.id] });
+    expect(await listed("state=awaiting_key,key_failed")).toEqual({ total: 3, ids: ids(onMail, onWebOther, failed) });
+    expect(await listed(`agentId=${web.id}`)).toEqual({ total: 2, ids: ids(onWebOther, failed) });
+    expect(await listed(`scriptId=${other.id}`)).toEqual({ total: 1, ids: [onWebOther.id] });
+    expect(await listed(`agentId=${web.id},${mail.id}&state=awaiting_key`)).toEqual({ total: 2, ids: ids(onMail, onWebOther) });
+    const [first, second] = [await listed("state=awaiting_key&pageSize=1"), await listed("state=awaiting_key&pageSize=1&page=2")];
+    expect([first.total, second.total]).toEqual([2, 2]);
+    expect([...first.ids, ...second.ids].sort()).toEqual(ids(onMail, onWebOther));
+    expect(await listed("state=deployed")).toEqual({ total: 0, ids: [] });
+    for (const query of ["state=lost", "agentId=not-an-id", "scriptId="]) expect((await api(acmeOrg, `/deployments?${query}`)).status).toBe(400);
+  });
+});
+
 describe("who may set up Deployments, and with what", () => {
   test("only an Organization Administrator may set up, see or run one", async () => {
     await readyToIssue();
