@@ -2,7 +2,7 @@ import { useQuery, useQueryClient } from "@tanstack/react-query";
 import { ApiError, api } from "@/lib/api";
 
 /** Everything that is read for one Managed Certificate's page starts with this key, so one refresh covers its tabs. */
-const managedCertificateKey = (orgId: string, id: string) => ["managed-certificate", orgId, id] as const;
+export const managedCertificateKey = (orgId: string, id: string) => ["managed-certificate", orgId, id] as const;
 
 /** What a Managed Certificate's page needs from the platform: who is looking, at which Organization, and the Managed Certificate itself. */
 export function useManagedCertificatePage(orgId: string, id: string) {

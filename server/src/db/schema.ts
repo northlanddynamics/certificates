@@ -6,6 +6,7 @@ import type { DcvMethod, DcvScope } from "../dcv-plan";
 import type { ScriptInterpreter } from "../deployment-script-kinds";
 import type { DnsProviderType } from "../dns-provider-kinds";
 import type { IssuanceFailureCode } from "../issuance-failure";
+import type { IssuanceKind } from "../issuance-kinds";
 import type { KeyAlgorithm, KeyCustody } from "../csr";
 import type { AgentArch, AgentOs } from "../agent-kinds";
 import type { ApprovalStatus } from "../approval";
@@ -301,6 +302,8 @@ export const issuance = pgTable(
       .references(() => organization.id),
     managedCertificateId: uuid("managed_certificate_id").notNull(),
     status: text("status").$type<"running" | "succeeded" | "failed">().notNull(),
+    /** What it is for, decided when it begins: see `IssuanceKind`. */
+    kind: text("kind").$type<IssuanceKind>().notNull(),
     /** Who asked for it; the Audit Events of its outcome are attributed to them. None when the Renewal scheduler did. */
     requestedById: text("requested_by_id"),
     requestedByEmail: text("requested_by_email"),
@@ -319,6 +322,7 @@ export const issuance = pgTable(
     uniqueIndex("issuance_one_running_per_managed_certificate")
       .on(t.managedCertificateId)
       .where(sql`${t.status} = 'running'`),
+    check("issuance_kind", sql`${t.kind} in ('first_issue', 'renewal', 'name_change')`),
   ],
 );
 

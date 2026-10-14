@@ -143,7 +143,7 @@ describe("what each intent needs besides being approved and live", () => {
   test.each(["issue", "renewNow", "scheduled"] as const)("%s is refused while another Issuance of it runs, and nothing more is recorded", async (intent) => {
     const mc = await managedCertificateIn();
     await certificateOf(mc.id);
-    await h.db.insert(issuance).values({ organizationId: orgId, managedCertificateId: mc.id, status: "running", startedAt: new Date() });
+    await h.db.insert(issuance).values({ organizationId: orgId, managedCertificateId: mc.id, status: "running", kind: "first_issue", startedAt: new Date() });
 
     expect(await begin(mc.id, intent)).toEqual({ refused: "already_running" });
 

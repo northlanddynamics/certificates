@@ -211,6 +211,13 @@
       "when": 1792005939022,
       "tag": "0029_sso",
       "breakpoints": true
+    },
+    {
+      "idx": 30,
+      "version": "7",
+      "when": 1792013498131,
+      "tag": "0030_issuance_kind",
+      "breakpoints": true
     }
   ]
 }
