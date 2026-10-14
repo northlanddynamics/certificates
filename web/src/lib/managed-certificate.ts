@@ -21,6 +21,10 @@ export function status(m: ManagedCertificate): { label: string; variant: "defaul
   return m.currentCertificate ? { label: "Issued", variant: "default" } : { label: "Not issued", variant: "outline" };
 }
 
+const CA_LABELS: Record<string, string> = { "lets-encrypt": "Let's Encrypt" };
+/** A CA by the name people know it by, from its name in the API. */
+export const caLabel = (ca: string) => CA_LABELS[ca] ?? ca;
+
 /** What an Issuance attempt was for, as a sentence starts. */
 export const ISSUANCE_KIND_WORDS: Record<Issuance["kind"], string> = {
   first_issue: "First Issuance",
