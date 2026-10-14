@@ -6,6 +6,9 @@ import { createAccessControl } from "better-auth/plugins/access";
 // Better Auth's default "owner" role is deliberately absent: "Owner" is a domain term for the party accountable
 // for a Managed Certificate.
 export const ORG_ADMIN_ROLE = "organization-administrator";
+
+/** The platform-wide role (Better Auth's admin plugin) of a Platform Operator, as opposed to an Organization role. */
+export const PLATFORM_OPERATOR_ROLE = "platform-operator";
 export const APPROVER_ROLE = "approver";
 export const MEMBER_ROLE = "member";
 

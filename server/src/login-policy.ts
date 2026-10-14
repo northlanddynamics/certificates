@@ -12,7 +12,7 @@
 import { OpenAPIHono, createRoute, z } from "@hono/zod-openapi";
 import { and, eq, inArray, isNotNull } from "drizzle-orm";
 import type { Authorizer } from "./authorization";
-import type { Db } from "./db/client";
+import type { Db, Tx } from "./db/client";
 import { account, loginPolicy, member, ssoProvider, user } from "./db/schema";
 import { HttpError, OrgParam, errors, json } from "./http";
 import type { Actor, UnitOfWork } from "./unit-of-work";
@@ -77,12 +77,11 @@ export function registerLoginPolicy(ctx: {
   unitOfWork: UnitOfWork;
 }) {
   const { app, db, requireSession, authorize, unitOfWork } = ctx;
-  const current = async (tx: Pick<Db, "select">, organizationId: string, lock = false) => {
-    const query = tx
+  const current = async (organizationId: string) => {
+    const [row] = await db
       .select({ requireMfa: loginPolicy.requireMfa, requireSso: loginPolicy.requireSso })
       .from(loginPolicy)
       .where(eq(loginPolicy.organizationId, organizationId));
-    const [row] = await (lock ? query.for("update") : query);
     return { requireMfa: row?.requireMfa ?? false, requireSso: row?.requireSso ?? false };
   };
 
@@ -98,7 +97,7 @@ export function registerLoginPolicy(ctx: {
     async (c) => {
       const { orgId } = c.req.valid("param");
       await authorize(await requireSession(c), orgId, { loginPolicy: ["read"] });
-      return c.json(await current(db, orgId), 200);
+      return c.json(await current(orgId), 200);
     },
   );
 
@@ -120,8 +119,7 @@ export function registerLoginPolicy(ctx: {
       await authorize(actor, orgId, { loginPolicy: ["update"] });
       const changed = await unitOfWork.run(actor, async (tx, change) => {
         // Serialises concurrent changes, so each records the value the one before left.
-        await tx.insert(loginPolicy).values({ organizationId: orgId, updatedAt: change.occurredAt }).onConflictDoNothing();
-        const before = await current(tx, orgId, true);
+        const before = await lockLoginPolicy(tx, orgId, change.occurredAt);
         const after = { ...before, ...asked };
         const detail: Record<string, { from: boolean; to: boolean }> = {};
         for (const key of ["requireMfa", "requireSso"] as const) if (before[key] !== after[key]) detail[key] = { from: before[key], to: after[key] };
@@ -150,4 +148,18 @@ async function refuseLockout(tx: Pick<Db, "select">, organizationId: string, act
     .where(and(eq(account.userId, actor.id), inArray(account.providerId, connections.map((c) => c.providerId))))
     .limit(1);
   if (!signedIn) throw new HttpError(409, "sign in through one of the Organization's SSO connections first, so that you know it lets you back in");
+}
+
+/**
+ * The Organization's login policy, locked for the rest of the transaction: what serialises changes to it, and the
+ * deletion of an SSO connection it may depend on (sso-connections.ts).
+ */
+export async function lockLoginPolicy(tx: Tx, organizationId: string, occurredAt: Date) {
+  await tx.insert(loginPolicy).values({ organizationId, updatedAt: occurredAt }).onConflictDoNothing();
+  const [row] = await tx
+    .select({ requireMfa: loginPolicy.requireMfa, requireSso: loginPolicy.requireSso })
+    .from(loginPolicy)
+    .where(eq(loginPolicy.organizationId, organizationId))
+    .for("update");
+  return { requireMfa: row?.requireMfa ?? false, requireSso: row?.requireSso ?? false };
 }

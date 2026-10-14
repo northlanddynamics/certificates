@@ -79,6 +79,7 @@ export const AUDIT_ACTIONS = [
   "sso_connection.created",
   "sso_connection.changed",
   "sso_connection.deleted",
+  "sso_connection.domain_verified",
   "sso_connection.tested",
 ] as const;
 export type AuditAction = (typeof AUDIT_ACTIONS)[number];

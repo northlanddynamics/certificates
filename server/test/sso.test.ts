@@ -46,6 +46,21 @@ async function join(email: string, role = "member") {
   return h.signIn(email, PASSWORD);
 }
 
+/** TXT records the tests publish, as the DNS would answer: by name. */
+let txt: Map<string, string[]>;
+beforeEach(() => {
+  txt = new Map();
+  h.dcvResolver.current = { lookupTxt: async (name) => txt.get(name) ?? [], lookupCname: async () => [] };
+});
+
+/** Publishes the TXT record a connection asks for, and has the platform check it. */
+async function verifyDomain(connection: { id: string; domainVerification: { name: string; value: string } }, orgId = org.orgId, cookie = org.cookie) {
+  txt.set(connection.domainVerification.name, [...(txt.get(connection.domainVerification.name) ?? []), connection.domainVerification.value]);
+  const verified = await h.api(`${connections(orgId)}/${connection.id}/verify-domain`, { method: "POST", cookie });
+  expect(verified.status).toBe(200);
+  return verified.body;
+}
+
 const oidcConnection = (overrides: Record<string, unknown> = {}) => ({
   name: "Acme IdP",
   domain: "acme.test",
@@ -53,10 +68,11 @@ const oidcConnection = (overrides: Record<string, unknown> = {}) => ({
   ...overrides,
 });
 
+/** Adds an OIDC connection and verifies its domain. */
 async function createOidc(overrides: Record<string, unknown> = {}) {
   const created = await h.api(connections(), { cookie: org.cookie, body: oidcConnection(overrides) });
   expect(created.status).toBe(201);
-  return created.body as { id: string };
+  return (await verifyDomain(created.body)) as { id: string };
 }
 
 /** Signs in through SSO as the browser would, for the connection of `enteredEmail`'s domain, the IdP answering as `identity`. Returns where the platform sent the browser, and its cookies. */
@@ -75,10 +91,11 @@ const samlConnection = (overrides: Record<string, unknown> = {}) => ({
   ...overrides,
 });
 
+/** Adds a SAML connection and verifies its domain. */
 async function createSaml(overrides: Record<string, unknown> = {}) {
   const created = await h.api(connections(), { cookie: org.cookie, body: samlConnection(overrides) });
   expect(created.status).toBe(201);
-  return created.body as { id: string; serviceProvider: { entityId: string; acsUrl: string } };
+  return (await verifyDomain(created.body)) as { id: string; serviceProvider: { entityId: string; acsUrl: string } };
 }
 
 /** Goes through a SAML connection as the browser would: to the IdP, which answers as `email`, and back to the ACS with its form. Returns the ACS's answer. */
@@ -111,6 +128,8 @@ describe("SSO connections", () => {
       domain: "acme.test",
       oidc: { issuer: idp.issuer, clientId: idp.clientId },
       serviceProvider: { redirectUri: `http://localhost/api/auth/sso/callback/${created.body.id}` },
+      domainVerified: false,
+      domainVerification: { name: "_certificate-platform-sso.acme.test", value: expect.any(String) },
     });
     expect(JSON.stringify(created.body)).not.toContain(idp.clientSecret);
 
@@ -131,6 +150,39 @@ describe("SSO connections", () => {
     const member = await join("m@acme.test");
     expect((await h.api(connections(), { cookie: member })).status).toBe(403);
     expect((await h.api(connections(), { cookie: member, body: oidcConnection() })).status).toBe(403);
+  });
+});
+
+describe("proving the domain", () => {
+  test("a connection signs nobody in until a TXT record in its domain proves the Organization holds it", async () => {
+    const created = (await h.api(connections(), { cookie: org.cookie, body: oidcConnection() })).body;
+    expect((await h.api("/api/auth/sign-in/sso", { body: { email: "new@acme.test", callbackURL: "/" } })).status).toBe(401);
+
+    const unproven = await h.api(`${connections()}/${created.id}/verify-domain`, { method: "POST", cookie: org.cookie });
+    expect(unproven.status).toBe(409);
+    txt.set(created.domainVerification.name, ["something else"]);
+    expect((await h.api(`${connections()}/${created.id}/verify-domain`, { method: "POST", cookie: org.cookie })).status).toBe(409);
+
+    const verified = await verifyDomain(created);
+    expect(verified).toMatchObject({ id: created.id, domainVerified: true });
+    expect((await eventsOf("sso_connection.domain_verified"))[0]).toMatchObject({ target: { id: created.id }, detail: { domain: "acme.test" } });
+    const signedIn = await signInWithOidc({ sub: "u-1", email: "new@acme.test" });
+    expect((await h.api("/api/me", { cookie: signedIn.cookie })).status).toBe(200);
+  });
+
+  test("another Organization's record does not prove a domain, and a new domain must be proven again", async () => {
+    const created = (await h.api(connections(), { cookie: org.cookie, body: oidcConnection() })).body;
+    const other = await h.createOrgWithAdmin(operator, "globex", "admin@globex.test");
+    const theirs = (await h.api(connections(other.orgId), { cookie: other.cookie, body: samlConnection({ domain: "globex.test" }) })).body;
+    await verifyDomain(theirs, other.orgId, other.cookie);
+    // Their record is published under their domain's name, with their value.
+    txt.set(created.domainVerification.name, [theirs.domainVerification.value]);
+    expect((await h.api(`${connections()}/${created.id}/verify-domain`, { method: "POST", cookie: org.cookie })).status).toBe(409);
+
+    await verifyDomain(created);
+    const moved = await h.api(`${connections()}/${created.id}`, { method: "PATCH", cookie: org.cookie, body: { domain: "acme.example" } });
+    expect(moved.body).toMatchObject({ domainVerified: false, domainVerification: { name: "_certificate-platform-sso.acme.example" } });
+    expect(moved.body.domainVerification.value).not.toBe(created.domainVerification.value);
   });
 });
 
@@ -297,6 +349,32 @@ describe("who a connection signs in", () => {
     await h.signIn("approver@acme.test", PASSWORD);
   });
 
+  test("a Platform Operator's account is never linked to a connection, even as a member", async () => {
+    const invited = await h.api(`${BA}/invite-member`, { cookie: org.cookie, body: { email: "op@platform.test", role: "member", organizationId: org.orgId } });
+    await h.api(`${BA}/accept-invitation`, { cookie: operator, body: { invitationId: invited.body.id } });
+    await createOidc({ domain: "platform.test" });
+    const signedIn = await signInWithOidc({ sub: "op", email: "op@platform.test" });
+    expect(signedIn.location).toContain("error=");
+    expect((await h.api("/api/me", { cookie: signedIn.cookie })).status).toBe(401);
+  });
+
+  test("someone who signed in while invited becomes a Member at a later sign-in if the invitation lapses, but a removed member does not come back", async () => {
+    const invited = await h.api(`${BA}/invite-member`, { cookie: org.cookie, body: { email: "late@acme.test", role: "approver", organizationId: org.orgId } });
+    await createOidc();
+    const first = await signInWithOidc({ sub: "late", email: "late@acme.test" });
+    expect((await h.api("/api/me", { cookie: first.cookie })).body.organizations).toEqual([]);
+    await h.api(`${BA}/cancel-invitation`, { cookie: org.cookie, body: { invitationId: invited.body.id } });
+    const second = await signInWithOidc({ sub: "late", email: "late@acme.test" });
+    const me = await h.api("/api/me", { cookie: second.cookie });
+    expect(me.body.organizations).toEqual([expect.objectContaining({ id: org.orgId, role: "member" })]);
+
+    const [membership] = (await h.api(`${BA}/list-members?organizationId=${org.orgId}`, { cookie: org.cookie })).body.members.filter((m: any) => m.userId === me.body.user.id);
+    expect((await h.api(`${BA}/remove-member`, { cookie: org.cookie, body: { memberIdOrEmail: membership.id, organizationId: org.orgId } })).status).toBe(200);
+    const third = await signInWithOidc({ sub: "late", email: "late@acme.test" });
+    expect((await h.api("/api/me", { cookie: third.cookie })).body.organizations).toEqual([]);
+    expect(await eventsOf("member.provisioned")).toHaveLength(1);
+  });
+
   test("an account with the address that is not a member of the connection's Organization is not linked to it", async () => {
     await createOidc();
     const outsider = await h.signUp("outsider@acme.test", PASSWORD);
@@ -375,6 +453,15 @@ describe("requiring SSO", () => {
     expect((await requireSso(await adminThroughSso())).status).toBe(200);
     await h.signIn("outsider@acme.test", PASSWORD);
     await h.signIn("op@platform.test", PASSWORD);
+  });
+
+  test("a Platform Operator may still impersonate one of its members", async () => {
+    await join("m@acme.test");
+    expect((await requireSso(await adminThroughSso())).status).toBe(200);
+    const { rows } = await h.pool.query(`select id from "user" where email = 'm@acme.test'`);
+    const impersonated = await h.api("/api/auth/admin/impersonate-user", { cookie: operator, body: { userId: rows[0].id } });
+    expect(impersonated.status).toBe(200);
+    expect((await h.api("/api/me", { cookie: impersonated.cookie })).body.user.email).toBe("m@acme.test");
   });
 
   test("a Member may not change it, and its last connection cannot be deleted while it is required", async () => {

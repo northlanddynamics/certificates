@@ -46,7 +46,7 @@ export function SignInPage() {
       unwrap(authClient.signIn.sso({ email, callbackURL: `${window.location.origin}/`, errorCallbackURL: `${window.location.origin}/sign-in` })),
   });
   const [returnedWith] = useState(ssoFailure);
-  const ssoRequired = [signIn.error, withPasskey.error].some((e) => e instanceof ApiError && e.status === 403 && /requires SSO/.test(e.message));
+  const ssoRequired = [signIn.error, withPasskey.error].some((e) => e instanceof ApiError && e.code === "SSO_REQUIRED");
 
   if (secondFactor) return <SecondFactor onSignedIn={done} onBack={() => setSecondFactor(false)} />;
 

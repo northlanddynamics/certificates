@@ -3,15 +3,21 @@
 // rows itself, here, because the plugin's own endpoints ask for its built-in "owner" and "admin" roles and audit nothing.
 //
 // A connection belongs to exactly one Organization, and to one email domain, which no other connection may have: a
-// user signing in by email is sent to the connection of their address's domain. The OIDC client secret is stored where
+// user signing in by email is sent to the connection of their address's domain. It signs nobody in until a TXT record
+// in that domain proves the Organization holds it (`verify-domain`): a connection speaks for every address in its
+// domain, members' existing accounts included (sso-sign-in.ts), so an administrator must not be able to claim a domain
+// they do not hold. The OIDC client secret is stored where
 // the plugin reads it and is never returned, nor put in an Audit Event.
 import { OpenAPIHono, createRoute, z } from "@hono/zod-openapi";
 import { computeDiscoveryUrl, DiscoveryError, fetchDiscoveryDocument, normalizeDiscoveryUrls, selectTokenEndpointAuthMethod, validateDiscoveryDocument } from "@better-auth/sso";
 import { X509Certificate } from "@peculiar/x509";
+import { createHmac } from "node:crypto";
 import { and, asc, eq, sql } from "drizzle-orm";
 import type { Authorizer } from "./authorization";
+import type { TxtResolver } from "./dcv";
 import type { Db, Tx } from "./db/client";
-import { account, loginPolicy, ssoProvider } from "./db/schema";
+import { account, ssoProvider } from "./db/schema";
+import { lockLoginPolicy } from "./login-policy";
 import { HttpError, OrgParam, errors, json } from "./http";
 import type { Actor, UnitOfWork } from "./unit-of-work";
 
@@ -41,6 +47,14 @@ interface StoredSaml {
   idpMetadata: { entityID: string };
   wantAssertionsSigned: true;
 }
+
+/** A row's configuration, which is one of the two. */
+type Config = { type: "oidc"; oidc: StoredOidc } | { type: "saml"; saml: StoredSaml };
+const configOf = (row: Row): Config =>
+  row.oidcConfig ? { type: "oidc", oidc: JSON.parse(row.oidcConfig) as StoredOidc } : { type: "saml", saml: JSON.parse(row.samlConfig ?? "{}") as StoredSaml };
+
+/** Where the TXT record that proves a connection's domain is published. */
+export const domainVerificationName = (domain: string) => `_certificate-platform-sso.${domain}`;
 
 const Name = z.string().trim().min(1).max(100);
 const Domain = z
@@ -87,6 +101,10 @@ const Connection = z.object({
       metadataUrl: z.string().optional().openapi({ description: "SAML: the platform's metadata for this connection." }),
     })
     .openapi({ description: "What the identity provider must be told about the platform." }),
+  domainVerified: z.boolean().openapi({ description: "Whether a TXT record has proven the domain; until then the connection signs nobody in." }),
+  domainVerification: z
+    .object({ name: z.string(), value: z.string() })
+    .openapi({ description: "The TXT record to publish in the domain to prove it, then ask `verify-domain`. It changes with the domain." }),
 });
 type Connection = z.infer<typeof Connection>;
 
@@ -109,6 +127,10 @@ export function registerSsoConnections(ctx: {
   unitOfWork: UnitOfWork;
   /** Where the API is served; Better Auth's endpoints are under /api/auth. */
   baseURL: string;
+  /** The platform's secret, from which each connection's domain verification value is derived. */
+  secret: string;
+  /** How the TXT record that proves a domain is looked up. */
+  resolver: TxtResolver;
   clock: () => Date;
   /** Origins the platform may fetch from although they are not public (an IdP on a private network), as Better Auth's own. */
   trustedOrigins: string[];
@@ -130,13 +152,23 @@ export function registerSsoConnections(ctx: {
       : { entityId: spEntityId(row.providerId), acsUrl: `${authBase}/sso/saml2/sp/acs/${row.providerId}`, metadataUrl: spEntityId(row.providerId) };
   const spEntityId = (providerId: string) => `${authBase}/sso/saml2/sp/metadata?providerId=${encodeURIComponent(providerId)}`;
 
+  /** The value a connection's TXT record must hold: bound to the connection and the domain, and to nothing an administrator can choose. */
+  const domainVerificationValue = (providerId: string, domain: string) => createHmac("sha256", ctx.secret).update(`sso-domain:${providerId}:${domain}`).digest("base64url");
+
   function toConnection(row: Row): Connection {
-    const base = { id: row.providerId, name: row.name, domain: row.domain };
-    if (row.oidcConfig) {
-      const oidc = JSON.parse(row.oidcConfig) as StoredOidc;
+    const base = {
+      id: row.providerId,
+      name: row.name,
+      domain: row.domain,
+      domainVerified: row.domainVerified === true,
+      domainVerification: { name: domainVerificationName(row.domain), value: domainVerificationValue(row.providerId, row.domain) },
+    };
+    const config = configOf(row);
+    if (config.type === "oidc") {
+      const { oidc } = config;
       return { ...base, type: "oidc", oidc: { issuer: oidc.issuer, clientId: oidc.clientId, ...(oidc.scopes && { scopes: oidc.scopes }) }, serviceProvider: serviceProviderOf(row, "oidc") };
     }
-    const saml = JSON.parse(row.samlConfig ?? "{}") as StoredSaml;
+    const { saml } = config;
     const cert = certificateOf(saml.cert);
     return {
       ...base,
@@ -147,12 +179,12 @@ export function registerSsoConnections(ctx: {
   }
 
   /** The provider's endpoints, from its discovery document; a 400 that says what is wrong when they cannot be had. */
-  async function discover(input: z.infer<typeof OidcInput>): Promise<Omit<StoredOidc, "clientId" | "clientSecret" | "scopes" | "pkce" | "overrideUserInfo">> {
-    const discoveryEndpoint = computeDiscoveryUrl(input.issuer);
+  async function discover(issuer: string): Promise<Omit<StoredOidc, "clientId" | "clientSecret" | "scopes" | "pkce" | "overrideUserInfo">> {
+    const discoveryEndpoint = computeDiscoveryUrl(issuer);
     try {
       const doc = await fetchDiscoveryDocument(discoveryEndpoint, 10_000, isTrustedOrigin);
-      validateDiscoveryDocument(doc, input.issuer);
-      const normalized = normalizeDiscoveryUrls(doc, input.issuer, isTrustedOrigin);
+      validateDiscoveryDocument(doc, issuer);
+      const normalized = normalizeDiscoveryUrls(doc, issuer, isTrustedOrigin);
       const auth = selectTokenEndpointAuthMethod(normalized);
       return {
         issuer: normalized.issuer,
@@ -208,7 +240,7 @@ export function registerSsoConnections(ctx: {
       tags: ["Identity"],
       summary: "Add an SSO connection",
       description:
-        "An OIDC connection is checked against its provider's discovery document before it is saved. Users whose email is in the domain then sign in through it, and are made Members of the Organization the first time. A change is an Audit Event.",
+        "An OIDC connection is checked against its provider's discovery document before it is saved. Once a TXT record proves the domain (`verify-domain`), users whose email is in it sign in through the connection, and are made Members of the Organization the first time. A change is an Audit Event.",
       request: { params: OrgParam, body: { content: { "application/json": { schema: Create } } } },
       responses: { 201: json(Connection, "Created"), ...errors(400, 401, 403, 404, 409) },
     }),
@@ -221,7 +253,7 @@ export function registerSsoConnections(ctx: {
       let config: { issuer: string; oidcConfig: string | null; samlConfig: string | null };
       if (input.oidc) {
         // The provider is asked outside any transaction.
-        const discovered = await discover(input.oidc);
+        const discovered = await discover(input.oidc.issuer);
         const stored: StoredOidc = {
           ...discovered,
           clientId: input.oidc.clientId,
@@ -246,7 +278,7 @@ export function registerSsoConnections(ctx: {
         await refuseTakenDomain(tx, input.domain);
         const [row] = await tx
           .insert(ssoProvider)
-          .values({ id: crypto.randomUUID(), providerId, organizationId: orgId, userId: actor.id, name: input.name, domain: input.domain, domainVerified: true, ...config })
+          .values({ id: crypto.randomUUID(), providerId, organizationId: orgId, userId: actor.id, name: input.name, domain: input.domain, domainVerified: false, ...config })
           .returning();
         const connection = toConnection(row!);
         await change.audit({ organizationId: orgId, action: "sso_connection.created", target: { type: "sso_connection", id: providerId }, detail: auditDetail(connection) });
@@ -272,15 +304,12 @@ export function registerSsoConnections(ctx: {
       const input = c.req.valid("json");
       const actor = await requireUser(c);
       await authorize(actor, orgId, { ssoConnection: ["update"] });
-      const existing = await findConnection(db, orgId, connectionId);
-      if (input.oidc && !existing.oidcConfig) throw new HttpError(400, "oidc: this is a SAML connection");
-      if (input.saml && !existing.samlConfig) throw new HttpError(400, "saml: this is an OIDC connection");
-      const before = JSON.parse(existing.oidcConfig ?? "{}") as StoredOidc;
+      const existing = configOf(await findConnection(db, orgId, connectionId));
+      if (input.oidc && existing.type !== "oidc") throw new HttpError(400, "oidc: this is a SAML connection");
+      if (input.saml && existing.type !== "saml") throw new HttpError(400, "saml: this is an OIDC connection");
+      const issuerAsked = existing.type === "oidc" ? existing.oidc.issuer : undefined;
       // A new issuer is asked for its endpoints outside any transaction.
-      const rediscovered =
-        input.oidc?.issuer && input.oidc.issuer !== before.issuer
-          ? await discover({ issuer: input.oidc.issuer, clientId: "", clientSecret: "" })
-          : undefined;
+      const rediscovered = input.oidc?.issuer && input.oidc.issuer !== issuerAsked ? await discover(input.oidc.issuer) : undefined;
       const changed = await unitOfWork.run(actor, async (tx, change) => {
         const row = await findConnection(tx, orgId, connectionId, true);
         const current = toConnection(row);
@@ -298,11 +327,14 @@ export function registerSsoConnections(ctx: {
           await refuseTakenDomain(tx, input.domain, connectionId);
           note("domain", row.domain, input.domain);
           values.domain = input.domain;
+          // A new domain is proven anew.
+          values.domainVerified = false;
         }
-        if (input.oidc && row.oidcConfig) {
-          const stored = JSON.parse(row.oidcConfig) as StoredOidc;
+        const config = configOf(row);
+        if (input.oidc && config.type === "oidc") {
+          const stored = config.oidc;
           // A change of issuer between asking it and now is lost to the later change; ask again.
-          if (rediscovered && stored.issuer !== before.issuer) throw new HttpError(409, "the connection changed meanwhile; try again");
+          if (rediscovered && stored.issuer !== issuerAsked) throw new HttpError(409, "the connection changed meanwhile; try again");
           const next: StoredOidc = {
             ...stored,
             ...rediscovered,
@@ -318,8 +350,8 @@ export function registerSsoConnections(ctx: {
           values.oidcConfig = JSON.stringify(next);
           values.issuer = next.issuer;
         }
-        if (input.saml && row.samlConfig) {
-          const stored = JSON.parse(row.samlConfig) as StoredSaml;
+        if (input.saml && config.type === "saml") {
+          const stored = config.saml;
           const cert = input.saml.certificate !== undefined ? certificateOf(input.saml.certificate) : undefined;
           const next: StoredSaml = {
             ...stored,
@@ -339,7 +371,7 @@ export function registerSsoConnections(ctx: {
         }
         if (Object.keys(detail).length === 0) return current;
         const [updated] = await tx.update(ssoProvider).set(values).where(eq(ssoProvider.id, row.id)).returning();
-        await change.audit({ organizationId: orgId, action: "sso_connection.changed", target: { type: "sso_connection", id: connectionId }, detail: { ...detail } });
+        await change.audit({ organizationId: orgId, action: "sso_connection.changed", target: { type: "sso_connection", id: connectionId }, detail });
         return toConnection(updated!);
       });
       return c.json(changed, 200);
@@ -362,11 +394,10 @@ export function registerSsoConnections(ctx: {
       const actor = await requireUser(c);
       await authorize(actor, orgId, { ssoConnection: ["delete"] });
       await unitOfWork.run(actor, async (tx, change) => {
-        // Serialises with changes to the login policy (login-policy.ts), which take the same lock.
-        await tx.insert(loginPolicy).values({ organizationId: orgId, updatedAt: change.occurredAt }).onConflictDoNothing();
-        const [policy] = await tx.select({ requireSso: loginPolicy.requireSso }).from(loginPolicy).where(eq(loginPolicy.organizationId, orgId)).for("update");
+        // Serialises with changes to the login policy, which take the same lock.
+        const policy = await lockLoginPolicy(tx, orgId, change.occurredAt);
         const row = await findConnection(tx, orgId, connectionId, true);
-        if (policy?.requireSso) {
+        if (policy.requireSso) {
           const others = await tx.select({ id: ssoProvider.id }).from(ssoProvider).where(eq(ssoProvider.organizationId, orgId));
           if (others.length <= 1) throw new HttpError(409, "the Organization requires SSO, and this is its last connection; stop requiring SSO first");
         }
@@ -375,6 +406,40 @@ export function registerSsoConnections(ctx: {
         await change.audit({ organizationId: orgId, action: "sso_connection.deleted", target: { type: "sso_connection", id: connectionId }, detail: auditDetail(toConnection(row)) });
       });
       return c.body(null, 204);
+    },
+  );
+
+  app.openapi(
+    createRoute({
+      method: "post",
+      path: "/api/organizations/{orgId}/sso-connections/{connectionId}/verify-domain",
+      tags: ["Identity"],
+      summary: "Prove an SSO connection's domain",
+      description:
+        "Looks up the TXT record named in `domainVerification` and, when it holds the value given there, marks the domain proven, after which the connection signs users in. 409 when the record is not (yet) there. A proof is an Audit Event.",
+      request: { params: ConnectionParams },
+      responses: { 200: json(Connection), ...errors(401, 403, 404, 409) },
+    }),
+    async (c) => {
+      const { orgId, connectionId } = c.req.valid("param");
+      const actor = await requireUser(c);
+      await authorize(actor, orgId, { ssoConnection: ["update"] });
+      const asked = await findConnection(db, orgId, connectionId);
+      if (asked.domainVerified) return c.json(toConnection(asked), 200);
+      const { name, value } = toConnection(asked).domainVerification;
+      // The DNS is asked outside any transaction.
+      const found = await ctx.resolver.lookupTxt(name);
+      if (!found.includes(value)) throw new HttpError(409, `no TXT record at ${name} holds the value given; publish it, wait for the DNS to answer with it, and try again`);
+      const verified = await unitOfWork.run(actor, async (tx, change) => {
+        const row = await findConnection(tx, orgId, connectionId, true);
+        // The domain changed meanwhile: the record found proves the old one.
+        if (row.domain !== asked.domain) throw new HttpError(409, "the connection's domain changed meanwhile; publish its new record and try again");
+        if (row.domainVerified) return toConnection(row);
+        const [updated] = await tx.update(ssoProvider).set({ domainVerified: true }).where(eq(ssoProvider.id, row.id)).returning();
+        await change.audit({ organizationId: orgId, action: "sso_connection.domain_verified", target: { type: "sso_connection", id: connectionId }, detail: { domain: row.domain } });
+        return toConnection(updated!);
+      });
+      return c.json(verified, 200);
     },
   );
 
@@ -410,16 +475,16 @@ export function registerSsoConnections(ctx: {
   );
 
   async function check(row: Row) {
-    if (row.oidcConfig) {
-      const stored = JSON.parse(row.oidcConfig) as StoredOidc;
-      const found = await discover({ issuer: stored.issuer, clientId: stored.clientId, clientSecret: "" });
+    const config = configOf(row);
+    if (config.type === "oidc") {
+      const stored = config.oidc;
+      const found = await discover(stored.issuer);
       for (const field of ["authorizationEndpoint", "tokenEndpoint", "jwksEndpoint"] as const) {
         if (found[field] !== stored[field]) throw new HttpError(400, `oidc: the provider's ${field} is now ${found[field]}; change the issuer to fetch it again`);
       }
       return;
     }
-    const stored = JSON.parse(row.samlConfig ?? "{}") as StoredSaml;
-    const cert = certificateOf(stored.cert);
+    const cert = certificateOf(config.saml.cert);
     const now = ctx.clock();
     if (now < cert.notBefore) throw new HttpError(400, `saml: the signing certificate is not valid until ${cert.notBefore.toISOString()}`);
     if (now > cert.notAfter) throw new HttpError(400, `saml: the signing certificate expired on ${cert.notAfter.toISOString()}`);

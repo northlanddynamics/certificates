@@ -7,12 +7,12 @@ import type { OrganizationOptions } from "better-auth/plugins";
 import { adminAc, userAc } from "better-auth/plugins/admin/access";
 import { drizzleAdapter } from "better-auth/adapters/drizzle";
 import type { NodePgDatabase } from "drizzle-orm/node-postgres";
-import { ORG_ADMIN_ROLE, ac, orgRoles } from "./permissions";
-import { createSsoSignIn, type FirstSsoSignIn } from "./sso-sign-in";
+import { ORG_ADMIN_ROLE, PLATFORM_OPERATOR_ROLE, ac, orgRoles } from "./permissions";
+import { createSsoSignIn, type SsoSignedIn } from "./sso-sign-in";
 
 export const INVITATION_EXPIRES_IN_SECONDS = 7 * 24 * 3600;
 
-export const PLATFORM_OPERATOR_ROLE = "platform-operator";
+export { PLATFORM_OPERATOR_ROLE } from "./permissions";
 
 /** How the platform names itself to authenticator apps and passkey managers. */
 export const APP_NAME = "Certificate Platform";
@@ -41,11 +41,11 @@ export interface AuthConfig {
   trustedOrigins?: string[];
   /** Hooks and mail for the organization plugin; set on the per-transaction instance (see organization-changes.ts). */
   organization?: Pick<OrganizationOptions, "organizationHooks" | "sendInvitationEmail">;
-  /** What a user's first sign-in through an SSO connection does besides creating them (sso-sign-in.ts); set on the main instance only. */
-  onFirstSsoSignIn?: FirstSsoSignIn;
+  /** What each sign-in through an SSO connection does besides signing the user in (sso-sign-in.ts); set on the main instance only. */
+  onSsoSignIn?: SsoSignedIn;
 }
 
-export function createAuth({ db, baseURL, secret, trustedOrigins = [], organization: orgExtras, onFirstSsoSignIn }: AuthConfig) {
+export function createAuth({ db, baseURL, secret, trustedOrigins = [], organization: orgExtras, onSsoSignIn }: AuthConfig) {
   const ssoSignIn = createSsoSignIn(db);
   return betterAuth({
     database: drizzleAdapter(db, { provider: "pg" }),
@@ -98,14 +98,14 @@ export function createAuth({ db, baseURL, secret, trustedOrigins = [], organizat
       // and the expected origin is the request's, which Better Auth has already checked against `trustedOrigins`.
       passkey({ rpName: APP_NAME }),
       // SAML and OIDC sign-in through an Organization's SSO connections. The connections are rows the platform writes
-      // (sso-connections.ts); membership on a first sign-in is the platform's to grant, with its Audit Event (sso-sign-in.ts).
+      // (sso-connections.ts); membership on signing in is the platform's to grant, with its Audit Event (sso-sign-in.ts).
       sso({
         organizationProvisioning: { disabled: true },
-        ...(onFirstSsoSignIn && { provisionUser: ({ user, provider }) => onFirstSsoSignIn(user, provider) }),
+        ...(onSsoSignIn && { provisionUser: ({ user, provider }) => onSsoSignIn(user, provider), provisionUserOnEveryLogin: true }),
         // The platform's own routes write connections; the plugin's limit counts per user and would only get in the way.
         providersLimit: 0,
-        // A connection's domain is the one its Organization Administrator gives, which the platform records as verified
-        // (sso-connections.ts): it is what lets a connection link to an existing member's account (sso-sign-in.ts).
+        // A connection signs nobody in until a TXT record proves its domain, which the platform checks itself
+        // (sso-connections.ts); a proven domain is also what lets it link to an existing member's account (sso-sign-in.ts).
         domainVerification: { enabled: true },
         saml: { requireTimestamps: true },
         schema: { ssoProvider: { additionalFields: { name: { type: "string", required: true } } } },

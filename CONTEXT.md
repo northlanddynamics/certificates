@@ -27,7 +27,7 @@ What an Organization asks of its users' sign-in, which an Organization Administr
 _Avoid_: auth policy, security settings
 
 **SSO Connection**:
-An identity provider (SAML, such as Ping, or OIDC) that belongs to exactly one Organization and signs in the users of one email domain, which no other connection has. A user signing in through it for the first time becomes a Member of its Organization; it links to an existing account only of a member of that Organization.
+An identity provider (SAML, such as Ping, or OIDC) that belongs to exactly one Organization and signs in the users of one email domain, which no other connection has and which a DNS TXT record must prove the Organization holds before it signs anyone in. A user signing in through it who is not a member of its Organization becomes a Member, unless they were removed from it; it links to an existing account only of a member of that Organization, never a Platform Operator's.
 _Avoid_: SSO provider, IdP (for the connection itself), identity source
 
 **Organization Administrator**:

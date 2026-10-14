@@ -68,4 +68,4 @@ Each resource's verbs, as of this writing. New ones may be added within version 
 | `two_factor` | `enabled`, `disabled`, `backup_codes_regenerated` |
 | `passkey` | `registered`, `renamed`, `deleted` |
 | `login_policy` | `changed` |
-| `sso_connection` | `created`, `changed`, `deleted`, `tested` |
+| `sso_connection` | `created`, `changed`, `deleted`, `domain_verified`, `tested` |

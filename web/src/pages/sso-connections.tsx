@@ -1,4 +1,4 @@
-import { useQuery } from "@tanstack/react-query";
+import { useMutation, useQuery } from "@tanstack/react-query";
 import { useParams } from "@tanstack/react-router";
 import { createColumnHelper, tableFeatures, useTable } from "@tanstack/react-table";
 import { PlusIcon } from "lucide-react";
@@ -11,6 +11,7 @@ import { Button } from "@/components/ui/button";
 import { Dialog, DialogContent, DialogDescription, DialogHeader, DialogTitle, DialogTrigger } from "@/components/ui/dialog";
 import { Input } from "@/components/ui/input";
 import { Label } from "@/components/ui/label";
+import { Select, SelectContent, SelectItem, SelectTrigger, SelectValue } from "@/components/ui/select";
 import { Textarea } from "@/components/ui/textarea";
 import { api, can, type SsoConnection, type SsoConnectionChange } from "@/lib/api";
 import { useAction } from "@/lib/use-action";
@@ -21,29 +22,46 @@ const TYPE_LABEL: Record<SsoConnection["type"], string> = { oidc: "OIDC", saml: 
 // The server lists every connection, so there is nothing to page.
 const features = tableFeatures({});
 const columnHelper = createColumnHelper<typeof features, SsoConnection>();
-const columns = columnHelper.columns([
-  columnHelper.accessor("name", { header: "Name", cell: ({ cell }) => <span className="font-medium">{cell.getValue()}</span> }),
-  columnHelper.accessor("type", { header: "Type", cell: ({ cell }) => <Badge variant="secondary">{TYPE_LABEL[cell.getValue()]}</Badge> }),
-  columnHelper.accessor("domain", { header: "Domain" }),
-  columnHelper.display({
-    id: "idp",
-    header: "Identity provider",
-    cell: ({ row }) => <span className="break-all">{row.original.oidc?.issuer ?? row.original.saml?.entityId}</span>,
-  }),
-  columnHelper.display({ id: "actions", header: () => <span className="sr-only">Actions</span>, cell: ({ row }) => <ConnectionActions connection={row.original} /> }),
-]);
 const noRows: SsoConnection[] = [];
 
 /**
  * The Organization's SSO connections: the SAML (Ping, for example) or OIDC identity providers its users sign in through,
- * each for one email domain. Someone signing in through one for the first time becomes a Member. Only Organization
+ * each for one email domain, which a TXT record must prove before it signs anyone in. Someone signing in through one becomes a Member. Only Organization
  * Administrators see or configure them, and every change is audited. Requiring SSO is on the Login policy page.
  */
 export function SsoConnectionsPage() {
   const { orgId } = useParams({ from: ROUTE });
   const org = useQuery({ queryKey: ["me"], queryFn: api.me, select: (me) => me.organizations.find((o) => o.id === orgId) }).data;
   const allowed = org ? can(org, "ssoConnection", "read") : false;
+  const may = {
+    test: org ? can(org, "ssoConnection", "test") : false,
+    change: org ? can(org, "ssoConnection", "update") : false,
+    delete: org ? can(org, "ssoConnection", "delete") : false,
+  };
   const connections = useQuery({ queryKey: ["sso-connections", orgId], queryFn: () => api.ssoConnections(orgId), enabled: allowed });
+  const columns = columnHelper.columns([
+    columnHelper.accessor("name", { header: "Name", cell: ({ cell }) => <span className="font-medium">{cell.getValue()}</span> }),
+    columnHelper.accessor("type", { header: "Type", cell: ({ cell }) => <Badge variant="secondary">{TYPE_LABEL[cell.getValue()]}</Badge> }),
+    columnHelper.accessor("domain", {
+      header: "Domain",
+      cell: ({ row }) => (
+        <span className="flex items-center gap-2">
+          {row.original.domain}
+          {!row.original.domainVerified && <Badge variant="outline">Not proven</Badge>}
+        </span>
+      ),
+    }),
+    columnHelper.display({
+      id: "idp",
+      header: "Identity provider",
+      cell: ({ row }) => <span className="break-all">{row.original.oidc?.issuer ?? row.original.saml?.entityId}</span>,
+    }),
+    columnHelper.display({
+      id: "actions",
+      header: () => <span className="sr-only">Actions</span>,
+      cell: ({ row }) => <ConnectionActions orgId={orgId} connection={row.original} may={may} />,
+    }),
+  ]);
   const table = useTable({ features, columns, data: connections.data?.items ?? noRows, getRowId: (c) => c.id });
 
   return (
@@ -54,7 +72,7 @@ export function SsoConnectionsPage() {
       </div>
       <p className="text-sm text-muted-foreground">
         Users whose email is in a connection's domain sign in through its identity provider, and become Members the first time they do. A member who already has an account
-        keeps it, and their role.
+        keeps it, and their role. A connection signs nobody in until a TXT record proves the Organization holds its domain.
       </p>
       <DataTable table={table} empty={connections.isPending ? "Loading…" : "No SSO connection is configured yet."} />
       {connections.error && <p className="text-sm text-destructive">{connections.error.message}</p>}
@@ -62,39 +80,67 @@ export function SsoConnectionsPage() {
   );
 }
 
-function ConnectionActions({ connection }: { connection: SsoConnection }) {
-  const { orgId } = useParams({ from: ROUTE });
-  const org = useQuery({ queryKey: ["me"], queryFn: api.me, select: (me) => me.organizations.find((o) => o.id === orgId) }).data;
+/** What may be done with a connection; how a test went is said under the buttons, where a long reason has room to wrap. */
+function ConnectionActions({ orgId, connection, may }: { orgId: string; connection: SsoConnection; may: { test: boolean; change: boolean; delete: boolean } }) {
   // A success is a toast; a failure stays by the buttons, where its reason can be read while the settings are corrected.
-  const [failure, setFailure] = useState<string | null>(null);
-  const test = useAction(() => api.testSsoConnection(orgId, connection.id), ["audit-events"]);
-  if (!org) return null;
+  const test = useMutation({
+    mutationFn: () => api.testSsoConnection(orgId, connection.id),
+    onSuccess: (result) => {
+      if (result.ok) toast.success(`${connection.name}: the connection checks out`);
+    },
+  });
   return (
-    <div className="flex flex-col items-end gap-1">
-      <div className="flex justify-end gap-1">
-        {can(org, "ssoConnection", "test") && (
-          <Button
-            variant="ghost"
-            size="sm"
-            disabled={test.isPending}
-            onClick={() =>
-              test.mutate(undefined, {
-                onSuccess: (result) => {
-                  const { ok, error } = result as { ok: boolean; error?: string };
-                  setFailure(ok ? null : (error ?? "the test failed"));
-                  if (ok) toast.success(`${connection.name}: the connection checks out`);
-                },
-              })
-            }
-          >
-            Test
+    <div className="flex flex-col items-end gap-2">
+      <div className="flex flex-wrap items-center justify-end gap-1">
+        {may.change && !connection.domainVerified && <ProveDomainDialog orgId={orgId} connection={connection} />}
+        {may.test && (
+          <Button variant="ghost" size="sm" disabled={test.isPending} aria-label={`Test ${connection.name}`} onClick={() => test.mutate()}>
+            {test.isPending ? "Testing…" : "Test"}
           </Button>
         )}
-        <EditConnectionDialog orgId={orgId} connection={connection} mayChange={can(org, "ssoConnection", "update")} />
-        {can(org, "ssoConnection", "delete") && <DeleteConnection orgId={orgId} connection={connection} />}
+        <EditConnectionDialog orgId={orgId} connection={connection} mayChange={may.change} />
+        {may.delete && <DeleteConnection orgId={orgId} connection={connection} />}
       </div>
-      {(failure ?? test.error?.message) && <p className="max-w-sm text-right text-sm text-destructive">{failure ?? test.error?.message}</p>}
+      {test.data && !test.data.ok && <span role="alert" className="max-w-72 whitespace-normal break-words text-right text-sm text-destructive">{test.data.error}</span>}
+      {test.error && <span role="alert" className="max-w-72 whitespace-normal break-words text-right text-sm text-destructive">{test.error.message}</span>}
     </div>
+  );
+}
+
+/** Proving the domain: the TXT record to publish, and a button to have the platform look for it. */
+function ProveDomainDialog({ orgId, connection }: { orgId: string; connection: SsoConnection }) {
+  const [open, setOpen] = useState(false);
+  const verify = useAction(() => api.verifySsoConnectionDomain(orgId, connection.id), ["sso-connections", "audit-events"], () => {
+    setOpen(false);
+    toast.success(`${connection.domain} is proven: ${connection.name} now signs users in`);
+  });
+  return (
+    <Dialog open={open} onOpenChange={setOpen}>
+      <DialogTrigger asChild>
+        <Button variant="outline" size="sm">
+          Prove domain
+        </Button>
+      </DialogTrigger>
+      <DialogContent>
+        <DialogHeader>
+          <DialogTitle>Prove {connection.domain}</DialogTitle>
+          <DialogDescription>
+            The connection signs nobody in until this TXT record is published in the domain's DNS. It shows the Organization holds the domain, since the connection speaks for
+            every address in it.
+          </DialogDescription>
+        </DialogHeader>
+        <div className="flex flex-col gap-2 rounded-md border p-3 text-sm">
+          <span className="font-medium">Name</span>
+          <code className="break-all text-xs">{connection.domainVerification.name}</code>
+          <span className="font-medium">Value</span>
+          <code className="break-all text-xs">{connection.domainVerification.value}</code>
+        </div>
+        {verify.error && <p className="text-sm text-destructive">{verify.error.message}</p>}
+        <Button onClick={() => verify.mutate(undefined)} disabled={verify.isPending}>
+          {verify.isPending ? "Looking…" : "Look for the record"}
+        </Button>
+      </DialogContent>
+    </Dialog>
   );
 }
 
@@ -179,7 +225,9 @@ function EditConnectionDialog({ orgId, connection, mayChange }: { orgId: string;
         <DialogHeader>
           <DialogTitle>{connection.name}</DialogTitle>
           <DialogDescription>
-            {mayChange ? "Leave the client secret or certificate empty to keep it. Once someone has signed in through it, it cannot be pointed at another identity provider." : null}
+            {mayChange
+              ? "Leave the client secret or certificate empty to keep it. Once someone has signed in through it, it cannot be pointed at another identity provider. A new domain must be proven again."
+              : null}
           </DialogDescription>
         </DialogHeader>
         <ServiceProviderDetails connection={connection} />
@@ -235,10 +283,15 @@ function ConnectionForm({ orgId, existing, onDone }: { orgId: string; existing?:
       {!existing && (
         <div className="flex flex-col gap-2">
           <Label htmlFor="sso-type">Type</Label>
-          <select id="sso-type" className="h-9 rounded-md border bg-transparent px-3 text-sm" value={type} onChange={(e) => setType(e.target.value as SsoConnection["type"])}>
-            <option value="saml">SAML (Ping, for example)</option>
-            <option value="oidc">OIDC</option>
-          </select>
+          <Select value={type} onValueChange={(value) => setType(value as SsoConnection["type"])}>
+            <SelectTrigger id="sso-type" className="w-full">
+              <SelectValue />
+            </SelectTrigger>
+            <SelectContent>
+              <SelectItem value="saml">SAML (Ping, for example)</SelectItem>
+              <SelectItem value="oidc">OIDC</SelectItem>
+            </SelectContent>
+          </Select>
         </div>
       )}
       {field("sso-name", "Name", name, setName, { maxLength: 100, required: true })}

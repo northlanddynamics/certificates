@@ -4,6 +4,8 @@ export class ApiError extends Error {
   constructor(
     readonly status: number,
     message: string,
+    /** The machine-readable reason, when the server gives one (Better Auth does, such as "SSO_REQUIRED"). */
+    readonly code?: string,
   ) {
     super(message);
   }
@@ -17,7 +19,7 @@ async function call<T>(path: string, init?: { method?: string; body?: unknown })
     body: init?.body ? JSON.stringify(init.body) : undefined,
   });
   const data = res.status === 204 ? null : await res.json().catch(() => null);
-  if (!res.ok) throw new ApiError(res.status, data?.error ?? data?.message ?? res.statusText);
+  if (!res.ok) throw new ApiError(res.status, data?.error ?? data?.message ?? res.statusText, data?.code);
   return data as T;
 }
 
@@ -396,6 +398,10 @@ export interface SsoConnection {
   saml?: { entityId: string; ssoUrl: string; certificate: { subject: string; notAfter: string } };
   /** What to tell the identity provider about the platform. */
   serviceProvider: { redirectUri?: string; entityId?: string; acsUrl?: string; metadataUrl?: string };
+  /** Whether a TXT record has proven the domain; until then the connection signs nobody in. */
+  domainVerified: boolean;
+  /** The TXT record that proves the domain. */
+  domainVerification: { name: string; value: string };
 }
 export type NewSsoConnection = { name: string; domain: string } & (
   | { oidc: { issuer: string; clientId: string; clientSecret: string } }
@@ -545,6 +551,7 @@ export const api = {
   changeSsoConnection: (orgId: string, id: string, body: SsoConnectionChange) =>
     call<SsoConnection>(`/api/organizations/${orgId}/sso-connections/${id}`, { method: "PATCH", body }),
   deleteSsoConnection: (orgId: string, id: string) => call<null>(`/api/organizations/${orgId}/sso-connections/${id}`, { method: "DELETE" }),
+  verifySsoConnectionDomain: (orgId: string, id: string) => call<SsoConnection>(`/api/organizations/${orgId}/sso-connections/${id}/verify-domain`, { method: "POST", body: {} }),
   testSsoConnection: (orgId: string, id: string) =>
     call<{ ok: boolean; error?: string }>(`/api/organizations/${orgId}/sso-connections/${id}/test`, { method: "POST", body: {} }),
   testDnsProvider: (orgId: string, providerId: string) =>
