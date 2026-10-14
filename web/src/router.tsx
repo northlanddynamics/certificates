@@ -3,6 +3,7 @@ import { Outlet, createRootRouteWithContext, createRoute, createRouter, redirect
 import { AppShell } from "./components/app-shell";
 import { Toaster } from "./components/ui/sonner";
 import { AcceptInvitationPage } from "./pages/accept-invitation";
+import { AccountSecurityPage } from "./pages/account-security";
 import { AcmeAccountsPage } from "./pages/acme-accounts";
 import { AgentsPage } from "./pages/agents";
 import { ApiKeysPage } from "./pages/api-keys";
@@ -19,6 +20,7 @@ import { NotificationsTab } from "./pages/subscriber-controls";
 import { NotificationChannelsPage } from "./pages/notification-channels";
 import { AuditLogPage } from "./pages/audit-log";
 import { AuditForwardingPage } from "./pages/audit-forwarding";
+import { LoginPolicyPage } from "./pages/login-policy";
 import { MembersPage } from "./pages/members";
 import { PlatformOrganizationsPage } from "./pages/platform-organizations";
 import { TeamsPage } from "./pages/teams";
@@ -146,6 +148,18 @@ const auditForwardingRoute = createRoute({
   component: AuditForwardingPage,
 });
 
+const loginPolicyRoute = createRoute({
+  getParentRoute: () => appRoute,
+  path: "/organizations/$orgId/login-policy",
+  component: LoginPolicyPage,
+});
+
+const accountSecurityRoute = createRoute({
+  getParentRoute: () => appRoute,
+  path: "/account/security",
+  component: AccountSecurityPage,
+});
+
 const csrToolsRoute = createRoute({
   getParentRoute: () => appRoute,
   path: "/organizations/$orgId/tools/csr",
@@ -171,7 +185,8 @@ const routeTree = rootRoute.addChildren([
       certificateNotificationsRoute,
       certificateUnknownTabRoute,
     ]),
-    membersRoute, teamsRoute, apiKeysRoute, agentsRoute, deploymentsRoute, deploymentScriptsRoute, acmeAccountsRoute, dnsProvidersRoute, notificationChannelsRoute, auditLogRoute, auditForwardingRoute, csrToolsRoute,
+    membersRoute, teamsRoute, apiKeysRoute, agentsRoute, deploymentsRoute, deploymentScriptsRoute, acmeAccountsRoute, dnsProvidersRoute, notificationChannelsRoute, auditLogRoute, auditForwardingRoute, loginPolicyRoute, csrToolsRoute,
+    accountSecurityRoute,
     platformOrganizationsRoute,
   ]),
 ]);

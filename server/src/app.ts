@@ -3,6 +3,7 @@ import { Scalar } from "@scalar/hono-api-reference";
 import { and, asc, eq } from "drizzle-orm";
 import type { Context } from "hono";
 import type { Pool } from "pg";
+import { ACCOUNT_SECURITY_PATHS, createAccountSecurity } from "./account-security";
 import { registerAcmeAccounts } from "./acme-accounts";
 import { DEFAULT_AGENT_GATEWAY, registerAgentGateway, type AgentGatewayConfig } from "./agent-gateway";
 import { registerAgents } from "./agents";
@@ -40,6 +41,7 @@ import { registerRevocationRoutes } from "./revocation-routes";
 import type { Mailer } from "./mailer";
 import type { MemberRemovalHook } from "./member-removal";
 import { removeTeamFromOwners, removeUserFromOwners } from "./owners";
+import { createLoginPolicies, registerLoginPolicy } from "./login-policy";
 import { createOrganizationChanges } from "./organization-changes";
 import { registerNotificationChannels } from "./notification-channels";
 import { createFetchWebhooks, createNotifications, type WebhookSender } from "./notifications";
@@ -87,11 +89,13 @@ export function createApp(deps: AppDeps) {
   const webURL = deps.webURL ?? deps.baseURL;
   const unitOfWork = createUnitOfWork({ db, mailer, clock });
   const { authorize } = createAuthorizer(db);
+  const loginPolicies = createLoginPolicies(db);
   const organizationChanges = createOrganizationChanges({
     unitOfWork,
     auth,
     authConfig,
     authorize,
+    admit: loginPolicies.admit,
     webURL,
     memberRemovalHooks: [
       removeUserFromOwners,
@@ -104,6 +108,7 @@ export function createApp(deps: AppDeps) {
     ],
     teamRemovalHooks: [removeTeamFromOwners, removeTeamFromSubscribers],
   });
+  const accountSecurity = createAccountSecurity({ unitOfWork, auth, authConfig });
   const platformOrganizations = createOrganizations({ unitOfWork, webURL });
   const app = new OpenAPIHono();
 
@@ -115,12 +120,22 @@ export function createApp(deps: AppDeps) {
 
   // Better Auth's organization endpoints, served as they are (see organization-changes.ts).
   app.all("/api/auth/organization/*", (c) => organizationChanges.serve(c.req.raw));
+  // Better Auth's two-factor and passkey endpoints, served as they are (see account-security.ts).
+  app.on(["GET", "POST"], ACCOUNT_SECURITY_PATHS, (c) => accountSecurity.serve(c.req.raw));
   app.on(["GET", "POST"], "/api/auth/*", (c) => auth.handler(c.req.raw));
 
-  async function requireUser(c: Context) {
+  /** The signed-in user, even one who must enroll in MFA before going on: only for what enrolling needs (login-policy.ts). */
+  async function requireSession(c: Context) {
     const session = await auth.api.getSession({ headers: c.req.raw.headers });
     if (!session) throw new HttpError(401, "sign in required");
     return session.user as { id: string; email: string; name: string; role?: string | null };
+  }
+
+  /** The signed-in user, held to their Organizations' login policy. */
+  async function requireUser(c: Context) {
+    const user = await requireSession(c);
+    await loginPolicies.admit(user);
+    return user;
   }
 
   async function requireOperator(c: Context) {
@@ -187,7 +202,14 @@ export function createApp(deps: AppDeps) {
       responses: {
         200: json(
           z.object({
-            user: z.object({ id: z.string(), email: z.string(), name: z.string(), isPlatformOperator: z.boolean() }),
+            user: z.object({
+              id: z.string(),
+              email: z.string(),
+              name: z.string(),
+              isPlatformOperator: z.boolean(),
+              // Whether they have enrolled TOTP, and whether they must before anything else answers them.
+              mfa: z.object({ enabled: z.boolean(), enrollmentRequired: z.boolean() }),
+            }),
             organizations: z.array(
               z.object({
                 id: z.string(),
@@ -206,7 +228,7 @@ export function createApp(deps: AppDeps) {
       },
     }),
     async (c) => {
-      const user = await requireUser(c);
+      const user = await requireSession(c);
       const organizations = await db
         .select({ id: organization.id, name: organization.name, slug: organization.slug, role: member.role })
         .from(member)
@@ -215,7 +237,13 @@ export function createApp(deps: AppDeps) {
         .orderBy(asc(organization.createdAt), asc(organization.id));
       return c.json(
         {
-          user: { id: user.id, email: user.email, name: user.name, isPlatformOperator: user.role === PLATFORM_OPERATOR_ROLE },
+          user: {
+            id: user.id,
+            email: user.email,
+            name: user.name,
+            isPlatformOperator: user.role === PLATFORM_OPERATOR_ROLE,
+            mfa: await loginPolicies.mfaOf(user),
+          },
           organizations: organizations.map((o) => ({ ...o, permissions: permissionsOf(o.role) })),
           roles: ROLE_NAMES,
         },
@@ -225,6 +253,7 @@ export function createApp(deps: AppDeps) {
   );
 
   registerAuditRoutes({ app, db, requireUser, authorize });
+  registerLoginPolicy({ app, db, requireSession, authorize, unitOfWork });
   registerTeamsOverview({ app, db, requireUser, authorize });
   const secrets = createSecrets(deps.kms);
   registerAcmeAccounts({ app, db, requireUser, authorize, unitOfWork, secrets, certificateAuthority: deps.certificateAuthority });

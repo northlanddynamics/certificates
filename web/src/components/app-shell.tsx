@@ -1,12 +1,12 @@
 import { useQuery } from "@tanstack/react-query";
-import { Link, Outlet, useLocation, useParams } from "@tanstack/react-router";
+import { Link, Navigate, Outlet, useLocation, useParams } from "@tanstack/react-router";
 import { AppSidebar } from "@/components/app-sidebar";
 import { Breadcrumb, BreadcrumbItem, BreadcrumbList, BreadcrumbPage, BreadcrumbSeparator } from "@/components/ui/breadcrumb";
 import { Separator } from "@/components/ui/separator";
 import { SidebarInset, SidebarProvider, SidebarTrigger } from "@/components/ui/sidebar";
 import { TooltipProvider } from "@/components/ui/tooltip";
 import { ApiError, api } from "@/lib/api";
-import { isOnPage, organizationNav, platformNav } from "@/lib/navigation";
+import { ACCOUNT_SECURITY_URL, accountNav, isOnPage, organizationNav, platformNav } from "@/lib/navigation";
 
 /** The signed-in pages: the left navigation around whichever page is open. */
 export function AppShell() {
@@ -26,10 +26,15 @@ export function AppShell() {
     );
   }
   if (me.error) return <p className="p-6 text-destructive">Something went wrong.</p>;
+  // An Organization of theirs requires MFA and they have none: nothing else answers them until they set it up, except
+  // the login policy, so that an Organization Administrator can still undo the requirement.
+  if (me.data.user.mfa.enrollmentRequired && pathname !== ACCOUNT_SECURITY_URL && !pathname.endsWith("/login-policy")) {
+    return <Navigate to={ACCOUNT_SECURITY_URL} replace />;
+  }
 
   // The Organization in the address, else the first one the caller belongs to.
   const active = me.data.organizations.find((o) => o.id === orgId) ?? me.data.organizations[0];
-  const page = [...(active ? organizationNav(active) : []), ...platformNav].find((item) => isOnPage(pathname, item.url));
+  const page = [...(active ? organizationNav(active) : []), ...platformNav, ...accountNav].find((item) => isOnPage(pathname, item.url));
 
   return (
     <TooltipProvider>

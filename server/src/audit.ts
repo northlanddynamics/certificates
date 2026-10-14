@@ -68,6 +68,13 @@ export const AUDIT_ACTIONS = [
   "issuance.started",
   "issuance.succeeded",
   "issuance.failed",
+  "two_factor.enabled",
+  "two_factor.disabled",
+  "two_factor.backup_codes_regenerated",
+  "passkey.registered",
+  "passkey.renamed",
+  "passkey.deleted",
+  "login_policy.changed",
 ] as const;
 export type AuditAction = (typeof AUDIT_ACTIONS)[number];
 

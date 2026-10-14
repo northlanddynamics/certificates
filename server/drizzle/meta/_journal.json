@@ -197,6 +197,13 @@
       "when": 1791982319753,
       "tag": "0027_audit_forwarding",
       "breakpoints": true
+    },
+    {
+      "idx": 28,
+      "version": "7",
+      "when": 1791998998959,
+      "tag": "0028_mfa_passkeys",
+      "breakpoints": true
     }
   ]
 }

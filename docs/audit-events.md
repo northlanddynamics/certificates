@@ -65,3 +65,6 @@ Each resource's verbs, as of this writing. New ones may be added within version 
 | `deployment_run` | `succeeded`, `failed` |
 | `notification_channel` | `created`, `deleted` |
 | `audit_forwarder` | `created`, `deleted` |
+| `two_factor` | `enabled`, `disabled`, `backup_codes_regenerated` |
+| `passkey` | `registered`, `renamed`, `deleted` |
+| `login_policy` | `changed` |

@@ -1,4 +1,4 @@
-import { BellIcon, BuildingIcon, ScrollTextIcon, SendIcon, BotIcon, GlobeIcon, LandmarkIcon, FileKey2Icon, FileTerminalIcon, KeyRoundIcon, RocketIcon, ShieldCheckIcon, UserRoundIcon, UsersIcon, type LucideIcon } from "lucide-react";
+import { BellIcon, BuildingIcon, LockKeyholeIcon, ScrollTextIcon, SendIcon, BotIcon, GlobeIcon, LandmarkIcon, FileKey2Icon, FileTerminalIcon, KeyRoundIcon, RocketIcon, ShieldCheckIcon, ShieldUserIcon, UserRoundIcon, UsersIcon, type LucideIcon } from "lucide-react";
 import { can, type Me } from "@/lib/api";
 
 type Org = Me["organizations"][number];
@@ -42,6 +42,7 @@ export function organizationNavGroups(org: Org): NavGroup[] {
         ...(can(org, "notificationChannel", "create") ? [{ title: "Notification channels", url: `${base}/notification-channels`, icon: BellIcon }] : []),
         ...(can(org, "audit", "read") ? [{ title: "Audit log", url: `${base}/audit-log`, icon: ScrollTextIcon }] : []),
         ...(can(org, "auditForwarder", "read") ? [{ title: "Audit forwarding", url: `${base}/audit-forwarding`, icon: SendIcon }] : []),
+        ...(can(org, "loginPolicy", "read") ? [{ title: "Login policy", url: `${base}/login-policy`, icon: LockKeyholeIcon }] : []),
       ],
     },
     {
@@ -60,6 +61,10 @@ export function organizationNavGroups(org: Org): NavGroup[] {
 export const organizationNav = (org: Org): NavItem[] => organizationNavGroups(org).flatMap((g) => g.items);
 
 export const platformNav: NavItem[] = [{ title: "Organizations", url: "/platform/organizations", icon: BuildingIcon }];
+
+/** The signed-in user's own page, which the user menu opens. */
+export const ACCOUNT_SECURITY_URL = "/account/security";
+export const accountNav: NavItem[] = [{ title: "Account security", url: ACCOUNT_SECURITY_URL, icon: ShieldUserIcon }];
 
 /** Whether `pathname` is on the page `url`. */
 export const isOnPage = (pathname: string, url: string) => pathname === url || pathname.startsWith(`${url}/`);

@@ -22,7 +22,14 @@ async function call<T>(path: string, init?: { method?: string; body?: unknown })
 }
 
 export interface Me {
-  user: { id: string; email: string; name: string; isPlatformOperator: boolean };
+  user: {
+    id: string;
+    email: string;
+    name: string;
+    isPlatformOperator: boolean;
+    /** Whether they have an authenticator app, and whether an Organization of theirs holds them up until they set one up. */
+    mfa: { enabled: boolean; enrollmentRequired: boolean };
+  };
   organizations: { id: string; name: string; slug: string; role: string; permissions: Record<string, string[]> }[];
   /** The roles the server accepts when assigning one. */
   roles: string[];
@@ -373,6 +380,10 @@ export interface AuditForwarder {
   /** When it is tried again after failing; none while it is not failing. */
   nextAttemptAt: string | null;
 }
+/** What an Organization asks of its users' sign-in. */
+export interface LoginPolicy {
+  requireMfa: boolean;
+}
 export type NewAuditForwarder = { name: string; kind: "webhook"; url: string; authorization?: string } | { name: string; kind: "syslog"; host: string; port?: number };
 export interface Team {
   id: string;
@@ -385,7 +396,6 @@ export interface Team {
 const BA = "/api/auth/organization";
 export const api = {
   me: () => call<Me>("/api/me"),
-  signIn: (email: string, password: string) => call("/api/auth/sign-in/email", { body: { email, password } }),
   signUp: (email: string, password: string, name: string) =>
     call("/api/auth/sign-up/email", { body: { email, password, name } }),
   signOut: () => call("/api/auth/sign-out", { method: "POST", body: {} }),
@@ -414,6 +424,8 @@ export const api = {
     if (cursor) query.set("cursor", cursor);
     return call<{ items: AuditEvent[]; nextCursor: string | null }>(`/api/organizations/${orgId}/audit-events?${query}`);
   },
+  loginPolicy: (orgId: string) => call<LoginPolicy>(`/api/organizations/${orgId}/login-policy`),
+  setLoginPolicy: (orgId: string, policy: LoginPolicy) => call<LoginPolicy>(`/api/organizations/${orgId}/login-policy`, { method: "PUT", body: policy }),
   auditForwarders: (orgId: string) => call<{ items: AuditForwarder[] }>(`/api/organizations/${orgId}/audit-forwarders`),
   addAuditForwarder: (orgId: string, forwarder: NewAuditForwarder) => call<AuditForwarder>(`/api/organizations/${orgId}/audit-forwarders`, { body: forwarder }),
   deleteAuditForwarder: (orgId: string, forwarderId: string) => call(`/api/organizations/${orgId}/audit-forwarders/${forwarderId}`, { method: "DELETE" }),

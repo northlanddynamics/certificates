@@ -821,3 +821,15 @@ export const auditDelivery = pgTable(
   },
   (t) => [primaryKey({ columns: [t.forwarderId, t.auditEventId] })],
 );
+
+/**
+ * An Organization's login policy: what it asks of its users' sign-in. No row is no requirement. Requiring MFA makes every
+ * member who signs in with a password enroll TOTP before using the platform (login-policy.ts).
+ */
+export const loginPolicy = pgTable("login_policy", {
+  organizationId: text("organization_id")
+    .primaryKey()
+    .references(() => organization.id),
+  requireMfa: boolean("require_mfa").notNull().default(false),
+  updatedAt: timestamp("updated_at", { withTimezone: true }).notNull(),
+});

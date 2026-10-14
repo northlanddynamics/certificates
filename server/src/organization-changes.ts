@@ -55,6 +55,8 @@ export interface OrganizationChangesDeps {
   authConfig: Omit<AuthConfig, "db" | "organization">;
   /** For the reads that need a permission. */
   authorize: Authorizer["authorize"];
+  /** Refuses a user their Organizations' login policy holds up (login-policy.ts); every endpoint asks it. */
+  admit?: (actor: Actor) => Promise<void>;
   /** Where users open the web UI, for the link in invitation emails. */
   webURL: string;
   /**
@@ -85,7 +87,7 @@ class Refused extends Error {
 const refusal = (status: number, error: string) => Response.json({ error }, { status });
 
 export function createOrganizationChanges(deps: OrganizationChangesDeps): OrganizationChanges {
-  const { unitOfWork, auth, authConfig, authorize, webURL, memberRemovalHooks = [], teamRemovalHooks = [] } = deps;
+  const { unitOfWork, auth, authConfig, authorize, admit = async () => {}, webURL, memberRemovalHooks = [], teamRemovalHooks = [] } = deps;
 
   /**
    * `administrators`: the change may remove or demote an Organization Administrator. Better Auth refuses to leave
@@ -123,10 +125,11 @@ export function createOrganizationChanges(deps: OrganizationChangesDeps): Organi
 
       if (request.method === "GET" && READS.has(endpoint)) {
         const needs = READS.get(endpoint);
+        const session = await auth.api.getSession({ headers: request.headers });
+        if (session) await admit(session.user);
         if (needs) {
           const organizationId = url.searchParams.get("organizationId");
           if (!organizationId) return refusal(400, "organizationId is required");
-          const session = await auth.api.getSession({ headers: request.headers });
           if (!session) throw new HttpError(401, "sign in required");
           await authorize(session.user, organizationId, needs);
         }
@@ -137,6 +140,7 @@ export function createOrganizationChanges(deps: OrganizationChangesDeps): Organi
       if (!rule) return refusal(404, "not found");
       const session = await auth.api.getSession({ headers: request.headers });
       if (!session) return auth.handler(request); // Better Auth's own 401
+      await admit(session.user);
       // Inviting someone already invited with `resend` extends the invitation and sends it again, returning before
       // any hook runs, so it would go unaudited. Invite again after cancelling instead.
       if (endpoint === "invite-member") {

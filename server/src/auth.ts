@@ -1,6 +1,7 @@
 import { apiKey } from "@better-auth/api-key";
+import { passkey } from "@better-auth/passkey";
 import { betterAuth } from "better-auth";
-import { admin, openAPI, organization } from "better-auth/plugins";
+import { admin, openAPI, organization, twoFactor } from "better-auth/plugins";
 import type { OrganizationOptions } from "better-auth/plugins";
 import { adminAc, userAc } from "better-auth/plugins/admin/access";
 import { drizzleAdapter } from "better-auth/adapters/drizzle";
@@ -10,6 +11,9 @@ import { ORG_ADMIN_ROLE, ac, orgRoles } from "./permissions";
 export const INVITATION_EXPIRES_IN_SECONDS = 7 * 24 * 3600;
 
 export const PLATFORM_OPERATOR_ROLE = "platform-operator";
+
+/** How the platform names itself to authenticator apps and passkey managers. */
+export const APP_NAME = "Certificate Platform";
 
 /** The header an API key is sent in. */
 export const API_KEY_HEADER = "x-api-key";
@@ -42,6 +46,7 @@ export function createAuth({ db, baseURL, secret, trustedOrigins = [], organizat
     database: drizzleAdapter(db, { provider: "pg" }),
     baseURL,
     secret,
+    appName: APP_NAME,
     basePath: "/api/auth",
     trustedOrigins: [baseURL, ...trustedOrigins],
     // API keys are created, revoked and verified only through the platform's own routes (api-keys.ts), which scope a key
@@ -65,6 +70,12 @@ export function createAuth({ db, baseURL, secret, trustedOrigins = [], organizat
         defaultRole: "user",
         roles: { [PLATFORM_OPERATOR_ROLE]: adminAc, user: userAc },
       }),
+      // TOTP as a second factor for password sign-in. Enrolling, verifying the first code and disabling are served on the
+      // unit of work, which audits them (account-security.ts); the email/SMS OTP method is not configured.
+      twoFactor({ issuer: APP_NAME }),
+      // Passkeys sign in on their own, without a password or a second factor. The relying party is the host of `baseURL`,
+      // and the expected origin is the request's, which Better Auth has already checked against `trustedOrigins`.
+      passkey({ rpName: APP_NAME }),
       apiKey([
         // A user's keys: they belong to the person who made them (the plugin's default configuration).
         { ...API_KEY_OPTIONS, configId: API_KEY_CONFIG.user, references: "user", defaultPrefix: "cp_" },
