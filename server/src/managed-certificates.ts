@@ -6,6 +6,7 @@
 // ones who see it (see managed-certificate-reader.ts). This module serves the inventory and the Managed Certificate itself.
 import { OpenAPIHono, createRoute, z } from "@hono/zod-openapi";
 import { and, asc, eq } from "drizzle-orm";
+import { silentSince } from "./agents";
 import type { Authorizer } from "./authorization";
 import { ACME_ENVIRONMENTS } from "./certificate-authority";
 import { KEY_ALGORITHMS } from "./csr";
@@ -31,8 +32,10 @@ export function registerManagedCertificates(ctx: {
   issuances: Issuances;
   reader: ManagedCertificateReader;
   clock: () => Date;
+  /** How long an Agent may be silent before it counts as offline, for the inventory's `agentOffline` filter. */
+  agentOfflineAfterSeconds: number;
 }) {
-  const { app, db, requireUser, authorize, unitOfWork, issuances, reader, clock } = ctx;
+  const { app, db, requireUser, authorize, unitOfWork, issuances, reader, clock, agentOfflineAfterSeconds } = ctx;
   const { findManagedCertificate, findReadable, visibleTo, certificatesOf, withState } = reader;
 
   app.openapi(
@@ -53,7 +56,8 @@ export function registerManagedCertificates(ctx: {
       const actor = await requireUser(c);
       const { role } = await authorize(actor, orgId);
       const query = c.req.valid("query");
-      const where = and(visibleTo(role, actor, orgId), inventoryCondition(query, clock()));
+      const now = clock();
+      const where = and(visibleTo(role, actor, orgId), inventoryCondition(query, { now, agentsSilentSince: silentSince(now, agentOfflineAfterSeconds) }));
       const [total, rows] = await Promise.all([
         db.$count(managedCertificate, where),
         db

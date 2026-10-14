@@ -257,8 +257,8 @@ export function createApp(deps: AppDeps) {
   registerDcvConfiguration({ app, db, requireUser, authorize, unitOfWork, dcvPlans });
   const dcv = createDcv(dnsProviders, dcvPlans, { resolver: createTxtResolver(), ...DEFAULT_DCV_CONFIG, ...deps.dcv });
   const issuances = createIssuances({ db, unitOfWork, certificateAuthority: deps.certificateAuthority, dcv, secrets });
-  const reader = createManagedCertificateReader({ db, authorize });
-  registerManagedCertificates({ app, db, requireUser, authorize, unitOfWork, issuances, reader, clock });
+  const reader = createManagedCertificateReader({ db, authorize, clock, agentOfflineAfterSeconds: agentGateway.offlineAfterSeconds });
+  registerManagedCertificates({ app, db, requireUser, authorize, unitOfWork, issuances, reader, clock, agentOfflineAfterSeconds: agentGateway.offlineAfterSeconds });
   const apiKeys = registerApiKeys({ app, db, auth, authConfig, requireUser, authorize, unitOfWork });
   registerCertificateExport({ app, apiKeys, unitOfWork, reader, certificateAuthority: deps.certificateAuthority });
   registerOwnerRoutes({ app, requireUser, unitOfWork, reader });
@@ -266,12 +266,12 @@ export function createApp(deps: AppDeps) {
   const renewals = createRenewalScheduler({ db, unitOfWork, issuances, certificateAuthority: deps.certificateAuthority, clock });
   registerNameChangeRoutes({ app, requireUser, authorize, unitOfWork, issuances, reader });
   registerApprovals({ app, db, requireUser, authorize, unitOfWork, issuances, reader });
-  registerArchiveRoutes({ app, requireUser, authorize, unitOfWork, reader });
+  registerArchiveRoutes({ app, requireUser, authorize, unitOfWork, issuances, reader });
   registerRevocationRoutes({ app, db, requireUser, unitOfWork, reader, secrets, certificateAuthority: deps.certificateAuthority });
   registerHistory({ app, db, requireUser, reader });
   registerDeploymentScripts({ app, db, requireUser, authorize, unitOfWork });
   registerDeployments({ app, db, requireUser, authorize, unitOfWork, workItems, issuances });
-  registerAgents({ app, db, requireUser, authorize, unitOfWork, clock, config: agentGateway });
+  registerAgents({ app, db, requireUser, authorize, unitOfWork, clock, config: agentGateway, issuances });
   registerAgentGateway({ app, db, unitOfWork, workItems, clock, config: agentGateway });
 
   app.doc("/api/openapi.json", {

@@ -56,6 +56,8 @@ export interface Issuance {
   id: string;
   status: "running" | "succeeded" | "failed";
   failure: { code: string; message: string } | null;
+  /** Whether it waits for the Agent that holds the key to make a new one, as a Renewal of a key an Agent holds begins. */
+  awaitingKey: boolean;
 }
 export interface Approval {
   status: "not_required" | "pending" | "approved" | "rejected";
@@ -74,6 +76,7 @@ export const ownerLabel = (o: Owner) => (o.type === "user" ? o.email : `${o.name
 export interface InventoryFilters {
   expiringSoon?: boolean;
   renewalFailing?: boolean;
+  agentOffline?: boolean;
   pendingApproval?: boolean;
   noOwners?: boolean;
   archived?: boolean;
@@ -164,6 +167,8 @@ export interface ManagedCertificate {
   issuance: Issuance | null;
   /** The most recently issued Certificate. */
   currentCertificate: Certificate | null;
+  /** For a key an Agent holds, that Agent and whether it is online; an offline one holds up the Renewal. */
+  agent: { id: string; hostName: string; status: "online" | "offline" | "revoked" } | null;
 }
 export interface QueuedNameChange extends PendingNameChange {
   managedCertificateId: string;

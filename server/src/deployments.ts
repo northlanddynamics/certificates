@@ -8,6 +8,9 @@
 //      (with its hash, which it checks before running it, ADR 0004), runs it, and reports how it went.
 //   3. That report is the Deployment Run. An Organization Administrator can have the Agent run it again for the current
 //      Certificate without renewing.
+// Each Renewal is for a new key: its Issuance waits (issuance.ts) while the Agent is asked again, through
+// `deployment.generate_key` naming the Issuance, and runs once the CSR is stored; it then goes on through steps 2 and 3. An
+// Agent that is away holds the Renewal up until it is back, when it is given the request it missed.
 // Each step and each Deployment Run is an Audit Event, written with the change it records.
 import { OpenAPIHono, createRoute, z } from "@hono/zod-openapi";
 import { and, desc, eq, inArray, sql } from "drizzle-orm";
@@ -179,27 +182,38 @@ export function registerDeployments(ctx: {
   workItems.register(
     DEPLOYMENT_WORK_TYPES.generateKey,
     async (tx, item) => {
-      const { deploymentId } = item.payload as { deploymentId: string };
+      const { deploymentId, issuanceId } = item.payload as { deploymentId: string; issuanceId?: string };
       const [row] = await tx.select().from(deployment).where(and(eq(deployment.id, deploymentId), eq(deployment.organizationId, item.organizationId)));
       if (!row) throw new PreparationError("the Deployment is gone");
       const [mc] = await tx.select().from(managedCertificate).where(eq(managedCertificate.id, row.managedCertificateId));
       if (!mc || mc.archivedAt) throw new PreparationError("the Managed Certificate is archived, so no key is wanted");
+      if (issuanceId) {
+        const [waiting] = await tx.select({ awaitingKey: issuance.awaitingKey }).from(issuance).where(eq(issuance.id, issuanceId));
+        if (!waiting?.awaitingKey) throw new PreparationError("the Renewal that wanted the key has ended");
+      }
       return { deploymentId, managedCertificateId: mc.id, names: mc.names, keyAlgorithm: mc.keyAlgorithm };
     },
     {
       durable: true,
-      // The Agent's report of the key: a CSR the platform checks as it would an Owner's, and issues from.
+      // The Agent's report of the key: a CSR the platform checks as it would an Owner's, and issues from. For the first key
+      // that is the first Issuance; for a Renewal's, the Issuance that waits for it, which fails instead when no usable key
+      // came, and is tried again as any failed Renewal is.
       async onResult(tx, change, item, result) {
-        const { deploymentId } = item.payload as { deploymentId: string };
+        const { deploymentId, issuanceId } = item.payload as { deploymentId: string; issuanceId?: string };
         const row = await lockDeployment(tx, item.organizationId, deploymentId);
         if (!row) return;
         const mc = await lockManagedCertificate(tx, item.organizationId, row.managedCertificateId);
+        // A stale report changes nothing: for a Renewal that has ended meanwhile, or for a first key already made (a second
+        // request for it, answered late).
+        if (issuanceId) {
+          const [waiting] = await tx.select({ awaitingKey: issuance.awaitingKey }).from(issuance).where(and(eq(issuance.id, issuanceId), eq(issuance.managedCertificateId, mc.id)));
+          if (!waiting?.awaitingKey) return;
+        } else if (mc.csr !== null) return;
         const fail = async (message: string) => {
-          await tx.update(deployment).set({ keyFailure: message }).where(eq(deployment.id, row.id));
-          await change.audit({ organizationId: item.organizationId, action: "deployment.key_failed", target: { type: "deployment", id: row.id }, detail: { agentId: row.agentId, message } });
+          await change.audit({ organizationId: item.organizationId, action: "deployment.key_failed", target: { type: "deployment", id: row.id }, detail: { agentId: row.agentId, ...(issuanceId && { issuanceId }), message } });
+          if (issuanceId) await issuances.abandon(tx, change, issuanceId, { code: "agent_key_failed", message });
+          else await tx.update(deployment).set({ keyFailure: message }).where(eq(deployment.id, row.id));
         };
-        // It has its key already: this report is stale (a second request for it, answered late), and changes nothing.
-        if (mc.csr !== null) return;
         if (!result.ok || !result.csr) return fail(result.error ?? "the Agent could not make the key");
         let csr;
         try {
@@ -209,13 +223,17 @@ export function registerDeployments(ctx: {
           throw err;
         }
         await tx.update(managedCertificate).set({ csr: result.csr }).where(and(eq(managedCertificate.id, mc.id), eq(managedCertificate.organizationId, mc.organizationId)));
-        await tx.update(deployment).set({ keyFailure: null }).where(eq(deployment.id, row.id));
         await change.audit({
           organizationId: item.organizationId,
           action: "deployment.key_generated",
           target: { type: "deployment", id: row.id },
-          detail: { agentId: row.agentId, managedCertificateId: mc.id, keyAlgorithm: mc.keyAlgorithm, csrFingerprint: csr.fingerprint },
+          detail: { agentId: row.agentId, managedCertificateId: mc.id, keyAlgorithm: mc.keyAlgorithm, csrFingerprint: csr.fingerprint, ...(issuanceId && { issuanceId }) },
         });
+        if (issuanceId) {
+          await issuances.keyMade(tx, change, issuanceId);
+          return;
+        }
+        await tx.update(deployment).set({ keyFailure: null }).where(eq(deployment.id, row.id));
         // The first Issuance, as of whoever set the Deployment up. It is refused only if the Managed Certificate was archived meanwhile.
         await issuances.begin(tx, change, { id: row.createdById, email: row.createdByEmail }, mc, "issue");
       },
@@ -303,6 +321,17 @@ export function registerDeployments(ctx: {
       },
     },
   );
+
+  // A Renewal asks the Deployment's Agent for a new key. The request waits for the Agent however long it is away; a
+  // revoked Agent is never given work, so it is not asked.
+  issuances.askForKeyWith(async (tx, change, waiting) => {
+    const [row] = await tx.select().from(deployment).where(and(eq(deployment.organizationId, waiting.organizationId), eq(deployment.managedCertificateId, waiting.managedCertificateId)));
+    if (!row) throw new Error("a Managed Certificate whose key an Agent holds has no Deployment");
+    // Shared, so that the Agent being revoked finishes first, and ends this Renewal, or is seen revoked.
+    const [holder] = await tx.select({ revokedAt: agent.revokedAt }).from(agent).where(eq(agent.id, row.agentId)).for("share");
+    if (!holder || holder.revokedAt) return "agent_revoked";
+    await workItems.enqueueIn(tx, change, waiting.organizationId, row.agentId, DEPLOYMENT_WORK_TYPES.generateKey, { deploymentId: row.id, issuanceId: waiting.issuanceId });
+  });
 
   // A Certificate for a Managed Certificate with a Deployment is given to its Agent to deploy, as it is stored.
   issuances.onIssued(async (tx, change, issued) => {

@@ -2,6 +2,8 @@
 // recorded when it is asked for and runs in the background (a CA with DNS propagation can take minutes, longer than a
 // request should wait): it does DCV through the Organization's DNS Provider, has the CA finalize the order with the
 // CSR, and ends by storing the Certificate, or with the cause of its failure. Either end is one audited change.
+// A Renewal of a Managed Certificate whose key an Agent holds begins by waiting: the Agent is asked for a new key and its
+// CSR (deployments.ts), and the Issuance runs once it is sent, however long the Agent is away.
 import { X509Certificate, createHash } from "node:crypto";
 import { and, desc, eq, inArray, isNull } from "drizzle-orm";
 import { CertificateAuthorityError, type CertificateAuthority } from "./certificate-authority";
@@ -22,7 +24,7 @@ import type { Actor, Change, UnitOfWork } from "./unit-of-work";
 export type IssuanceIntent = "issue" | "renewNow" | "scheduled";
 
 /** Why a Managed Certificate may not have an Issuance begin now. */
-export type Refusal = "awaiting_approval" | "rejected" | "archived" | "already_running" | "no_certificate" | "not_automatic" | "awaiting_key";
+export type Refusal = "awaiting_approval" | "rejected" | "archived" | "already_running" | "no_certificate" | "not_automatic" | "awaiting_key" | "agent_revoked";
 
 export type Begun = { issuanceId: string } | { refused: Refusal };
 
@@ -55,7 +57,16 @@ export function refusalMessage(refusal: Refusal, intent: IssuanceIntent): string
       return "the Managed Certificate is not renewed automatically";
     case "awaiting_key":
       return "the Agent has not yet made the key for this Managed Certificate, which has to be done first";
+    case "agent_revoked":
+      return `the Agent that holds the key of this Managed Certificate is revoked, so it cannot make the new key a Renewal needs; it cannot be ${verb}`;
   }
+}
+
+/** An Issuance that waits for the Agent holding its Managed Certificate's key to make a new one, as whoever asks the Agent is told. */
+export interface AwaitingKey {
+  organizationId: string;
+  managedCertificateId: string;
+  issuanceId: string;
 }
 
 /** A Certificate that was just issued, as what follows from it is told. */
@@ -86,9 +97,19 @@ export interface Issuances {
    * undone alone: the Certificate the CA issued is kept whatever else goes wrong.
    */
   onIssued(listener: (tx: Tx, change: Change, issued: IssuedCertificate) => Promise<void>): void;
+  /**
+   * Says how the Agent that holds a Managed Certificate's key is asked for a new one, on the transaction that begins the
+   * Issuance waiting for it: a Renewal of such a Managed Certificate begins so, and runs once `keyMade` is told the CSR is
+   * stored. `ask` refuses, and the Issuance does not begin, when no Agent can make the key.
+   */
+  askForKeyWith(ask: (tx: Tx, change: Change, waiting: AwaitingKey) => Promise<Refusal | undefined>): void;
+  /** The Managed Certificate's new CSR is stored: the Issuance that waited for it runs once the change commits. False when it no longer waits (it ended meanwhile). */
+  keyMade(tx: Tx, change: Change, issuanceId: string): Promise<boolean>;
+  /** Ends an Issuance that waits for its Agent's key, as failed for the reason given. False when it no longer waits. */
+  abandon(tx: Tx, change: Change, issuanceId: string, failure: { code: IssuanceFailureCode; message: string }): Promise<boolean>;
   /** Resolves once every Issuance started so far has recorded its outcome. */
   idle(): Promise<void>;
-  /** Ends the Issuances a stopped platform left running, as failed. Call it once, before serving. */
+  /** Ends the Issuances a stopped platform left running, as failed; not those waiting for an Agent's key, which the Agent still makes. Call it once, before serving. */
   failInterrupted(): Promise<void>;
 }
 
@@ -132,6 +153,7 @@ function failureOf(err: unknown): Failure {
 export function createIssuances({ db, unitOfWork, certificateAuthority: ca, dcv, secrets }: IssuancesDeps): Issuances {
   const running = new Set<Promise<void>>();
   const issuedListeners: ((tx: Tx, change: Change, issued: IssuedCertificate) => Promise<void>)[] = [];
+  let askForKey: ((tx: Tx, change: Change, waiting: AwaitingKey) => Promise<Refusal | undefined>) | undefined;
   const actorOf = (row: typeof issuance.$inferSelect) => (row.requestedById && row.requestedByEmail ? { id: row.requestedById, email: row.requestedByEmail } : null);
   const targetOf = (row: typeof issuance.$inferSelect) => ({ type: "managed_certificate", id: row.managedCertificateId });
   const leftoverDetail = (leftovers: string[]) => (leftovers.length > 0 ? { challengeRecordsNotRemoved: leftovers } : {});
@@ -147,6 +169,7 @@ export function createIssuances({ db, unitOfWork, certificateAuthority: ca, dcv,
       .update(issuance)
       .set({
         status: outcome.kind,
+        awaitingKey: false,
         certificateId: failed ? null : outcome.certificateId,
         failureCode: failed ? outcome.code : null,
         failureMessage: failed ? outcome.message : null,
@@ -170,7 +193,7 @@ export function createIssuances({ db, unitOfWork, certificateAuthority: ca, dcv,
 
   async function run(issuanceId: string) {
     const [row] = await db.select().from(issuance).where(eq(issuance.id, issuanceId));
-    if (!row || row.status !== "running") return;
+    if (!row || row.status !== "running" || row.awaitingKey) return;
     const responder = dcv.responderFor(db, row.organizationId);
     let chainPem: string;
     let mc: typeof managedCertificate.$inferSelect;
@@ -290,14 +313,24 @@ export function createIssuances({ db, unitOfWork, certificateAuthority: ca, dcv,
         .limit(1);
       if (runningOne) return { refused: "already_running" };
 
+      // Each Renewal of a key an Agent holds is for a new key, which the Agent makes first.
+      const awaitingKey = mc.keyCustody === "agent" && hasCertificate;
+      const issuanceId = crypto.randomUUID();
+      if (awaitingKey) {
+        if (!askForKey) throw new Error("nothing asks an Agent for a key");
+        const refused = await askForKey(tx, change, { organizationId, managedCertificateId: id, issuanceId });
+        if (refused) return { refused };
+      }
       const [row] = await tx
         .insert(issuance)
         .values({
+          id: issuanceId,
           organizationId,
           managedCertificateId: id,
           status: "running",
           requestedById: actor?.id ?? null,
           requestedByEmail: actor?.email ?? null,
+          awaitingKey,
           startedAt: change.occurredAt,
         })
         .returning({ id: issuance.id });
@@ -308,15 +341,38 @@ export function createIssuances({ db, unitOfWork, certificateAuthority: ca, dcv,
         target: { type: "managed_certificate", id },
         detail: { issuanceId: row!.id, ...(renewal && { renewal }) },
       });
-      change.afterCommit(() => start(row!.id));
+      if (!awaitingKey) change.afterCommit(() => start(row!.id));
       return { issuanceId: row!.id };
     },
     onIssued: (listener) => void issuedListeners.push(listener),
+    askForKeyWith(ask) {
+      askForKey = ask;
+    },
+    async keyMade(tx, change, issuanceId) {
+      const resumed = await tx
+        .update(issuance)
+        .set({ awaitingKey: false })
+        .where(and(eq(issuance.id, issuanceId), eq(issuance.status, "running"), eq(issuance.awaitingKey, true)))
+        .returning({ id: issuance.id });
+      if (resumed.length === 0) return false;
+      change.afterCommit(() => start(issuanceId));
+      return true;
+    },
+    async abandon(tx, change, issuanceId, failure) {
+      const [row] = await tx
+        .select()
+        .from(issuance)
+        .where(and(eq(issuance.id, issuanceId), eq(issuance.status, "running"), eq(issuance.awaitingKey, true)))
+        .for("update");
+      if (!row || !(await end(tx, change, row, { kind: "failed", ...failure }))) return false;
+      await change.audit({ organizationId: row.organizationId, action: "issuance.failed", target: targetOf(row), detail: { issuanceId: row.id, code: failure.code, message: failure.message } });
+      return true;
+    },
     async idle() {
       while (running.size > 0) await Promise.all(running);
     },
     async failInterrupted() {
-      const rows = await db.select().from(issuance).where(eq(issuance.status, "running"));
+      const rows = await db.select().from(issuance).where(and(eq(issuance.status, "running"), eq(issuance.awaitingKey, false)));
       for (const row of rows) await fail(row, { code: "interrupted", message: "the platform stopped while this was running; ask for it again" });
     },
   };

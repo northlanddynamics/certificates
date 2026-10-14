@@ -16,6 +16,10 @@ export const ISSUANCE_FAILURE_CODES = [
   "ca_rejected",
   /** The CA did not answer. */
   "ca_unreachable",
+  /** The Agent that holds the key did not make a new one: it could not, was revoked first, or sent a CSR that could not be used. */
+  "agent_key_failed",
+  /** The Managed Certificate was archived while the Issuance waited for its Agent's key. */
+  "archived",
   /** The platform stopped while the Issuance was running. */
   "interrupted",
   /** Something went wrong in the platform itself. */

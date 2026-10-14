@@ -11,8 +11,12 @@ export function status(m: ManagedCertificate): { label: string; variant: "defaul
   if (m.archivedAt) return { label: "Archived", variant: "secondary" };
   if (m.approval.status === "pending") return { label: "Awaiting Approval", variant: "outline" };
   if (m.approval.status === "rejected") return { label: "Rejected", variant: "destructive" };
+  // A Renewal waiting for an Agent that is away is held up until it is back.
+  if (m.issuance?.awaitingKey && m.agent?.status === "offline") return { label: "Agent offline", variant: "destructive" };
   if (m.issuance?.status === "running") return { label: m.currentCertificate ? "Renewing…" : "Issuing…", variant: "secondary" };
   if (m.renewal.failing) return { label: "Renewal failing", variant: "destructive" };
   if (m.issuance?.status === "failed") return { label: "Issuance failed", variant: "destructive" };
+  if (m.agent?.status === "revoked") return { label: "Agent revoked", variant: "destructive" };
+  if (m.agent?.status === "offline") return { label: "Agent offline", variant: "outline" };
   return m.currentCertificate ? { label: "Issued", variant: "default" } : { label: "Not issued", variant: "outline" };
 }

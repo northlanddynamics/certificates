@@ -8,13 +8,24 @@ import { AGENT_ARCHES, AGENT_OSES, isOutdated } from "./agent-kinds";
 import { newRegistrationToken, hashToken, type AgentGatewayConfig } from "./agent-gateway";
 import type { Authorizer } from "./authorization";
 import type { Db } from "./db/client";
-import { agent, agentRegistrationToken } from "./db/schema";
+import { agent, agentRegistrationToken, deployment, issuance } from "./db/schema";
 import { HttpError, OrgParam, PageQuery, anyOf, errors, json, pageOf } from "./http";
+import type { Issuances } from "./issuance";
 import type { Actor, UnitOfWork } from "./unit-of-work";
 
 type Row = typeof agent.$inferSelect;
 const DAY_MS = 24 * 3600_000;
-const STATUSES = ["online", "offline", "revoked"] as const;
+export const AGENT_STATUSES = ["online", "offline", "revoked"] as const;
+
+/** The last contact before which an Agent that is not revoked is offline at `now`: it has been silent longer than `offlineAfterSeconds`. */
+export const silentSince = (now: Date, offlineAfterSeconds: number) => new Date(now.getTime() - offlineAfterSeconds * 1000);
+
+/** Whether the Agent is online at `now`: `revoked` once its credential was ended, `offline` once it has been silent too long. */
+export const agentStatus = (row: { revokedAt: Date | null; lastContactAt: Date }, now: Date, offlineAfterSeconds: number): (typeof AGENT_STATUSES)[number] =>
+  row.revokedAt ? "revoked" : row.lastContactAt < silentSince(now, offlineAfterSeconds) ? "offline" : "online";
+
+/** The condition that an Agent is offline, as `agentStatus` says, for Agents silent since `since` (from `silentSince`). */
+export const agentOffline = (since: Date) => and(isNull(agent.revokedAt), lt(agent.lastContactAt, since))!;
 
 const AgentView = z.object({
   id: z.string(),
@@ -23,13 +34,13 @@ const AgentView = z.object({
   arch: z.enum(AGENT_ARCHES),
   version: z.string(),
   outdated: z.boolean().openapi({ description: "Whether it runs a version older than the newest the platform knows of." }),
-  status: z.enum(STATUSES).openapi({ description: "`offline` once it has been silent for longer than a missed poll or two; `revoked` once an Organization Administrator ended its credential." }),
+  status: z.enum(AGENT_STATUSES).openapi({ description: "`offline` once it has been silent for longer than a missed poll or two; `revoked` once an Organization Administrator ended its credential." }),
   registeredAt: z.string(),
   lastContactAt: z.string(),
   revokedAt: z.string().nullable(),
 });
 const AgentsQuery = PageQuery.extend({
-  status: anyOf(STATUSES).optional().meta({ description: "Those that are any of these, comma-separated." }),
+  status: anyOf(AGENT_STATUSES).optional().meta({ description: "Those that are any of these, comma-separated." }),
   os: anyOf(AGENT_OSES).optional().meta({ description: "Those running any of these operating systems, comma-separated." }),
   outdated: z.literal("true").optional().meta({ description: "Only those running an outdated version." }),
 });
@@ -43,8 +54,9 @@ export function registerAgents(ctx: {
   unitOfWork: UnitOfWork;
   clock: () => Date;
   config: AgentGatewayConfig;
+  issuances: Issuances;
 }) {
-  const { app, db, requireUser, authorize, unitOfWork, clock, config } = ctx;
+  const { app, db, requireUser, authorize, unitOfWork, clock, config, issuances } = ctx;
 
   const toView = (row: Row, now: Date) => ({
     id: row.id,
@@ -53,7 +65,7 @@ export function registerAgents(ctx: {
     arch: row.arch,
     version: row.version,
     outdated: isOutdated(row.version, config.latestVersion),
-    status: row.revokedAt ? ("revoked" as const) : now.getTime() - row.lastContactAt.getTime() > config.offlineAfterSeconds * 1000 ? ("offline" as const) : ("online" as const),
+    status: agentStatus(row, now, config.offlineAfterSeconds),
     registeredAt: row.registeredAt.toISOString(),
     lastContactAt: row.lastContactAt.toISOString(),
     revokedAt: row.revokedAt?.toISOString() ?? null,
@@ -107,7 +119,7 @@ export function registerAgents(ctx: {
       await authorize(await requireUser(c), orgId, { agent: ["read"] });
       const { page, pageSize, status, os, outdated } = c.req.valid("query");
       const now = clock();
-      const silentSince = new Date(now.getTime() - config.offlineAfterSeconds * 1000);
+      const since = silentSince(now, config.offlineAfterSeconds);
       const conditions: (SQL | undefined)[] = [eq(agent.organizationId, orgId)];
       if (status) {
         const wanted = status.split(",");
@@ -115,8 +127,8 @@ export function registerAgents(ctx: {
         conditions.push(
           or(
             wanted.includes("revoked") ? isNotNull(agent.revokedAt) : undefined,
-            wanted.includes("offline") ? and(isNull(agent.revokedAt), lt(agent.lastContactAt, silentSince)) : undefined,
-            wanted.includes("online") ? and(isNull(agent.revokedAt), gte(agent.lastContactAt, silentSince)) : undefined,
+            wanted.includes("offline") ? agentOffline(since) : undefined,
+            wanted.includes("online") ? and(isNull(agent.revokedAt), gte(agent.lastContactAt, since)) : undefined,
           ),
         );
       }
@@ -142,7 +154,9 @@ export function registerAgents(ctx: {
       path: "/api/organizations/{orgId}/agents/{agentId}/revoke",
       tags: ["Agents"],
       summary: "Revoke an Agent: its credential is accepted no more",
-      description: "Organization Administrators only. For a decommissioned or compromised host. It cannot be undone: a new Agent registers with a new token.",
+      description:
+        "Organization Administrators only. For a decommissioned or compromised host. It cannot be undone: a new Agent registers with a new token. " +
+        "A Renewal waiting for it to make a new key fails, as no key will come; the Managed Certificates whose key it holds cannot be renewed from then on.",
       request: { params: AgentParams },
       responses: { 200: json(AgentView, "Revoked"), ...errors(401, 403, 404, 409) },
     }),
@@ -160,6 +174,12 @@ export function registerAgents(ctx: {
           .where(and(eq(agent.id, agentId), isNull(agent.revokedAt)))
           .returning();
         await change.audit({ organizationId: orgId, action: "agent.revoked", target: { type: "agent", id: agentId }, detail: { hostName: row.hostName } });
+        const waiting = await tx
+          .select({ id: issuance.id })
+          .from(issuance)
+          .innerJoin(deployment, eq(deployment.managedCertificateId, issuance.managedCertificateId))
+          .where(and(eq(deployment.agentId, agentId), eq(issuance.status, "running"), eq(issuance.awaitingKey, true)));
+        for (const { id } of waiting) await issuances.abandon(tx, change, id, { code: "agent_key_failed", message: `the Agent ${row.hostName} was revoked before it made the new key` });
         return updated!;
       });
       return c.json(toView(revoked, clock()), 200);

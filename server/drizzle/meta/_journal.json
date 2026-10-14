@@ -176,6 +176,13 @@
       "when": 1791899779658,
       "tag": "0024_drop_agent_identity",
       "breakpoints": true
+    },
+    {
+      "idx": 25,
+      "version": "7",
+      "when": 1791937794589,
+      "tag": "0025_issuance_awaiting_key",
+      "breakpoints": true
     }
   ]
 }

@@ -116,11 +116,19 @@ export function AlertStrip({ org, m, userId, onChanged }: { org: Me["organizatio
   const mayRetry = renewing ? mayRenew : mayIssue;
   const proposal = m.approval.status === "pending" ? m.approval : null;
   const nameChange = m.pendingNameChange;
+  const heldUp = m.issuance?.awaitingKey && m.agent?.status === "offline" ? m.agent : null;
 
   if (m.archivedAt) return null;
-  if (!failure && !proposal && !nameChange) return null;
+  if (!failure && !proposal && !nameChange && !heldUp) return null;
   return (
     <div className="flex flex-col gap-2">
+      {heldUp && (
+        <Alert variant="destructive">
+          <CircleAlertIcon />
+          <AlertTitle>Agent offline</AlertTitle>
+          <AlertDescription>The Renewal waits for {heldUp.hostName} to make the new key, and goes on once the Agent is back in touch.</AlertDescription>
+        </Alert>
+      )}
       {failure && m.issuance?.status !== "running" && (
         <Alert variant="destructive">
           <CircleAlertIcon />
