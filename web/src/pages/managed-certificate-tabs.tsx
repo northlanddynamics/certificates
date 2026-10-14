@@ -7,4 +7,3 @@ export const ActivityTab = () => <p className="text-sm text-muted-foreground">Th
 export const ServicesTab = () => (
   <EmptySection title="Services">Deployments, and the Agents and Endpoints they run on, will appear here.</EmptySection>
 );
-export const NotificationsTab = () => <EmptySection title="Notifications">Subscribers, the users, Teams and channels told about this Managed Certificate, will appear here.</EmptySection>;

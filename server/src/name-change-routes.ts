@@ -6,6 +6,7 @@ import { and, eq } from "drizzle-orm";
 import type { Authorizer } from "./authorization";
 import { managedCertificate, nameChange } from "./db/schema";
 import { HttpError, errors, json } from "./http";
+import type { Notifications } from "./notifications";
 import type { Issuances } from "./issuance";
 import { ManagedCertificate, ManagedCertificateParams, type ManagedCertificateReader } from "./managed-certificate-reader";
 import { sameNames } from "./names";
@@ -21,8 +22,9 @@ export function registerNameChangeRoutes(ctx: {
   unitOfWork: UnitOfWork;
   issuances: Issuances;
   reader: ManagedCertificateReader;
+  notifications: Notifications;
 }) {
-  const { app, requireUser, authorize, unitOfWork, issuances, reader } = ctx;
+  const { app, requireUser, authorize, unitOfWork, issuances, reader, notifications } = ctx;
   const { findAsOwnerOr, findManagedCertificate, findReadable, withState } = reader;
 
   app.openapi(
@@ -122,6 +124,7 @@ export function registerNameChangeRoutes(ctx: {
         target: { type: "managed_certificate", id: mc.id },
         detail: { from: mc.names, to: pending.names, reason, proposedBy: pending.proposedByEmail },
       });
+      await notifications.notify(tx, change, mc, { event: "approval.decided", detail: { of: "name_change", decision, reason, decidedBy: actor.email, names: pending.names } });
       if (decision === "approved") await applyNames(tx, change, actor, issuances, mc, { names: pending.names, csr: pending.csr });
     });
     return (await withState([await findManagedCertificate(orgId, id)]))[0]!;
