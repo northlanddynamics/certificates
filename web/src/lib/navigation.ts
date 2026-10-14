@@ -1,4 +1,4 @@
-import { BellIcon, BuildingIcon, BotIcon, GlobeIcon, LandmarkIcon, FileKey2Icon, FileTerminalIcon, KeyRoundIcon, RocketIcon, ShieldCheckIcon, UserRoundIcon, UsersIcon, type LucideIcon } from "lucide-react";
+import { BellIcon, BuildingIcon, ScrollTextIcon, SendIcon, BotIcon, GlobeIcon, LandmarkIcon, FileKey2Icon, FileTerminalIcon, KeyRoundIcon, RocketIcon, ShieldCheckIcon, UserRoundIcon, UsersIcon, type LucideIcon } from "lucide-react";
 import { can, type Me } from "@/lib/api";
 
 type Org = Me["organizations"][number];
@@ -40,6 +40,8 @@ export function organizationNavGroups(org: Org): NavGroup[] {
         ...(can(org, "dnsProvider", "read") ? [{ title: "DNS Providers", url: `${base}/dns-providers`, icon: GlobeIcon }] : []),
         // Anyone may list the channels (to choose one as a Subscriber), but the page is for configuring them.
         ...(can(org, "notificationChannel", "create") ? [{ title: "Notification channels", url: `${base}/notification-channels`, icon: BellIcon }] : []),
+        ...(can(org, "audit", "read") ? [{ title: "Audit log", url: `${base}/audit-log`, icon: ScrollTextIcon }] : []),
+        ...(can(org, "auditForwarder", "read") ? [{ title: "Audit forwarding", url: `${base}/audit-forwarding`, icon: SendIcon }] : []),
       ],
     },
     {

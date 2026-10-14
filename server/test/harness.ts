@@ -12,6 +12,7 @@ import { createLocalKms } from "../src/kms";
 import { CapturingMailer } from "../src/mailer";
 import type { MemberRemovalHook } from "../src/member-removal";
 import { CapturingWebhooks } from "../src/notifications";
+import { CapturingAuditTransport } from "../src/audit-transport";
 import { runMigrations } from "../src/migrate";
 import { bootstrapPlatformOperator } from "../src/operator";
 import type { UnitOfWork } from "../src/unit-of-work";
@@ -62,6 +63,10 @@ export interface Harness {
   mailer: CapturingMailer;
   /** What webhook notification channels were sent, instead of sending it; `failing` makes every post fail. */
   webhooks: CapturingWebhooks;
+  /** What audit forwarders were sent, instead of sending it; `failing` makes every delivery fail, `failingAfter` the next one partway. */
+  auditTransport: CapturingAuditTransport;
+  /** One pass of audit forwarding at the harness's clock: sends each forwarder that is due what it has queued. Returns how many events were delivered. */
+  forwardAudit(): Promise<number>;
   /** One pass of notifications at the harness's clock: notices Agents gone silent and Certificates nearing their end, then sends what is queued. Returns how many were sent. */
   deliverNotices(): Promise<number>;
   /** Where the CA's environments are served; every one is Pebble unless a test points one elsewhere. */
@@ -126,6 +131,7 @@ export async function createHarness(overrides: Partial<AppDeps> = {}): Promise<H
   const pool = new Pool({ connectionString: TEST_DATABASE_URL });
   const mailer = new CapturingMailer();
   const webhooks = new CapturingWebhooks();
+  const auditTransport = new CapturingAuditTransport();
   const memberRemovalHooks: MemberRemovalHook[] = [];
   let now = new Date("2026-01-01T00:00:00Z");
   const caDirectories: Record<AcmeEnvironment, string> = { staging: PEBBLE_DIRECTORY, production: PEBBLE_DIRECTORY };
@@ -146,6 +152,7 @@ export async function createHarness(overrides: Partial<AppDeps> = {}): Promise<H
     pool,
     mailer,
     webhooks,
+    auditTransport,
     memberRemovalHooks,
     kms: createLocalKms(Buffer.alloc(32, 1).toString("base64")),
     certificateAuthority: {
@@ -176,7 +183,7 @@ export async function createHarness(overrides: Partial<AppDeps> = {}): Promise<H
     secret: "test-secret-test-secret-test-secret-1234",
     ...overrides,
   };
-  const { app, auth, db, unitOfWork, issuances, renewals, notifications } = createApp(deps);
+  const { app, auth, db, unitOfWork, issuances, renewals, notifications, auditForwarding } = createApp(deps);
   await runMigrations(pool);
   const reset = async () => {
     await issuances.idle();
@@ -189,6 +196,9 @@ export async function createHarness(overrides: Partial<AppDeps> = {}): Promise<H
     mailer.sent.length = 0;
     webhooks.sent.length = 0;
     webhooks.failing = false;
+    auditTransport.sent.length = 0;
+    auditTransport.failing = false;
+    auditTransport.failingAfter = null;
     memberRemovalHooks.length = 0;
     createdAccountKeys.length = 0;
     caDirectories.staging = caDirectories.production = PEBBLE_DIRECTORY;
@@ -212,6 +222,8 @@ export async function createHarness(overrides: Partial<AppDeps> = {}): Promise<H
     mailer,
     webhooks,
     deliverNotices: () => notifications.tick(),
+    auditTransport,
+    forwardAudit: () => auditForwarding.tick(),
     caDirectories,
     bindTxt,
     dcvResolver,

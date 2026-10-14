@@ -60,6 +60,12 @@ A Managed Certificate's Subscribers are told of upcoming expiry (14, 7 and 1 day
 
 Notices are queued with the change they tell of and sent by a pass the server runs once a minute (`notifications.tick()`), which also notices silent Agents and Certificates nearing their end. One that cannot be sent is tried again after 1, 5 and 30 minutes, 2 and 6 hours, then given up. Mail goes through the server's `Mailer`; in development that is the console.
 
+## Audit
+
+Every change to an Organization's state is an Audit Event, written in the same transaction as the change. The log is kept for ever: no route changes or deletes one, and the database refuses to. Organization Administrators search it (`GET /api/organizations/{orgId}/audit-events`, or Audit log under Administration) by actor (id or email), action (`team.created`, or `team.*` for a resource), target type and id, and time range (`from` inclusive, `to` exclusive), oldest or newest first, a page at a time by `cursor`.
+
+They also forward it to a SIEM (`/api/organizations/{orgId}/audit-forwarders`, or Audit forwarding under Administration): a webhook (https, to a host that is not internal, with an optional `Authorization` header such as an HTTP event collector's token; both are a Secret and only the host is shown) posted each event as JSON, or a syslog receiver over TLS (RFC 5425, port 6514 by default) written each event as an RFC 5424 message whose MSG is the JSON. Events follow the schema `certificate-platform.audit/1`, documented in [docs/audit-events.md](docs/audit-events.md). Every event recorded after a forwarder is added, its own creation included, is queued for it in the same transaction and sent by a pass the server runs every 30 seconds (`auditForwarding.tick()`), in the order of their ids (two changes committing at the same moment may arrive the other way round). A forwarder that cannot be reached is tried again after 1, 5 and 30 minutes, then every hour, and never given up: delivery is at least once, so a receiver may see an event twice (deduplicate by `id`). Adding and removing a forwarder are audited.
+
 ## Database schema
 
 Drizzle ORM is the data layer; Better Auth uses it through its Drizzle adapter.

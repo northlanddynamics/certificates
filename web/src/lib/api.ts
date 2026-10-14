@@ -331,6 +331,44 @@ export const subscriberKey = (s: SubscriberRef) => `${s.type}:${s.id}`;
 export const subscriberFromKey = (key: string): SubscriberRef => ({ type: key.slice(0, key.indexOf(":")) as Subscriber["type"], id: key.slice(key.indexOf(":") + 1) });
 export const subscriberLabel = (s: Subscriber) =>
   s.type === "user" ? s.email : s.type === "team" ? `${s.name} (Team)` : `${s.name} (${s.kind === "email" ? "email" : "webhook"} channel)`;
+export interface AuditEvent {
+  /** Rising: a later event has a greater id. */
+  id: string;
+  occurredAt: string;
+  /** Both are null when the platform itself or an Organization's API key made the change. */
+  actor: { id: string | null; email: string | null };
+  action: string;
+  target: { type: string; id: string | null };
+  detail: Record<string, unknown>;
+}
+/** What the audit log is searched by; every filter given must match. `action` may be a prefix, such as `team.*`. */
+export interface AuditFilters {
+  actor?: string;
+  action?: string;
+  targetType?: string;
+  targetId?: string;
+  /** ISO times: from inclusive, to exclusive. */
+  from?: string;
+  to?: string;
+}
+export interface AuditForwarder {
+  id: string;
+  name: string;
+  kind: "webhook" | "syslog";
+  /** A webhook's host (its URL is write-only, so never shown), or the syslog receiver. */
+  host: string;
+  /** The syslog receiver's port; none for a webhook. */
+  port: number | null;
+  createdAt: string;
+  /** How many Audit Events wait to be delivered to it. */
+  backlog: number;
+  lastDeliveredAt: string | null;
+  /** Why the last try failed; none once it delivers again. */
+  lastError: string | null;
+  /** When it is tried again after failing; none while it is not failing. */
+  nextAttemptAt: string | null;
+}
+export type NewAuditForwarder = { name: string; kind: "webhook"; url: string; authorization?: string } | { name: string; kind: "syslog"; host: string; port?: number };
 export interface Team {
   id: string;
   name: string;
@@ -364,6 +402,16 @@ export const api = {
     call<{ items: Subscriber[] }>(`/api/organizations/${orgId}/managed-certificates/${id}/subscribers`, { body: subscriber }),
   removeSubscriber: (orgId: string, id: string, subscriber: SubscriberRef) =>
     call<{ items: Subscriber[] }>(`/api/organizations/${orgId}/managed-certificates/${id}/subscribers/${subscriber.type}/${encodeURIComponent(subscriber.id)}`, { method: "DELETE" }),
+  /** A page of the audit log, newest first, that matches `filters`; `cursor` is where the page before ended. */
+  auditEvents: (orgId: string, filters: AuditFilters, cursor?: string, limit = 50) => {
+    const query = new URLSearchParams({ order: "desc", limit: String(limit) });
+    for (const [key, value] of Object.entries(filters)) if (value) query.set(key, value);
+    if (cursor) query.set("cursor", cursor);
+    return call<{ items: AuditEvent[]; nextCursor: string | null }>(`/api/organizations/${orgId}/audit-events?${query}`);
+  },
+  auditForwarders: (orgId: string) => call<{ items: AuditForwarder[] }>(`/api/organizations/${orgId}/audit-forwarders`),
+  addAuditForwarder: (orgId: string, forwarder: NewAuditForwarder) => call<AuditForwarder>(`/api/organizations/${orgId}/audit-forwarders`, { body: forwarder }),
+  deleteAuditForwarder: (orgId: string, forwarderId: string) => call(`/api/organizations/${orgId}/audit-forwarders/${forwarderId}`, { method: "DELETE" }),
   notificationChannels: (orgId: string) => call<{ items: NotificationChannel[] }>(`/api/organizations/${orgId}/notification-channels`),
   addNotificationChannel: (orgId: string, channel: NewNotificationChannel) => call<NotificationChannel>(`/api/organizations/${orgId}/notification-channels`, { body: channel }),
   deleteNotificationChannel: (orgId: string, channelId: string) => call(`/api/organizations/${orgId}/notification-channels/${channelId}`, { method: "DELETE" }),
