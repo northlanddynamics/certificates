@@ -12,7 +12,7 @@ const localKmsKey = process.env.LOCAL_KMS_KEY;
 if (!databaseUrl || !secret || !localKmsKey) throw new Error("DATABASE_URL, AUTH_SECRET and LOCAL_KMS_KEY are required");
 
 const pool = new Pool({ connectionString: databaseUrl });
-const { app, auth, db, issuances, renewals } = createApp({
+const { app, auth, db, issuances, renewals, notifications } = createApp({
   pool,
   mailer: new ConsoleMailer(),
   clock: () => new Date(),
@@ -36,6 +36,13 @@ const RENEWAL_PASS_MS = 60_000;
 (async function renewDue() {
   await renewals.tick().catch((err) => console.error("renewal pass failed", err));
   setTimeout(renewDue, RENEWAL_PASS_MS);
+})();
+
+// Notices are sent, and silent Agents and Certificates nearing their end noticed, once a minute; each pass waits for the one before it.
+const NOTIFICATION_PASS_MS = 60_000;
+(async function notify() {
+  await notifications.tick().catch((err) => console.error("notification pass failed", err));
+  setTimeout(notify, NOTIFICATION_PASS_MS);
 })();
 
 if (process.env.OPERATOR_EMAIL && process.env.OPERATOR_PASSWORD) {

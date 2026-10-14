@@ -180,8 +180,15 @@
     {
       "idx": 25,
       "version": "7",
-      "when": 1791937794589,
-      "tag": "0025_issuance_awaiting_key",
+      "when": 1791943404720,
+      "tag": "0025_notifications",
+      "breakpoints": true
+    },
+    {
+      "idx": 26,
+      "version": "7",
+      "when": 1791980962895,
+      "tag": "0026_issuance_awaiting_key",
       "breakpoints": true
     }
   ]

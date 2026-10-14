@@ -10,7 +10,7 @@ export const APPROVER_ROLE = "approver";
 export const MEMBER_ROLE = "member";
 
 // Every permission there is. The organization, member, invitation and team resources are the ones Better Auth's
-// organization plugin checks itself; `audit`, `acmeAccount`, `dnsProvider`, `validationZone`, `dcvRule`, `managedCertificate`, `approval`, `agent`, `deploymentScript`, `deployment` and `apiKey` are ours (the last is the plugin's too).
+// organization plugin checks itself; `audit`, `acmeAccount`, `dnsProvider`, `validationZone`, `dcvRule`, `managedCertificate`, `approval`, `agent`, `deploymentScript`, `deployment`, `notificationChannel` and `apiKey` are ours (the last is the plugin's too).
 const statements = {
   organization: ["update", "delete"],
   member: ["create", "update", "delete"],
@@ -25,12 +25,12 @@ const statements = {
   dcvRule: ["read", "create", "update", "delete"],
   // `read` sees every Managed Certificate in the Organization (anyone else sees only what they own or proposed);
   // `create` makes one outright; `propose` asks for one that waits for Approval; `changeOwners` changes whose it is
-  // (its Owners may do that too, whatever their role, as they may `renew` it now, `setRenewalPolicy`, `replaceCsr` and
+  // (its Owners may do that too, whatever their role, as they may `changeSubscribers`, `renew` it now, `setRenewalPolicy`, `replaceCsr` and
   // `proposeNameChange`); `changeNames` changes its names outright, where a proposed name change waits for Approval;
   // `download` exports a Certificate it may see, and is what an API key must carry to do the same; `revoke` tells the CA
   // to distrust a Certificate (its Owners may, whatever their role) and `archive` retires the Managed Certificate (only
   // those who hold it may, so not its Owners).
-  managedCertificate: ["read", "create", "propose", "issue", "changeOwners", "renew", "setRenewalPolicy", "replaceCsr", "proposeNameChange", "changeNames", "download", "revoke", "archive"],
+  managedCertificate: ["read", "create", "propose", "issue", "changeOwners", "renew", "setRenewalPolicy", "replaceCsr", "proposeNameChange", "changeNames", "download", "revoke", "archive", "changeSubscribers"],
   approval: ["read", "decide"],
   // Agents: `register` makes the single-use token by which one registers into the Organization, `read` lists them, `revoke` ends one's credential.
   agent: ["read", "register", "revoke"],
@@ -41,6 +41,9 @@ const statements = {
   // use, which is running code on hosts, so only Organization Administrators hold any of this. `create` sets one up, `read`
   // sees them and their runs, `run` has an Agent run one again for its current Certificate.
   deployment: ["read", "create", "run"],
+  // Notification channels: email addresses and webhooks a Managed Certificate's notices can go to. `read` lists them (names
+  // and kinds, never a webhook's URL), so anyone who may subscribe one may choose it; `create` and `delete` configure them.
+  notificationChannel: ["read", "create", "delete"],
   // The Organization's own API keys (a user's keys need none): the organization plugin asks for these names.
   apiKey: ["create", "read", "update", "delete"],
 } as const;
@@ -55,8 +58,8 @@ export const ac = createAccessControl(statements);
 // to decide knowingly while a Member sees only their own.
 export const orgRoles = {
   [ORG_ADMIN_ROLE]: ac.newRole(statements),
-  [APPROVER_ROLE]: ac.newRole({ managedCertificate: ["read", "propose", "download"], approval: ["read", "decide"] }),
-  [MEMBER_ROLE]: ac.newRole({ managedCertificate: ["propose", "download"] }),
+  [APPROVER_ROLE]: ac.newRole({ managedCertificate: ["read", "propose", "download"], approval: ["read", "decide"], notificationChannel: ["read"] }),
+  [MEMBER_ROLE]: ac.newRole({ managedCertificate: ["propose", "download"], notificationChannel: ["read"] }),
 };
 
 const roleOf = (name: string) => (Object.hasOwn(orgRoles, name) ? orgRoles[name as keyof typeof orgRoles] : undefined);

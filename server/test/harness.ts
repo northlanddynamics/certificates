@@ -11,6 +11,7 @@ import type { Issuances } from "../src/issuance";
 import { createLocalKms } from "../src/kms";
 import { CapturingMailer } from "../src/mailer";
 import type { MemberRemovalHook } from "../src/member-removal";
+import { CapturingWebhooks } from "../src/notifications";
 import { runMigrations } from "../src/migrate";
 import { bootstrapPlatformOperator } from "../src/operator";
 import type { UnitOfWork } from "../src/unit-of-work";
@@ -59,6 +60,10 @@ export interface Harness {
   unitOfWork: UnitOfWork;
   issuances: Issuances;
   mailer: CapturingMailer;
+  /** What webhook notification channels were sent, instead of sending it; `failing` makes every post fail. */
+  webhooks: CapturingWebhooks;
+  /** One pass of notifications at the harness's clock: notices Agents gone silent and Certificates nearing their end, then sends what is queued. Returns how many were sent. */
+  deliverNotices(): Promise<number>;
   /** Where the CA's environments are served; every one is Pebble unless a test points one elsewhere. */
   caDirectories: Record<AcmeEnvironment, string>;
   /** Reads TXT records straight from BIND, as the CA's DNS checks do: what is really published. */
@@ -120,6 +125,7 @@ function cookieFrom(res: Response): string {
 export async function createHarness(overrides: Partial<AppDeps> = {}): Promise<Harness> {
   const pool = new Pool({ connectionString: TEST_DATABASE_URL });
   const mailer = new CapturingMailer();
+  const webhooks = new CapturingWebhooks();
   const memberRemovalHooks: MemberRemovalHook[] = [];
   let now = new Date("2026-01-01T00:00:00Z");
   const caDirectories: Record<AcmeEnvironment, string> = { staging: PEBBLE_DIRECTORY, production: PEBBLE_DIRECTORY };
@@ -139,6 +145,7 @@ export async function createHarness(overrides: Partial<AppDeps> = {}): Promise<H
   const deps: AppDeps = {
     pool,
     mailer,
+    webhooks,
     memberRemovalHooks,
     kms: createLocalKms(Buffer.alloc(32, 1).toString("base64")),
     certificateAuthority: {
@@ -169,7 +176,7 @@ export async function createHarness(overrides: Partial<AppDeps> = {}): Promise<H
     secret: "test-secret-test-secret-test-secret-1234",
     ...overrides,
   };
-  const { app, auth, db, unitOfWork, issuances, renewals } = createApp(deps);
+  const { app, auth, db, unitOfWork, issuances, renewals, notifications } = createApp(deps);
   await runMigrations(pool);
   const reset = async () => {
     await issuances.idle();
@@ -180,6 +187,8 @@ export async function createHarness(overrides: Partial<AppDeps> = {}): Promise<H
     // Cascades through every table that references an Organization or a user.
     await pool.query(`truncate organization, "user", apikey cascade`);
     mailer.sent.length = 0;
+    webhooks.sent.length = 0;
+    webhooks.failing = false;
     memberRemovalHooks.length = 0;
     createdAccountKeys.length = 0;
     caDirectories.staging = caDirectories.production = PEBBLE_DIRECTORY;
@@ -201,6 +210,8 @@ export async function createHarness(overrides: Partial<AppDeps> = {}): Promise<H
     unitOfWork,
     issuances,
     mailer,
+    webhooks,
+    deliverNotices: () => notifications.tick(),
     caDirectories,
     bindTxt,
     dcvResolver,

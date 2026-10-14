@@ -34,6 +34,8 @@ export type AuditAction =
   | "managed_certificate.rejected"
   | "managed_certificate.owner_added"
   | "managed_certificate.owner_removed"
+  | "managed_certificate.subscriber_added"
+  | "managed_certificate.subscriber_removed"
   | "managed_certificate.renewal_policy_changed"
   | "managed_certificate.csr_uploaded"
   | "managed_certificate.names_changed"
@@ -59,6 +61,8 @@ export type AuditAction =
   | "deployment.run_requested"
   | "deployment_run.succeeded"
   | "deployment_run.failed"
+  | "notification_channel.created"
+  | "notification_channel.deleted"
   | "issuance.started"
   | "issuance.succeeded"
   | "issuance.failed";

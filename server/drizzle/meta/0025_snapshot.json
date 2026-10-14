@@ -1,5 +1,5 @@
 {
-  "id": "6cfd2c24-5418-4abb-88c6-4075cb0ab368",
+  "id": "d5b7e4d8-b8dc-4b4c-8049-88991f9b3dc4",
   "prevId": "bf4b0d5b-9896-4df9-ba85-66d5b7ea07d9",
   "version": "7",
   "dialect": "postgresql",
@@ -2172,13 +2172,6 @@
           "primaryKey": false,
           "notNull": false
         },
-        "awaiting_key": {
-          "name": "awaiting_key",
-          "type": "boolean",
-          "primaryKey": false,
-          "notNull": true,
-          "default": false
-        },
         "started_at": {
           "name": "started_at",
           "type": "timestamp with time zone",
@@ -2664,6 +2657,272 @@
       },
       "isRLSEnabled": false
     },
+    "public.managed_certificate_subscriber": {
+      "name": "managed_certificate_subscriber",
+      "schema": "",
+      "columns": {
+        "id": {
+          "name": "id",
+          "type": "bigint",
+          "primaryKey": true,
+          "notNull": true,
+          "identity": {
+            "type": "always",
+            "name": "managed_certificate_subscriber_id_seq",
+            "schema": "public",
+            "increment": "1",
+            "startWith": "1",
+            "minValue": "1",
+            "maxValue": "9223372036854775807",
+            "cache": "1",
+            "cycle": false
+          }
+        },
+        "organization_id": {
+          "name": "organization_id",
+          "type": "text",
+          "primaryKey": false,
+          "notNull": true
+        },
+        "managed_certificate_id": {
+          "name": "managed_certificate_id",
+          "type": "uuid",
+          "primaryKey": false,
+          "notNull": true
+        },
+        "user_id": {
+          "name": "user_id",
+          "type": "text",
+          "primaryKey": false,
+          "notNull": false
+        },
+        "team_id": {
+          "name": "team_id",
+          "type": "text",
+          "primaryKey": false,
+          "notNull": false
+        },
+        "channel_id": {
+          "name": "channel_id",
+          "type": "uuid",
+          "primaryKey": false,
+          "notNull": false
+        },
+        "created_at": {
+          "name": "created_at",
+          "type": "timestamp with time zone",
+          "primaryKey": false,
+          "notNull": true,
+          "default": "now()"
+        }
+      },
+      "indexes": {
+        "managed_certificate_subscriber_user_unique": {
+          "name": "managed_certificate_subscriber_user_unique",
+          "columns": [
+            {
+              "expression": "managed_certificate_id",
+              "isExpression": false,
+              "asc": true,
+              "nulls": "last"
+            },
+            {
+              "expression": "user_id",
+              "isExpression": false,
+              "asc": true,
+              "nulls": "last"
+            }
+          ],
+          "isUnique": true,
+          "where": "\"managed_certificate_subscriber\".\"user_id\" is not null",
+          "concurrently": false,
+          "method": "btree",
+          "with": {}
+        },
+        "managed_certificate_subscriber_team_unique": {
+          "name": "managed_certificate_subscriber_team_unique",
+          "columns": [
+            {
+              "expression": "managed_certificate_id",
+              "isExpression": false,
+              "asc": true,
+              "nulls": "last"
+            },
+            {
+              "expression": "team_id",
+              "isExpression": false,
+              "asc": true,
+              "nulls": "last"
+            }
+          ],
+          "isUnique": true,
+          "where": "\"managed_certificate_subscriber\".\"team_id\" is not null",
+          "concurrently": false,
+          "method": "btree",
+          "with": {}
+        },
+        "managed_certificate_subscriber_channel_unique": {
+          "name": "managed_certificate_subscriber_channel_unique",
+          "columns": [
+            {
+              "expression": "managed_certificate_id",
+              "isExpression": false,
+              "asc": true,
+              "nulls": "last"
+            },
+            {
+              "expression": "channel_id",
+              "isExpression": false,
+              "asc": true,
+              "nulls": "last"
+            }
+          ],
+          "isUnique": true,
+          "where": "\"managed_certificate_subscriber\".\"channel_id\" is not null",
+          "concurrently": false,
+          "method": "btree",
+          "with": {}
+        },
+        "managed_certificate_subscriber_user_idx": {
+          "name": "managed_certificate_subscriber_user_idx",
+          "columns": [
+            {
+              "expression": "organization_id",
+              "isExpression": false,
+              "asc": true,
+              "nulls": "last"
+            },
+            {
+              "expression": "user_id",
+              "isExpression": false,
+              "asc": true,
+              "nulls": "last"
+            }
+          ],
+          "isUnique": false,
+          "concurrently": false,
+          "method": "btree",
+          "with": {}
+        },
+        "managed_certificate_subscriber_team_idx": {
+          "name": "managed_certificate_subscriber_team_idx",
+          "columns": [
+            {
+              "expression": "organization_id",
+              "isExpression": false,
+              "asc": true,
+              "nulls": "last"
+            },
+            {
+              "expression": "team_id",
+              "isExpression": false,
+              "asc": true,
+              "nulls": "last"
+            }
+          ],
+          "isUnique": false,
+          "concurrently": false,
+          "method": "btree",
+          "with": {}
+        },
+        "managed_certificate_subscriber_channel_idx": {
+          "name": "managed_certificate_subscriber_channel_idx",
+          "columns": [
+            {
+              "expression": "channel_id",
+              "isExpression": false,
+              "asc": true,
+              "nulls": "last"
+            }
+          ],
+          "isUnique": false,
+          "concurrently": false,
+          "method": "btree",
+          "with": {}
+        }
+      },
+      "foreignKeys": {
+        "managed_certificate_subscriber_organization_id_organization_id_fk": {
+          "name": "managed_certificate_subscriber_organization_id_organization_id_fk",
+          "tableFrom": "managed_certificate_subscriber",
+          "tableTo": "organization",
+          "columnsFrom": [
+            "organization_id"
+          ],
+          "columnsTo": [
+            "id"
+          ],
+          "onDelete": "no action",
+          "onUpdate": "no action"
+        },
+        "managed_certificate_subscriber_user_id_user_id_fk": {
+          "name": "managed_certificate_subscriber_user_id_user_id_fk",
+          "tableFrom": "managed_certificate_subscriber",
+          "tableTo": "user",
+          "columnsFrom": [
+            "user_id"
+          ],
+          "columnsTo": [
+            "id"
+          ],
+          "onDelete": "cascade",
+          "onUpdate": "no action"
+        },
+        "managed_certificate_subscriber_team_id_team_id_fk": {
+          "name": "managed_certificate_subscriber_team_id_team_id_fk",
+          "tableFrom": "managed_certificate_subscriber",
+          "tableTo": "team",
+          "columnsFrom": [
+            "team_id"
+          ],
+          "columnsTo": [
+            "id"
+          ],
+          "onDelete": "cascade",
+          "onUpdate": "no action"
+        },
+        "managed_certificate_subscriber_managed_certificate_id_organization_id_managed_certificate_id_organization_id_fk": {
+          "name": "managed_certificate_subscriber_managed_certificate_id_organization_id_managed_certificate_id_organization_id_fk",
+          "tableFrom": "managed_certificate_subscriber",
+          "tableTo": "managed_certificate",
+          "columnsFrom": [
+            "managed_certificate_id",
+            "organization_id"
+          ],
+          "columnsTo": [
+            "id",
+            "organization_id"
+          ],
+          "onDelete": "no action",
+          "onUpdate": "no action"
+        },
+        "managed_certificate_subscriber_channel_id_organization_id_notification_channel_id_organization_id_fk": {
+          "name": "managed_certificate_subscriber_channel_id_organization_id_notification_channel_id_organization_id_fk",
+          "tableFrom": "managed_certificate_subscriber",
+          "tableTo": "notification_channel",
+          "columnsFrom": [
+            "channel_id",
+            "organization_id"
+          ],
+          "columnsTo": [
+            "id",
+            "organization_id"
+          ],
+          "onDelete": "no action",
+          "onUpdate": "no action"
+        }
+      },
+      "compositePrimaryKeys": {},
+      "uniqueConstraints": {},
+      "policies": {},
+      "checkConstraints": {
+        "managed_certificate_subscriber_one_of": {
+          "name": "managed_certificate_subscriber_one_of",
+          "value": "num_nonnulls(\"managed_certificate_subscriber\".\"user_id\", \"managed_certificate_subscriber\".\"team_id\", \"managed_certificate_subscriber\".\"channel_id\") = 1"
+        }
+      },
+      "isRLSEnabled": false
+    },
     "public.member": {
       "name": "member",
       "schema": "",
@@ -2943,6 +3202,366 @@
         "name_change_status": {
           "name": "name_change_status",
           "value": "\"name_change\".\"status\" in ('pending', 'approved', 'rejected', 'withdrawn', 'discarded')"
+        }
+      },
+      "isRLSEnabled": false
+    },
+    "public.notice": {
+      "name": "notice",
+      "schema": "",
+      "columns": {
+        "id": {
+          "name": "id",
+          "type": "uuid",
+          "primaryKey": true,
+          "notNull": true,
+          "default": "gen_random_uuid()"
+        },
+        "organization_id": {
+          "name": "organization_id",
+          "type": "text",
+          "primaryKey": false,
+          "notNull": true
+        },
+        "event": {
+          "name": "event",
+          "type": "text",
+          "primaryKey": false,
+          "notNull": true
+        },
+        "email": {
+          "name": "email",
+          "type": "text",
+          "primaryKey": false,
+          "notNull": false
+        },
+        "channel_id": {
+          "name": "channel_id",
+          "type": "uuid",
+          "primaryKey": false,
+          "notNull": false
+        },
+        "subject": {
+          "name": "subject",
+          "type": "text",
+          "primaryKey": false,
+          "notNull": true
+        },
+        "text": {
+          "name": "text",
+          "type": "text",
+          "primaryKey": false,
+          "notNull": true
+        },
+        "payload": {
+          "name": "payload",
+          "type": "jsonb",
+          "primaryKey": false,
+          "notNull": true
+        },
+        "status": {
+          "name": "status",
+          "type": "text",
+          "primaryKey": false,
+          "notNull": true,
+          "default": "'queued'"
+        },
+        "attempts": {
+          "name": "attempts",
+          "type": "integer",
+          "primaryKey": false,
+          "notNull": true,
+          "default": 0
+        },
+        "next_attempt_at": {
+          "name": "next_attempt_at",
+          "type": "timestamp with time zone",
+          "primaryKey": false,
+          "notNull": true
+        },
+        "last_error": {
+          "name": "last_error",
+          "type": "text",
+          "primaryKey": false,
+          "notNull": false
+        },
+        "created_at": {
+          "name": "created_at",
+          "type": "timestamp with time zone",
+          "primaryKey": false,
+          "notNull": true
+        },
+        "sent_at": {
+          "name": "sent_at",
+          "type": "timestamp with time zone",
+          "primaryKey": false,
+          "notNull": false
+        }
+      },
+      "indexes": {
+        "notice_queued_idx": {
+          "name": "notice_queued_idx",
+          "columns": [
+            {
+              "expression": "next_attempt_at",
+              "isExpression": false,
+              "asc": true,
+              "nulls": "last"
+            }
+          ],
+          "isUnique": false,
+          "where": "\"notice\".\"status\" = 'queued'",
+          "concurrently": false,
+          "method": "btree",
+          "with": {}
+        }
+      },
+      "foreignKeys": {
+        "notice_organization_id_organization_id_fk": {
+          "name": "notice_organization_id_organization_id_fk",
+          "tableFrom": "notice",
+          "tableTo": "organization",
+          "columnsFrom": [
+            "organization_id"
+          ],
+          "columnsTo": [
+            "id"
+          ],
+          "onDelete": "no action",
+          "onUpdate": "no action"
+        },
+        "notice_channel_id_organization_id_notification_channel_id_organization_id_fk": {
+          "name": "notice_channel_id_organization_id_notification_channel_id_organization_id_fk",
+          "tableFrom": "notice",
+          "tableTo": "notification_channel",
+          "columnsFrom": [
+            "channel_id",
+            "organization_id"
+          ],
+          "columnsTo": [
+            "id",
+            "organization_id"
+          ],
+          "onDelete": "cascade",
+          "onUpdate": "no action"
+        }
+      },
+      "compositePrimaryKeys": {},
+      "uniqueConstraints": {},
+      "policies": {},
+      "checkConstraints": {
+        "notice_status": {
+          "name": "notice_status",
+          "value": "\"notice\".\"status\" in ('queued', 'sent', 'failed')"
+        },
+        "notice_recipient": {
+          "name": "notice_recipient",
+          "value": "\"notice\".\"email\" is not null or \"notice\".\"channel_id\" is not null"
+        }
+      },
+      "isRLSEnabled": false
+    },
+    "public.noticed_condition": {
+      "name": "noticed_condition",
+      "schema": "",
+      "columns": {
+        "organization_id": {
+          "name": "organization_id",
+          "type": "text",
+          "primaryKey": false,
+          "notNull": true
+        },
+        "key": {
+          "name": "key",
+          "type": "text",
+          "primaryKey": false,
+          "notNull": true
+        },
+        "noticed_at": {
+          "name": "noticed_at",
+          "type": "timestamp with time zone",
+          "primaryKey": false,
+          "notNull": true
+        }
+      },
+      "indexes": {},
+      "foreignKeys": {
+        "noticed_condition_organization_id_organization_id_fk": {
+          "name": "noticed_condition_organization_id_organization_id_fk",
+          "tableFrom": "noticed_condition",
+          "tableTo": "organization",
+          "columnsFrom": [
+            "organization_id"
+          ],
+          "columnsTo": [
+            "id"
+          ],
+          "onDelete": "no action",
+          "onUpdate": "no action"
+        }
+      },
+      "compositePrimaryKeys": {
+        "noticed_condition_organization_id_key_pk": {
+          "name": "noticed_condition_organization_id_key_pk",
+          "columns": [
+            "organization_id",
+            "key"
+          ]
+        }
+      },
+      "uniqueConstraints": {},
+      "policies": {},
+      "checkConstraints": {},
+      "isRLSEnabled": false
+    },
+    "public.notification_channel": {
+      "name": "notification_channel",
+      "schema": "",
+      "columns": {
+        "id": {
+          "name": "id",
+          "type": "uuid",
+          "primaryKey": true,
+          "notNull": true,
+          "default": "gen_random_uuid()"
+        },
+        "organization_id": {
+          "name": "organization_id",
+          "type": "text",
+          "primaryKey": false,
+          "notNull": true
+        },
+        "name": {
+          "name": "name",
+          "type": "text",
+          "primaryKey": false,
+          "notNull": true
+        },
+        "kind": {
+          "name": "kind",
+          "type": "text",
+          "primaryKey": false,
+          "notNull": true
+        },
+        "email": {
+          "name": "email",
+          "type": "text",
+          "primaryKey": false,
+          "notNull": false
+        },
+        "secret_id": {
+          "name": "secret_id",
+          "type": "uuid",
+          "primaryKey": false,
+          "notNull": false
+        },
+        "webhook_host": {
+          "name": "webhook_host",
+          "type": "text",
+          "primaryKey": false,
+          "notNull": false
+        },
+        "created_at": {
+          "name": "created_at",
+          "type": "timestamp with time zone",
+          "primaryKey": false,
+          "notNull": true
+        }
+      },
+      "indexes": {
+        "notification_channel_org_idx": {
+          "name": "notification_channel_org_idx",
+          "columns": [
+            {
+              "expression": "organization_id",
+              "isExpression": false,
+              "asc": true,
+              "nulls": "last"
+            },
+            {
+              "expression": "created_at",
+              "isExpression": false,
+              "asc": true,
+              "nulls": "last"
+            }
+          ],
+          "isUnique": false,
+          "concurrently": false,
+          "method": "btree",
+          "with": {}
+        },
+        "notification_channel_name_unique": {
+          "name": "notification_channel_name_unique",
+          "columns": [
+            {
+              "expression": "organization_id",
+              "isExpression": false,
+              "asc": true,
+              "nulls": "last"
+            },
+            {
+              "expression": "lower(\"name\")",
+              "asc": true,
+              "isExpression": true,
+              "nulls": "last"
+            }
+          ],
+          "isUnique": true,
+          "concurrently": false,
+          "method": "btree",
+          "with": {}
+        }
+      },
+      "foreignKeys": {
+        "notification_channel_organization_id_organization_id_fk": {
+          "name": "notification_channel_organization_id_organization_id_fk",
+          "tableFrom": "notification_channel",
+          "tableTo": "organization",
+          "columnsFrom": [
+            "organization_id"
+          ],
+          "columnsTo": [
+            "id"
+          ],
+          "onDelete": "no action",
+          "onUpdate": "no action"
+        },
+        "notification_channel_secret_id_organization_id_secret_id_organization_id_fk": {
+          "name": "notification_channel_secret_id_organization_id_secret_id_organization_id_fk",
+          "tableFrom": "notification_channel",
+          "tableTo": "secret",
+          "columnsFrom": [
+            "secret_id",
+            "organization_id"
+          ],
+          "columnsTo": [
+            "id",
+            "organization_id"
+          ],
+          "onDelete": "no action",
+          "onUpdate": "no action"
+        }
+      },
+      "compositePrimaryKeys": {},
+      "uniqueConstraints": {
+        "notification_channel_id_organization_unique": {
+          "name": "notification_channel_id_organization_unique",
+          "nullsNotDistinct": false,
+          "columns": [
+            "id",
+            "organization_id"
+          ]
+        }
+      },
+      "policies": {},
+      "checkConstraints": {
+        "notification_channel_kind": {
+          "name": "notification_channel_kind",
+          "value": "\"notification_channel\".\"kind\" in ('email', 'webhook')"
+        },
+        "notification_channel_target": {
+          "name": "notification_channel_target",
+          "value": "(\"notification_channel\".\"kind\" = 'email' and \"notification_channel\".\"email\" is not null) or (\"notification_channel\".\"kind\" = 'webhook' and \"notification_channel\".\"secret_id\" is not null)"
         }
       },
       "isRLSEnabled": false

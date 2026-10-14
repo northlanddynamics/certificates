@@ -8,6 +8,7 @@ import type { Db } from "./db/client";
 import { managedCertificate } from "./db/schema";
 import { OrgParam, HttpError, errors, json } from "./http";
 import { refusalMessage, type Issuances } from "./issuance";
+import type { Notifications } from "./notifications";
 import { ManagedCertificate, ManagedCertificateParams, type ManagedCertificateReader } from "./managed-certificate-reader";
 import { PendingNameChange, pendingNameChangesOf, toPendingNameChange } from "./name-change";
 import type { Actor, UnitOfWork } from "./unit-of-work";
@@ -22,8 +23,9 @@ export function registerApprovals(ctx: {
   unitOfWork: UnitOfWork;
   issuances: Issuances;
   reader: ManagedCertificateReader;
+  notifications: Notifications;
 }) {
-  const { app, db, requireUser, authorize, unitOfWork, issuances, reader } = ctx;
+  const { app, db, requireUser, authorize, unitOfWork, issuances, reader, notifications } = ctx;
   const { findManagedCertificate, withState } = reader;
 
   app.openapi(
@@ -94,6 +96,7 @@ export function registerApprovals(ctx: {
         target: { type: "managed_certificate", id: mc.id },
         detail: { names: mc.names, reason, proposedBy: mc.proposedByEmail },
       });
+      await notifications.notify(tx, change, mc, { event: "approval.decided", detail: { of: "proposal", decision, reason, decidedBy: actor.email, names: mc.names } });
       if (decision === "approved") {
         const begun = await issuances.begin(tx, change, actor, mc, "issue");
         // Only an archive can refuse it now (archived since the proposal was made); the approval is rolled back with it.

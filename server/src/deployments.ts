@@ -22,6 +22,7 @@ import { agent, certificate, deployment, deploymentRun, deploymentScript, deploy
 import { SCRIPT_INTERPRETERS } from "./deployment-script-kinds";
 import { HttpError, OrgParam, PageQuery, errors, json, pageOf } from "./http";
 import type { Issuances } from "./issuance";
+import type { Notifications } from "./notifications";
 import { RenewalPolicy } from "./managed-certificate-reader";
 import { MAX_NAMES, normalizeNames } from "./names";
 import { checkNamesAndCsr, namesField } from "./names-and-csr";
@@ -105,8 +106,9 @@ export function registerDeployments(ctx: {
   unitOfWork: UnitOfWork;
   workItems: WorkItems;
   issuances: Issuances;
+  notifications: Notifications;
 }) {
-  const { app, db, requireUser, authorize, unitOfWork, workItems, issuances } = ctx;
+  const { app, db, requireUser, authorize, unitOfWork, workItems, issuances, notifications } = ctx;
 
   async function findDeployment(orgId: string, id: string) {
     // Not a UUID can't be a Deployment; asking Postgres would only raise a type error.
@@ -318,6 +320,13 @@ export function registerDeployments(ctx: {
             exitCode: reported.exitCode ?? null,
           },
         });
+        if (status === "failed") {
+          const [host] = await tx.select({ hostName: agent.hostName }).from(agent).where(eq(agent.id, row.agentId));
+          await notifications.notify(tx, change, { id: row.managedCertificateId, organizationId: item.organizationId }, {
+            event: "deployment_run.failed",
+            detail: { deploymentId: row.id, runId: run!.id, agentId: row.agentId, hostName: host?.hostName ?? "", exitCode: reported.exitCode ?? null },
+          });
+        }
       },
     },
   );
