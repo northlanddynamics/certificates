@@ -204,6 +204,13 @@
       "when": 1791998998959,
       "tag": "0028_mfa_passkeys",
       "breakpoints": true
+    },
+    {
+      "idx": 29,
+      "version": "7",
+      "when": 1792005939022,
+      "tag": "0029_sso",
+      "breakpoints": true
     }
   ]
 }

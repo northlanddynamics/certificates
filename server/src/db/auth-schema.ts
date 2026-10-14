@@ -128,6 +128,21 @@ export const passkey = pgTable(
   ],
 );
 
+export const ssoProvider = pgTable("sso_provider", {
+  id: text("id").primaryKey(),
+  issuer: text("issuer").notNull(),
+  oidcConfig: text("oidc_config"),
+  samlConfig: text("saml_config"),
+  userId: text("user_id")
+    .notNull()
+    .references(() => user.id, { onDelete: "cascade" }),
+  providerId: text("provider_id").notNull().unique(),
+  organizationId: text("organization_id"),
+  domain: text("domain").notNull(),
+  domainVerified: boolean("domain_verified"),
+  name: text("name").notNull(),
+});
+
 export const apikey = pgTable(
   "apikey",
   {
@@ -251,6 +266,7 @@ export const userRelations = relations(user, ({ many }) => ({
   accounts: many(account),
   twoFactors: many(twoFactor),
   passkeys: many(passkey),
+  ssoProviders: many(ssoProvider),
   teamMembers: many(teamMember),
   members: many(member),
   invitations: many(invitation),
@@ -280,6 +296,13 @@ export const twoFactorRelations = relations(twoFactor, ({ one }) => ({
 export const passkeyRelations = relations(passkey, ({ one }) => ({
   user: one(user, {
     fields: [passkey.userId],
+    references: [user.id],
+  }),
+}));
+
+export const ssoProviderRelations = relations(ssoProvider, ({ one }) => ({
+  user: one(user, {
+    fields: [ssoProvider.userId],
     references: [user.id],
   }),
 }));

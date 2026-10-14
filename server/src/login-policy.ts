@@ -1,4 +1,5 @@
-// An Organization's login policy, and its enforcement. Requiring MFA means no member relies on a password alone: a
+// An Organization's login policy, and its enforcement. It can require SSO, which sso-sign-in.ts enforces where Better Auth
+// makes a session; and it can require MFA. Requiring MFA means no member relies on a password alone: a
 // member who has a password and has not set up TOTP may sign in, but may use nothing on the platform until they set it up.
 // A passkey does not count, because the password still signs in by itself; a user without a password (who signs in by
 // passkey only) is not a password user and is not held up.
@@ -9,10 +10,10 @@
 // anywhere. What stays open is what setting it up needs: `/api/me`, Better Auth's own endpoints (two-factor among them), and the login policy itself,
 // so that an Organization Administrator who required MFA can still undo it.
 import { OpenAPIHono, createRoute, z } from "@hono/zod-openapi";
-import { and, eq, isNotNull } from "drizzle-orm";
+import { and, eq, inArray, isNotNull } from "drizzle-orm";
 import type { Authorizer } from "./authorization";
-import type { Db } from "./db/client";
-import { account, loginPolicy, member, user } from "./db/schema";
+import type { Db, Tx } from "./db/client";
+import { account, loginPolicy, member, ssoProvider, user } from "./db/schema";
 import { HttpError, OrgParam, errors, json } from "./http";
 import type { Actor, UnitOfWork } from "./unit-of-work";
 
@@ -61,7 +62,11 @@ export function createLoginPolicies(db: Db): LoginPolicies {
 
 const Policy = z.object({
   requireMfa: z.boolean().openapi({ description: "Whether members who sign in with a password must set up TOTP before using the platform." }),
+  requireSso: z.boolean().openapi({
+    description: "Whether members must sign in through one of the Organization's SSO connections, and in no other way (Platform Operators excepted).",
+  }),
 });
+const PolicyChange = Policy.partial().openapi({ description: "What to change; what is left out stays as it is." });
 
 export function registerLoginPolicy(ctx: {
   app: OpenAPIHono;
@@ -72,10 +77,12 @@ export function registerLoginPolicy(ctx: {
   unitOfWork: UnitOfWork;
 }) {
   const { app, db, requireSession, authorize, unitOfWork } = ctx;
-  const current = async (tx: Pick<Db, "select">, organizationId: string, lock = false) => {
-    const query = tx.select({ requireMfa: loginPolicy.requireMfa }).from(loginPolicy).where(eq(loginPolicy.organizationId, organizationId));
-    const [row] = await (lock ? query.for("update") : query);
-    return { requireMfa: row?.requireMfa ?? false };
+  const current = async (organizationId: string) => {
+    const [row] = await db
+      .select({ requireMfa: loginPolicy.requireMfa, requireSso: loginPolicy.requireSso })
+      .from(loginPolicy)
+      .where(eq(loginPolicy.organizationId, organizationId));
+    return { requireMfa: row?.requireMfa ?? false, requireSso: row?.requireSso ?? false };
   };
 
   app.openapi(
@@ -90,7 +97,7 @@ export function registerLoginPolicy(ctx: {
     async (c) => {
       const { orgId } = c.req.valid("param");
       await authorize(await requireSession(c), orgId, { loginPolicy: ["read"] });
-      return c.json(await current(db, orgId), 200);
+      return c.json(await current(orgId), 200);
     },
   );
 
@@ -100,30 +107,59 @@ export function registerLoginPolicy(ctx: {
       path: "/api/organizations/{orgId}/login-policy",
       tags: ["Identity"],
       summary: "Change the Organization's login policy",
-      description: "Requiring MFA holds up every member who signs in with a password and has not set up TOTP, the caller included, until they set it up. A change is an Audit Event.",
-      request: { params: OrgParam, body: { content: { "application/json": { schema: Policy } } } },
-      responses: { 200: json(Policy), ...errors(400, 401, 403, 404) },
+      description:
+        "Requiring MFA holds up every member who signs in with a password and has not set up TOTP, the caller included, until they set it up. Requiring SSO refuses every other way of signing in to the members; the caller must have signed in through one of the Organization's SSO connections themselves, so that they know it lets them back in. A change is an Audit Event.",
+      request: { params: OrgParam, body: { content: { "application/json": { schema: PolicyChange } } } },
+      responses: { 200: json(Policy), ...errors(400, 401, 403, 404, 409) },
     }),
     async (c) => {
       const { orgId } = c.req.valid("param");
-      const { requireMfa } = c.req.valid("json");
+      const asked = c.req.valid("json");
       const actor = await requireSession(c);
       await authorize(actor, orgId, { loginPolicy: ["update"] });
       const changed = await unitOfWork.run(actor, async (tx, change) => {
         // Serialises concurrent changes, so each records the value the one before left.
-        await tx.insert(loginPolicy).values({ organizationId: orgId, updatedAt: change.occurredAt }).onConflictDoNothing();
-        const before = await current(tx, orgId, true);
-        if (before.requireMfa === requireMfa) return before;
-        await tx.update(loginPolicy).set({ requireMfa, updatedAt: change.occurredAt }).where(eq(loginPolicy.organizationId, orgId));
-        await change.audit({
-          organizationId: orgId,
-          action: "login_policy.changed",
-          target: { type: "organization", id: orgId },
-          detail: { requireMfa: { from: before.requireMfa, to: requireMfa } },
-        });
-        return { requireMfa };
+        const before = await lockLoginPolicy(tx, orgId, change.occurredAt);
+        const after = { ...before, ...asked };
+        const detail: Record<string, { from: boolean; to: boolean }> = {};
+        for (const key of ["requireMfa", "requireSso"] as const) if (before[key] !== after[key]) detail[key] = { from: before[key], to: after[key] };
+        if (Object.keys(detail).length === 0) return before;
+        if (detail.requireSso?.to) await refuseLockout(tx, orgId, actor);
+        await tx.update(loginPolicy).set({ ...after, updatedAt: change.occurredAt }).where(eq(loginPolicy.organizationId, orgId));
+        await change.audit({ organizationId: orgId, action: "login_policy.changed", target: { type: "organization", id: orgId }, detail });
+        return after;
       });
       return c.json(changed, 200);
     },
   );
+}
+
+/**
+ * Refuses to require SSO of an Organization whose administrator could not get back in: one without an SSO connection,
+ * or whose administrator making the change has not signed in through one of its connections. Deleting the last
+ * connection while SSO is required is refused where connections are deleted (sso-connections.ts).
+ */
+async function refuseLockout(tx: Pick<Db, "select">, organizationId: string, actor: Actor) {
+  const connections = await tx.select({ providerId: ssoProvider.providerId }).from(ssoProvider).where(eq(ssoProvider.organizationId, organizationId));
+  if (connections.length === 0) throw new HttpError(409, "the Organization has no SSO connection to require");
+  const [signedIn] = await tx
+    .select({ id: account.id })
+    .from(account)
+    .where(and(eq(account.userId, actor.id), inArray(account.providerId, connections.map((c) => c.providerId))))
+    .limit(1);
+  if (!signedIn) throw new HttpError(409, "sign in through one of the Organization's SSO connections first, so that you know it lets you back in");
+}
+
+/**
+ * The Organization's login policy, locked for the rest of the transaction: what serialises changes to it, and the
+ * deletion of an SSO connection it may depend on (sso-connections.ts).
+ */
+export async function lockLoginPolicy(tx: Tx, organizationId: string, occurredAt: Date) {
+  await tx.insert(loginPolicy).values({ organizationId, updatedAt: occurredAt }).onConflictDoNothing();
+  const [row] = await tx
+    .select({ requireMfa: loginPolicy.requireMfa, requireSso: loginPolicy.requireSso })
+    .from(loginPolicy)
+    .where(eq(loginPolicy.organizationId, organizationId))
+    .for("update");
+  return { requireMfa: row?.requireMfa ?? false, requireSso: row?.requireSso ?? false };
 }

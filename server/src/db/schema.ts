@@ -831,5 +831,6 @@ export const loginPolicy = pgTable("login_policy", {
     .primaryKey()
     .references(() => organization.id),
   requireMfa: boolean("require_mfa").notNull().default(false),
+  requireSso: boolean("require_sso").notNull().default(false),
   updatedAt: timestamp("updated_at", { withTimezone: true }).notNull(),
 });
