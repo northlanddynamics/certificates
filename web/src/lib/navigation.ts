@@ -1,4 +1,4 @@
-import { BellIcon, BuildingIcon, LockKeyholeIcon, ScrollTextIcon, SendIcon, BotIcon, GlobeIcon, LandmarkIcon, FileKey2Icon, FileTerminalIcon, KeyRoundIcon, LogInIcon, RocketIcon, ShieldCheckIcon, ShieldUserIcon, UserRoundIcon, UsersIcon, type LucideIcon } from "lucide-react";
+import { BellIcon, BuildingIcon, LockKeyholeIcon, PlugIcon, ScrollTextIcon, SendIcon, BotIcon, GlobeIcon, LandmarkIcon, FileKey2Icon, FileTerminalIcon, KeyRoundIcon, LogInIcon, RocketIcon, ShieldCheckIcon, ShieldIcon, ShieldUserIcon, UserRoundIcon, UsersIcon, type LucideIcon } from "lucide-react";
 import { can, type Me } from "@/lib/api";
 
 type Org = Me["organizations"][number];
@@ -10,13 +10,22 @@ export interface NavItem {
   icon: LucideIcon;
 }
 
-export interface NavGroup {
-  /** None for a group that stands without a heading. */
-  label?: string;
+/** Pages folded under one expandable entry of a group. */
+export interface NavSection {
+  title: string;
+  icon: LucideIcon;
   items: NavItem[];
 }
 
-/** The pages of one Organization that the caller may open, under the headings the sidebar gives them; a heading with no page left under it is not shown. */
+export interface NavGroup {
+  /** None for a group that stands without a heading. */
+  label?: string;
+  items: (NavItem | NavSection)[];
+}
+
+export const isNavSection = (entry: NavItem | NavSection): entry is NavSection => "items" in entry;
+
+/** The pages of one Organization that the caller may open, under the headings the sidebar gives them; a heading or section with no page left under it is not shown. */
 export function organizationNavGroups(org: Org): NavGroup[] {
   const base = `/organizations/${org.id}`;
   const groups: NavGroup[] = [
@@ -36,14 +45,26 @@ export function organizationNavGroups(org: Org): NavGroup[] {
       label: "Administration",
       items: [
         { title: "API keys", url: `${base}/api-keys`, icon: KeyRoundIcon },
-        ...(can(org, "acmeAccount", "read") ? [{ title: "ACME accounts", url: `${base}/acme-accounts`, icon: LandmarkIcon }] : []),
-        ...(can(org, "dnsProvider", "read") ? [{ title: "DNS Providers", url: `${base}/dns-providers`, icon: GlobeIcon }] : []),
+        {
+          title: "Integrations",
+          icon: PlugIcon,
+          items: [
+            ...(can(org, "acmeAccount", "read") ? [{ title: "ACME accounts", url: `${base}/acme-accounts`, icon: LandmarkIcon }] : []),
+            ...(can(org, "dnsProvider", "read") ? [{ title: "DNS Providers", url: `${base}/dns-providers`, icon: GlobeIcon }] : []),
+          ],
+        },
         // Anyone may list the channels (to choose one as a Subscriber), but the page is for configuring them.
         ...(can(org, "notificationChannel", "create") ? [{ title: "Notification channels", url: `${base}/notification-channels`, icon: BellIcon }] : []),
-        ...(can(org, "audit", "read") ? [{ title: "Audit log", url: `${base}/audit-log`, icon: ScrollTextIcon }] : []),
-        ...(can(org, "auditForwarder", "read") ? [{ title: "Audit forwarding", url: `${base}/audit-forwarding`, icon: SendIcon }] : []),
-        ...(can(org, "loginPolicy", "read") ? [{ title: "Login policy", url: loginPolicyUrl(org.id), icon: LockKeyholeIcon }] : []),
-        ...(can(org, "ssoConnection", "read") ? [{ title: "SSO connections", url: `${base}/sso-connections`, icon: LogInIcon }] : []),
+        {
+          title: "Security",
+          icon: ShieldIcon,
+          items: [
+            ...(can(org, "loginPolicy", "read") ? [{ title: "Login policy", url: loginPolicyUrl(org.id), icon: LockKeyholeIcon }] : []),
+            ...(can(org, "ssoConnection", "read") ? [{ title: "SSO connections", url: `${base}/sso-connections`, icon: LogInIcon }] : []),
+            ...(can(org, "audit", "read") ? [{ title: "Audit log", url: `${base}/audit-log`, icon: ScrollTextIcon }] : []),
+            ...(can(org, "auditForwarder", "read") ? [{ title: "Audit forwarding", url: `${base}/audit-forwarding`, icon: SendIcon }] : []),
+          ],
+        },
       ],
     },
     {
@@ -55,11 +76,14 @@ export function organizationNavGroups(org: Org): NavGroup[] {
       ],
     },
   ];
-  return groups.filter((g) => g.items.length > 0);
+  return groups
+    .map((g) => ({ ...g, items: g.items.filter((entry) => !isNavSection(entry) || entry.items.length > 0) }))
+    .filter((g) => g.items.length > 0);
 }
 
 /** The same pages in one list, to find the one that is open. */
-export const organizationNav = (org: Org): NavItem[] => organizationNavGroups(org).flatMap((g) => g.items);
+export const organizationNav = (org: Org): NavItem[] =>
+  organizationNavGroups(org).flatMap((g) => g.items.flatMap((entry) => (isNavSection(entry) ? entry.items : [entry])));
 
 export const platformNav: NavItem[] = [{ title: "Organizations", url: "/platform/organizations", icon: BuildingIcon }];
 
