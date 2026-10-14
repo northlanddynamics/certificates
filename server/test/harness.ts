@@ -114,7 +114,7 @@ export interface Harness {
 }
 
 /** The cookies a browser would hold after `res`: a later Set-Cookie of a name replaces an earlier one, and an empty value clears it. */
-function cookieFrom(res: Response): string {
+export function cookieFrom(res: Response): string {
   const jar = new Map<string, string>();
   for (const setCookie of res.headers.getSetCookie()) {
     const [pair = ""] = setCookie.split(";");

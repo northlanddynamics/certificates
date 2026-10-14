@@ -183,13 +183,13 @@ describe("requiring MFA", () => {
 
   test("an Organization Administrator requires MFA, which is an Audit Event; no one else may", async () => {
     org = { ...org, cookie: (await setUpTotp(org.cookie)).cookie };
-    expect((await policy()).body).toEqual({ requireMfa: false });
+    expect((await policy()).body).toEqual({ requireMfa: false, requireSso: false });
     const bob = await join("bob@acme.test", "approver");
     expect((await setPolicy(true, bob)).status).toBe(403);
 
     expect((await setPolicy(true)).status).toBe(200);
     expect((await setPolicy(true)).status).toBe(200); // no change, so no Audit Event
-    expect((await policy()).body).toEqual({ requireMfa: true });
+    expect((await policy()).body).toEqual({ requireMfa: true, requireSso: false });
     expect((await auditOf()).filter((e) => e.action.startsWith("login_policy."))).toMatchObject([
       { action: "login_policy.changed", actor: { email: "admin@acme.test" }, target: { type: "organization", id: org.orgId }, detail: { requireMfa: { from: false, to: true } } },
     ]);

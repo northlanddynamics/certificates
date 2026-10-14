@@ -16,6 +16,7 @@
   "dependencies": {
     "@better-auth/api-key": "1.7.7",
     "@better-auth/passkey": "1.7.7",
+    "@better-auth/sso": "1.7.7",
     "@hono/zod-openapi": "1.6.3",
     "@peculiar/x509": "1.14.3",
     "@scalar/hono-api-reference": "^0.12.11",
@@ -31,6 +32,8 @@
     "@types/pg": "8.23.1",
     "auth": "1.7.7",
     "drizzle-kit": "0.31.11",
+    "jose": "6.2.12",
+    "samlify": "2.13.1",
     "typescript": "5"
   },
   "overrides": {

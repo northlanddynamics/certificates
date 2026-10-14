@@ -23,8 +23,12 @@ A person who runs the platform itself and creates Organizations; they see inside
 _Avoid_: super admin, site admin, admin (unqualified)
 
 **Login Policy**:
-What an Organization asks of its users' sign-in, which an Organization Administrator sets. Requiring MFA holds up every member who has a password and no authenticator app (TOTP), in every Organization they belong to and with their API keys, until they set one up; a passkey does not count, because the password still signs in alone.
+What an Organization asks of its users' sign-in, which an Organization Administrator sets. Requiring MFA holds up every member who has a password and no authenticator app (TOTP), in every Organization they belong to and with their API keys, until they set one up; a passkey does not count, because the password still signs in alone. Requiring SSO lets its members sign in only through one of its SSO Connections, not with a password or a passkey; Platform Operators are exempt, so that someone can still get in when an identity provider fails.
 _Avoid_: auth policy, security settings
+
+**SSO Connection**:
+An identity provider (SAML, such as Ping, or OIDC) that belongs to exactly one Organization and signs in the users of one email domain, which no other connection has and which a DNS TXT record must prove the Organization holds before it signs anyone in. A user signing in through it who is not a member of its Organization becomes a Member, unless they were removed from it; it links to an existing account only of a member of that Organization, never a Platform Operator's.
+_Avoid_: SSO provider, IdP (for the connection itself), identity source
 
 **Organization Administrator**:
 An Organization role with full control of that Organization, including Deployments, Deployment Scripts and integrations; changes they make need no Approval.

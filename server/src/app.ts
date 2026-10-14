@@ -50,6 +50,8 @@ import { removeTeamFromSubscribers, removeUserFromSubscribers } from "./subscrib
 import { createOrganizations } from "./organizations";
 import { ROLE_NAMES, permissionsOf } from "./permissions";
 import { createSecrets } from "./secrets";
+import { registerSsoConnections } from "./sso-connections";
+import { provisionOnSsoSignIn } from "./sso-sign-in";
 import { registerTeamsOverview } from "./teams-overview";
 import { createUnitOfWork } from "./unit-of-work";
 import { createWorkItems } from "./work-items";
@@ -85,9 +87,9 @@ export function createApp(deps: AppDeps) {
   const { pool, mailer, clock } = deps;
   const db = createDb(pool);
   const authConfig = { baseURL: deps.baseURL, secret: deps.secret, trustedOrigins: deps.trustedOrigins };
-  const auth = createAuth({ ...authConfig, db });
   const webURL = deps.webURL ?? deps.baseURL;
   const unitOfWork = createUnitOfWork({ db, mailer, clock });
+  const auth = createAuth({ ...authConfig, db, onSsoSignIn: provisionOnSsoSignIn(unitOfWork) });
   const { authorize } = createAuthorizer(db);
   const loginPolicies = createLoginPolicies(db);
   const organizationChanges = createOrganizationChanges({
@@ -254,6 +256,19 @@ export function createApp(deps: AppDeps) {
 
   registerAuditRoutes({ app, db, requireUser, authorize });
   registerLoginPolicy({ app, db, requireSession, authorize, unitOfWork });
+  registerSsoConnections({
+    app,
+    db,
+    requireUser,
+    authorize,
+    unitOfWork,
+    clock,
+    baseURL: deps.baseURL,
+    secret: deps.secret,
+    // The same resolvers DCV looks records up through.
+    resolver: deps.dcv?.resolver ?? createTxtResolver(),
+    trustedOrigins: deps.trustedOrigins ?? [],
+  });
   registerTeamsOverview({ app, db, requireUser, authorize });
   const secrets = createSecrets(deps.kms);
   registerAcmeAccounts({ app, db, requireUser, authorize, unitOfWork, secrets, certificateAuthority: deps.certificateAuthority });
