@@ -50,6 +50,8 @@ export function organizationNavGroups(org: Org): NavGroup[] {
           items: [
             ...(can(org, "acmeAccount", "read") ? [{ title: "ACME accounts", url: `${base}/acme-accounts`, icon: LandmarkIcon }] : []),
             ...(can(org, "dnsProvider", "read") ? [{ title: "DNS Providers", url: `${base}/dns-providers`, icon: GlobeIcon }] : []),
+            // Anyone may list the channels (to choose one as a Subscriber), but the page is for configuring them.
+            ...(can(org, "notificationChannel", "create") ? [{ title: "Notification channels", url: `${base}/notification-channels`, icon: BellIcon }] : []),
           ],
         },
         {
@@ -64,8 +66,6 @@ export function organizationNavGroups(org: Org): NavGroup[] {
             { title: "API keys", url: `${base}/api-keys`, icon: KeyRoundIcon },
           ],
         },
-        // Anyone may list the channels (to choose one as a Subscriber), but the page is for configuring them.
-        ...(can(org, "notificationChannel", "create") ? [{ title: "Notification channels", url: `${base}/notification-channels`, icon: BellIcon }] : []),
       ],
     },
     {
