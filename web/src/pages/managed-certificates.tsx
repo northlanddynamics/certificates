@@ -55,6 +55,7 @@ function ManagedCertificateLink({ orgId, id, children }: { orgId: string; id: st
 const STATUS_FACETS: [keyof Omit<InventoryFilters, "keyCustody" | "environment" | "keyAlgorithm">, string][] = [
   ["expiringSoon", "Expiring soon"],
   ["renewalFailing", "Renewal failing"],
+  ["agentOffline", "Agent offline"],
   ["pendingApproval", "Awaiting Approval"],
   ["noOwners", "No Owners"],
   ["archived", "Archived"],

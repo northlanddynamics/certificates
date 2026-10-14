@@ -4,11 +4,12 @@
 import { z } from "@hono/zod-openapi";
 import { and, desc, eq, inArray, or, type SQL } from "drizzle-orm";
 import { APPROVAL_STATUSES } from "./approval";
+import { AGENT_STATUSES, agentStatus } from "./agents";
 import type { Authorizer } from "./authorization";
 import { ACME_ENVIRONMENTS } from "./certificate-authority";
 import { KEY_ALGORITHMS, KEY_CUSTODIES } from "./csr";
 import type { Db } from "./db/client";
-import { certificate, issuance, managedCertificate } from "./db/schema";
+import { agent, certificate, deployment, issuance, managedCertificate } from "./db/schema";
 import { HttpError, OrgParam } from "./http";
 import { ISSUANCE_FAILURE_CODES } from "./issuance-failure";
 import { PendingNameChange, pendingNameChanges, toPendingNameChange } from "./name-change";
@@ -31,6 +32,7 @@ export const Issuance = z.object({
     .nullable()
     .openapi({ description: "Why it failed: which step, and what the DNS Provider or the CA said." }),
   certificateId: z.string().nullable(),
+  awaitingKey: z.boolean().openapi({ description: "Whether it waits for the Agent that holds the key to make a new one and send its CSR, as a Renewal of a key an Agent holds begins: it waits as long as the Agent is away." }),
 });
 
 export const Certificate = z.object({
@@ -103,6 +105,10 @@ export const ManagedCertificate = z.object({
   renewal: Renewal,
   issuance: Issuance.nullable().openapi({ description: "The latest attempt to issue a Certificate." }),
   currentCertificate: Certificate.nullable().openapi({ description: "The most recently issued Certificate." }),
+  agent: z
+    .object({ id: z.string(), hostName: z.string(), status: z.enum(AGENT_STATUSES) })
+    .nullable()
+    .openapi({ description: "For Key Custody `agent`, the Agent that holds the key, and whether it is online: one that is offline holds up the Renewal, which waits for it to make the new key. None for a key the Owner holds." }),
 });
 
 type ManagedCertificateRow = typeof managedCertificate.$inferSelect;
@@ -113,6 +119,7 @@ export const toIssuance = (row: typeof issuance.$inferSelect) => ({
   finishedAt: row.finishedAt?.toISOString() ?? null,
   failure: row.failureCode && row.failureMessage ? { code: row.failureCode, message: row.failureMessage } : null,
   certificateId: row.certificateId,
+  awaitingKey: row.awaitingKey,
 });
 export const toCertificate = (row: typeof certificate.$inferSelect, revocation: RevocationRow | undefined) => ({
   id: row.id,
@@ -128,7 +135,7 @@ export const toCertificate = (row: typeof certificate.$inferSelect, revocation: 
   revocation: revocation ? toRevocation(revocation) : null,
 });
 
-export function createManagedCertificateReader({ db, authorize }: { db: Db; authorize: Authorizer["authorize"] }) {
+export function createManagedCertificateReader({ db, authorize, clock, agentOfflineAfterSeconds }: { db: Db; authorize: Authorizer["authorize"]; clock: () => Date; agentOfflineAfterSeconds: number }) {
   async function findManagedCertificate(orgId: string, id: string) {
     // Not a UUID can't be a Managed Certificate; asking Postgres would only raise a type error.
     const [row] = z.uuid().safeParse(id).success
@@ -202,7 +209,18 @@ export function createManagedCertificateReader({ db, authorize }: { db: Db; auth
     const nameChanges = await pendingNameChanges(db, ids);
     const information = await informationOf(db, currentCertificates.map((c) => c.id));
     const revocations = await revocationsOf(db, currentCertificates.map((c) => c.id));
+    const holders = new Map(
+      (
+        await db
+          .select({ managedCertificateId: deployment.managedCertificateId, id: agent.id, hostName: agent.hostName, revokedAt: agent.revokedAt, lastContactAt: agent.lastContactAt })
+          .from(deployment)
+          .innerJoin(agent, eq(agent.id, deployment.agentId))
+          .where(inArray(deployment.managedCertificateId, ids))
+      ).map((h) => [h.managedCertificateId, h]),
+    );
+    const now = clock();
     return rows.map((row) => {
+      const holder = holders.get(row.id);
       const latest = latestIssuances.find((i) => i.managedCertificateId === row.id);
       const current = currentCertificates.find((c) => c.managedCertificateId === row.id);
       const policy = { mode: row.renewalMode, daysBeforeExpiry: row.renewalDaysBeforeExpiry };
@@ -250,6 +268,7 @@ export function createManagedCertificateReader({ db, authorize }: { db: Db; auth
         },
         issuance: latest ? toIssuance(latest) : null,
         currentCertificate: current ? toCertificate(current, revocations.get(current.id)) : null,
+        agent: holder ? { id: holder.id, hostName: holder.hostName, status: agentStatus(holder, now, agentOfflineAfterSeconds) } : null,
       };
     });
   }

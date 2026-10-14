@@ -1,0 +1,1 @@
+ALTER TABLE "issuance" ADD COLUMN "awaiting_key" boolean DEFAULT false NOT NULL;

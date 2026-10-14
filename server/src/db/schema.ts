@@ -298,6 +298,8 @@ export const issuance = pgTable(
     failureCode: text("failure_code").$type<IssuanceFailureCode>(),
     failureMessage: text("failure_message"),
     certificateId: uuid("certificate_id"),
+    /** While it runs, whether it waits for the Agent that holds the key to make a new one and send its CSR: a Renewal of a Managed Certificate whose key an Agent holds begins so. */
+    awaitingKey: boolean("awaiting_key").notNull().default(false),
     startedAt: timestamp("started_at", { withTimezone: true }).notNull(),
     finishedAt: timestamp("finished_at", { withTimezone: true }),
     createdAt: timestamp("created_at", { withTimezone: true }).notNull().defaultNow(),
