@@ -60,9 +60,10 @@ export function organizationNavGroups(org: Org): NavGroup[] {
             ...(can(org, "ssoConnection", "read") ? [{ title: "SSO connections", url: `${base}/sso-connections`, icon: LogInIcon }] : []),
             ...(can(org, "audit", "read") ? [{ title: "Audit log", url: `${base}/audit-log`, icon: ScrollTextIcon }] : []),
             ...(can(org, "auditForwarder", "read") ? [{ title: "Audit forwarding", url: `${base}/audit-forwarding`, icon: SendIcon }] : []),
+            // Anyone may make their own keys, so the page is open to all.
+            { title: "API keys", url: `${base}/api-keys`, icon: KeyRoundIcon },
           ],
         },
-        { title: "API keys", url: `${base}/api-keys`, icon: KeyRoundIcon },
         // Anyone may list the channels (to choose one as a Subscriber), but the page is for configuring them.
         ...(can(org, "notificationChannel", "create") ? [{ title: "Notification channels", url: `${base}/notification-channels`, icon: BellIcon }] : []),
       ],
