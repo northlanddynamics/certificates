@@ -543,8 +543,8 @@ describe("Approval", () => {
 
   test("what each role may do is reported by /api/me", async () => {
     const me = async (cookie: string) => (await h.api("/api/me", { cookie })).body.organizations[0].permissions;
-    expect(await me(member)).toEqual({ managedCertificate: ["propose", "download"] });
-    expect(await me(approver)).toEqual({ managedCertificate: ["read", "propose", "download"], approval: ["read", "decide"] });
+    expect(await me(member)).toEqual({ managedCertificate: ["propose", "download"], notificationChannel: ["read"] });
+    expect(await me(approver)).toEqual({ managedCertificate: ["read", "propose", "download"], approval: ["read", "decide"], notificationChannel: ["read"] });
     expect((await me(acmeOrg.cookie)).approval).toEqual(["read", "decide"]);
   });
 });

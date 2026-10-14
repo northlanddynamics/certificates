@@ -310,6 +310,27 @@ export interface NewManagedCertificate {
   environment: "staging" | "production";
   owners?: OwnerRef[];
 }
+export interface NotificationChannel {
+  id: string;
+  name: string;
+  kind: "email" | "webhook";
+  /** Where an email channel sends; none for a webhook. */
+  email: string | null;
+  /** The host a webhook posts to: its URL is write-only, so never shown. */
+  webhookHost: string | null;
+  createdAt: string;
+}
+export type NewNotificationChannel = { name: string; kind: "email"; email: string } | { name: string; kind: "webhook"; url: string };
+export type Subscriber =
+  | { type: "user"; id: string; email: string }
+  | { type: "team"; id: string; name: string }
+  | { type: "channel"; id: string; name: string; kind: NotificationChannel["kind"] };
+export type SubscriberRef = { type: Subscriber["type"]; id: string };
+/** A Subscriber as one string, for a form control's value, and back. */
+export const subscriberKey = (s: SubscriberRef) => `${s.type}:${s.id}`;
+export const subscriberFromKey = (key: string): SubscriberRef => ({ type: key.slice(0, key.indexOf(":")) as Subscriber["type"], id: key.slice(key.indexOf(":") + 1) });
+export const subscriberLabel = (s: Subscriber) =>
+  s.type === "user" ? s.email : s.type === "team" ? `${s.name} (Team)` : `${s.name} (${s.kind === "email" ? "email" : "webhook"} channel)`;
 export interface Team {
   id: string;
   name: string;
@@ -338,6 +359,14 @@ export const api = {
   managedCertificate: (orgId: string, id: string) => call<ManagedCertificate>(`/api/organizations/${orgId}/managed-certificates/${id}`),
   addOwner: (orgId: string, id: string, owner: OwnerRef) =>
     call<ManagedCertificate>(`/api/organizations/${orgId}/managed-certificates/${id}/owners`, { body: owner }),
+  subscribers: (orgId: string, id: string) => call<{ items: Subscriber[] }>(`/api/organizations/${orgId}/managed-certificates/${id}/subscribers`),
+  addSubscriber: (orgId: string, id: string, subscriber: SubscriberRef) =>
+    call<{ items: Subscriber[] }>(`/api/organizations/${orgId}/managed-certificates/${id}/subscribers`, { body: subscriber }),
+  removeSubscriber: (orgId: string, id: string, subscriber: SubscriberRef) =>
+    call<{ items: Subscriber[] }>(`/api/organizations/${orgId}/managed-certificates/${id}/subscribers/${subscriber.type}/${encodeURIComponent(subscriber.id)}`, { method: "DELETE" }),
+  notificationChannels: (orgId: string) => call<{ items: NotificationChannel[] }>(`/api/organizations/${orgId}/notification-channels`),
+  addNotificationChannel: (orgId: string, channel: NewNotificationChannel) => call<NotificationChannel>(`/api/organizations/${orgId}/notification-channels`, { body: channel }),
+  deleteNotificationChannel: (orgId: string, channelId: string) => call(`/api/organizations/${orgId}/notification-channels/${channelId}`, { method: "DELETE" }),
   removeOwner: (orgId: string, id: string, owner: OwnerRef) =>
     call<ManagedCertificate>(`/api/organizations/${orgId}/managed-certificates/${id}/owners/${owner.type}/${encodeURIComponent(owner.id)}`, { method: "DELETE" }),
   history: (orgId: string, id: string) => call<{ items: HistoryEntry[] }>(`/api/organizations/${orgId}/managed-certificates/${id}/history`),

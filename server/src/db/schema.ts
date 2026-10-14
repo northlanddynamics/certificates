@@ -9,6 +9,7 @@ import type { KeyAlgorithm, KeyCustody } from "../csr";
 import type { AgentArch, AgentOs } from "../agent-kinds";
 import type { ApprovalStatus } from "../approval";
 import type { NameChangeStatus } from "../name-change";
+import type { NoticeEvent, NotificationChannelKind } from "../notification-kinds";
 import type { RenewalMode } from "../renewal";
 import type { WorkItemStatus, WorkResult } from "../work-items";
 import { organization, team, user } from "./auth-schema";
@@ -633,4 +634,122 @@ export const deploymentRun = pgTable(
     check("deployment_run_status", sql`${t.status} in ('succeeded', 'failed')`),
     check("deployment_run_trigger", sql`${t.trigger} in ('issuance', 'rerun')`),
   ],
+);
+
+/**
+ * Where an Organization's notices can go besides its users' own email: an email address (a shared mailbox, a list) or a
+ * webhook (Microsoft Teams, Slack, ticketing, a SIEM). A webhook's URL often carries its own credential, so it is a Secret,
+ * never read back; only its host is shown. Only Organization Administrators configure them.
+ */
+export const notificationChannel = pgTable(
+  "notification_channel",
+  {
+    id: uuid("id").primaryKey().defaultRandom(),
+    organizationId: text("organization_id")
+      .notNull()
+      .references(() => organization.id),
+    name: text("name").notNull(),
+    kind: text("kind").$type<NotificationChannelKind>().notNull(),
+    /** The address an email channel sends to; none for a webhook. */
+    email: text("email"),
+    /** A webhook's URL, as a Secret; none for an email channel. */
+    secretId: uuid("secret_id"),
+    /** The host a webhook posts to, which is all of its URL that is shown. */
+    webhookHost: text("webhook_host"),
+    createdAt: timestamp("created_at", { withTimezone: true }).notNull(),
+  },
+  (t) => [
+    index("notification_channel_org_idx").on(t.organizationId, t.createdAt),
+    uniqueIndex("notification_channel_name_unique").on(t.organizationId, sql`lower(${t.name})`),
+    check("notification_channel_kind", sql`${t.kind} in ('email', 'webhook')`),
+    check("notification_channel_target", sql`(${t.kind} = 'email' and ${t.email} is not null) or (${t.kind} = 'webhook' and ${t.secretId} is not null)`),
+    foreignKey({ columns: [t.secretId, t.organizationId], foreignColumns: [secret.id, secret.organizationId] }),
+    unique("notification_channel_id_organization_unique").on(t.id, t.organizationId),
+  ],
+);
+
+/**
+ * Who has opted in to notices about a Managed Certificate: exactly one of a user, a Team or a notification channel. Nobody
+ * is one by default, and being one grants no visibility. A user must be a member of the Organization; a user who leaves
+ * it, a Team that is deleted and a channel that is removed stop being one.
+ */
+export const managedCertificateSubscriber = pgTable(
+  "managed_certificate_subscriber",
+  {
+    /** Rising, so Subscribers are listed in the order they were added. */
+    id: bigint("id", { mode: "number" }).primaryKey().generatedAlwaysAsIdentity(),
+    organizationId: text("organization_id")
+      .notNull()
+      .references(() => organization.id),
+    managedCertificateId: uuid("managed_certificate_id").notNull(),
+    userId: text("user_id").references(() => user.id, { onDelete: "cascade" }),
+    teamId: text("team_id").references(() => team.id, { onDelete: "cascade" }),
+    channelId: uuid("channel_id"),
+    createdAt: timestamp("created_at", { withTimezone: true }).notNull().defaultNow(),
+  },
+  (t) => [
+    foreignKey({ columns: [t.managedCertificateId, t.organizationId], foreignColumns: [managedCertificate.id, managedCertificate.organizationId] }),
+    foreignKey({ columns: [t.channelId, t.organizationId], foreignColumns: [notificationChannel.id, notificationChannel.organizationId] }),
+    check("managed_certificate_subscriber_one_of", sql`num_nonnulls(${t.userId}, ${t.teamId}, ${t.channelId}) = 1`),
+    uniqueIndex("managed_certificate_subscriber_user_unique").on(t.managedCertificateId, t.userId).where(sql`${t.userId} is not null`),
+    uniqueIndex("managed_certificate_subscriber_team_unique").on(t.managedCertificateId, t.teamId).where(sql`${t.teamId} is not null`),
+    uniqueIndex("managed_certificate_subscriber_channel_unique").on(t.managedCertificateId, t.channelId).where(sql`${t.channelId} is not null`),
+    index("managed_certificate_subscriber_user_idx").on(t.organizationId, t.userId),
+    index("managed_certificate_subscriber_team_idx").on(t.organizationId, t.teamId),
+    index("managed_certificate_subscriber_channel_idx").on(t.channelId),
+  ],
+);
+
+/**
+ * One notice to one recipient, queued on the transaction of the event it tells of and sent afterwards by the delivery
+ * pass (the job queue): an email to an address, or a post to a webhook channel. A notice that cannot be sent is tried again
+ * with backoff, and given up as `failed` after a few tries. Removing its channel (a webhook, or the email channel whose
+ * address it goes to) removes the notices still queued for it.
+ */
+export const notice = pgTable(
+  "notice",
+  {
+    id: uuid("id").primaryKey().defaultRandom(),
+    organizationId: text("organization_id")
+      .notNull()
+      .references(() => organization.id),
+    event: text("event").$type<NoticeEvent>().notNull(),
+    /** The address an email goes to; none for a webhook. */
+    email: text("email"),
+    /** The channel it is for: the webhook posted to, or the email channel whose address it goes to; none for a person's own email. */
+    channelId: uuid("channel_id"),
+    subject: text("subject").notNull(),
+    text: text("text").notNull(),
+    /** What a webhook is sent: the event in the stable JSON schema. */
+    payload: jsonb("payload").$type<Record<string, unknown>>().notNull(),
+    status: text("status").$type<"queued" | "sent" | "failed">().notNull().default("queued"),
+    attempts: integer("attempts").notNull().default(0),
+    nextAttemptAt: timestamp("next_attempt_at", { withTimezone: true }).notNull(),
+    lastError: text("last_error"),
+    createdAt: timestamp("created_at", { withTimezone: true }).notNull(),
+    sentAt: timestamp("sent_at", { withTimezone: true }),
+  },
+  (t) => [
+    index("notice_queued_idx").on(t.nextAttemptAt).where(sql`${t.status} = 'queued'`),
+    foreignKey({ columns: [t.channelId, t.organizationId], foreignColumns: [notificationChannel.id, notificationChannel.organizationId] }).onDelete("cascade"),
+    check("notice_status", sql`${t.status} in ('queued', 'sent', 'failed')`),
+    check("notice_recipient", sql`${t.email} is not null or ${t.channelId} is not null`),
+  ],
+);
+
+/**
+ * What the platform has already noticed of conditions it finds by looking rather than by a change: an Agent's silence
+ * (keyed by the Agent and its last contact, so a new silence after it comes back is noticed again) and a Certificate
+ * nearing its end (keyed by the Certificate and the days before it). Each is noticed once.
+ */
+export const noticedCondition = pgTable(
+  "noticed_condition",
+  {
+    organizationId: text("organization_id")
+      .notNull()
+      .references(() => organization.id),
+    key: text("key").notNull(),
+    noticedAt: timestamp("noticed_at", { withTimezone: true }).notNull(),
+  },
+  (t) => [primaryKey({ columns: [t.organizationId, t.key] })],
 );

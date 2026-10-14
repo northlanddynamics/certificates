@@ -54,6 +54,12 @@ An Organization Administrator sets up a Deployment in one call (`POST /api/organ
 
 One Agent can serve many Deployments. Setting one up, the key, each run and each request to run again are Audit Events. Work for a Deployment waits for its Agent however long it is away (the work items are durable), and one the Agent was given but never reported on, because it stopped, is given again after 15 minutes. Until a Deployment can have the Agent make a new key, a Managed Certificate it holds the key for cannot upload a CSR or change its names.
 
+## Notifications
+
+A Managed Certificate's Subscribers are told of upcoming expiry (14, 7 and 1 days before its current Certificate ends), Renewals that succeed or fail, failed Deployment Runs (the exit code, not the script's output), its Agent going offline and Approval decisions (on a proposal or a name change). Subscribers are users, Teams (their members at the time) and notification channels; there are none by default, and being one shows a user nothing more in the portal. Owners and Organization Administrators change them (`/api/organizations/{orgId}/managed-certificates/{id}/subscribers`, or the Notifications tab of the Managed Certificate). Organization Administrators configure the channels (`/api/organizations/{orgId}/notification-channels`, or Notification channels under Administration): an email address, or a webhook (https, to a host that is not localhost or an internal address) that is posted each notice as JSON (`"schema": "certificate-platform.notice/1"`, with the event, the Managed Certificate and the event's detail). A webhook's URL is a Secret, never shown again but for its host. Subscriber and channel changes are audited, and whoever leaves the Organization, a deleted Team and a removed channel stop being Subscribers.
+
+Notices are queued with the change they tell of and sent by a pass the server runs once a minute (`notifications.tick()`), which also notices silent Agents and Certificates nearing their end. One that cannot be sent is tried again after 1, 5 and 30 minutes, 2 and 6 hours, then given up. Mail goes through the server's `Mailer`; in development that is the console.
+
 ## Database schema
 
 Drizzle ORM is the data layer; Better Auth uses it through its Drizzle adapter.

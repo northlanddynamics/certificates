@@ -39,6 +39,10 @@ import type { Mailer } from "./mailer";
 import type { MemberRemovalHook } from "./member-removal";
 import { removeTeamFromOwners, removeUserFromOwners } from "./owners";
 import { createOrganizationChanges } from "./organization-changes";
+import { registerNotificationChannels } from "./notification-channels";
+import { createFetchWebhooks, createNotifications, type WebhookSender } from "./notifications";
+import { registerSubscriberRoutes } from "./subscriber-routes";
+import { removeTeamFromSubscribers, removeUserFromSubscribers } from "./subscribers";
 import { createOrganizations } from "./organizations";
 import { ROLE_NAMES, permissionsOf } from "./permissions";
 import { createSecrets } from "./secrets";
@@ -49,6 +53,8 @@ import { createWorkItems } from "./work-items";
 export interface AppDeps {
   pool: Pool;
   mailer: Mailer;
+  /** How notices reach webhook notification channels; posts with `fetch` unless given. */
+  webhooks?: WebhookSender;
   clock: () => Date;
   /** Where the API is served; Better Auth builds its URLs from this. */
   baseURL: string;
@@ -85,13 +91,14 @@ export function createApp(deps: AppDeps) {
     webURL,
     memberRemovalHooks: [
       removeUserFromOwners,
+      removeUserFromSubscribers,
       discardNameChangesOfRemoved,
       // The host's own (a test adds one while the app runs), so they are looked at when a member is removed.
       async (tx, removed, change) => {
         for (const hook of deps.memberRemovalHooks ?? []) await hook(tx, removed, change);
       },
     ],
-    teamRemovalHooks: [removeTeamFromOwners],
+    teamRemovalHooks: [removeTeamFromOwners, removeTeamFromSubscribers],
   });
   const platformOrganizations = createOrganizations({ unitOfWork, webURL });
   const app = new OpenAPIHono();
@@ -257,20 +264,46 @@ export function createApp(deps: AppDeps) {
   registerDcvConfiguration({ app, db, requireUser, authorize, unitOfWork, dcvPlans });
   const dcv = createDcv(dnsProviders, dcvPlans, { resolver: createTxtResolver(), ...DEFAULT_DCV_CONFIG, ...deps.dcv });
   const issuances = createIssuances({ db, unitOfWork, certificateAuthority: deps.certificateAuthority, dcv, secrets });
+  const notifications = createNotifications({
+    db,
+    unitOfWork,
+    secrets,
+    mailer,
+    webhooks: deps.webhooks ?? createFetchWebhooks(),
+    clock,
+    webURL,
+    offlineAfterSeconds: agentGateway.offlineAfterSeconds,
+  });
+  registerNotificationChannels({ app, db, requireUser, authorize, unitOfWork, secrets });
+  // A Renewal's end is told to the Managed Certificate's Subscribers; a first Issuance is not a Renewal, so is not.
+  issuances.onEnded(async (tx, change, ended) => {
+    if (!ended.renewal) return;
+    const mc = { id: ended.managedCertificateId, organizationId: ended.organizationId };
+    const { outcome } = ended;
+    await notifications.notify(
+      tx,
+      change,
+      mc,
+      outcome.kind === "succeeded"
+        ? { event: "renewal.succeeded", detail: { issuanceId: ended.issuanceId, certificateId: outcome.certificateId, fingerprint: outcome.fingerprint, notAfter: outcome.notAfter.toISOString() } }
+        : { event: "renewal.failed", detail: { issuanceId: ended.issuanceId, code: outcome.code, message: outcome.message } },
+    );
+  });
   const reader = createManagedCertificateReader({ db, authorize });
   registerManagedCertificates({ app, db, requireUser, authorize, unitOfWork, issuances, reader, clock });
   const apiKeys = registerApiKeys({ app, db, auth, authConfig, requireUser, authorize, unitOfWork });
   registerCertificateExport({ app, apiKeys, unitOfWork, reader, certificateAuthority: deps.certificateAuthority });
   registerOwnerRoutes({ app, requireUser, unitOfWork, reader });
+  registerSubscriberRoutes({ app, db, requireUser, unitOfWork, reader });
   registerRenewalRoutes({ app, db, requireUser, unitOfWork, issuances, reader });
   const renewals = createRenewalScheduler({ db, unitOfWork, issuances, certificateAuthority: deps.certificateAuthority, clock });
-  registerNameChangeRoutes({ app, requireUser, authorize, unitOfWork, issuances, reader });
-  registerApprovals({ app, db, requireUser, authorize, unitOfWork, issuances, reader });
+  registerNameChangeRoutes({ app, requireUser, authorize, unitOfWork, issuances, reader, notifications });
+  registerApprovals({ app, db, requireUser, authorize, unitOfWork, issuances, reader, notifications });
   registerArchiveRoutes({ app, requireUser, authorize, unitOfWork, reader });
   registerRevocationRoutes({ app, db, requireUser, unitOfWork, reader, secrets, certificateAuthority: deps.certificateAuthority });
   registerHistory({ app, db, requireUser, reader });
   registerDeploymentScripts({ app, db, requireUser, authorize, unitOfWork });
-  registerDeployments({ app, db, requireUser, authorize, unitOfWork, workItems, issuances });
+  registerDeployments({ app, db, requireUser, authorize, unitOfWork, workItems, issuances, notifications });
   registerAgents({ app, db, requireUser, authorize, unitOfWork, clock, config: agentGateway });
   registerAgentGateway({ app, db, unitOfWork, workItems, clock, config: agentGateway });
 
@@ -292,5 +325,5 @@ export function createApp(deps: AppDeps) {
     }),
   );
 
-  return { app, auth, db, unitOfWork, issuances, renewals };
+  return { app, auth, db, unitOfWork, issuances, renewals, notifications };
 }

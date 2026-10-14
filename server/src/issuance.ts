@@ -3,7 +3,7 @@
 // request should wait): it does DCV through the Organization's DNS Provider, has the CA finalize the order with the
 // CSR, and ends by storing the Certificate, or with the cause of its failure. Either end is one audited change.
 import { X509Certificate, createHash } from "node:crypto";
-import { and, desc, eq, inArray, isNull } from "drizzle-orm";
+import { and, desc, eq, inArray, isNull, ne } from "drizzle-orm";
 import { CertificateAuthorityError, type CertificateAuthority } from "./certificate-authority";
 import { parseCsr } from "./csr";
 import type { Dcv } from "./dcv";
@@ -65,6 +65,15 @@ export interface IssuedCertificate {
   certificateId: string;
 }
 
+/** How an Issuance ended, as what follows from that is told. A Renewal is an Issuance of a Managed Certificate that already had a Certificate. */
+export interface EndedIssuance {
+  organizationId: string;
+  managedCertificateId: string;
+  issuanceId: string;
+  renewal: boolean;
+  outcome: { kind: "succeeded"; certificateId: string; fingerprint: string; notAfter: Date } | { kind: "failed"; code: IssuanceFailureCode; message: string };
+}
+
 export interface Issuances {
   /**
    * Begins an Issuance of the Managed Certificate if it may have one now, as the intent says, on the transaction of the
@@ -86,6 +95,11 @@ export interface Issuances {
    * undone alone: the Certificate the CA issued is kept whatever else goes wrong.
    */
   onIssued(listener: (tx: Tx, change: Change, issued: IssuedCertificate) => Promise<void>): void;
+  /**
+   * Has `listener` run for every Issuance that ends from now on, succeeded or failed, on the transaction that records how
+   * it ended: for what must be told of it, such as notices to Subscribers. A listener that fails is logged and undone alone.
+   */
+  onEnded(listener: (tx: Tx, change: Change, ended: EndedIssuance) => Promise<void>): void;
   /** Resolves once every Issuance started so far has recorded its outcome. */
   idle(): Promise<void>;
   /** Ends the Issuances a stopped platform left running, as failed. Call it once, before serving. */
@@ -132,6 +146,22 @@ function failureOf(err: unknown): Failure {
 export function createIssuances({ db, unitOfWork, certificateAuthority: ca, dcv, secrets }: IssuancesDeps): Issuances {
   const running = new Set<Promise<void>>();
   const issuedListeners: ((tx: Tx, change: Change, issued: IssuedCertificate) => Promise<void>)[] = [];
+  const endedListeners: ((tx: Tx, change: Change, ended: EndedIssuance) => Promise<void>)[] = [];
+  /** Runs each listener on a savepoint of the change's transaction, so that a listener's failure undoes only what it did. */
+  async function tell<T>(tx: Tx, change: Change, listeners: ((tx: Tx, change: Change, what: T) => Promise<void>)[], what: T) {
+    for (const listener of listeners) {
+      await tx.transaction((inner) => listener(inner, change, what)).catch((err) => console.error("what follows from an Issuance failed", err));
+    }
+  }
+  /** Whether the Managed Certificate has a Certificate other than `except`: whether an Issuance of it is a Renewal. */
+  async function hadCertificate(tx: Tx, row: typeof issuance.$inferSelect, except?: string) {
+    const found = await tx
+      .select({ id: certificate.id })
+      .from(certificate)
+      .where(and(eq(certificate.organizationId, row.organizationId), eq(certificate.managedCertificateId, row.managedCertificateId), except ? ne(certificate.id, except) : undefined))
+      .limit(1);
+    return found.length > 0;
+  }
   const actorOf = (row: typeof issuance.$inferSelect) => (row.requestedById && row.requestedByEmail ? { id: row.requestedById, email: row.requestedByEmail } : null);
   const targetOf = (row: typeof issuance.$inferSelect) => ({ type: "managed_certificate", id: row.managedCertificateId });
   const leftoverDetail = (leftovers: string[]) => (leftovers.length > 0 ? { challengeRecordsNotRemoved: leftovers } : {});
@@ -165,6 +195,13 @@ export function createIssuances({ db, unitOfWork, certificateAuthority: ca, dcv,
         action: "issuance.failed",
         target: targetOf(row),
         detail: { issuanceId: row.id, code: failure.code, message: failure.message, ...leftoverDetail(leftovers) },
+      });
+      await tell(tx, change, endedListeners, {
+        organizationId: row.organizationId,
+        managedCertificateId: row.managedCertificateId,
+        issuanceId: row.id,
+        renewal: await hadCertificate(tx, row),
+        outcome: { kind: "failed", ...failure },
       });
     });
 
@@ -241,10 +278,14 @@ export function createIssuances({ db, unitOfWork, certificateAuthority: ca, dcv,
             ...leftoverDetail(responder.leftovers()),
           },
         });
-        for (const listener of issuedListeners) {
-          // A savepoint, so that a listener's failure undoes only what it did.
-          await tx.transaction((inner) => listener(inner, change, { organizationId: row.organizationId, managedCertificateId: mc.id, certificateId })).catch((err) => console.error("what follows from a Certificate failed", err));
-        }
+        await tell(tx, change, issuedListeners, { organizationId: row.organizationId, managedCertificateId: mc.id, certificateId });
+        await tell(tx, change, endedListeners, {
+          organizationId: row.organizationId,
+          managedCertificateId: mc.id,
+          issuanceId: row.id,
+          renewal: await hadCertificate(tx, row, certificateId),
+          outcome: { kind: "succeeded", certificateId, fingerprint: stored.fingerprint, notAfter: stored.notAfter },
+        });
       });
     } catch (err) {
       await fail(row, failureOf(err), responder.leftovers());
@@ -312,6 +353,7 @@ export function createIssuances({ db, unitOfWork, certificateAuthority: ca, dcv,
       return { issuanceId: row!.id };
     },
     onIssued: (listener) => void issuedListeners.push(listener),
+    onEnded: (listener) => void endedListeners.push(listener),
     async idle() {
       while (running.size > 0) await Promise.all(running);
     },
