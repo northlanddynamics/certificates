@@ -44,7 +44,6 @@ export function organizationNavGroups(org: Org): NavGroup[] {
     {
       label: "Administration",
       items: [
-        { title: "API keys", url: `${base}/api-keys`, icon: KeyRoundIcon },
         {
           title: "Integrations",
           icon: PlugIcon,
@@ -53,8 +52,6 @@ export function organizationNavGroups(org: Org): NavGroup[] {
             ...(can(org, "dnsProvider", "read") ? [{ title: "DNS Providers", url: `${base}/dns-providers`, icon: GlobeIcon }] : []),
           ],
         },
-        // Anyone may list the channels (to choose one as a Subscriber), but the page is for configuring them.
-        ...(can(org, "notificationChannel", "create") ? [{ title: "Notification channels", url: `${base}/notification-channels`, icon: BellIcon }] : []),
         {
           title: "Security",
           icon: ShieldIcon,
@@ -65,6 +62,9 @@ export function organizationNavGroups(org: Org): NavGroup[] {
             ...(can(org, "auditForwarder", "read") ? [{ title: "Audit forwarding", url: `${base}/audit-forwarding`, icon: SendIcon }] : []),
           ],
         },
+        { title: "API keys", url: `${base}/api-keys`, icon: KeyRoundIcon },
+        // Anyone may list the channels (to choose one as a Subscriber), but the page is for configuring them.
+        ...(can(org, "notificationChannel", "create") ? [{ title: "Notification channels", url: `${base}/notification-channels`, icon: BellIcon }] : []),
       ],
     },
     {
