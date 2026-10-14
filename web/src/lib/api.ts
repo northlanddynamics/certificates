@@ -63,7 +63,13 @@ export interface PendingInvitation {
 }
 export interface Issuance {
   id: string;
+  /** `first_issue`: it had no Certificate yet; `renewal`: it had one for its names; `name_change`: it had one for other names. */
+  kind: "first_issue" | "renewal" | "name_change";
   status: "running" | "succeeded" | "failed";
+  /** Who asked for it; none when the Renewal scheduler did. */
+  requestedBy: { id: string; email: string } | null;
+  startedAt: string;
+  finishedAt: string | null;
   failure: { code: string; message: string } | null;
   /** Whether it waits for the Agent that holds the key to make a new one, as a Renewal of a key an Agent holds begins. */
   awaitingKey: boolean;
@@ -464,6 +470,8 @@ export const api = {
   removeOwner: (orgId: string, id: string, owner: OwnerRef) =>
     call<ManagedCertificate>(`/api/organizations/${orgId}/managed-certificates/${id}/owners/${owner.type}/${encodeURIComponent(owner.id)}`, { method: "DELETE" }),
   history: (orgId: string, id: string) => call<{ items: HistoryEntry[] }>(`/api/organizations/${orgId}/managed-certificates/${id}/history`),
+  /** Every attempt to issue a Certificate for it, the newest first. */
+  issuances: (orgId: string, id: string) => call<{ items: Issuance[] }>(`/api/organizations/${orgId}/managed-certificates/${id}/issuances`),
   createManagedCertificate: (orgId: string, body: NewManagedCertificate) =>
     call<ManagedCertificate>(`/api/organizations/${orgId}/managed-certificates`, { body }),
   approvalQueue: (orgId: string) => call<{ items: ManagedCertificate[]; nameChanges: QueuedNameChange[] }>(`/api/organizations/${orgId}/approvals`),

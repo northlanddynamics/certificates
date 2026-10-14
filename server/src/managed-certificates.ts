@@ -5,7 +5,7 @@
 // Approver approves it. It may have Owners (owners.ts), who with Approvers and Organization Administrators are the
 // ones who see it (see managed-certificate-reader.ts). This module serves the inventory and the Managed Certificate itself.
 import { OpenAPIHono, createRoute, z } from "@hono/zod-openapi";
-import { and, asc, eq } from "drizzle-orm";
+import { and, asc, desc, eq } from "drizzle-orm";
 import { silentSince } from "./agents";
 import type { Authorizer } from "./authorization";
 import { ACME_ENVIRONMENTS } from "./certificate-authority";
@@ -155,6 +155,28 @@ export function registerManagedCertificates(ctx: {
     async (c) => {
       const { orgId, id } = c.req.valid("param");
       return c.json((await withState([await findReadable(await requireUser(c), orgId, id)]))[0]!, 200);
+    },
+  );
+
+  app.openapi(
+    createRoute({
+      method: "get",
+      path: "/api/organizations/{orgId}/managed-certificates/{id}/issuances",
+      tags: ["Managed Certificates"],
+      summary: "Every attempt to issue a Certificate for the Managed Certificate, the newest first",
+      description: "Each with its kind (first issue, Renewal, Name Change), status and failure, so a failure a later attempt cleared can still be explained.",
+      request: { params: ManagedCertificateParams },
+      responses: { 200: json(z.object({ items: z.array(Issuance) })), ...errors(401, 403, 404) },
+    }),
+    async (c) => {
+      const { orgId, id } = c.req.valid("param");
+      const mc = await findReadable(await requireUser(c), orgId, id);
+      const rows = await db
+        .select()
+        .from(issuance)
+        .where(and(eq(issuance.organizationId, orgId), eq(issuance.managedCertificateId, mc.id)))
+        .orderBy(desc(issuance.startedAt), desc(issuance.createdAt));
+      return c.json({ items: rows.map(toIssuance) }, 200);
     },
   );
 
