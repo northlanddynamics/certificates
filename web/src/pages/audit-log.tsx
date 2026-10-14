@@ -1,0 +1,127 @@
+import { useInfiniteQuery, useQuery } from "@tanstack/react-query";
+import { useParams } from "@tanstack/react-router";
+import { createColumnHelper, tableFeatures, useTable } from "@tanstack/react-table";
+import { useState, type ComponentProps, type FormEvent } from "react";
+import { DataTable } from "@/components/data-table/data-table";
+import { Badge } from "@/components/ui/badge";
+import { Button } from "@/components/ui/button";
+import { Input } from "@/components/ui/input";
+import { Label } from "@/components/ui/label";
+import { api, can, type AuditEvent, type AuditFilters } from "@/lib/api";
+
+const ROUTE = "/app/organizations/$orgId/audit-log";
+
+// The server pages by cursor; the page shows what has been loaded and loads older events on asking.
+const features = tableFeatures({});
+const columnHelper = createColumnHelper<typeof features, AuditEvent>();
+const columns = columnHelper.columns([
+  columnHelper.accessor("occurredAt", { header: "When", cell: ({ cell }) => <span className="whitespace-nowrap">{new Date(cell.getValue()).toLocaleString()}</span> }),
+  columnHelper.display({
+    id: "actor",
+    header: "Actor",
+    cell: ({ row }) => <span className="break-all">{row.original.actor.email ?? <span className="text-muted-foreground">The platform or an API key</span>}</span>,
+  }),
+  columnHelper.accessor("action", { header: "Action", cell: ({ cell }) => <Badge variant="secondary">{cell.getValue()}</Badge> }),
+  columnHelper.display({
+    id: "target",
+    header: "Target",
+    cell: ({ row }) => (
+      <span className="break-all">
+        {row.original.target.type}
+        {row.original.target.id && <span className="text-muted-foreground"> {row.original.target.id}</span>}
+      </span>
+    ),
+  }),
+  columnHelper.accessor("detail", {
+    header: "Detail",
+    cell: ({ cell }) => <code className="block max-w-md text-xs break-all whitespace-pre-wrap">{Object.keys(cell.getValue()).length > 0 ? JSON.stringify(cell.getValue()) : ""}</code>,
+  }),
+]);
+const noRows: AuditEvent[] = [];
+
+/** A local date and time from a `datetime-local` input, as an ISO time; none if empty. */
+const isoOf = (local: string) => (local ? new Date(local).toISOString() : undefined);
+
+/**
+ * The Organization's audit log, newest first: every change to its state, who made it and what it was done to, kept for
+ * ever. Organization Administrators search it by actor, action (or every action of a resource, as `team.*`), target and
+ * time range.
+ */
+export function AuditLogPage() {
+  const { orgId } = useParams({ from: ROUTE });
+  const org = useQuery({ queryKey: ["me"], queryFn: api.me, select: (me) => me.organizations.find((o) => o.id === orgId) }).data;
+  const allowed = org ? can(org, "audit", "read") : false;
+  const [filters, setFilters] = useState<AuditFilters>({});
+  const events = useInfiniteQuery({
+    queryKey: ["audit-events", orgId, filters],
+    queryFn: ({ pageParam }) => api.auditEvents(orgId, filters, pageParam),
+    initialPageParam: undefined as string | undefined,
+    getNextPageParam: (last) => last.nextCursor ?? undefined,
+    enabled: allowed,
+  });
+  const rows = events.data?.pages.flatMap((p) => p.items) ?? noRows;
+  const table = useTable({ features, columns, data: rows, getRowId: (e) => e.id });
+
+  return (
+    <div className="flex flex-col gap-6">
+      <h1 className="text-xl font-semibold">Audit log</h1>
+      <p className="text-sm text-muted-foreground">
+        Every change to the Organization, newest first. Audit Events are kept for ever and cannot be changed or deleted. To send them to a SIEM, see Audit forwarding.
+      </p>
+      <AuditFilterForm onSearch={setFilters} />
+      <DataTable table={table} empty={events.isPending && allowed ? "Loading…" : "No Audit Event matches."} />
+      {events.error && <p className="text-sm text-destructive">{events.error.message}</p>}
+      {events.hasNextPage && (
+        <div className="flex justify-center">
+          <Button variant="outline" disabled={events.isFetchingNextPage} onClick={() => events.fetchNextPage()}>
+            {events.isFetchingNextPage ? "Loading…" : "Load older events"}
+          </Button>
+        </div>
+      )}
+    </div>
+  );
+}
+
+function AuditFilterForm({ onSearch }: { onSearch: (filters: AuditFilters) => void }) {
+  const [actor, setActor] = useState("");
+  const [action, setAction] = useState("");
+  const [targetType, setTargetType] = useState("");
+  const [targetId, setTargetId] = useState("");
+  const [from, setFrom] = useState("");
+  const [to, setTo] = useState("");
+  const field = (id: string, label: string, value: string, set: (v: string) => void, props: Partial<ComponentProps<typeof Input>> = {}) => (
+    <div className="flex flex-col gap-2">
+      <Label htmlFor={id}>{label}</Label>
+      <Input id={id} value={value} onChange={(e) => set(e.target.value)} {...props} />
+    </div>
+  );
+  return (
+    <form
+      className="grid gap-4 sm:grid-cols-2 lg:grid-cols-3"
+      onSubmit={(e: FormEvent) => {
+        e.preventDefault();
+        onSearch({ actor: actor.trim(), action: action.trim(), targetType: targetType.trim(), targetId: targetId.trim(), from: isoOf(from), to: isoOf(to) });
+      }}
+    >
+      {field("audit-actor", "Actor", actor, setActor, { placeholder: "Email or user id", autoComplete: "off" })}
+      {field("audit-action", "Action", action, setAction, { placeholder: "team.created, or team.*", autoComplete: "off" })}
+      {field("audit-target-type", "Target type", targetType, setTargetType, { placeholder: "managed_certificate", autoComplete: "off" })}
+      {field("audit-target-id", "Target id", targetId, setTargetId, { autoComplete: "off" })}
+      {field("audit-from", "From", from, setFrom, { type: "datetime-local" })}
+      {field("audit-to", "Until", to, setTo, { type: "datetime-local" })}
+      <div className="flex gap-2 sm:col-span-2 lg:col-span-3">
+        <Button type="submit">Search</Button>
+        <Button
+          type="button"
+          variant="outline"
+          onClick={() => {
+            for (const set of [setActor, setAction, setTargetType, setTargetId, setFrom, setTo]) set("");
+            onSearch({});
+          }}
+        >
+          Clear
+        </Button>
+      </div>
+    </form>
+  );
+}

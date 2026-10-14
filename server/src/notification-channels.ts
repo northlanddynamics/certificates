@@ -26,7 +26,7 @@ const Channel = z.object({
  * inside its network, so such a URL would have it reach what only it can. Only names written as such are known here; a DNS
  * name that resolves to one is not looked up.
  */
-function isInternalHost(hostname: string) {
+export function isInternalHost(hostname: string) {
   const host = hostname.replace(/^\[|\]$/g, "").toLowerCase();
   if (host === "localhost" || host.endsWith(".localhost")) return true;
   if (isIP(host) === 4) {

@@ -15,13 +15,15 @@ import { registerDeployments } from "./deployments";
 import { registerDcvConfiguration } from "./dcv-configuration";
 import { createDcvPlans } from "./dcv-plan";
 import { DEFAULT_DCV_CONFIG, createDcv, createTxtResolver, type DcvConfig } from "./dcv";
-import { listAudit } from "./audit";
+import { createAuditForwarding, registerAuditForwarders } from "./audit-forwarding";
+import { registerAuditRoutes } from "./audit-routes";
+import { createAuditTransport, type AuditTransport } from "./audit-transport";
 import { createDb } from "./db/client";
 import { DEFAULT_DNS_RELAY, createDnsRelay, type DnsRelayConfig } from "./dns-relay";
 import { createDnsProviders, registerDnsProviders } from "./dns-providers";
 import { member, organization } from "./db/schema";
 import { createAuthorizer } from "./authorization";
-import { HttpError, OrgParam, errors, json } from "./http";
+import { HttpError, errors, json } from "./http";
 import { createIssuances } from "./issuance";
 import type { Kms } from "./kms";
 import { registerApprovals } from "./approvals";
@@ -71,6 +73,8 @@ export interface AppDeps {
   agentGateway?: Partial<AgentGatewayConfig>;
   /** How DNS Provider operations relayed by Agents wait for them: see `DnsRelayConfig`. */
   dnsRelay?: Partial<DnsRelayConfig>;
+  /** How Audit Events reach the Organizations' SIEMs; posts with `fetch` and writes syslog over TLS unless given. */
+  auditTransport?: AuditTransport;
   /** See `OrganizationChangesDeps.memberRemovalHooks`. */
   memberRemovalHooks?: MemberRemovalHook[];
 }
@@ -220,37 +224,7 @@ export function createApp(deps: AppDeps) {
     },
   );
 
-  app.openapi(
-    createRoute({
-      method: "get",
-      path: "/api/organizations/{orgId}/audit-events",
-      tags: ["Audit"],
-      request: { params: OrgParam },
-      responses: {
-        200: json(
-          z.object({
-            items: z.array(
-              z.object({
-                id: z.string(),
-                occurredAt: z.string(),
-                actor: z.object({ id: z.string().nullable(), email: z.string().nullable() }),
-                action: z.string(),
-                target: z.object({ type: z.string(), id: z.string().nullable() }),
-                detail: z.record(z.string(), z.unknown()),
-              }),
-            ),
-          }),
-        ),
-        ...errors(401, 403, 404),
-      },
-    }),
-    async (c) => {
-      const { orgId } = c.req.valid("param");
-      await authorize(await requireUser(c), orgId, { audit: ["read"] });
-      return c.json({ items: await listAudit(db, orgId) }, 200);
-    },
-  );
-
+  registerAuditRoutes({ app, db, requireUser, authorize });
   registerTeamsOverview({ app, db, requireUser, authorize });
   const secrets = createSecrets(deps.kms);
   registerAcmeAccounts({ app, db, requireUser, authorize, unitOfWork, secrets, certificateAuthority: deps.certificateAuthority });
@@ -275,6 +249,8 @@ export function createApp(deps: AppDeps) {
     offlineAfterSeconds: agentGateway.offlineAfterSeconds,
   });
   registerNotificationChannels({ app, db, requireUser, authorize, unitOfWork, secrets });
+  registerAuditForwarders({ app, db, requireUser, authorize, unitOfWork, secrets });
+  const auditForwarding = createAuditForwarding({ db, unitOfWork, secrets, transport: deps.auditTransport ?? createAuditTransport(), clock });
   // A Renewal's end is told to the Managed Certificate's Subscribers; a first Issuance is not a Renewal, so is not.
   issuances.onEnded(async (tx, change, ended) => {
     if (!ended.renewal) return;
@@ -325,5 +301,5 @@ export function createApp(deps: AppDeps) {
     }),
   );
 
-  return { app, auth, db, unitOfWork, issuances, renewals, notifications };
+  return { app, auth, db, unitOfWork, issuances, renewals, notifications, auditForwarding };
 }

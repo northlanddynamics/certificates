@@ -1,5 +1,6 @@
 import { bigint, boolean, check, customType, integer, foreignKey, index, jsonb, pgTable, primaryKey, text, timestamp, unique, uniqueIndex, uuid } from "drizzle-orm/pg-core";
 import { sql } from "drizzle-orm";
+import type { AuditForwarderKind } from "../audit-forwarder-kinds";
 import type { AcmeEnvironment, RevocationReason } from "../certificate-authority";
 import type { DcvMethod, DcvScope } from "../dcv-plan";
 import type { ScriptInterpreter } from "../deployment-script-kinds";
@@ -154,7 +155,15 @@ export const auditEvent = pgTable(
     targetId: text("target_id"),
     detail: jsonb("detail").$type<Record<string, unknown>>().notNull().default({}),
   },
-  (t) => [index("audit_event_org_idx").on(t.organizationId, t.id)],
+  (t) => [
+    index("audit_event_org_idx").on(t.organizationId, t.id),
+    // What the audit log is searched by (audit.ts).
+    index("audit_event_action_idx").on(t.organizationId, t.action, t.id),
+    index("audit_event_target_idx").on(t.organizationId, t.targetType, t.targetId, t.id),
+    index("audit_event_actor_email_idx").on(t.organizationId, sql`lower(${t.actorEmail})`, t.id),
+    index("audit_event_actor_id_idx").on(t.organizationId, t.actorId, t.id),
+    index("audit_event_occurred_at_idx").on(t.organizationId, t.occurredAt),
+  ],
 );
 
 /** An Organization's data key, wrapped by the KMS. The unwrapped key is never stored. */
@@ -754,4 +763,61 @@ export const noticedCondition = pgTable(
     noticedAt: timestamp("noticed_at", { withTimezone: true }).notNull(),
   },
   (t) => [primaryKey({ columns: [t.organizationId, t.key] })],
+);
+
+/**
+ * Where an Organization's Audit Events are forwarded, a SIEM: a webhook, whose URL and Authorization header are a Secret
+ * (they carry the receiver's credential) of which only the host is shown, or a syslog receiver over TLS. Every Audit Event
+ * recorded after it was added is sent to it, at least once. Only Organization Administrators configure them.
+ */
+export const auditForwarder = pgTable(
+  "audit_forwarder",
+  {
+    id: uuid("id").primaryKey().defaultRandom(),
+    organizationId: text("organization_id")
+      .notNull()
+      .references(() => organization.id),
+    name: text("name").notNull(),
+    kind: text("kind").$type<AuditForwarderKind>().notNull(),
+    /** A webhook's URL and Authorization header, as a Secret; none for syslog. */
+    secretId: uuid("secret_id"),
+    /** The host it sends to: all of a webhook's URL that is shown, or the syslog receiver. */
+    host: text("host").notNull(),
+    /** The syslog receiver's port; none for a webhook. */
+    port: integer("port"),
+    createdAt: timestamp("created_at", { withTimezone: true }).notNull(),
+    /** Failed tries since it last delivered; the wait before the next grows with them. */
+    failures: integer("failures").notNull().default(0),
+    /** Not tried again before this: after a failure, or while a pass is sending to it (its lease). */
+    nextAttemptAt: timestamp("next_attempt_at", { withTimezone: true }).notNull(),
+    lastDeliveredAt: timestamp("last_delivered_at", { withTimezone: true }),
+    lastError: text("last_error"),
+  },
+  (t) => [
+    index("audit_forwarder_due_idx").on(t.nextAttemptAt),
+    uniqueIndex("audit_forwarder_name_unique").on(t.organizationId, sql`lower(${t.name})`),
+    check("audit_forwarder_kind", sql`${t.kind} in ('webhook', 'syslog')`),
+    check("audit_forwarder_target", sql`(${t.kind} = 'webhook' and ${t.secretId} is not null) or (${t.kind} = 'syslog' and ${t.port} is not null)`),
+    foreignKey({ columns: [t.secretId, t.organizationId], foreignColumns: [secret.id, secret.organizationId] }),
+  ],
+);
+
+/**
+ * An Audit Event a forwarder has yet to deliver: written in the transaction that records the event, for every forwarder
+ * the Organization has then, and removed once it is delivered. It names its forwarder without a foreign key, so that a
+ * forwarder being removed never fails the change being recorded; one left behind by a removed forwarder is dropped by the
+ * delivery pass.
+ */
+export const auditDelivery = pgTable(
+  "audit_delivery",
+  {
+    forwarderId: uuid("forwarder_id").notNull(),
+    organizationId: text("organization_id")
+      .notNull()
+      .references(() => organization.id),
+    auditEventId: bigint("audit_event_id", { mode: "number" })
+      .notNull()
+      .references(() => auditEvent.id),
+  },
+  (t) => [primaryKey({ columns: [t.forwarderId, t.auditEventId] })],
 );
