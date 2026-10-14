@@ -205,6 +205,25 @@ export interface Certificate {
   issuedAt: string;
   revocation: Revocation | null;
 }
+/** One certificate of a Certificate's chain, as it says of itself. */
+export interface ChainCertificate {
+  subject: string;
+  issuer: string;
+  serial: string;
+  fingerprint: string;
+  notBefore: string;
+  notAfter: string;
+}
+/** A Certificate with everything it says about itself, for one Certificate's side sheet. */
+export interface CertificateFacts extends Certificate {
+  /** The leaf's subject; empty when its names are only in `names`, as a CA's short-lived Certificates have them. */
+  subject: string;
+  issuer: string;
+  signatureAlgorithm: string;
+  /** The leaf and the intermediates the CA served, leaf first. */
+  chain: ChainCertificate[];
+  acmeAccount: { id: string; environment: AcmeAccount["environment"] };
+}
 /** An Organization's account with a CA; its key is never returned. */
 export interface AcmeAccount {
   id: string;
@@ -464,6 +483,8 @@ export const api = {
   revokeCertificate: (orgId: string, id: string, certificateId: string, reason: string) =>
     call<Certificate>(`/api/organizations/${orgId}/managed-certificates/${id}/certificates/${certificateId}/revocation`, { body: { reason } }),
   certificates: (orgId: string, id: string) => call<{ items: Certificate[] }>(`/api/organizations/${orgId}/managed-certificates/${id}/certificates`),
+  certificate: (orgId: string, id: string, certificateId: string) =>
+    call<CertificateFacts>(`/api/organizations/${orgId}/managed-certificates/${id}/certificates/${certificateId}`),
   /** Where a Certificate downloads from: the current one, or the one with `certificateId`. */
   certificateDownloadUrl: (orgId: string, id: string, form: { format: string; chain: string }, certificateId?: string) =>
     `/api/organizations/${orgId}/managed-certificates/${id}/${certificateId ? `certificates/${certificateId}/download` : "certificate"}?${new URLSearchParams(form)}`,

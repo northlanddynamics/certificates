@@ -20,3 +20,7 @@ export function status(m: ManagedCertificate): { label: string; variant: "defaul
   if (m.agent?.status === "offline") return { label: "Agent offline", variant: "outline" };
   return m.currentCertificate ? { label: "Issued", variant: "default" } : { label: "Not issued", variant: "outline" };
 }
+
+const CA_LABELS: Record<string, string> = { "lets-encrypt": "Let's Encrypt" };
+/** A CA by the name people know it by, from its name in the API. */
+export const caLabel = (ca: string) => CA_LABELS[ca] ?? ca;

@@ -49,6 +49,23 @@ export const Certificate = z.object({
   revocation: Revocation.nullable().openapi({ description: "Set once the CA has been told to revoke it, by whom and why." }),
 });
 
+const ChainCertificate = z.object({
+  subject: z.string(),
+  issuer: z.string(),
+  serial: z.string().openapi({ description: "Upper-case hex." }),
+  fingerprint: z.string().openapi({ description: "SHA-256 of the certificate, lower-case hex." }),
+  notBefore: z.string(),
+  notAfter: z.string(),
+});
+
+export const CertificateFacts = Certificate.extend({
+  subject: z.string().openapi({ description: "The leaf's subject, as a distinguished name; `names` are its subject alternative names." }),
+  issuer: z.string().openapi({ description: "The distinguished name of the CA certificate that signed it." }),
+  signatureAlgorithm: z.string().openapi({ description: "How the CA signed it, such as `ECDSA with SHA-256`." }),
+  chain: z.array(ChainCertificate).openapi({ description: "The leaf and the intermediates the CA served, leaf first." }),
+  acmeAccount: z.object({ id: z.string(), environment: z.enum(ACME_ENVIRONMENTS) }).openapi({ description: "The Organization's ACME account it was issued through." }),
+});
+
 export const RenewalPolicy = z.object({
   mode: z.enum(RENEWAL_MODES).openapi({ description: "`automatic`: the scheduler renews it when due. `manual`: only an Owner or an Organization Administrator does." }),
   daysBeforeExpiry: z.number().int().min(1).max(MAX_RENEWAL_DAYS).openapi({ description: "How many days before its current Certificate ends it is due for Renewal." }),

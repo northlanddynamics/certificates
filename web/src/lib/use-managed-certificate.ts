@@ -24,3 +24,18 @@ export function useManagedCertificatePage(orgId: string, id: string) {
   };
   return { org: me.data?.organizations.find((o) => o.id === orgId), userId: me.data?.user.id, me, certificate, refresh };
 }
+
+/**
+ * Every Certificate of the Managed Certificate, the newest first. `currentId` is its current Certificate as last read:
+ * when an Issuance ends with a new one, the list is read again.
+ */
+export const useCertificates = (orgId: string, id: string, currentId: string | undefined) =>
+  useQuery({ queryKey: [...managedCertificateKey(orgId, id), "certificates", { currentId }], queryFn: () => api.certificates(orgId, id) });
+
+/** One Certificate with everything it says about itself; none is asked for until `certificateId` is given. */
+export const useCertificateFacts = (orgId: string, id: string, certificateId: string | undefined) =>
+  useQuery({
+    queryKey: [...managedCertificateKey(orgId, id), "certificates", certificateId],
+    queryFn: () => api.certificate(orgId, id, certificateId!),
+    enabled: Boolean(certificateId),
+  });
