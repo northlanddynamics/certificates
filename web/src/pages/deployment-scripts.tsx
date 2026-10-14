@@ -1,9 +1,10 @@
 import { keepPreviousData, useQuery } from "@tanstack/react-query";
 import { useParams } from "@tanstack/react-router";
 import { createColumnHelper, rowPaginationFeature, tableFeatures, useTable, type PaginationState } from "@tanstack/react-table";
-import { PlusIcon } from "lucide-react";
+import { PlusIcon, XIcon } from "lucide-react";
 import { useState, type FormEvent } from "react";
 import { DataTable } from "@/components/data-table/data-table";
+import { DataTableFacetedFilter } from "@/components/data-table/data-table-faceted-filter";
 import { DataTablePagination } from "@/components/data-table/data-table-pagination";
 import { Badge } from "@/components/ui/badge";
 import { Button } from "@/components/ui/button";
@@ -18,9 +19,10 @@ import { useAction } from "@/lib/use-action";
 const ROUTE = "/app/organizations/$orgId/deployment-scripts";
 const INTERPRETERS: DeploymentScript["interpreter"][] = ["bash", "powershell"];
 const INTERPRETER_LABEL: Record<DeploymentScript["interpreter"], string> = { bash: "Bash", powershell: "PowerShell" };
+const INTERPRETER_FACETS = INTERPRETERS.map((value) => ({ value, label: INTERPRETER_LABEL[value] }));
 const shortHash = (hash: string) => hash.slice(0, 12);
 
-// Paging is the server's (Page<DeploymentScript>); the table lays out the page it was given.
+// Paging and narrowing are the server's (Page<DeploymentScript>); the table lays out the page it was given.
 const features = tableFeatures({ rowPaginationFeature });
 const columnHelper = createColumnHelper<typeof features, DeploymentScript>();
 const columns = columnHelper.columns([
@@ -58,10 +60,11 @@ export function DeploymentScriptsPage() {
   const { orgId } = useParams({ from: ROUTE });
   const org = useQuery({ queryKey: ["me"], queryFn: api.me, select: (me) => me.organizations.find((o) => o.id === orgId) }).data;
   const allowed = org ? can(org, "deploymentScript", "read") : false;
+  const [interpreter, setInterpreter] = useState<string[]>([]);
   const [pagination, setPagination] = useState<PaginationState>({ pageIndex: 0, pageSize: 25 });
   const scripts = useQuery({
-    queryKey: ["deployment-scripts", orgId, pagination],
-    queryFn: () => api.deploymentScripts(orgId, { page: pagination.pageIndex + 1, pageSize: pagination.pageSize }),
+    queryKey: ["deployment-scripts", orgId, { interpreter }, pagination],
+    queryFn: () => api.deploymentScripts(orgId, { page: pagination.pageIndex + 1, pageSize: pagination.pageSize }, { interpreter }),
     enabled: allowed,
     placeholderData: keepPreviousData,
   });
@@ -76,6 +79,12 @@ export function DeploymentScriptsPage() {
     getRowId: (s) => s.id,
   });
   const mayUpload = org ? can(org, "deploymentScript", "upload") : false;
+  const narrowed = interpreter.length > 0;
+  // A new narrowing starts again from the first page.
+  const narrow = (values: string[]) => {
+    setInterpreter(values);
+    setPagination({ ...pagination, pageIndex: 0 });
+  };
 
   return (
     <div className="flex flex-col gap-6">
@@ -91,7 +100,16 @@ export function DeploymentScriptsPage() {
         <p className="text-sm text-muted-foreground">Only Organization Administrators see the Deployment Scripts.</p>
       ) : (
         <div className="flex flex-col gap-4">
-          <DataTable table={table} empty={scripts.isPending ? "Loading…" : "No Deployment Script is uploaded yet."} />
+          <div className="flex flex-wrap items-center gap-2">
+            <DataTableFacetedFilter title="Interpreter" options={INTERPRETER_FACETS} value={interpreter} onChange={narrow} />
+            {narrowed && (
+              <Button variant="ghost" size="sm" onClick={() => narrow([])}>
+                Reset
+                <XIcon />
+              </Button>
+            )}
+          </div>
+          <DataTable table={table} empty={scripts.isPending ? "Loading…" : narrowed ? "No Deployment Scripts match." : "No Deployment Script is uploaded yet."} />
           <DataTablePagination
             pageIndex={pagination.pageIndex}
             pageSize={pagination.pageSize}

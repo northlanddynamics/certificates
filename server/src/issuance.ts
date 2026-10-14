@@ -332,12 +332,13 @@ export function createIssuances({ db, unitOfWork, certificateAuthority: ca, dcv,
         .where(and(eq(managedCertificate.id, id), eq(managedCertificate.organizationId, organizationId)))
         .for("update");
       if (!mc) throw new Error("the Managed Certificate is gone");
-      const [certificateOf] = await tx
-        .select({ id: certificate.id })
+      const [latest] = await tx
+        .select({ names: certificate.names })
         .from(certificate)
         .where(and(eq(certificate.organizationId, organizationId), eq(certificate.managedCertificateId, id)))
+        .orderBy(desc(certificate.createdAt), desc(certificate.id))
         .limit(1);
-      const hasCertificate = certificateOf !== undefined;
+      const hasCertificate = latest !== undefined;
 
       if (mc.archivedAt) return { refused: "archived" };
       // An Agent makes the key first, and sends the CSR that its Managed Certificate is issued from.
@@ -369,6 +370,7 @@ export function createIssuances({ db, unitOfWork, certificateAuthority: ca, dcv,
           organizationId,
           managedCertificateId: id,
           status: "running",
+          kind: !latest ? "first_issue" : sameNames(latest.names, mc.names) ? "renewal" : "name_change",
           requestedById: actor?.id ?? null,
           requestedByEmail: actor?.email ?? null,
           awaitingKey,

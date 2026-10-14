@@ -202,6 +202,21 @@ describe("viewing the library", () => {
     for (const query of ["?page=0", "?pageSize=101"]) expect((await h.api(`${scriptsOf()}${query}`, { cookie: acmeOrg.cookie })).status).toBe(400);
   });
 
+  test("narrows the library to the scripts run by any of the interpreters asked for", async () => {
+    await uploadHello("bash-script");
+    await upload({ name: "powershell-script", interpreter: "powershell", content: POWERSHELL.content });
+    const names = async (query: string) => {
+      const listed = await h.api(`${scriptsOf()}?${query}`, { cookie: acmeOrg.cookie });
+      expect(listed.status).toBe(200);
+      // Uploaded at the same moment, so in no order of their own.
+      return [listed.body.total, listed.body.items.map((s: any) => s.name).sort()];
+    };
+
+    expect(await names("interpreter=powershell")).toEqual([1, ["powershell-script"]]);
+    expect(await names("interpreter=bash,powershell")).toEqual([2, ["bash-script", "powershell-script"]]);
+    expect((await h.api(`${scriptsOf()}?interpreter=python`, { cookie: acmeOrg.cookie })).status).toBe(400);
+  });
+
   test("a previous version stays viewable, with its content, by its hash", async () => {
     const { id } = await uploadHello();
     await addVersion(id, GOODBYE.content);

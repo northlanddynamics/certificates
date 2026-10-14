@@ -10,7 +10,7 @@ import type { Authorizer } from "./authorization";
 import type { Db, Tx } from "./db/client";
 import { deploymentScript, deploymentScriptVersion } from "./db/schema";
 import { SCRIPT_INTERPRETERS } from "./deployment-script-kinds";
-import { HttpError, OrgParam, PageQuery, errors, isUniqueViolation, json, pageOf } from "./http";
+import { HttpError, OrgParam, PageQuery, anyOf, errors, isUniqueViolation, json, pageOf } from "./http";
 import type { Actor, Change, UnitOfWork } from "./unit-of-work";
 
 
@@ -63,6 +63,9 @@ async function addVersion(tx: Tx, change: Change, actor: Actor, script: ScriptRo
   return row!;
 }
 
+const ScriptsQuery = PageQuery.extend({
+  interpreter: anyOf(SCRIPT_INTERPRETERS).optional().meta({ description: "Those run by any of these interpreters, comma-separated." }),
+});
 const ScriptParams = OrgParam.extend({ scriptId: z.string().openapi({ param: { name: "scriptId", in: "path" } }) });
 const VersionParams = ScriptParams.extend({ hash: z.string().openapi({ param: { name: "hash", in: "path" } }) });
 const ScriptWithVersions = Script.extend({ versions: z.array(Version).openapi({ description: "Every version, newest first." }) });
@@ -98,15 +101,18 @@ export function registerDeploymentScripts(ctx: {
       path: "/api/organizations/{orgId}/deployment-scripts",
       tags: ["Deployment Scripts"],
       summary: "List the Deployment Scripts, oldest first, a page at a time",
-      description: "Each with its latest version; the content is not included, ask for a version to see it. `total` is how many there are, whatever the page.",
-      request: { params: OrgParam, query: PageQuery },
+      description: "Each with its latest version; the content is not included, ask for a version to see it. `total` is how many match the filter, whatever the page.",
+      request: { params: OrgParam, query: ScriptsQuery },
       responses: { 200: json(pageOf(Script)), ...errors(400, 401, 403, 404) },
     }),
     async (c) => {
       const { orgId } = c.req.valid("param");
       await authorize(await requireUser(c), orgId, { deploymentScript: ["read"] });
-      const { page, pageSize } = c.req.valid("query");
-      const where = eq(deploymentScript.organizationId, orgId);
+      const { page, pageSize, interpreter } = c.req.valid("query");
+      const where = and(
+        eq(deploymentScript.organizationId, orgId),
+        interpreter ? inArray(deploymentScript.interpreter, interpreter.split(",") as ScriptRow["interpreter"][]) : undefined,
+      );
       const [total, scripts] = await Promise.all([
         db.$count(deploymentScript, where),
         db.select().from(deploymentScript).where(where).orderBy(asc(deploymentScript.createdAt), asc(deploymentScript.id)).limit(pageSize).offset((page - 1) * pageSize),
