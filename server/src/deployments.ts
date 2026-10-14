@@ -20,7 +20,7 @@ import { KEY_ALGORITHMS } from "./csr";
 import type { Db, Tx } from "./db/client";
 import { agent, certificate, deployment, deploymentRun, deploymentScript, deploymentScriptVersion, issuance, managedCertificate, workItem } from "./db/schema";
 import { SCRIPT_INTERPRETERS } from "./deployment-script-kinds";
-import { HttpError, OrgParam, PageQuery, errors, json, pageOf } from "./http";
+import { HttpError, OrgParam, PageQuery, anyOf, errors, json, pageOf } from "./http";
 import type { Issuances } from "./issuance";
 import type { Notifications } from "./notifications";
 import { RenewalPolicy } from "./managed-certificate-reader";
@@ -94,6 +94,14 @@ const toRun = (row: RunRow, fingerprint: string) => ({
   outputTruncated: row.outputTruncated,
   certificate: { id: row.certificateId, fingerprint },
   script: { version: row.scriptVersion, hash: row.scriptHash },
+});
+
+/** One or more ids, comma-separated, for a filter that matches what has any of them. */
+const anyId = z.string().refine((s) => s.split(",").every((id) => UUID.test(id)), "One or more ids, comma-separated.");
+const DeploymentsQuery = PageQuery.extend({
+  state: anyOf(DEPLOYMENT_STATES).optional().meta({ description: "Those that are in any of these states, comma-separated." }),
+  agentId: anyId.optional().meta({ description: "Those on any of these Agents, comma-separated." }),
+  scriptId: anyId.optional().meta({ description: "Those running any of these Deployment Scripts, comma-separated." }),
 });
 
 const DeploymentParams = OrgParam.extend({ id: z.string().openapi({ param: { name: "id", in: "path" } }) });
@@ -472,18 +480,32 @@ export function registerDeployments(ctx: {
       path: "/api/organizations/{orgId}/deployments",
       tags: ["Deployments"],
       summary: "List the Deployments, newest first, a page at a time",
-      description: "Each with its Agent, script version, where it has got to and its latest Deployment Run. Organization Administrators only.",
-      request: { params: OrgParam, query: PageQuery },
+      description:
+        "Each with its Agent, script version, where it has got to and its latest Deployment Run. Organization Administrators only. " +
+        "The filters combine; `total` is how many match them, whatever the page.",
+      request: { params: OrgParam, query: DeploymentsQuery },
       responses: { 200: json(pageOf(Deployment)), ...errors(400, 401, 403, 404) },
     }),
     async (c) => {
       const { orgId } = c.req.valid("param");
       await authorize(await requireUser(c), orgId, { deployment: ["read"] });
-      const { page, pageSize } = c.req.valid("query");
-      const where = eq(deployment.organizationId, orgId);
+      const { page, pageSize, state, agentId, scriptId } = c.req.valid("query");
+      const where = and(
+        eq(deployment.organizationId, orgId),
+        agentId ? inArray(deployment.agentId, agentId.split(",")) : undefined,
+        scriptId ? inArray(deployment.scriptId, scriptId.split(",")) : undefined,
+      );
+      const newestFirst = [desc(deployment.createdAt), desc(deployment.id)];
+      if (state) {
+        // Where a Deployment has got to is worked out from its Managed Certificate, Issuances and runs (`withState`), not
+        // stored: narrow by it after working it out for every Deployment the other filters leave.
+        const wanted = state.split(",");
+        const matching = (await withState(await db.select().from(deployment).where(where).orderBy(...newestFirst))).filter((d) => wanted.includes(d.state));
+        return c.json({ items: matching.slice((page - 1) * pageSize, page * pageSize), total: matching.length, page, pageSize }, 200);
+      }
       const [total, rows] = await Promise.all([
         db.$count(deployment, where),
-        db.select().from(deployment).where(where).orderBy(desc(deployment.createdAt), desc(deployment.id)).limit(pageSize).offset((page - 1) * pageSize),
+        db.select().from(deployment).where(where).orderBy(...newestFirst).limit(pageSize).offset((page - 1) * pageSize),
       ]);
       return c.json({ items: await withState(rows), total, page, pageSize }, 200);
     },
