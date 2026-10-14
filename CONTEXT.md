@@ -22,6 +22,10 @@ _Avoid_: contact, assignee, requester (when meaning the ongoing responsible part
 A person who runs the platform itself and creates Organizations; they see inside an Organization only if explicitly invited into it.
 _Avoid_: super admin, site admin, admin (unqualified)
 
+**Login Policy**:
+What an Organization asks of its users' sign-in, which an Organization Administrator sets. Requiring MFA holds up every member who has a password and no authenticator app (TOTP), in every Organization they belong to and with their API keys, until they set one up; a passkey does not count, because the password still signs in alone.
+_Avoid_: auth policy, security settings
+
 **Organization Administrator**:
 An Organization role with full control of that Organization, including Deployments, Deployment Scripts and integrations; changes they make need no Approval.
 _Avoid_: admin (unqualified), org owner

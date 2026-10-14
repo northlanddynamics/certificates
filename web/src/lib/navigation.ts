@@ -42,7 +42,7 @@ export function organizationNavGroups(org: Org): NavGroup[] {
         ...(can(org, "notificationChannel", "create") ? [{ title: "Notification channels", url: `${base}/notification-channels`, icon: BellIcon }] : []),
         ...(can(org, "audit", "read") ? [{ title: "Audit log", url: `${base}/audit-log`, icon: ScrollTextIcon }] : []),
         ...(can(org, "auditForwarder", "read") ? [{ title: "Audit forwarding", url: `${base}/audit-forwarding`, icon: SendIcon }] : []),
-        ...(can(org, "loginPolicy", "read") ? [{ title: "Login policy", url: `${base}/login-policy`, icon: LockKeyholeIcon }] : []),
+        ...(can(org, "loginPolicy", "read") ? [{ title: "Login policy", url: loginPolicyUrl(org.id), icon: LockKeyholeIcon }] : []),
       ],
     },
     {
@@ -61,6 +61,9 @@ export function organizationNavGroups(org: Org): NavGroup[] {
 export const organizationNav = (org: Org): NavItem[] => organizationNavGroups(org).flatMap((g) => g.items);
 
 export const platformNav: NavItem[] = [{ title: "Organizations", url: "/platform/organizations", icon: BuildingIcon }];
+
+/** An Organization's login policy, which stays open to a user it holds up, so that the requirement can be undone. */
+export const loginPolicyUrl = (orgId: string) => `/organizations/${orgId}/login-policy`;
 
 /** The signed-in user's own page, which the user menu opens. */
 export const ACCOUNT_SECURITY_URL = "/account/security";

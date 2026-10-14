@@ -20,7 +20,7 @@ const QRCode = (QRCodeModule as unknown as { default?: typeof QRCodeModule }).de
 /**
  * The signed-in user's own sign-in methods: an authenticator app (TOTP) as a second factor for their password, and
  * passkeys, which sign in on their own. Each change is an Audit Event in every Organization of theirs. When an
- * Organization of theirs requires MFA and they have a password, this is the one page open to them until they enroll.
+ * Organization of theirs requires MFA and they have a password, this is the one page open to them until they set it up.
  */
 export function AccountSecurityPage() {
   const me = useQuery({ queryKey: ["me"], queryFn: api.me });
@@ -29,7 +29,7 @@ export function AccountSecurityPage() {
   return (
     <div className="flex max-w-3xl flex-col gap-6">
       <h1 className="text-xl font-semibold">Account security</h1>
-      {mfa?.enrollmentRequired && (
+      {mfa?.setupRequired && (
         <Alert variant="destructive">
           <ShieldAlertIcon />
           <AlertTitle>Set up an authenticator app to continue</AlertTitle>

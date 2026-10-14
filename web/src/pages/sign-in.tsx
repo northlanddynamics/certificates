@@ -9,7 +9,7 @@ import { Label } from "@/components/ui/label";
 import { Separator } from "@/components/ui/separator";
 import { authClient, unwrap } from "@/lib/auth-client";
 
-/** Sign in with a password (and, once enrolled, a code from an authenticator app or a backup code), or with a passkey alone. */
+/** Sign in with a password (and, once set up, a code from an authenticator app or a backup code), or with a passkey alone. */
 export function SignInPage() {
   const navigate = useNavigate();
   const queryClient = useQueryClient();

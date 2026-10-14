@@ -1,6 +1,6 @@
-// MFA and passkeys, through the platform's HTTP API: a user enrolls TOTP as a second factor and registers passkeys
-// (Better Auth's two-factor and passkey plugins), each enrollment an Audit Event in the user's Organizations, and an
-// Organization Administrator can require MFA, after which a password user without it must enroll before going on.
+// MFA and passkeys, through the platform's HTTP API: a user sets up TOTP as a second factor and registers passkeys
+// (Better Auth's two-factor and passkey plugins), each change an Audit Event in the user's Organizations, and an
+// Organization Administrator can require MFA, after which a password user without it must set it up before going on.
 // The authenticator app and the passkey are doubles in the test (totp.ts, passkey-double.ts); time for TOTP codes is real.
 import { afterAll, beforeAll, beforeEach, describe, expect, setDefaultTimeout, test } from "bun:test";
 import { PASSWORD, createHarness, type Harness } from "./harness";
@@ -36,8 +36,8 @@ async function join(email: string, role = "member") {
   return h.signIn(email, PASSWORD);
 }
 
-/** Enables TOTP for the signed-in user: asks for a secret, then proves the authenticator app has it. Returns the secret's URI and the session cookie that replaces `cookie`. */
-async function enrollTotp(cookie: string) {
+/** Sets up TOTP for the signed-in user: asks for a secret, then proves the authenticator app has it. Returns the secret's URI and the session cookie that replaces `cookie`. */
+async function setUpTotp(cookie: string) {
   const enabled = await h.api("/api/auth/two-factor/enable", { cookie, body: { password: PASSWORD } });
   expect(enabled.status).toBe(200);
   const verified = await h.api("/api/auth/two-factor/verify-totp", { cookie, body: { code: totpCode(enabled.body.totpURI) } });
@@ -75,7 +75,7 @@ async function signInWithPasskey(device: PasskeyDouble) {
 
 describe("passkeys", () => {
   test("a user registers a passkey and signs in with it, without a password or a second factor", async () => {
-    const { cookie } = await enrollTotp(org.cookie);
+    const { cookie } = await setUpTotp(org.cookie);
     const device = await createPasskeyDouble();
     const registered = await registerPasskey(cookie, device, "Laptop");
     expect(registered.status).toBe(200);
@@ -113,8 +113,8 @@ describe("passkeys", () => {
 });
 
 describe("TOTP as a second factor", () => {
-  test("a user enrolls TOTP, after which password sign-in asks for a code", async () => {
-    const { totpURI } = await enrollTotp(org.cookie);
+  test("a user sets up TOTP, after which password sign-in asks for a code", async () => {
+    const { totpURI } = await setUpTotp(org.cookie);
     expect(totpURI).toStartWith("otpauth://totp/Certificate%20Platform:admin%40acme.test?");
 
     const wrong = await signInWithTotp("admin@acme.test", () => "000000");
@@ -125,7 +125,7 @@ describe("TOTP as a second factor", () => {
   });
 
   test("enabling and disabling TOTP are Audit Events in each of the user's Organizations", async () => {
-    const { cookie } = await enrollTotp(org.cookie);
+    const { cookie } = await setUpTotp(org.cookie);
     const disabled = await h.api("/api/auth/two-factor/disable", { cookie, body: { password: PASSWORD } });
     expect(disabled.status).toBe(200);
 
@@ -136,7 +136,7 @@ describe("TOTP as a second factor", () => {
     ]);
   });
 
-  test("asking for a secret is not yet an enrollment, and a wrong first code enrolls nothing", async () => {
+  test("asking for a secret is not yet setting it up, and a wrong first code turns nothing on", async () => {
     const enabled = await h.api("/api/auth/two-factor/enable", { cookie: org.cookie, body: { password: PASSWORD } });
     expect(enabled.status).toBe(200);
     const wrong = await h.api("/api/auth/two-factor/verify-totp", { cookie: org.cookie, body: { code: "000000" } });
@@ -149,7 +149,7 @@ describe("TOTP as a second factor", () => {
   });
 
   test("regenerating backup codes is an Audit Event, and a backup code answers the second factor once", async () => {
-    const { cookie } = await enrollTotp(org.cookie);
+    const { cookie } = await setUpTotp(org.cookie);
     const regenerated = await h.api("/api/auth/two-factor/generate-backup-codes", { cookie, body: { password: PASSWORD } });
     expect(regenerated.status).toBe(200);
     const [code] = regenerated.body.backupCodes as string[];
@@ -163,12 +163,12 @@ describe("TOTP as a second factor", () => {
     expect((await use()).status).toBe(401);
   });
 
-  test("an enrollment is audited in every Organization of the user's, and in no other", async () => {
+  test("setting up TOTP is audited in every Organization of the user's, and in no other", async () => {
     const globex = await h.createOrgWithAdmin(operator, "globex", "admin@globex.test");
     const invited = await h.api(`${BA}/invite-member`, { cookie: globex.cookie, body: { email: "admin@acme.test", role: "member", organizationId: globex.orgId } });
     await h.api(`${BA}/accept-invitation`, { cookie: org.cookie, body: { invitationId: invited.body.id } });
     const bob = await join("bob@acme.test");
-    await enrollTotp(bob);
+    await setUpTotp(bob);
 
     const enabled = (orgId: string, cookie: string) => auditOf(orgId, cookie).then((events) => events.filter((e) => e.action === "two_factor.enabled"));
     expect(await enabled(org.orgId, org.cookie)).toMatchObject([{ actor: { email: "bob@acme.test" } }]);
@@ -182,7 +182,7 @@ describe("requiring MFA", () => {
   const certificates = (cookie: string) => h.api(`/api/organizations/${org.orgId}/managed-certificates`, { cookie });
 
   test("an Organization Administrator requires MFA, which is an Audit Event; no one else may", async () => {
-    org = { ...org, cookie: (await enrollTotp(org.cookie)).cookie };
+    org = { ...org, cookie: (await setUpTotp(org.cookie)).cookie };
     expect((await policy()).body).toEqual({ requireMfa: false });
     const bob = await join("bob@acme.test", "approver");
     expect((await setPolicy(true, bob)).status).toBe(403);
@@ -195,28 +195,28 @@ describe("requiring MFA", () => {
     ]);
   });
 
-  test("a password user without MFA must enroll before going on, and may once they have", async () => {
+  test("a password user without MFA must set it up before going on, and may once they have", async () => {
     const bob = await join("bob@acme.test");
     await setPolicy(true);
 
     const me = await h.api("/api/me", { cookie: bob });
     expect(me.status).toBe(200);
-    expect(me.body.user.mfa).toEqual({ enabled: false, enrollmentRequired: true });
+    expect(me.body.user.mfa).toEqual({ enabled: false, setupRequired: true });
     const refused = await certificates(bob);
     expect(refused.status).toBe(403);
     expect(refused.body.error).toMatch(/MFA/);
     // Better Auth's organization endpoints too.
     expect((await h.api(`${BA}/list-members?organizationId=${org.orgId}`, { cookie: bob })).status).toBe(403);
 
-    const { cookie } = await enrollTotp(bob);
-    expect((await h.api("/api/me", { cookie })).body.user.mfa).toEqual({ enabled: true, enrollmentRequired: false });
+    const { cookie } = await setUpTotp(bob);
+    expect((await h.api("/api/me", { cookie })).body.user.mfa).toEqual({ enabled: true, setupRequired: false });
     expect((await certificates(cookie)).status).toBe(200);
   });
 
-  test("an Organization Administrator who requires MFA without having it must enroll too", async () => {
+  test("an Organization Administrator who requires MFA without having it must set it up too", async () => {
     await setPolicy(true);
     expect((await certificates(org.cookie)).status).toBe(403);
-    // Enrolling is open to them, and so is the requirement's own page, so it can be undone.
+    // Setting it up is open to them, and so is the requirement's own page, so it can be undone.
     expect((await policy()).status).toBe(200);
     expect((await setPolicy(false)).status).toBe(200);
     expect((await certificates(org.cookie)).status).toBe(200);
@@ -231,6 +231,27 @@ describe("requiring MFA", () => {
     expect((await certificates(byPasskey)).status).toBe(403);
     await setPolicy(false);
     expect((await certificates(byPasskey)).status).toBe(200);
-    expect((await h.api("/api/me", { cookie: byPasskey })).body.user.mfa).toEqual({ enabled: false, enrollmentRequired: false });
+    expect((await h.api("/api/me", { cookie: byPasskey })).body.user.mfa).toEqual({ enabled: false, setupRequired: false });
+  });
+
+  test("a held user's API keys are held with them, and an Organization's are not", async () => {
+    const bob = await join("bob@acme.test");
+    const keys = `/api/organizations/${org.orgId}/api-keys`;
+    const bobsKey = (await h.api(keys, { cookie: bob, body: { name: "ci" } })).body.key as string;
+    const orgKey = (await h.api(keys, { cookie: org.cookie, body: { name: "ci", type: "organization" } })).body.key as string;
+    // A Managed Certificate that is not there: a key that gets past the login policy is refused for that instead.
+    const fetchWith = async (key: string) => {
+      const res = await h.app.request(`http://localhost/api/organizations/${org.orgId}/managed-certificates/00000000-0000-0000-0000-000000000000/certificate`, { headers: { "x-api-key": key } });
+      return { status: res.status, error: ((await res.json()) as { error: string }).error };
+    };
+    const heldUp = { status: 403, error: expect.stringMatching(/MFA/) };
+    expect(await fetchWith(bobsKey)).not.toMatchObject(heldUp);
+
+    await setPolicy(true);
+    expect(await fetchWith(bobsKey)).toMatchObject(heldUp);
+    expect(await fetchWith(orgKey)).toMatchObject({ status: 404 });
+
+    await setUpTotp(bob);
+    expect(await fetchWith(bobsKey)).not.toMatchObject(heldUp);
   });
 });

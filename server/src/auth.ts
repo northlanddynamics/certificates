@@ -70,7 +70,7 @@ export function createAuth({ db, baseURL, secret, trustedOrigins = [], organizat
         defaultRole: "user",
         roles: { [PLATFORM_OPERATOR_ROLE]: adminAc, user: userAc },
       }),
-      // TOTP as a second factor for password sign-in. Enrolling, verifying the first code and disabling are served on the
+      // TOTP as a second factor for password sign-in. Setting it up, verifying the first code and disabling are served on the
       // unit of work, which audits them (account-security.ts); the email/SMS OTP method is not configured.
       twoFactor({ issuer: APP_NAME }),
       // Passkeys sign in on their own, without a password or a second factor. The relying party is the host of `baseURL`,

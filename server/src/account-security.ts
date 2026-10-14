@@ -1,9 +1,9 @@
-// Better Auth's two-factor and passkey endpoints, served as they are, but each change to a signed-in user's enrollment
+// Better Auth's two-factor and passkey endpoints, served as they are, but each change to a signed-in user's sign-in methods
 // on a transaction of the unit of work, which records it as Audit Events on that same transaction. Like the organization
 // endpoints (organization-changes.ts), these open no transaction of their own, and the plugins have no hooks to audit
-// from, so the change is found by comparing the user's enrollment before and after the endpoint ran.
+// from, so the change is found by comparing the user's sign-in methods before and after the endpoint ran.
 //
-// An enrollment belongs to a user, not to an Organization, while an Audit Event belongs to one Organization: it is
+// A sign-in method belongs to a user, not to an Organization, while an Audit Event belongs to one Organization: it is
 // recorded in each Organization the user is a member of when it happens (a user in none leaves none).
 //
 // This module is the only one that knows which of those endpoints exist. Anything not listed here is not served; in
@@ -12,7 +12,8 @@ import { asc, eq } from "drizzle-orm";
 import { createAuth, type Auth, type AuthConfig } from "./auth";
 import type { Tx } from "./db/client";
 import { member, passkey, user } from "./db/schema";
-import type { Change, UnitOfWork } from "./unit-of-work";
+import type { AuditAction } from "./audit";
+import type { Actor, Change, UnitOfWork } from "./unit-of-work";
 
 /**
  * Served straight from Better Auth, outside the unit of work: reads, and the sign-in ceremonies. The sign-in ones count
@@ -28,7 +29,7 @@ const PASS_THROUGH = new Set([
   "passkey/list-user-passkeys",
 ]);
 
-/** The endpoints that change a signed-in user's enrollment. */
+/** The endpoints that change a signed-in user's sign-in methods. */
 const CHANGES = new Set([
   "two-factor/enable",
   "two-factor/verify-totp",
@@ -72,13 +73,13 @@ export function createAccountSecurity({ unitOfWork, auth, authConfig }: AccountS
       const actor = { id: session.user.id, email: session.user.email };
       try {
         return await unitOfWork.run(actor, async (tx, change) => {
-          // Serialises the user's own concurrent changes, so each sees the enrollment the one before left.
+          // Serialises the user's own concurrent changes, so each sees the sign-in methods the one before left.
           await tx.select({ id: user.id }).from(user).where(eq(user.id, actor.id)).for("update");
-          const before = await enrollmentOf(tx, actor.id);
+          const before = await signInMethodsOf(tx, actor.id);
           const res = await createAuth({ ...authConfig, db: tx }).handler(request);
           if (res.status >= 400) throw new Refused(res);
-          const after = await enrollmentOf(tx, actor.id);
-          await audit(tx, change, actor, changes(before, after, endpoint));
+          const after = await signInMethodsOf(tx, actor.id);
+          await audit(tx, change, actor.id, changes(actor, before, after, endpoint));
           return res;
         });
       } catch (err) {
@@ -89,48 +90,45 @@ export function createAccountSecurity({ unitOfWork, auth, authConfig }: AccountS
   };
 }
 
-interface Enrollment {
+interface SignInMethods {
   twoFactorEnabled: boolean;
   /** The user's passkeys' names, by id. */
   passkeys: Map<string, string | null>;
 }
 
-async function enrollmentOf(tx: Tx, userId: string): Promise<Enrollment> {
+async function signInMethodsOf(tx: Tx, userId: string): Promise<SignInMethods> {
   const [u] = await tx.select({ twoFactorEnabled: user.twoFactorEnabled }).from(user).where(eq(user.id, userId));
   const keys = await tx.select({ id: passkey.id, name: passkey.name }).from(passkey).where(eq(passkey.userId, userId)).orderBy(asc(passkey.id));
   return { twoFactorEnabled: Boolean(u?.twoFactorEnabled), passkeys: new Map(keys.map((k) => [k.id, k.name])) };
 }
 
-type EnrollmentChange =
-  | { action: "two_factor.enabled" | "two_factor.disabled" | "two_factor.backup_codes_regenerated" }
-  | { action: "passkey.registered" | "passkey.deleted"; passkeyId: string; name: string | null }
-  | { action: "passkey.renamed"; passkeyId: string; from: string | null; to: string | null };
+/** One change to a user's sign-in methods, as the Audit Event that records it. */
+interface SignInMethodChange {
+  action: AuditAction;
+  target: { type: "user" | "passkey"; id: string };
+  detail: Record<string, unknown>;
+}
 
-function changes(before: Enrollment, after: Enrollment, endpoint: string): EnrollmentChange[] {
-  const found: EnrollmentChange[] = [];
-  if (!before.twoFactorEnabled && after.twoFactorEnabled) found.push({ action: "two_factor.enabled" });
-  if (before.twoFactorEnabled && !after.twoFactorEnabled) found.push({ action: "two_factor.disabled" });
+function changes(actor: Actor, before: SignInMethods, after: SignInMethods, endpoint: string): SignInMethodChange[] {
+  const found: SignInMethodChange[] = [];
+  const ofUser = (action: AuditAction) => found.push({ action, target: { type: "user", id: actor.id }, detail: { email: actor.email } });
+  const ofPasskey = (action: AuditAction, id: string, detail: Record<string, unknown>) =>
+    found.push({ action, target: { type: "passkey", id }, detail: { userId: actor.id, email: actor.email, ...detail } });
+  if (!before.twoFactorEnabled && after.twoFactorEnabled) ofUser("two_factor.enabled");
+  if (before.twoFactorEnabled && !after.twoFactorEnabled) ofUser("two_factor.disabled");
   // The codes are stored encrypted, so a new set is told by the endpoint that makes one rather than by comparing.
-  if (endpoint === "two-factor/generate-backup-codes") found.push({ action: "two_factor.backup_codes_regenerated" });
+  if (endpoint === "two-factor/generate-backup-codes") ofUser("two_factor.backup_codes_regenerated");
   for (const [id, name] of after.passkeys) {
-    if (!before.passkeys.has(id)) found.push({ action: "passkey.registered", passkeyId: id, name });
-    else if (before.passkeys.get(id) !== name) found.push({ action: "passkey.renamed", passkeyId: id, from: before.passkeys.get(id)!, to: name });
+    if (!before.passkeys.has(id)) ofPasskey("passkey.registered", id, { name });
+    else if (before.passkeys.get(id) !== name) ofPasskey("passkey.renamed", id, { from: before.passkeys.get(id), to: name });
   }
-  for (const [id, name] of before.passkeys) if (!after.passkeys.has(id)) found.push({ action: "passkey.deleted", passkeyId: id, name });
+  for (const [id, name] of before.passkeys) if (!after.passkeys.has(id)) ofPasskey("passkey.deleted", id, { name });
   return found;
 }
 
-async function audit(tx: Tx, change: Change, actor: { id: string; email: string }, found: EnrollmentChange[]) {
+/** Records each change in every Organization the user belongs to now. */
+async function audit(tx: Tx, change: Change, userId: string, found: SignInMethodChange[]) {
   if (found.length === 0) return;
-  const memberships = await tx.select({ organizationId: member.organizationId }).from(member).where(eq(member.userId, actor.id)).orderBy(asc(member.organizationId));
-  for (const { organizationId } of memberships) {
-    for (const c of found) {
-      if (c.action.startsWith("two_factor.")) {
-        await change.audit({ organizationId, action: c.action, target: { type: "user", id: actor.id }, detail: { email: actor.email } });
-      } else if ("passkeyId" in c) {
-        const { action, passkeyId, ...detail } = c;
-        await change.audit({ organizationId, action, target: { type: "passkey", id: passkeyId }, detail: { userId: actor.id, email: actor.email, ...detail } });
-      }
-    }
-  }
+  const memberships = await tx.select({ organizationId: member.organizationId }).from(member).where(eq(member.userId, userId)).orderBy(asc(member.organizationId));
+  for (const { organizationId } of memberships) for (const c of found) await change.audit({ organizationId, ...c });
 }

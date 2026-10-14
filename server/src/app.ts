@@ -124,7 +124,7 @@ export function createApp(deps: AppDeps) {
   app.on(["GET", "POST"], ACCOUNT_SECURITY_PATHS, (c) => accountSecurity.serve(c.req.raw));
   app.on(["GET", "POST"], "/api/auth/*", (c) => auth.handler(c.req.raw));
 
-  /** The signed-in user, even one who must enroll in MFA before going on: only for what enrolling needs (login-policy.ts). */
+  /** The signed-in user, even one who must set up MFA before going on: only for what setting it up needs (login-policy.ts). */
   async function requireSession(c: Context) {
     const session = await auth.api.getSession({ headers: c.req.raw.headers });
     if (!session) throw new HttpError(401, "sign in required");
@@ -207,8 +207,8 @@ export function createApp(deps: AppDeps) {
               email: z.string(),
               name: z.string(),
               isPlatformOperator: z.boolean(),
-              // Whether they have enrolled TOTP, and whether they must before anything else answers them.
-              mfa: z.object({ enabled: z.boolean(), enrollmentRequired: z.boolean() }),
+              // Whether they have set up TOTP, and whether they must before anything else answers them.
+              mfa: z.object({ enabled: z.boolean(), setupRequired: z.boolean() }),
             }),
             organizations: z.array(
               z.object({
@@ -296,7 +296,7 @@ export function createApp(deps: AppDeps) {
   });
   const reader = createManagedCertificateReader({ db, authorize, clock, agentOfflineAfterSeconds: agentGateway.offlineAfterSeconds });
   registerManagedCertificates({ app, db, requireUser, authorize, unitOfWork, issuances, reader, clock, agentOfflineAfterSeconds: agentGateway.offlineAfterSeconds });
-  const apiKeys = registerApiKeys({ app, db, auth, authConfig, requireUser, authorize, unitOfWork });
+  const apiKeys = registerApiKeys({ app, db, auth, authConfig, requireUser, authorize, admit: loginPolicies.admit, unitOfWork });
   registerCertificateExport({ app, apiKeys, unitOfWork, reader, certificateAuthority: deps.certificateAuthority });
   registerOwnerRoutes({ app, requireUser, unitOfWork, reader });
   registerSubscriberRoutes({ app, db, requireUser, unitOfWork, reader });

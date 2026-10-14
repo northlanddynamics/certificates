@@ -1,12 +1,12 @@
 // An Organization's login policy, and its enforcement. Requiring MFA means no member relies on a password alone: a
-// member who has a password and has not enrolled TOTP may sign in, but may use nothing on the platform until they enroll.
+// member who has a password and has not set up TOTP may sign in, but may use nothing on the platform until they set it up.
 // A passkey does not count, because the password still signs in by itself; a user without a password (who signs in by
 // passkey only) is not a password user and is not held up.
 //
-// It is enforced where a signed-in user is looked up for the platform's routes (`requireUser` in app.ts) and for
-// Better Auth's organization endpoints (organization-changes.ts), for the user as a whole rather than one
-// Organization: a member of any Organization that requires MFA enrolls before doing anything anywhere. What stays open
-// is what enrolling needs: `/api/me`, Better Auth's own endpoints (two-factor among them), and the login policy itself,
+// It is enforced where a signed-in user is looked up for the platform's routes (`requireUser` in app.ts), for Better
+// Auth's organization endpoints (organization-changes.ts) and for a user's API keys (api-keys.ts), for the user as a
+// whole rather than one Organization: a member of any Organization that requires MFA sets up TOTP before doing anything
+// anywhere. What stays open is what setting it up needs: `/api/me`, Better Auth's own endpoints (two-factor among them), and the login policy itself,
 // so that an Organization Administrator who required MFA can still undo it.
 import { OpenAPIHono, createRoute, z } from "@hono/zod-openapi";
 import { and, eq, isNotNull } from "drizzle-orm";
@@ -17,16 +17,16 @@ import { HttpError, OrgParam, errors, json } from "./http";
 import type { Actor, UnitOfWork } from "./unit-of-work";
 
 export interface MfaStatus {
-  /** Whether the user has enrolled TOTP. */
+  /** Whether the user has set up TOTP. */
   enabled: boolean;
-  /** Whether an Organization of theirs requires MFA of a password user like them, who has not enrolled. */
-  enrollmentRequired: boolean;
+  /** Whether an Organization of theirs requires MFA of a password user like them, who has not set up TOTP. */
+  setupRequired: boolean;
 }
 
 export interface LoginPolicies {
   /** Where the user stands with MFA. */
   mfaOf(actor: { id: string }): Promise<MfaStatus>;
-  /** Refuses (403) a user who must enroll in MFA before going on. */
+  /** Refuses (403) a user who must set up MFA before going on. */
   admit(actor: { id: string }): Promise<void>;
 }
 
@@ -47,26 +47,26 @@ export function createLoginPolicies(db: Db): LoginPolicies {
         .limit(1),
     ]);
     const enabled = Boolean(u?.enabled);
-    return { enabled, enrollmentRequired: !enabled && Boolean(password) && Boolean(requiring) };
+    return { enabled, setupRequired: !enabled && Boolean(password) && Boolean(requiring) };
   }
   return {
     mfaOf,
     async admit(actor) {
-      if ((await mfaOf(actor)).enrollmentRequired) {
-        throw new HttpError(403, "MFA required: an Organization of yours requires it; enroll an authenticator app to continue");
+      if ((await mfaOf(actor)).setupRequired) {
+        throw new HttpError(403, "MFA required: an Organization of yours requires it; set up an authenticator app to continue");
       }
     },
   };
 }
 
 const Policy = z.object({
-  requireMfa: z.boolean().openapi({ description: "Whether members who sign in with a password must enroll TOTP before using the platform." }),
+  requireMfa: z.boolean().openapi({ description: "Whether members who sign in with a password must set up TOTP before using the platform." }),
 });
 
 export function registerLoginPolicy(ctx: {
   app: OpenAPIHono;
   db: Db;
-  /** The signed-in user, whether or not they must enroll in MFA first: the policy stays open to them (see above). */
+  /** The signed-in user, whether or not they must set up MFA first: the policy stays open to them (see above). */
   requireSession(c: any): Promise<Actor>;
   authorize: Authorizer["authorize"];
   unitOfWork: UnitOfWork;
@@ -100,7 +100,7 @@ export function registerLoginPolicy(ctx: {
       path: "/api/organizations/{orgId}/login-policy",
       tags: ["Identity"],
       summary: "Change the Organization's login policy",
-      description: "Requiring MFA holds up every member who signs in with a password and has not enrolled TOTP, the caller included, until they enroll. A change is an Audit Event.",
+      description: "Requiring MFA holds up every member who signs in with a password and has not set up TOTP, the caller included, until they set it up. A change is an Audit Event.",
       request: { params: OrgParam, body: { content: { "application/json": { schema: Policy } } } },
       responses: { 200: json(Policy), ...errors(400, 401, 403, 404) },
     }),

@@ -824,7 +824,7 @@ export const auditDelivery = pgTable(
 
 /**
  * An Organization's login policy: what it asks of its users' sign-in. No row is no requirement. Requiring MFA makes every
- * member who signs in with a password enroll TOTP before using the platform (login-policy.ts).
+ * member who signs in with a password set up TOTP before using the platform (login-policy.ts).
  */
 export const loginPolicy = pgTable("login_policy", {
   organizationId: text("organization_id")

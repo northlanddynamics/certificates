@@ -94,9 +94,11 @@ export function registerApiKeys(ctx: {
   authConfig: Omit<AuthConfig, "db" | "organization">;
   requireUser(c: Context): Promise<Actor>;
   authorize: Authorizer["authorize"];
+  /** Refuses a person their Organizations' login policy holds up, and so their keys (login-policy.ts). */
+  admit(actor: Actor): Promise<void>;
   unitOfWork: UnitOfWork;
 }) {
-  const { app, db, auth, authConfig, requireUser, authorize, unitOfWork } = ctx;
+  const { app, db, auth, authConfig, requireUser, authorize, admit, unitOfWork } = ctx;
 
   /**
    * The keys the signed-in person may see in the Organization: their own, and, for those who may read them, the
@@ -133,6 +135,8 @@ export function registerApiKeys(ctx: {
     const [person] = await db.select({ id: user.id, email: user.email, banned: user.banned }).from(user).where(eq(user.id, stored.referenceId));
     // A person the Platform Operator banned has no sessions, and so no keys.
     if (!person || person.banned || typeof organizationId !== "string") throw new HttpError(401, "invalid API key");
+    // Nor has a person held up by a login policy until they set up MFA.
+    await admit(person);
     return { user: { id: person.id, email: person.email }, apiKey: { ...use, organizationId } };
   }
 

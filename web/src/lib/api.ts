@@ -28,7 +28,7 @@ export interface Me {
     name: string;
     isPlatformOperator: boolean;
     /** Whether they have an authenticator app, and whether an Organization of theirs holds them up until they set one up. */
-    mfa: { enabled: boolean; enrollmentRequired: boolean };
+    mfa: { enabled: boolean; setupRequired: boolean };
   };
   organizations: { id: string; name: string; slug: string; role: string; permissions: Record<string, string[]> }[];
   /** The roles the server accepts when assigning one. */
