@@ -1,4 +1,4 @@
-import { BellIcon, BuildingIcon, LockKeyholeIcon, ScrollTextIcon, SendIcon, BotIcon, GlobeIcon, LandmarkIcon, FileKey2Icon, FileTerminalIcon, KeyRoundIcon, RocketIcon, ShieldCheckIcon, ShieldUserIcon, UserRoundIcon, UsersIcon, type LucideIcon } from "lucide-react";
+import { BellIcon, BuildingIcon, LockKeyholeIcon, ScrollTextIcon, SendIcon, BotIcon, GlobeIcon, LandmarkIcon, FileKey2Icon, FileTerminalIcon, KeyRoundIcon, LogInIcon, RocketIcon, ShieldCheckIcon, ShieldUserIcon, UserRoundIcon, UsersIcon, type LucideIcon } from "lucide-react";
 import { can, type Me } from "@/lib/api";
 
 type Org = Me["organizations"][number];
@@ -43,6 +43,7 @@ export function organizationNavGroups(org: Org): NavGroup[] {
         ...(can(org, "audit", "read") ? [{ title: "Audit log", url: `${base}/audit-log`, icon: ScrollTextIcon }] : []),
         ...(can(org, "auditForwarder", "read") ? [{ title: "Audit forwarding", url: `${base}/audit-forwarding`, icon: SendIcon }] : []),
         ...(can(org, "loginPolicy", "read") ? [{ title: "Login policy", url: loginPolicyUrl(org.id), icon: LockKeyholeIcon }] : []),
+        ...(can(org, "ssoConnection", "read") ? [{ title: "SSO connections", url: `${base}/sso-connections`, icon: LogInIcon }] : []),
       ],
     },
     {

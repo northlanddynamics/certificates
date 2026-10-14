@@ -383,7 +383,30 @@ export interface AuditForwarder {
 /** What an Organization asks of its users' sign-in. */
 export interface LoginPolicy {
   requireMfa: boolean;
+  /** Whether members sign in only through one of the Organization's SSO connections. */
+  requireSso: boolean;
 }
+/** An identity provider the Organization's users sign in through. Its OIDC client secret is write-only. */
+export interface SsoConnection {
+  id: string;
+  name: string;
+  type: "oidc" | "saml";
+  domain: string;
+  oidc?: { issuer: string; clientId: string; scopes?: string[] };
+  saml?: { entityId: string; ssoUrl: string; certificate: { subject: string; notAfter: string } };
+  /** What to tell the identity provider about the platform. */
+  serviceProvider: { redirectUri?: string; entityId?: string; acsUrl?: string; metadataUrl?: string };
+}
+export type NewSsoConnection = { name: string; domain: string } & (
+  | { oidc: { issuer: string; clientId: string; clientSecret: string } }
+  | { saml: { entityId: string; ssoUrl: string; certificate: string } }
+);
+export type SsoConnectionChange = {
+  name?: string;
+  domain?: string;
+  oidc?: Partial<{ issuer: string; clientId: string; clientSecret: string }>;
+  saml?: Partial<{ entityId: string; ssoUrl: string; certificate: string }>;
+};
 export type NewAuditForwarder = { name: string; kind: "webhook"; url: string; authorization?: string } | { name: string; kind: "syslog"; host: string; port?: number };
 export interface Team {
   id: string;
@@ -425,7 +448,7 @@ export const api = {
     return call<{ items: AuditEvent[]; nextCursor: string | null }>(`/api/organizations/${orgId}/audit-events?${query}`);
   },
   loginPolicy: (orgId: string) => call<LoginPolicy>(`/api/organizations/${orgId}/login-policy`),
-  setLoginPolicy: (orgId: string, policy: LoginPolicy) => call<LoginPolicy>(`/api/organizations/${orgId}/login-policy`, { method: "PUT", body: policy }),
+  setLoginPolicy: (orgId: string, policy: Partial<LoginPolicy>) => call<LoginPolicy>(`/api/organizations/${orgId}/login-policy`, { method: "PUT", body: policy }),
   auditForwarders: (orgId: string) => call<{ items: AuditForwarder[] }>(`/api/organizations/${orgId}/audit-forwarders`),
   addAuditForwarder: (orgId: string, forwarder: NewAuditForwarder) => call<AuditForwarder>(`/api/organizations/${orgId}/audit-forwarders`, { body: forwarder }),
   deleteAuditForwarder: (orgId: string, forwarderId: string) => call(`/api/organizations/${orgId}/audit-forwarders/${forwarderId}`, { method: "DELETE" }),
@@ -517,6 +540,13 @@ export const api = {
     call<DnsProvider>(`/api/organizations/${orgId}/dns-providers/${providerId}/secret`, { method: "PUT", body: { secret } }),
   setDnsProviderRelay: (orgId: string, providerId: string, agentIds: string[]) =>
     call<DnsProvider>(`/api/organizations/${orgId}/dns-providers/${providerId}/relay`, { method: "PUT", body: { agentIds } }),
+  ssoConnections: (orgId: string) => call<{ items: SsoConnection[] }>(`/api/organizations/${orgId}/sso-connections`),
+  addSsoConnection: (orgId: string, body: NewSsoConnection) => call<SsoConnection>(`/api/organizations/${orgId}/sso-connections`, { body }),
+  changeSsoConnection: (orgId: string, id: string, body: SsoConnectionChange) =>
+    call<SsoConnection>(`/api/organizations/${orgId}/sso-connections/${id}`, { method: "PATCH", body }),
+  deleteSsoConnection: (orgId: string, id: string) => call<null>(`/api/organizations/${orgId}/sso-connections/${id}`, { method: "DELETE" }),
+  testSsoConnection: (orgId: string, id: string) =>
+    call<{ ok: boolean; error?: string }>(`/api/organizations/${orgId}/sso-connections/${id}/test`, { method: "POST", body: {} }),
   testDnsProvider: (orgId: string, providerId: string) =>
     call<{ ok: boolean; error?: string }>(`/api/organizations/${orgId}/dns-providers/${providerId}/test`, { method: "POST", body: {} }),
   platformOrganizations: () => call<{ items: { id: string; name: string; slug: string }[] }>("/api/platform/organizations"),

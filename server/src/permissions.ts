@@ -10,7 +10,7 @@ export const APPROVER_ROLE = "approver";
 export const MEMBER_ROLE = "member";
 
 // Every permission there is. The organization, member, invitation and team resources are the ones Better Auth's
-// organization plugin checks itself; `audit`, `acmeAccount`, `dnsProvider`, `validationZone`, `dcvRule`, `managedCertificate`, `approval`, `agent`, `deploymentScript`, `deployment`, `notificationChannel`, `auditForwarder`, `loginPolicy` and `apiKey` are ours (the last is the plugin's too).
+// organization plugin checks itself; `audit`, `acmeAccount`, `dnsProvider`, `validationZone`, `dcvRule`, `managedCertificate`, `approval`, `agent`, `deploymentScript`, `deployment`, `notificationChannel`, `auditForwarder`, `loginPolicy`, `ssoConnection` and `apiKey` are ours (the last is the plugin's too).
 const statements = {
   organization: ["update", "delete"],
   member: ["create", "update", "delete"],
@@ -49,6 +49,9 @@ const statements = {
   auditForwarder: ["read", "create", "delete"],
   // The Organization's login policy: whether its password users must have MFA. Only Organization Administrators hold any of this.
   loginPolicy: ["read", "update"],
+  // The Organization's SSO connections: the identity providers its users sign in through, so only Organization Administrators
+  // hold any of this. `test` checks one against its provider without signing anyone in.
+  ssoConnection: ["read", "create", "update", "delete", "test"],
   // The Organization's own API keys (a user's keys need none): the organization plugin asks for these names.
   apiKey: ["create", "read", "update", "delete"],
 } as const;

@@ -47,7 +47,7 @@ Each resource's verbs, as of this writing. New ones may be added within version 
 | --- | --- |
 | `organization` | `created` |
 | `invitation` | `created`, `accepted`, `rejected`, `canceled` |
-| `member` | `role_changed`, `removed` |
+| `member` | `role_changed`, `removed`, `provisioned` |
 | `team` | `created`, `renamed`, `deleted`, `member_added`, `member_removed` |
 | `acme_account` | `created`, `key_replaced` |
 | `dns_provider` | `created`, `changed`, `secret_replaced`, `tested`, `relay_changed` |
@@ -68,3 +68,4 @@ Each resource's verbs, as of this writing. New ones may be added within version 
 | `two_factor` | `enabled`, `disabled`, `backup_codes_regenerated` |
 | `passkey` | `registered`, `renamed`, `deleted` |
 | `login_policy` | `changed` |
+| `sso_connection` | `created`, `changed`, `deleted`, `tested` |

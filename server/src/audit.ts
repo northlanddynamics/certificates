@@ -11,6 +11,7 @@ export const AUDIT_ACTIONS = [
   "invitation.canceled",
   "member.role_changed",
   "member.removed",
+  "member.provisioned",
   "team.created",
   "team.renamed",
   "team.deleted",
@@ -75,6 +76,10 @@ export const AUDIT_ACTIONS = [
   "passkey.renamed",
   "passkey.deleted",
   "login_policy.changed",
+  "sso_connection.created",
+  "sso_connection.changed",
+  "sso_connection.deleted",
+  "sso_connection.tested",
 ] as const;
 export type AuditAction = (typeof AUDIT_ACTIONS)[number];
 

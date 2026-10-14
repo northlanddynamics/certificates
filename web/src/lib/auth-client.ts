@@ -1,11 +1,12 @@
-// Better Auth's client, for what is Better Auth's alone: signing in with a second factor or a passkey, and a user's own
+// Better Auth's client, for what is Better Auth's alone: signing in with a second factor, a passkey or SSO, and a user's own
 // TOTP and passkeys (served on the platform API under /api/auth; see server/src/account-security.ts).
 import { passkeyClient } from "@better-auth/passkey/client";
+import { ssoClient } from "@better-auth/sso/client";
 import { twoFactorClient } from "better-auth/client/plugins";
 import { createAuthClient } from "better-auth/react";
 import { ApiError } from "@/lib/api";
 
-export const authClient = createAuthClient({ basePath: "/api/auth", plugins: [twoFactorClient(), passkeyClient()] });
+export const authClient = createAuthClient({ basePath: "/api/auth", plugins: [twoFactorClient(), passkeyClient(), ssoClient()] });
 
 type Result<T> = { data: T; error: null } | { data: null; error: { message?: string; status: number; statusText: string } };
 

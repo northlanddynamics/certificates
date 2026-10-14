@@ -21,6 +21,7 @@ import { NotificationChannelsPage } from "./pages/notification-channels";
 import { AuditLogPage } from "./pages/audit-log";
 import { AuditForwardingPage } from "./pages/audit-forwarding";
 import { LoginPolicyPage } from "./pages/login-policy";
+import { SsoConnectionsPage } from "./pages/sso-connections";
 import { MembersPage } from "./pages/members";
 import { PlatformOrganizationsPage } from "./pages/platform-organizations";
 import { TeamsPage } from "./pages/teams";
@@ -154,6 +155,12 @@ const loginPolicyRoute = createRoute({
   component: LoginPolicyPage,
 });
 
+const ssoConnectionsRoute = createRoute({
+  getParentRoute: () => appRoute,
+  path: "/organizations/$orgId/sso-connections",
+  component: SsoConnectionsPage,
+});
+
 const accountSecurityRoute = createRoute({
   getParentRoute: () => appRoute,
   path: "/account/security",
@@ -185,7 +192,8 @@ const routeTree = rootRoute.addChildren([
       certificateNotificationsRoute,
       certificateUnknownTabRoute,
     ]),
-    membersRoute, teamsRoute, apiKeysRoute, agentsRoute, deploymentsRoute, deploymentScriptsRoute, acmeAccountsRoute, dnsProvidersRoute, notificationChannelsRoute, auditLogRoute, auditForwardingRoute, loginPolicyRoute, csrToolsRoute,
+    membersRoute, teamsRoute, apiKeysRoute, agentsRoute, deploymentsRoute, deploymentScriptsRoute, acmeAccountsRoute, dnsProvidersRoute, notificationChannelsRoute, auditLogRoute, auditForwardingRoute, loginPolicyRoute,
+    ssoConnectionsRoute, csrToolsRoute,
     accountSecurityRoute,
     platformOrganizationsRoute,
   ]),
