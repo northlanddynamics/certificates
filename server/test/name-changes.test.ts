@@ -461,7 +461,15 @@ describe("the Approval queue and the history", () => {
     const queued = (await queue(mc.approver)).body;
     expect(queued.items).toEqual([]);
     expect(queued.nameChanges).toEqual([
-      { managedCertificateId: mc.id, currentNames: mc.names, names: proposed.names, proposedBy: { id: expect.any(String), email: "owner@acme.test" }, proposedAt: expect.any(String) },
+      {
+        managedCertificateId: mc.id,
+        currentNames: mc.names,
+        currentValidityDays: null,
+        names: proposed.names,
+        validityDays: null,
+        proposedBy: { id: expect.any(String), email: "owner@acme.test" },
+        proposedAt: expect.any(String),
+      },
     ]);
     expect((await queue(org.cookie)).body.nameChanges).toHaveLength(1);
     expect((await queue(mc.owner)).status).toBe(403);
