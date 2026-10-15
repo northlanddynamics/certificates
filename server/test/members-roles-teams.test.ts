@@ -559,7 +559,7 @@ describe("authorization", () => {
   });
 
   test("an Organization Administrator holds every declared permission; Approvers and Members only those granted them; Better Auth's own role names none", () => {
-    const granted: Record<string, string[]> = { approver: ["managedCertificate.read", "managedCertificate.propose", "managedCertificate.download", "approval.read", "approval.decide", "notificationChannel.read"], member: ["managedCertificate.propose", "managedCertificate.download", "notificationChannel.read"] };
+    const granted: Record<string, string[]> = { approver: ["managedCertificate.read", "managedCertificate.propose", "managedCertificate.download", "approval.read", "approval.decide", "notificationChannel.read", "privateCa.read"], member: ["managedCertificate.propose", "managedCertificate.download", "notificationChannel.read", "privateCa.read"] };
     const declared = declaredPermissions();
     // The permissions the platform's own routes and Better Auth's endpoints ask about stay declared.
     expect(declared.invitation).toContain("create");
