@@ -32,6 +32,7 @@ const MASTER_KEY = Buffer.alloc(32, 7).toString("base64");
 function watchedKms(inner: Kms = createLocalKms(MASTER_KEY)) {
   const wrapped: { context: string; wrapped: Uint8Array }[] = [];
   const kms: Kms = {
+    ...inner,
     async wrap(dataKey, context) {
       const out = await inner.wrap(dataKey, context);
       wrapped.push({ context, wrapped: out });

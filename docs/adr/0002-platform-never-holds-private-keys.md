@@ -11,3 +11,7 @@ The web app's code runs in the user's browser, and what the platform serves is n
 ## Addendum: relayed DNS Provider credentials
 
 A DNS Provider that Agents relay is run beside DNS the platform cannot reach, so its credentials must reach the Agent that runs an operation. They stay write-only for people. The platform puts them into a work item only at the moment its Agent is given it, over the Agent's mTLS channel, for that operation alone: they are never stored in the work item, shown by any API, written to an Audit Event or logged, and an Agent that is revoked, or an item that has waited too long, is given none. The Agent holds them in memory for the operation and keeps nothing. Delivery is not itself an Audit Event; the operations that cause it (a connection test, an Issuance) are recorded.
+
+## Amendment: Private CA keys
+
+A Private CA's signing keys are held only as non-exportable keys in a KMS, and the SCEP RA key as a wrapped software key; see [ADR 0007](0007-private-ca-keys-are-held-in-a-kms.md). The platform still never holds a Managed Certificate's key or a device's.
