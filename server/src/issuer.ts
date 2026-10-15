@@ -4,7 +4,6 @@
 // assume ACME: accounts, DCV and ARI are the ACME kind's concern (certificate-authority.ts).
 import { and, eq, type SQL } from "drizzle-orm";
 import { CertificateAuthorityError, type AcmeCertificateAuthority, type AcmeEnvironment, type DnsChallengeResponder, type RenewalInfo, type RevocationReason } from "./certificate-authority";
-import { parseCsr } from "./csr";
 import type { Db, Tx } from "./db/client";
 import { acmeAccount } from "./db/schema";
 import { IssuanceFailure } from "./issuance-failure";
@@ -72,7 +71,7 @@ export interface Issued {
 
 export interface Issuers {
   /**
-   * Has the issuer's CA issue for the CSR. `dcv` gives the DNS challenge responder for a kind whose CA validates control
+   * Has the issuer's CA issue for the CSR and the Managed Certificate's (approved) `names`, which the CSR asks for. `dcv` gives the DNS challenge responder for a kind whose CA validates control
    * of the names; another kind never asks for it. `replaces` is the Certificate (PEM) a Renewal replaces, for a CA that
    * coordinates Renewals. Throws an IssuanceFailure when the issuer cannot issue for the Organization (it has no ACME
    * Account in the environment), and a CertificateAuthorityError when the CA says no or does not answer.
@@ -81,7 +80,7 @@ export interface Issuers {
     db: Db | Tx,
     organizationId: string,
     issuer: Issuer,
-    request: { csr: string; replaces?: string; dcv: () => DnsChallengeResponder },
+    request: { csr: string; names: string[]; replaces?: string; dcv: () => DnsChallengeResponder },
   ): Promise<Issued>;
   /** Has the CA a Certificate came from revoke it (PEM, its chain or the leaf alone) for `reason`. Throws a CertificateAuthorityError when the CA says no or does not answer. */
   revoke(db: Db | Tx, organizationId: string, issuedBy: CertificateIssuer, request: { certificate: string; reason: RevocationReason }): Promise<void>;
@@ -93,7 +92,7 @@ export interface Issuers {
 
 /** What one kind of issuer does for the issuers of its kind: `Issuers`, for a Managed Certificate's issuer and a Certificate's of that kind. */
 interface KindOfIssuer<M extends Issuer, C extends CertificateIssuer> {
-  issue(db: Db | Tx, organizationId: string, issuer: M, request: { csr: string; replaces?: string; dcv: () => DnsChallengeResponder }): Promise<Issued>;
+  issue(db: Db | Tx, organizationId: string, issuer: M, request: { csr: string; names: string[]; replaces?: string; dcv: () => DnsChallengeResponder }): Promise<Issued>;
   revoke(db: Db | Tx, organizationId: string, issuedBy: C, request: { certificate: string; reason: RevocationReason }): Promise<void>;
   renewalInfo(issuedBy: C, certificate: string): Promise<RenewalInfo | null>;
   roots(db: Db | Tx, organizationId: string, issuedBy: C): Promise<string[]>;
@@ -128,8 +127,7 @@ export function createIssuers({ acme, secrets, privateCas }: { acme: AcmeCertifi
 
   // No DCV: the names a Private CA may issue for are the Organization's to decide. No ARI either.
   const privateCaKind: KindOfIssuer<Issuer & { kind: "private_ca" }, CertificateIssuer & { kind: "private_ca" }> = {
-    async issue(db, organizationId, issuer, { csr }) {
-      const { names } = await parseCsr(csr);
+    async issue(db, organizationId, issuer, { csr, names }) {
       const { chainPem, name } = await privateCas.issueFrom(db, organizationId, issuer.privateCaId, { csr, names });
       return { chainPem, ca: name, issuedBy: { kind: "private_ca", privateCaId: issuer.privateCaId } };
     },

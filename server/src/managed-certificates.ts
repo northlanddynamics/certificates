@@ -21,7 +21,7 @@ import { Certificate, CertificateFacts, Issuance, ManagedCertificate, ManagedCer
 import { checkNamesAndCsr, csrField, namesField } from "./names-and-csr";
 import { OwnerRef, addOwner } from "./owners";
 import { roleCan } from "./permissions";
-import { findPrivateCa } from "./private-ca";
+import { findPrivateCa, issuingRefusal } from "./private-ca";
 import { revocationsOf } from "./revocation";
 import type { Actor, UnitOfWork } from "./unit-of-work";
 
@@ -56,7 +56,8 @@ export function registerManagedCertificates(ctx: {
     if (issuer.kind === "private_ca") {
       const ca = await findPrivateCa(db, orgId, issuer.privateCaId);
       if (!ca) throw new HttpError(422, "the Organization has no such Private CA");
-      if (ca.status !== "active") throw new HttpError(422, `the Private CA ${ca.name} is ${ca.status}, so it issues nothing`);
+      const refusal = issuingRefusal(ca);
+      if (refusal) throw new HttpError(422, refusal);
     }
     return issuer;
   }

@@ -25,4 +25,4 @@ Implemented. Notes for the tickets that follow:
 - A Private CA's `lifetimeYears` applies to both the root and the Issuing CA. A TLS Certificate gets 397 days, clipped to the Issuing CA's `notAfter`; ticket 05 makes this configurable.
 - No CDP or AIA yet (ticket 06). Revoking a Private CA Certificate is refused with 422 until ticket 06.
 - Only Key Custody: Owner is offered a Private CA; Deployments (Agent custody) stay ACME until ticket 08.
-- `issuance.failed` does not carry `detail.issuer`; `issuance.started` of the same Issuance does.
+- A TLS Certificate's SANs are the Managed Certificate's names, passed to the issuer; its subject CN is the first name of at most 64 characters, and empty (with a critical SAN) when none is that short.

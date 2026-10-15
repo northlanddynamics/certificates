@@ -12,16 +12,18 @@ import { RadioGroup, RadioGroupItem } from "@/components/ui/radio-group";
 import { Select, SelectContent, SelectItem, SelectTrigger, SelectValue } from "@/components/ui/select";
 import { Sidebar, SidebarContent, SidebarGroup, SidebarGroupContent, SidebarMenu, SidebarMenuButton, SidebarMenuItem, SidebarProvider } from "@/components/ui/sidebar";
 import { Textarea } from "@/components/ui/textarea";
-import { api, can, ownerFromKey, ownerKey, type ManagedCertificate, type Me } from "@/lib/api";
+import { api, can, ownerFromKey, ownerKey, type ManagedCertificate, type Me, type NewManagedCertificate } from "@/lib/api";
+import { issuerLabel } from "@/lib/managed-certificate";
 import { KEY_ALGORITHMS, KEY_ALGORITHM_LABELS, type KeyAlgorithm } from "@/lib/csr-generator";
 import { nameProblems, splitNames } from "@/lib/csr-names";
 
 type Org = Me["organizations"][number];
 type Environment = "staging" | "production";
-/** The CA chosen: an ACME environment, or one of the Organization's Private CAs by id. */
-type Authority = { kind: "acme"; environment: Environment } | { kind: "private_ca"; privateCaId: string };
-const authorityValue = (a: Authority) => (a.kind === "acme" ? `acme:${a.environment}` : `private_ca:${a.privateCaId}`);
-const authorityOf = (value: string): Authority => {
+/** The issuer chosen: an ACME environment, or one of the Organization's Private CAs by id. */
+type IssuerChoice = NewManagedCertificate["issuer"];
+/** The issuer as a radio button's value, and back. */
+const issuerValue = (i: IssuerChoice) => (i.kind === "acme" ? `acme:${i.environment}` : `private_ca:${i.privateCaId}`);
+const issuerOfValue = (value: string): IssuerChoice => {
   const [kind, ref] = value.split(":") as [string, string];
   return kind === "acme" ? { kind: "acme", environment: ref as Environment } : { kind: "private_ca", privateCaId: ref };
 };
@@ -76,7 +78,7 @@ export function NewManagedCertificateDialog({ org, onCreated }: { org: Org; onCr
 // Every step's state lives here, so moving between steps never loses what was entered.
 function NewManagedCertificateForm({ org, direct, onCreated }: { org: Org; direct: boolean; onCreated: (created: ManagedCertificate) => void }) {
   const [step, setStep] = useState<StepId>("authority");
-  const [authority, setAuthority] = useState<Authority>({ kind: "acme", environment: "staging" });
+  const [issuer, setIssuer] = useState<IssuerChoice>({ kind: "acme", environment: "staging" });
   const [names, setNames] = useState("");
   const [keyAlgorithm, setKeyAlgorithm] = useState<KeyAlgorithm>("ecdsa-p256");
   const [csr, setCsr] = useState("");
@@ -96,7 +98,7 @@ function NewManagedCertificateForm({ org, direct, onCreated }: { org: Org; direc
         names: splitNames(names),
         keyAlgorithm,
         csr,
-        issuer: authority,
+        issuer,
         owners: owners.map(ownerFromKey),
       }),
     onSuccess: onCreated,
@@ -118,9 +120,9 @@ function NewManagedCertificateForm({ org, direct, onCreated }: { org: Org; direc
     const target = STEPS[i];
     if (target && reachable(i)) setStep(target.id);
   };
-  const registered = authority.kind !== "acme" || accounts.data?.items.some((a) => a.environment === authority.environment);
-  const authorityTitle =
-    authority.kind === "acme" ? ENVIRONMENTS.find((e) => e.value === authority.environment)?.title : `Private CA ${activeCas.find((ca) => ca.id === authority.privateCaId)?.name ?? ""}`;
+  const registered = issuer.kind !== "acme" || accounts.data?.items.some((a) => a.environment === issuer.environment);
+  const issuerTitle =
+    issuer.kind === "acme" ? ENVIRONMENTS.find((e) => e.value === issuer.environment)?.title : issuerLabel({ kind: "private_ca", privateCa: activeCas.find((ca) => ca.id === issuer.privateCaId) ?? { id: issuer.privateCaId, name: "" } });
 
   const dropGeneratedCsr = () => {
     if (generated !== null && csr === generated) setCsr("");
@@ -180,7 +182,7 @@ function NewManagedCertificateForm({ org, direct, onCreated }: { org: Org; direc
                 {direct ? "Issuance starts as soon as it is created." : "An Approver must approve it before any Certificate is issued."} An ACME CA issues it under the
                 Organization's account for the environment you choose, after checking control of the names (DCV); one of the Organization's Private CAs issues it with no DCV.
               </FieldDescription>
-              <RadioGroup value={authorityValue(authority)} onValueChange={(value) => setAuthority(authorityOf(value))}>
+              <RadioGroup value={issuerValue(issuer)} onValueChange={(value) => setIssuer(issuerOfValue(value))}>
                 {ENVIRONMENTS.map((env) => (
                   <FieldLabel key={env.value} htmlFor={`new-mc-env-${env.value}`}>
                     <Field orientation="horizontal">
@@ -196,7 +198,7 @@ function NewManagedCertificateForm({ org, direct, onCreated }: { org: Org; direc
                   <FieldLabel key={ca.id} htmlFor={`new-mc-ca-${ca.id}`}>
                     <Field orientation="horizontal">
                       <FieldContent>
-                        <FieldTitle>Private CA {ca.name}</FieldTitle>
+                        <FieldTitle>{issuerLabel({ kind: "private_ca", privateCa: ca })}</FieldTitle>
                         <FieldDescription>
                           The Organization's own CA ({ca.subject}). Trusted only where its root is installed; no DCV.
                         </FieldDescription>
@@ -206,9 +208,9 @@ function NewManagedCertificateForm({ org, direct, onCreated }: { org: Org; direc
                   </FieldLabel>
                 ))}
               </RadioGroup>
-              {authority.kind === "acme" && accounts.data && !registered && (
+              {issuer.kind === "acme" && accounts.data && !registered && (
                 <FieldError>
-                  The Organization has no {authority.environment} ACME account yet, so Issuance would fail. An Organization Administrator can register one under ACME accounts.
+                  The Organization has no {issuer.environment} ACME account yet, so Issuance would fail. An Organization Administrator can register one under ACME accounts.
                 </FieldError>
               )}
             </FieldSet>
@@ -331,7 +333,7 @@ function NewManagedCertificateForm({ org, direct, onCreated }: { org: Org; direc
                   {direct ? "Issuance starts as soon as it is created." : "An Approver must approve it before any Certificate is issued."} Use Back to change anything.
                 </FieldDescription>
                 <Summary
-                  authority={authorityTitle ?? ""}
+                  issuer={issuerTitle ?? ""}
                   names={parsedNames}
                   keyAlgorithm={keyAlgorithm}
                   csr={generated !== null && csr === generated ? "Generated in this browser" : "Provided"}
@@ -361,9 +363,9 @@ function NewManagedCertificateForm({ org, direct, onCreated }: { org: Org; direc
   );
 }
 
-function Summary({ authority, names, keyAlgorithm, csr, owners }: { authority: string; names: string[]; keyAlgorithm: KeyAlgorithm; csr: string; owners: string[] }) {
+function Summary({ issuer, names, keyAlgorithm, csr, owners }: { issuer: string; names: string[]; keyAlgorithm: KeyAlgorithm; csr: string; owners: string[] }) {
   const rows: { label: string; value: ReactNode }[] = [
-    { label: "Issued from", value: authority },
+    { label: "Issued from", value: issuer },
     { label: "Domain names", value: <ul className="flex flex-col gap-0.5 font-mono text-xs">{names.map((name) => <li key={name}>{name}</li>)}</ul> },
     { label: "Key algorithm", value: KEY_ALGORITHM_LABELS[keyAlgorithm] },
     { label: "CSR", value: csr },

@@ -14,7 +14,7 @@ import type { Db, Tx } from "./db/client";
 import { certificate, issuance, managedCertificate } from "./db/schema";
 import { sameNames } from "./names";
 import { IssuanceFailure, type IssuanceFailureCode } from "./issuance-failure";
-import { certificateIssuerColumns, issuerDetail, issuerOf, type Issued, type Issuers } from "./issuer";
+import { certificateIssuerColumns, issuerDetail, issuerOf, type Issued, type Issuer, type Issuers } from "./issuer";
 import type { Actor, Change, UnitOfWork } from "./unit-of-work";
 
 /**
@@ -210,14 +210,15 @@ export function createIssuances({ db, unitOfWork, issuers, dcv }: IssuancesDeps)
     return ended.length > 0;
   }
 
-  const fail = (row: typeof issuance.$inferSelect, failure: Failure, leftovers: string[] = []) =>
+  /** `issuer` is the Managed Certificate's, when it was read before the Issuance failed. */
+  const fail = (row: typeof issuance.$inferSelect, failure: Failure, leftovers: string[] = [], issuer?: Issuer) =>
     unitOfWork.run(actorOf(row), async (tx, change) => {
       if (!(await end(tx, change, row, { kind: "failed", ...failure }))) return;
       await change.audit({
         organizationId: row.organizationId,
         action: "issuance.failed",
         target: targetOf(row),
-        detail: { issuanceId: row.id, code: failure.code, message: failure.message, ...leftoverDetail(leftovers) },
+        detail: { issuanceId: row.id, code: failure.code, message: failure.message, ...(issuer && issuerDetail(issuer)), ...leftoverDetail(leftovers) },
       });
       await tell(tx, change, endedListeners, {
         organizationId: row.organizationId,
@@ -235,7 +236,7 @@ export function createIssuances({ db, unitOfWork, issuers, dcv }: IssuancesDeps)
     let responder: ReturnType<Dcv["responderFor"]> | undefined;
     const leftovers = () => responder?.leftovers() ?? [];
     let issued: Issued;
-    let mc: typeof managedCertificate.$inferSelect;
+    let mc: typeof managedCertificate.$inferSelect | undefined;
     try {
       const [found] = await db
         .select()
@@ -254,11 +255,12 @@ export function createIssuances({ db, unitOfWork, issuers, dcv }: IssuancesDeps)
       if (mc.csr === null) throw new IssuanceFailure("internal", "the Managed Certificate has no CSR to issue from");
       issued = await issuers.issue(db, row.organizationId, issuerOf(mc), {
         csr: mc.csr,
+        names: mc.names,
         replaces: replaced && sameNames(replaced.names, mc.names) ? replaced.chainPem : undefined,
         dcv: () => (responder ??= dcv.responderFor(db, row.organizationId)),
       });
     } catch (err) {
-      return fail(row, failureOf(err), leftovers());
+      return fail(row, failureOf(err), leftovers(), mc && issuerOf(mc));
     }
 
     // The CA has issued: from here on the Certificate is kept whatever else happens to the Issuance.
@@ -308,7 +310,7 @@ export function createIssuances({ db, unitOfWork, issuers, dcv }: IssuancesDeps)
         });
       });
     } catch (err) {
-      await fail(row, failureOf(err), leftovers());
+      await fail(row, failureOf(err), leftovers(), issuerOf(mc));
     }
   }
 

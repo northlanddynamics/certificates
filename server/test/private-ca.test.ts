@@ -223,6 +223,19 @@ describe("issuing a Managed Certificate from a Private CA", () => {
     expect((await ended(other.body.id)).currentCertificate.serial).not.toBe(leaf!.serialNumber.toUpperCase());
   });
 
+  test("a name too long for a common name is left out of the subject, and only in the subject alternative names, then critical", async () => {
+    const ca = await createCa();
+    const long = `${"a".repeat(60)}.internal.acme`;
+    const created = await h.api(mcs(), { cookie: org.cookie, body: { ...(await request([long, "app.internal.acme"])), ...fromCa(ca.id) } });
+    const mc = await ended(created.body.id);
+
+    const [leaf] = await downloaded(mc.id, "leaf");
+    expect(leaf!.subject).toBe("CN=app.internal.acme");
+    const [onlyLong] = await downloaded((await ended((await h.api(mcs(), { cookie: org.cookie, body: { ...(await request([long])), ...fromCa(ca.id) } })).body.id)).id, "leaf");
+    expect(onlyLong!.subject).toBe("");
+    expect(onlyLong!.getExtension(x509.SubjectAlternativeNameExtension)).toMatchObject({ critical: true });
+  });
+
   test("a CSR that asks for clientAuth gets it besides serverAuth", async () => {
     const ca = await createCa();
     const created = await h.api(mcs(), { cookie: org.cookie, body: { ...(await requestWithUsages(["app.internal.acme"], [x509.ExtendedKeyUsage.serverAuth, x509.ExtendedKeyUsage.clientAuth])), ...fromCa(ca.id) } });

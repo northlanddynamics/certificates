@@ -48,6 +48,8 @@ function kmsSigning(kms: Kms, { key, context, algorithm }: CaKey) {
 }
 
 const EXTENDED_KEY_USAGE = "2.5.29.37";
+/** RFC 5280's upper bound on a common name. */
+const MAX_COMMON_NAME = 64;
 
 /** A serial number: 20 random bytes, positive (the top bit clear) and with no leading zero byte, as upper-case hex. */
 export function newSerial(): string {
@@ -117,7 +119,8 @@ export async function makeIssuingCa(kms: Kms, by: Signer, key: CaKey, input: { s
 
 /**
  * A TLS server certificate for the CSR's key and `names`, signed by `by`: serverAuth, and clientAuth too when the CSR
- * asks for it. Its subject is the first name.
+ * asks for it. Its subject is the first name that fits a common name (64 characters), and empty when none does: the
+ * names are in its subject alternative names either way.
  */
 export async function makeTlsServer(kms: Kms, by: Signer, input: { csr: string; names: string[]; notBefore: Date; notAfter: Date }) {
   const csr = new x509.Pkcs10CertificateRequest(input.csr);
@@ -125,11 +128,12 @@ export async function makeTlsServer(kms: Kms, by: Signer, input: { csr: string; 
   const asked = (csr.getExtension(EXTENDED_KEY_USAGE) as x509.ExtendedKeyUsageExtension | null)?.usages ?? [];
   const usages: string[] = [x509.ExtendedKeyUsage.serverAuth, ...(asked.includes(x509.ExtendedKeyUsage.clientAuth) ? [x509.ExtendedKeyUsage.clientAuth] : [])];
   const rsa = csr.publicKey.algorithm.name === "RSASSA-PKCS1-v1_5" || csr.publicKey.algorithm.name === "RSA-PSS" || csr.publicKey.algorithm.name === "RSA-OAEP";
+  const commonName = input.names.find((name) => name.length <= MAX_COMMON_NAME);
   const { crypto, signingKey } = kmsSigning(kms, by);
   return x509.X509CertificateGenerator.create(
     {
       serialNumber: newSerial(),
-      subject: new x509.Name([{ CN: [input.names[0]!] }]),
+      subject: new x509.Name(commonName ? [{ CN: [commonName] }] : []),
       issuer: by.certificate.subjectName,
       notBefore: input.notBefore,
       notAfter: input.notAfter,
@@ -139,7 +143,8 @@ export async function makeTlsServer(kms: Kms, by: Signer, input: { csr: string; 
         new x509.BasicConstraintsExtension(false, undefined, true),
         new x509.KeyUsagesExtension(x509.KeyUsageFlags.digitalSignature | (rsa ? x509.KeyUsageFlags.keyEncipherment : 0), true),
         new x509.ExtendedKeyUsageExtension(usages),
-        new x509.SubjectAlternativeNameExtension(input.names.map((value) => ({ type: "dns" as const, value }))),
+        // Critical when the subject is empty, as RFC 5280 asks.
+        new x509.SubjectAlternativeNameExtension(input.names.map((value) => ({ type: "dns" as const, value })), !commonName),
         await x509.SubjectKeyIdentifierExtension.create(csr.publicKey, false, webcrypto as unknown as Crypto),
         await x509.AuthorityKeyIdentifierExtension.create(by.certificate.publicKey, false, webcrypto as unknown as Crypto),
       ],

@@ -59,6 +59,9 @@ export async function findPrivateCa(db: Db | Tx, organizationId: string, id: str
   return row;
 }
 
+/** Why the Private CA issues nothing now, or none when it issues. */
+export const issuingRefusal = (ca: PrivateCaRow) => (ca.status === "active" && ca.issuingCertificatePem ? undefined : `the Private CA ${ca.name} is ${ca.status}, so it issues nothing`);
+
 /** The chain of the Private CA, PEM: its Issuing CA, then the root when the platform has it. */
 const chainOf = (row: PrivateCaRow) => [row.issuingCertificatePem, row.rootCertificatePem].filter((pem): pem is string => pem !== null).join("");
 
@@ -79,8 +82,9 @@ export function createPrivateCas({ kms, clock }: { kms: Kms; clock: () => Date }
     async issueFrom(db, organizationId, privateCaId, { csr, names }) {
       const ca = await findPrivateCa(db, organizationId, privateCaId);
       if (!ca) throw new IssuanceFailure("internal", "the Private CA is gone");
-      if (ca.status !== "active" || !ca.issuingCertificatePem) throw new IssuanceFailure("ca_rejected", `the Private CA ${ca.name} is ${ca.status}, so it issues nothing`);
-      const issuing = new x509.X509Certificate(ca.issuingCertificatePem);
+      const refusal = issuingRefusal(ca);
+      if (refusal) throw new IssuanceFailure("ca_rejected", refusal);
+      const issuing = new x509.X509Certificate(ca.issuingCertificatePem!);
       const notBefore = clock();
       if (issuing.notAfter <= notBefore) throw new IssuanceFailure("ca_rejected", `the Issuing CA of the Private CA ${ca.name} has ended`);
       const notAfter = new Date(Math.min(notBefore.getTime() + TLS_VALIDITY_DAYS * DAY_MS, issuing.notAfter.getTime()));
@@ -168,7 +172,14 @@ export function registerPrivateCas(ctx: {
       const subject = parseSubject(body.subject);
       if (!subject) throw new HttpError(400, "the subject must be a distinguished name with a common name, such as CN=Acme Internal TLS, O=Acme");
 
-      // The keys are made in the KMS first; a Private CA that is then not stored leaves only keys nothing refers to.
+      const taken = () => new HttpError(409, `the Organization already has a Private CA named ${body.name}`);
+      const [named] = await db
+        .select({ id: privateCa.id })
+        .from(privateCa)
+        .where(and(eq(privateCa.organizationId, orgId), eq(privateCa.name, body.name)));
+      if (named) throw taken();
+
+      // The keys are made in the KMS first; a Private CA that is then not stored (one of the same name was made meanwhile) leaves only keys nothing refers to.
       const notBefore = clock();
       const notAfter = new Date(notBefore);
       notAfter.setUTCFullYear(notAfter.getUTCFullYear() + body.lifetimeYears);
@@ -212,7 +223,7 @@ export function registerPrivateCas(ctx: {
         });
         return c.json(toPrivateCa(row), 201);
       } catch (err) {
-        if (isUniqueViolation(err)) throw new HttpError(409, `the Organization already has a Private CA named ${body.name}`);
+        if (isUniqueViolation(err)) throw taken();
         throw err;
       }
     },
