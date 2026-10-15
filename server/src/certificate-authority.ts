@@ -5,17 +5,14 @@ import { AuthorityKeyIdentifierExtension, X509Certificate } from "@peculiar/x509
 import acme from "acme-client";
 import { Agent } from "node:https";
 import { rootCertificates } from "node:tls";
+import { REVOCATION_REASONS, type RevocationReason } from "./revocation-reasons";
 
 export const ACME_ENVIRONMENTS = ["staging", "production"] as const;
 export type AcmeEnvironment = (typeof ACME_ENVIRONMENTS)[number];
 
-/**
- * Why a Certificate is revoked, by the name of its RFC 5280 reason code (section 5.3.1). These are the reasons an ACME CA
- * takes from a subscriber that Let's Encrypt honours; the others (a CA's or an attribute authority's compromise, a hold)
- * are not a subscriber's to give, and `affiliationChanged` and `privilegeWithdrawn` it refuses.
- */
-export const REVOCATION_REASONS = { unspecified: 0, keyCompromise: 1, superseded: 4, cessationOfOperation: 5 } as const;
-export type RevocationReason = keyof typeof REVOCATION_REASONS;
+// Why a Certificate is revoked, by the name of its RFC 5280 reason code (section 5.3.1); an ACME CA is only ever given
+// those of REVOCATION_REASONS_OF.acme, which Let's Encrypt honours from a subscriber (revocation-reasons.ts).
+export type { RevocationReason } from "./revocation-reasons";
 
 export class CertificateAuthorityError extends Error {
   constructor(

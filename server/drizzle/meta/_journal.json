@@ -253,6 +253,13 @@
       "when": 1792097272135,
       "tag": "0035_issuing_ca",
       "breakpoints": true
+    },
+    {
+      "idx": 36,
+      "version": "7",
+      "when": 1792103278067,
+      "tag": "0036_crl",
+      "breakpoints": true
     }
   ]
 }

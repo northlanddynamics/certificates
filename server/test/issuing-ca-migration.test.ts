@@ -81,12 +81,14 @@ async function storeOldShape(orgId: string) {
   const notAfter = days(5 * 365);
   const subject = new x509.Name("CN=Acme Internal TLS, O=Acme");
   const root = await makeRoot(kms, rootKey, { subject: new x509.Name("CN=Acme Internal TLS Root, O=Acme"), notBefore, notAfter });
-  const issuing = await makeIssuingCa(kms, { ...rootKey, certificate: root }, issuingKey, { subject, notBefore, notAfter, permittedDnsNames: ["internal.acme"] });
+  // Where these say they publish matters not here: nothing is fetched from it.
+  const publication = { crl: "http://pki.platform.test/ca.crl", caIssuers: "http://pki.platform.test/ca.crt" };
+  const issuing = await makeIssuingCa(kms, { ...rootKey, certificate: root }, issuingKey, { subject, notBefore, notAfter, permittedDnsNames: ["internal.acme"], publication });
 
   const key = await acme.crypto.createPrivateEcdsaKey("P-256");
   const [, csrBuffer] = await acme.crypto.createCsr({ commonName: "app.internal.acme", altNames: ["app.internal.acme"] }, key);
   const csr = csrBuffer.toString();
-  const leaf = await makeTlsServer(kms, { ...issuingKey, certificate: issuing }, { csr, names: ["app.internal.acme"], notBefore, notAfter: days(30) });
+  const leaf = await makeTlsServer(kms, { ...issuingKey, certificate: issuing }, { csr, names: ["app.internal.acme"], notBefore, notAfter: days(30), publication });
 
   const {
     rows: [ca],

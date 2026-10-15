@@ -1,3 +1,6 @@
+// The server's own list of the reasons each kind of issuer takes, from a module that imports only types.
+import { REVOCATION_REASONS_OF, type RevocationReason } from "../../../server/src/revocation-reasons";
+
 // The web UI talks only to the platform's HTTP API (described by /api/openapi.json).
 // Sign-in and sign-up go through Better Auth's endpoints, which are mounted on that same API under /api/auth.
 export class ApiError extends Error {
@@ -122,14 +125,21 @@ export interface Revocation {
   revokedAt: string;
   revokedBy: { id: string; email: string };
 }
-/** The reasons a Certificate may be revoked for (RFC 5280), by the name the server takes. */
-export const REVOCATION_REASONS: [string, string][] = [
-  ["keyCompromise", "Key compromise"],
-  ["superseded", "Superseded"],
-  ["cessationOfOperation", "Cessation of operation"],
-  ["unspecified", "Unspecified"],
-];
-export const revocationReasonLabel = (reason: string) => REVOCATION_REASONS.find(([value]) => value === reason)?.[1] ?? reason;
+/** Each reason a Certificate may be revoked for (RFC 5280), by the name the server takes, in words, in the order offered. */
+const REVOCATION_REASON_LABELS: Record<RevocationReason, string> = {
+  keyCompromise: "Key compromise",
+  superseded: "Superseded",
+  cessationOfOperation: "Cessation of operation",
+  affiliationChanged: "Affiliation changed",
+  privilegeWithdrawn: "Privilege withdrawn",
+  unspecified: "Unspecified",
+};
+/** The reasons a Certificate may be revoked for, as the server takes them from its kind of issuer: a Private CA's when it came from one. */
+export const revocationReasonsFor = (certificate: Pick<Certificate, "issuingCaId">): [string, string][] => {
+  const offered = REVOCATION_REASONS_OF[certificate.issuingCaId ? "private_ca" : "acme"];
+  return (Object.entries(REVOCATION_REASON_LABELS) as [RevocationReason, string][]).filter(([value]) => offered.includes(value));
+};
+export const revocationReasonLabel = (reason: string) => REVOCATION_REASON_LABELS[reason as RevocationReason] ?? reason;
 export type HistoryEntry =
   | {
       kind:

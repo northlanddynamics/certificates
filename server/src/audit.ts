@@ -45,6 +45,7 @@ export const AUDIT_ACTIONS = [
   "private_ca.created",
   "private_ca.issuing_ca_added",
   "private_ca.updated",
+  "private_ca.crl_published",
   "name_change.proposed",
   "name_change.approved",
   "name_change.rejected",

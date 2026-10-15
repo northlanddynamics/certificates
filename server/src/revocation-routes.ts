@@ -7,7 +7,7 @@ import { CertificateAuthorityError } from "./certificate-authority";
 import type { Db } from "./db/client";
 import { certificate, certificateRevocation } from "./db/schema";
 import { HttpError, errors, json } from "./http";
-import { certificateIssuerOf, type Issuers } from "./issuer";
+import { certificateIssuerOf, issuerDetail, type Issuers } from "./issuer";
 import { Certificate, ManagedCertificateParams, toCertificate, type ManagedCertificateReader } from "./managed-certificate-reader";
 import { lockManagedCertificate } from "./name-change";
 import { RevocationReasonName, revocationsOf } from "./revocation";
@@ -33,7 +33,9 @@ export function registerRevocationRoutes(ctx: {
       tags: ["Revocation"],
       summary: "Revoke a Certificate with an RFC 5280 reason: the CA is told, and the Certificate shows as revoked",
       description:
-        "Organization Administrators and the Managed Certificate's own Owners may, even once it is archived. The CA is told first, and the revocation is recorded and audited only once it has revoked the Certificate; " +
+        "Organization Administrators and the Managed Certificate's own Owners may, even once it is archived. The revocation is recorded and audited only once the CA has revoked the Certificate; " +
+        "a Private CA revokes it by reissuing its CRL in the same change, so it is on the CRL the moment the request succeeds. " +
+        "An ACME CA takes `unspecified`, `keyCompromise`, `superseded` and `cessationOfOperation`; a Private CA those and `affiliationChanged` and `privilegeWithdrawn`; another reason is refused with 422. " +
         "if it refuses or cannot be reached nothing is recorded and the request may be made again. A revoked Certificate cannot be revoked again. Revoking does not issue a replacement: renew the Managed Certificate (with a new CSR, if the key is compromised) when one is needed.",
       request: {
         params: CertificateParams,
@@ -56,22 +58,23 @@ export function registerRevocationRoutes(ctx: {
         // Under the Managed Certificate's lock, so two who revoke the same Certificate at once take turns and the second finds it revoked.
         await lockManagedCertificate(tx, orgId, mc.id);
         if ((await revocationsOf(tx, [issued.id])).has(issued.id)) throw new HttpError(409, "the Certificate is already revoked");
+        // Recorded first, so that a Private CA publishes it in its CRL; if the CA then says no, the record rolls back with the rest.
+        const [row] = await tx
+          .insert(certificateRevocation)
+          .values({ certificateId: issued.id, organizationId: orgId, reason, revokedById: actor.id, revokedByEmail: actor.email, revokedAt: change.occurredAt })
+          .returning();
         try {
-          await issuers.revoke(tx, orgId, certificateIssuerOf(issued), { certificate: issued.chainPem, reason });
+          await issuers.revoke(tx, change, orgId, certificateIssuerOf(issued), { certificate: issued.chainPem, reason });
         } catch (err) {
           if (!(err instanceof CertificateAuthorityError)) throw err;
           // A CA that says no is the caller's to fix, 422; one that does not answer is 502.
           throw new HttpError(err.kind === "unreachable" ? 502 : 422, err.message);
         }
-        const [row] = await tx
-          .insert(certificateRevocation)
-          .values({ certificateId: issued.id, organizationId: orgId, reason, revokedById: actor.id, revokedByEmail: actor.email, revokedAt: change.occurredAt })
-          .returning();
         await change.audit({
           organizationId: orgId,
           action: "certificate.revoked",
           target: { type: "managed_certificate", id: mc.id },
-          detail: { certificateId: issued.id, fingerprint: issued.fingerprint, serial: issued.serial, reason },
+          detail: { certificateId: issued.id, fingerprint: issued.fingerprint, serial: issued.serial, reason, ...issuerDetail(certificateIssuerOf(issued)) },
         });
         return row!;
       });

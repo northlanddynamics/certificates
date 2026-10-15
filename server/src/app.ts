@@ -19,6 +19,7 @@ import { DEFAULT_DCV_CONFIG, createDcv, createTxtResolver, type DcvConfig } from
 import { createAuditForwarding, registerAuditForwarders } from "./audit-forwarding";
 import { registerAuditRoutes } from "./audit-routes";
 import { createAuditTransport, type AuditTransport } from "./audit-transport";
+import { createCrls, registerPkiRoutes } from "./crl";
 import { createDb } from "./db/client";
 import { DEFAULT_DNS_RELAY, createDnsRelay, type DnsRelayConfig } from "./dns-relay";
 import { createDnsProviders, registerDnsProviders } from "./dns-providers";
@@ -66,6 +67,11 @@ export interface AppDeps {
   clock: () => Date;
   /** Where the API is served; Better Auth builds its URLs from this. */
   baseURL: string;
+  /**
+   * Where relying parties fetch what Private CAs publish (their CRLs and CA certificates, under `/pki`), which the
+   * certificates they sign name; it should be a plain-HTTP URL (crl.ts). Defaults to baseURL.
+   */
+  pkiBaseURL?: string;
   /** Where users open the web UI, for links in emails. Defaults to baseURL. */
   webURL?: string;
   trustedOrigins?: string[];
@@ -284,8 +290,11 @@ export function createApp(deps: AppDeps) {
   const dcvPlans = createDcvPlans(dnsProviders);
   registerDcvConfiguration({ app, db, requireUser, authorize, unitOfWork, dcvPlans });
   const dcv = createDcv(dnsProviders, dcvPlans, { resolver: createTxtResolver(), ...DEFAULT_DCV_CONFIG, ...deps.dcv });
-  registerPrivateCas({ app, db, requireUser, authorize, unitOfWork, kms: deps.kms, clock });
-  const issuers = createIssuers({ acme: deps.certificateAuthority, secrets, privateCas: createPrivateCas({ kms: deps.kms, clock }) });
+  const pkiBaseURL = deps.pkiBaseURL ?? deps.baseURL;
+  const crls = createCrls({ db, unitOfWork, kms: deps.kms, clock });
+  registerPrivateCas({ app, db, requireUser, authorize, unitOfWork, kms: deps.kms, clock, crls, pkiBaseURL });
+  registerPkiRoutes({ app, db });
+  const issuers = createIssuers({ acme: deps.certificateAuthority, secrets, privateCas: createPrivateCas({ kms: deps.kms, clock, crls, pkiBaseURL }) });
   const issuances = createIssuances({ db, unitOfWork, issuers, dcv });
   const notifications = createNotifications({
     db,
@@ -350,5 +359,5 @@ export function createApp(deps: AppDeps) {
     }),
   );
 
-  return { app, auth, db, unitOfWork, issuances, renewals, notifications, auditForwarding };
+  return { app, auth, db, unitOfWork, issuances, renewals, notifications, auditForwarding, crls };
 }

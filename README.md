@@ -60,6 +60,15 @@ A Managed Certificate's Subscribers are told of upcoming expiry (14, 7 and 1 day
 
 Notices are queued with the change they tell of and sent by a pass the server runs once a minute (`notifications.tick()`), which also notices silent Agents and Certificates nearing their end. One that cannot be sent is tried again after 1, 5 and 30 minutes, 2 and 6 hours, then given up. Mail goes through the server's `Mailer`; in development that is the console.
 
+## Private CAs: CRLs and their public routes
+
+A Certificate issued from a Private CA names, in its CRL Distribution Point and AIA caIssuers, where relying parties fetch its Issuing CA's CRL and certificate; a platform-made Issuing CA names its root's the same way. They are served, DER-encoded, at `/pki/issuing-cas/{issuingCaId}/ca.crl` and `ca.crt` for each Issuing CA, and `/pki/roots/{privateCaId}/ca.crl` and `ca.crt` for a platform-made root, on `PKI_BASE_URL` (default `BASE_URL`), which is written into every certificate a Private CA signs, so choose it before issuing and do not change it. Each Issuing CA and each platform-made root publishes its first CRL when it is made. Revoking a Certificate reissues its Issuing CA's CRL in the same transaction, and a pass the server runs once a minute (`crls.tick()`) reissues each CRL at least 3 days before its `nextUpdate` (7 days after `thisUpdate`) and drops Certificates that have expired.
+
+Deployment notes:
+
+- These routes must be public: reachable by every relying party (servers, load balancers, RADIUS servers, browsers) with no authentication, no VPN and no IP allowlist. They are the platform's only unauthenticated routes outside `/api/auth`.
+- They must be reachable over plain HTTP, and must not redirect to HTTPS: a relying party checking revocation must not need TLS, which would need a revocation check of its own. Set `PKI_BASE_URL` to an `http://` URL, such as `http://pki.example.com`. A TLS terminator or load balancer in front of the platform must pass `/pki/*` through over HTTP (no HTTPS redirect, no HSTS on that host). When the platform serves TLS itself (`TLS_CERT_FILE`), set `PKI_HTTP_PORT` (such as 80) and it also listens there over plain HTTP, answering only `/pki/*`. They are served over HTTPS too, on the main listener.
+
 ## Audit
 
 Every change to an Organization's state is an Audit Event, written in the same transaction as the change. The log is kept for ever: no route changes or deletes one, and the database refuses to. Organization Administrators search it (`GET /api/organizations/{orgId}/audit-events`, or Audit log under Administration) by actor (id or email), action (`team.created`, or `team.*` for a resource), target type and id, and time range (`from` inclusive, `to` exclusive), oldest or newest first, a page at a time by `cursor`.

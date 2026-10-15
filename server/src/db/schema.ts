@@ -1,7 +1,8 @@
 import { bigint, boolean, check, customType, integer, foreignKey, index, jsonb, pgTable, primaryKey, text, timestamp, unique, uniqueIndex, uuid } from "drizzle-orm/pg-core";
 import { sql } from "drizzle-orm";
 import type { AuditForwarderKind } from "../audit-forwarder-kinds";
-import type { AcmeEnvironment, RevocationReason } from "../certificate-authority";
+import type { AcmeEnvironment } from "../certificate-authority";
+import type { RevocationReason } from "../revocation-reasons";
 import type { DcvMethod, DcvScope } from "../dcv-plan";
 import type { ScriptInterpreter } from "../deployment-script-kinds";
 import type { DnsProviderType } from "../dns-provider-kinds";
@@ -43,6 +44,16 @@ export const privateCa = pgTable(
     /** The platform-made root: its certificate (PEM) and the KMS's reference to its key. */
     rootCertificatePem: text("root_certificate_pem"),
     rootKey: text("root_key"),
+    /**
+     * The root's latest CRL, of its Issuing CAs (crl.ts): a full CRL signed by the root's key, kept as it was signed and served as it is, with its number
+     * and when it is current from and until; none until it is first published. `crlFailingSince` is when its scheduled
+     * reissue first failed since it was last published, none while publication works.
+     */
+    crlNumber: bigint("crl_number", { mode: "number" }),
+    crlThisUpdate: timestamp("crl_this_update", { withTimezone: true }),
+    crlNextUpdate: timestamp("crl_next_update", { withTimezone: true }),
+    crlDer: bytea("crl_der"),
+    crlFailingSince: timestamp("crl_failing_since", { withTimezone: true }),
     createdAt: timestamp("created_at", { withTimezone: true }).notNull().defaultNow(),
   },
   (t) => [
@@ -80,6 +91,16 @@ export const issuingCa = pgTable(
     /** The longest a TLS Certificate it issues may be valid for, in days, and how long one is when its Managed Certificate chooses no validity. */
     maxValidityDays: integer("max_validity_days").notNull().default(397),
     defaultValidityDays: integer("default_validity_days").notNull().default(397),
+    /**
+     * Its latest CRL, of the Certificates it signed (crl.ts): a full CRL signed by its key, kept as it was signed and served as it is, with its number
+     * and when it is current from and until; none until it is first published. `crlFailingSince` is when its scheduled
+     * reissue first failed since it was last published, none while publication works.
+     */
+    crlNumber: bigint("crl_number", { mode: "number" }),
+    crlThisUpdate: timestamp("crl_this_update", { withTimezone: true }),
+    crlNextUpdate: timestamp("crl_next_update", { withTimezone: true }),
+    crlDer: bytea("crl_der"),
+    crlFailingSince: timestamp("crl_failing_since", { withTimezone: true }),
     createdAt: timestamp("created_at", { withTimezone: true }).notNull().defaultNow(),
   },
   (t) => [
@@ -506,7 +527,7 @@ export const certificateRevocation = pgTable(
   },
   (t) => [
     index("certificate_revocation_org_idx").on(t.organizationId),
-    check("certificate_revocation_reason", sql`${t.reason} in ('unspecified', 'keyCompromise', 'superseded', 'cessationOfOperation')`),
+    check("certificate_revocation_reason", sql`${t.reason} in ('unspecified', 'keyCompromise', 'affiliationChanged', 'superseded', 'cessationOfOperation', 'privilegeWithdrawn')`),
   ],
 );
 
