@@ -265,7 +265,7 @@ export interface PrivateCa {
   status: "active" | "revoked";
   /** The algorithm of its keys, the root's and its Issuing CAs'. */
   keyAlgorithm: string;
-  /** The root that signs its Issuing CAs; none when the platform does not hold it. */
+  /** The root that signs its Issuing CAs; under the Organization's own root, none until it is uploaded with the first signed Issuing CA. */
   root: { subject: string; notAfter: string } | null;
   /** Its Issuing CAs, oldest first. */
   issuingCas: IssuingCa[];
@@ -281,6 +281,8 @@ export interface IssuingCa {
   notAfter: string | null;
   permittedNames: PermittedNames;
   validity: PrivateCaValidity;
+  /** The name constraints in its certificate, which relying parties enforce, such as "dns:example.com" or "ip:10.0.0.0/8"; none when it has none or no certificate yet. */
+  nameConstraints: { permitted: string[]; excluded: string[] } | null;
 }
 /** How long an Issuing CA's TLS Certificates are valid for, in days: at most the maximum, and the default when a Managed Certificate chooses none. */
 export interface PrivateCaValidity {
@@ -301,9 +303,12 @@ export interface NewIssuingCa {
 }
 export interface NewPrivateCa {
   name: string;
+  /** Who signs its Issuing CAs: a root the platform makes, or the Organization's own, which signs each one's CSR. */
+  kind: PrivateCa["kind"];
   subject: string;
   keyAlgorithm: string;
-  lifetimeYears: number;
+  /** For a platform-made root only: the Organization's own decides how long its Issuing CAs last. */
+  lifetimeYears?: number;
   permittedNames: PermittedNames;
   validity: PrivateCaValidity;
 }
@@ -656,8 +661,13 @@ export const api = {
     call<IssuingCa>(`/api/organizations/${orgId}/private-cas/${id}/issuing-cas/${issuingCaId}`, { method: "PATCH", body }),
   /** Where a Private CA's root downloads from. */
   privateCaRootUrl: (orgId: string, id: string) => `/api/organizations/${orgId}/private-cas/${id}/chain`,
-  /** Where an Issuing CA's chain (the Issuing CA, then its root) downloads from. */
+  /** Where an Issuing CA's chain (the Issuing CA, anything between it and its root, then its root) downloads from. */
   issuingCaChainUrl: (orgId: string, id: string, issuingCaId: string) => `/api/organizations/${orgId}/private-cas/${id}/issuing-cas/${issuingCaId}/chain`,
+  /** Where an Issuing CA under the Organization's own root has its CSR downloaded from. */
+  issuingCaCsrUrl: (orgId: string, id: string, issuingCaId: string) => `/api/organizations/${orgId}/private-cas/${id}/issuing-cas/${issuingCaId}/csr`,
+  /** Uploads what the Organization's own root signed for an Issuing CA's CSR; the root and chain above only with the first one signed. */
+  uploadIssuingCaCertificate: (orgId: string, id: string, issuingCaId: string, body: { certificate: string; root?: string; chain?: string }) =>
+    call<IssuingCa>(`/api/organizations/${orgId}/private-cas/${id}/issuing-cas/${issuingCaId}/certificate`, { body }),
   acmeAccounts: (orgId: string) => call<{ items: AcmeAccount[] }>(`/api/organizations/${orgId}/acme-accounts`),
   registerAcmeAccount: (orgId: string, body: { environment: AcmeAccount["environment"]; contactEmail?: string }) =>
     call<AcmeAccount>(`/api/organizations/${orgId}/acme-accounts`, { body: { ...body, termsOfServiceAgreed: true } }),

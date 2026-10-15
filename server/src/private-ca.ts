@@ -11,7 +11,7 @@ import * as x509 from "@peculiar/x509";
 import { and, asc, eq, inArray } from "drizzle-orm";
 import { randomUUID } from "node:crypto";
 import type { Authorizer } from "./authorization";
-import { makeIssuingCa, makeRoot, makeTlsServer, parseSubject, rootSubjectOf, type CaKey, type Signer } from "./ca-certificates";
+import { makeCaCsr, makeIssuingCa, makeRoot, makeTlsServer, nameConstraintsOf, parseSubject, rootSubjectOf, type CaKey, type Signer } from "./ca-certificates";
 import { publicationOf, type Crls } from "./crl";
 import { KEY_ALGORITHMS } from "./csr";
 import type { Db, Tx } from "./db/client";
@@ -98,6 +98,14 @@ export const IssuingCa = z.object({
     .object({ exact: z.array(z.string()), zones: z.array(z.string()) })
     .openapi({ description: "Its permitted name rules: it issues for no other name. One made before there were rules has none, and issues for nothing until they are set." }),
   validity: ValidityField,
+  nameConstraints: z
+    .object({ permitted: z.array(z.string()), excluded: z.array(z.string()) })
+    .nullable()
+    .openapi({
+      description:
+        "The name constraints in its certificate, which relying parties enforce: each subtree as `dns:`, `ip:` (CIDR), `email:`, `uri:` or `dn:` and its base. " +
+        "A platform-made one's are its rules as they were when it was made; under an Organization's own root, whatever that root put there. None when its certificate has none, or it has no certificate yet.",
+    }),
 });
 
 export const PrivateCa = z.object({
@@ -122,14 +130,18 @@ function rootOf(row: PrivateCaRow) {
   return root ? { subject: root.subject, notAfter: root.notAfter.toISOString() } : null;
 }
 
-const toIssuingCa = (row: IssuingCaRow): z.infer<typeof IssuingCa> => ({
-  id: row.id,
-  subject: row.subject,
-  status: row.status,
-  notAfter: certificateOf(row.certificatePem)?.notAfter.toISOString() ?? null,
-  permittedNames: permittedNamesOf(row),
-  validity: validityOf(row),
-});
+function toIssuingCa(row: IssuingCaRow): z.infer<typeof IssuingCa> {
+  const certificate = certificateOf(row.certificatePem);
+  return {
+    id: row.id,
+    subject: row.subject,
+    status: row.status,
+    notAfter: certificate?.notAfter.toISOString() ?? null,
+    permittedNames: permittedNamesOf(row),
+    validity: validityOf(row),
+    nameConstraints: certificate && nameConstraintsOf(certificate),
+  };
+}
 
 const toPrivateCa = (row: PrivateCaRow, issuingCas: IssuingCaRow[]): z.infer<typeof PrivateCa> => ({
   id: row.id,
@@ -245,7 +257,8 @@ export function createPrivateCas({ kms, clock, crls, pkiBaseURL }: { kms: Kms; c
       const notAfter = new Date(Math.min(notBefore.getTime() + days * DAY_MS, certificate.notAfter.getTime()));
       const signer: Signer = { key: issuing.key, context: organizationId, algorithm: ca.keyAlgorithm, certificate };
       const leaf = await makeTlsServer(kms, signer, { csr, names, notBefore, notAfter, publication: publicationOf(pkiBaseURL, { signer: "issuing", id: issuing.id }) });
-      return { chainPem: `${leaf.toString("pem")}\n${issuing.certificatePem}`, name: ca.name };
+      // The root is not in it: whoever downloads the chain is given it (`rootsOf`) when they ask for it.
+      return { chainPem: [leaf.toString("pem"), issuing.certificatePem, ...(ca.chainPem ? [ca.chainPem] : [])].join("\n"), name: ca.name };
     },
     publishRevocation: (tx, change, organizationId, issuingCaId) => crls.publish(tx, change, organizationId, { signer: "issuing", id: issuingCaId }),
     async rootsOf(db, organizationId, issuingCaId) {
@@ -261,6 +274,68 @@ function yearsAfter(from: Date, years: number) {
   to.setUTCFullYear(to.getUTCFullYear() + years);
   return to;
 }
+
+const PEM_CERTIFICATE = /-----BEGIN CERTIFICATE-----[^-]+-----END CERTIFICATE-----/g;
+
+/** The certificates of a PEM bundle, in order; a 400 naming `what` when one cannot be read or there is none (unless `none` may be). */
+function certificatesAsked(pem: string, what: string, { none = false } = {}): x509.X509Certificate[] {
+  const blocks = pem.match(PEM_CERTIFICATE) ?? [];
+  if (blocks.length === 0 && !none) throw new HttpError(400, `${what} is not a PEM-encoded certificate`);
+  try {
+    return blocks.map((block) => new x509.X509Certificate(block));
+  } catch {
+    throw new HttpError(400, `${what} is not a PEM-encoded certificate`);
+  }
+}
+
+// By OID: looked up by class, an extension is not found when two copies of the library are loaded.
+const BASIC_CONSTRAINTS = "2.5.29.19";
+const KEY_USAGE = "2.5.29.15";
+
+/** Whether the certificate is a CA's: basic constraints say so, and its key usage, if any, lets it sign certificates. */
+function isCaCertificate(certificate: x509.X509Certificate) {
+  const constraints = certificate.getExtension(BASIC_CONSTRAINTS) as x509.BasicConstraintsExtension | null;
+  const usage = certificate.getExtension(KEY_USAGE) as x509.KeyUsagesExtension | null;
+  return constraints?.ca === true && (!usage || (usage.usages & x509.KeyUsageFlags.keyCertSign) !== 0);
+}
+
+const sameCertificates = (a: x509.X509Certificate[], b: x509.X509Certificate[]) => a.length === b.length && a.every((cert, i) => cert.equal(b[i]!));
+
+const signs = (by: x509.X509Certificate, cert: x509.X509Certificate) => cert.issuer === by.subject && cert.verify({ publicKey: by.publicKey, signatureOnly: true }).catch(() => false);
+
+/**
+ * Why the certificate uploaded for the Issuing CA, whose key's public key is `publicKey` (DER) and whose subject is
+ * `subject`, may not make it a CA under `root` through `chain` (the one that signs it first) at `now`: it is not for
+ * that key or subject, not a CA certificate, ended, or does not verify up to the root, a self-signed CA. None when it may.
+ */
+async function signedCertificateRefusal(certificate: x509.X509Certificate, { publicKey, subject, root, chain, now }: { publicKey: Uint8Array; subject: string; root: x509.X509Certificate; chain: x509.X509Certificate[]; now: Date }) {
+  if (!Buffer.from(certificate.publicKey.rawData).equals(Buffer.from(publicKey))) return "the certificate is not for the Issuing CA's key, the one its CSR is for";
+  if (!isCaCertificate(certificate)) return "the certificate is not a CA certificate: its basic constraints must make it a CA, and its key usage, if any, must let it sign certificates";
+  if (new x509.Name(certificate.subject).toString() !== subject) return `the certificate's subject is ${certificate.subject}, not the Issuing CA's ${subject}`;
+  if (certificate.notAfter <= now) return "the certificate has ended";
+  const above = [...chain, root];
+  if (!above.every(isCaCertificate)) return "the root and chain must be CA certificates";
+  if (above.some((cert) => cert.notAfter <= now)) return "a certificate of the root and chain has ended";
+  if (!(await signs(root, root))) return "the root is not self-signed";
+  const path = [certificate, ...above];
+  for (let i = 0; i < path.length - 1; i++) {
+    if (!(await signs(path[i + 1]!, path[i]!))) return `the certificate does not verify against the root and chain: ${path[i]!.subject} is not signed by ${path[i + 1]!.subject}`;
+  }
+  return undefined;
+}
+
+/** A new Issuing CA under an Organization's own root, as it is stored until that root has signed it: its key, and no certificate. */
+const awaitingSignature = (organizationId: string, privateCaId: string, subject: x509.Name, key: string, permittedNames: PermittedNames, validity: Validity) => ({
+  organizationId,
+  privateCaId,
+  subject: subject.toString(),
+  key,
+  status: "awaiting_signature" as const,
+  permittedExactNames: permittedNames.exact,
+  permittedZones: permittedNames.zones,
+  maxValidityDays: validity.maximumDays,
+  defaultValidityDays: validity.defaultDays,
+});
 
 /** The SHA-256 fingerprint of a CA certificate, lower-case hex, and its serial, as Audit Events name it. */
 const identityOf = async (certificate: x509.X509Certificate) => ({ serial: certificate.serialNumber, fingerprint: Buffer.from(await certificate.getThumbprint("SHA-256")).toString("hex") });
@@ -324,12 +399,14 @@ export function registerPrivateCas(ctx: {
       method: "post",
       path: "/api/organizations/{orgId}/private-cas",
       tags: ["Private CAs"],
-      summary: "Create a Private CA with a platform-made root and its first Issuing CA",
+      summary: "Create a Private CA and its first Issuing CA, under a platform-made root or the Organization's own",
       description:
-        "The platform makes two keys in the KMS, of the algorithm given: a self-signed root's, and an Issuing CA's, which the root signs and which signs Certificates (pathLen 0). " +
-        "`subject` is the Issuing CA's distinguished name and must have a common name; the root's is the same with \" Root\" added to the common name. Both are valid from now for `lifetimeYears`. " +
-        "`permittedNames` and `validity` are the Issuing CA's: `validity` sets how long its TLS Certificates are valid for (397 days for both unless given); a default above the maximum is refused with 422. " +
-        "The Private CA is active at once, and its root and Issuing CA each publish a CRL at once. More Issuing CAs can be added under its root later. Only Organization Administrators may.",
+        "`kind` `platform_root` (the default): the platform makes two keys in the KMS, of the algorithm given: a self-signed root's, and an Issuing CA's, which the root signs and which signs Certificates (pathLen 0). " +
+        "`subject` is the Issuing CA's distinguished name and must have a common name; the root's is the same with \" Root\" added to the common name. Both are valid from now for `lifetimeYears` (10 unless given). " +
+        "The Private CA is active at once, and its root and Issuing CA each publish a CRL at once. " +
+        "`kind` `organization_root`: the platform makes only the Issuing CA's key in the KMS, and the Issuing CA is `awaiting_signature` until the Organization's own root has signed its CSR (`.../csr`) and the result is uploaded (`.../certificate`); that root decides how long it lasts, so `lifetimeYears` is refused with 422. " +
+        "Either way, `permittedNames` and `validity` are the Issuing CA's: `validity` sets how long its TLS Certificates are valid for (397 days for both unless given); a default above the maximum is refused with 422. " +
+        "More Issuing CAs can be added under its root later. Only Organization Administrators may.",
       request: {
         params: OrgParam,
         body: {
@@ -337,9 +414,10 @@ export function registerPrivateCas(ctx: {
             "application/json": {
               schema: z.object({
                 name: z.string().trim().min(1).max(100),
+                kind: z.enum(PRIVATE_CA_KINDS).default("platform_root"),
                 subject: z.string().min(1).max(1000).openapi({ example: "CN=Acme Internal TLS, O=Acme" }),
                 keyAlgorithm: z.enum(KEY_ALGORITHMS).default("ecdsa-p256"),
-                lifetimeYears: z.number().int().min(1).max(MAX_LIFETIME_YEARS).default(10),
+                lifetimeYears: z.number().int().min(1).max(MAX_LIFETIME_YEARS).optional().openapi({ description: "For a platform-made root and its Issuing CA: 10 unless given. Not for an Organization's own root." }),
                 permittedNames: PermittedNamesField,
                 validity: ValidityField.default(DEFAULT_VALIDITY),
               }),
@@ -347,7 +425,7 @@ export function registerPrivateCas(ctx: {
           },
         },
       },
-      responses: { 201: json(PrivateCa, "Created, active"), ...errors(400, 401, 403, 404, 409, 422) },
+      responses: { 201: json(PrivateCa, "Created: active, its first Issuing CA active or, under the Organization's own root, awaiting signature"), ...errors(400, 401, 403, 404, 409, 422) },
     }),
     async (c) => {
       const { orgId } = c.req.valid("param");
@@ -357,6 +435,7 @@ export function registerPrivateCas(ctx: {
       const subject = subjectAsked(body.subject);
       const permittedNames = permittedNamesAsked(body.permittedNames);
       const validity = validityAsked(body.validity);
+      if (body.kind === "organization_root" && body.lifetimeYears !== undefined) throw new HttpError(422, "the Organization's own root decides how long an Issuing CA under it lasts, so no lifetime can be given");
 
       const taken = () => new HttpError(409, `the Organization already has a Private CA named ${body.name}`);
       const [named] = await db
@@ -365,11 +444,36 @@ export function registerPrivateCas(ctx: {
         .where(and(eq(privateCa.organizationId, orgId), eq(privateCa.name, body.name)));
       if (named) throw taken();
 
+      if (body.kind === "organization_root") {
+        // As below, the key is made first; one not stored then leaves only a key nothing refers to.
+        const key = await kms.createSigningKey(body.keyAlgorithm, orgId);
+        try {
+          const row = await unitOfWork.run(actor, async (tx, change) => {
+            const [row] = await tx.insert(privateCa).values({ organizationId: orgId, name: body.name, kind: "organization_root", status: "active", keyAlgorithm: body.keyAlgorithm }).returning();
+            const [first] = await tx
+              .insert(issuingCa)
+              .values({ ...awaitingSignature(orgId, row!.id, subject, key, permittedNames, validity) })
+              .returning({ id: issuingCa.id });
+            await change.audit({
+              organizationId: orgId,
+              action: "private_ca.created",
+              target: { type: "private_ca", id: row!.id },
+              detail: { name: body.name, kind: "organization_root", keyAlgorithm: body.keyAlgorithm, subject: subject.toString(), permittedNames, validity, issuingCa: { id: first!.id } },
+            });
+            return row!;
+          });
+          return c.json(await shown(db, row), 201);
+        } catch (err) {
+          if (isUniqueViolation(err)) throw taken();
+          throw err;
+        }
+      }
+
       // The keys are made in the KMS first; a Private CA that is then not stored (one of the same name was made meanwhile) leaves only keys nothing refers to.
       // Its id is chosen here: its Issuing CA names where the root publishes, under it.
       const id = randomUUID();
       const notBefore = clock();
-      const notAfter = yearsAfter(notBefore, body.lifetimeYears);
+      const notAfter = yearsAfter(notBefore, body.lifetimeYears ?? 10);
       const rootKey: CaKey = { key: await kms.createSigningKey(body.keyAlgorithm, orgId), context: orgId, algorithm: body.keyAlgorithm };
       const issuingKey: CaKey = { key: await kms.createSigningKey(body.keyAlgorithm, orgId), context: orgId, algorithm: body.keyAlgorithm };
       const root = await makeRoot(kms, rootKey, { subject: rootSubjectOf(subject), notBefore, notAfter });
@@ -449,12 +553,13 @@ export function registerPrivateCas(ctx: {
       method: "post",
       path: "/api/organizations/{orgId}/private-cas/{id}/issuing-cas",
       tags: ["Private CAs"],
-      summary: "Add an Issuing CA under a Private CA's platform-made root",
+      summary: "Add an Issuing CA under a Private CA's root",
       description:
-        "The platform makes a new key in the KMS, of the Private CA's algorithm, and has the root sign it: pathLen 0, with `permittedNames` as critical dNSName name constraints. " +
-        "It is valid from now for `lifetimeYears`, but never past the root's end, which is also what it gets when none is given. " +
+        "The platform makes a new key in the KMS, of the Private CA's algorithm. " +
+        "Under a platform-made root, it has the root sign it: pathLen 0, with `permittedNames` as critical dNSName name constraints, valid from now for `lifetimeYears`, but never past the root's end, which is also what it gets when none is given. It is active at once, and publishes a CRL at once. " +
+        "Under the Organization's own root, it is `awaiting_signature` until that root has signed its CSR and the result is uploaded; that root decides how long it lasts, so `lifetimeYears` is refused with 422. " +
         "`subject` must have a common name, and is refused with 422 when another Issuing CA of the Private CA has it. A default validity above the maximum is refused with 422. " +
-        "The Issuing CA is active at once, and publishes a CRL at once; the others under the root are unaffected. Not yet for a Private CA under an Organization's own root. Only Organization Administrators may.",
+        "The others under the root are unaffected. Only Organization Administrators may.",
       request: {
         params: PrivateCaParams,
         body: {
@@ -470,7 +575,7 @@ export function registerPrivateCas(ctx: {
           },
         },
       },
-      responses: { 201: json(IssuingCa, "Added, active"), ...errors(400, 401, 403, 404, 422) },
+      responses: { 201: json(IssuingCa, "Added: active, or awaiting signature under the Organization's own root"), ...errors(400, 401, 403, 404, 422) },
     }),
     async (c) => {
       const { orgId, id } = c.req.valid("param");
@@ -482,11 +587,7 @@ export function registerPrivateCas(ctx: {
       const validity = validityAsked(body.validity);
       const ca = await findPrivateCa(db, orgId, id);
       if (!ca) throw new HttpError(404, "Private CA not found");
-      if (ca.kind !== "platform_root" || !ca.rootCertificatePem || !ca.rootKey) throw new HttpError(422, `the platform does not hold the root of the Private CA ${ca.name}, so it cannot sign an Issuing CA`);
       if (ca.status !== "active") throw new HttpError(422, `the root of the Private CA ${ca.name} is ${ca.status}`);
-      const root = new x509.X509Certificate(ca.rootCertificatePem);
-      const notBefore = clock();
-      if (root.notAfter <= notBefore) throw new HttpError(422, `the root of the Private CA ${ca.name} has ended`);
 
       const repeated = () => new HttpError(422, `the Private CA ${ca.name} already has an Issuing CA with the subject ${subject.toString()}`);
       const [same] = await db
@@ -494,6 +595,32 @@ export function registerPrivateCas(ctx: {
         .from(issuingCa)
         .where(and(eq(issuingCa.privateCaId, ca.id), eq(issuingCa.subject, subject.toString())));
       if (same) throw repeated();
+
+      if (ca.kind === "organization_root") {
+        if (body.lifetimeYears !== undefined) throw new HttpError(422, "the Organization's own root decides how long an Issuing CA under it lasts, so no lifetime can be given");
+        const key = await kms.createSigningKey(ca.keyAlgorithm, orgId);
+        try {
+          const row = await unitOfWork.run(actor, async (tx, change) => {
+            const [row] = await tx.insert(issuingCa).values(awaitingSignature(orgId, ca.id, subject, key, permittedNames, validity)).returning();
+            await change.audit({
+              organizationId: orgId,
+              action: "private_ca.issuing_ca_added",
+              target: { type: "private_ca", id: ca.id },
+              detail: { name: ca.name, issuingCa: { id: row!.id, subject: row!.subject, status: row!.status, permittedNames, validity } },
+            });
+            return row!;
+          });
+          return c.json(toIssuingCa(row), 201);
+        } catch (err) {
+          if (isUniqueViolation(err)) throw repeated();
+          throw err;
+        }
+      }
+
+      if (!ca.rootCertificatePem || !ca.rootKey) throw new HttpError(422, `the platform does not hold the root of the Private CA ${ca.name}, so it cannot sign an Issuing CA`);
+      const root = new x509.X509Certificate(ca.rootCertificatePem);
+      const notBefore = clock();
+      if (root.notAfter <= notBefore) throw new HttpError(422, `the root of the Private CA ${ca.name} has ended`);
 
       // As when a Private CA is created, the key is made first; one not stored then leaves only a key nothing refers to.
       const asked = body.lifetimeYears ? yearsAfter(notBefore, body.lifetimeYears) : root.notAfter;
@@ -607,6 +734,122 @@ export function registerPrivateCas(ctx: {
   app.openapi(
     createRoute({
       method: "get",
+      path: "/api/organizations/{orgId}/private-cas/{id}/issuing-cas/{issuingCaId}/csr",
+      tags: ["Private CAs"],
+      summary: "Download an Issuing CA's CSR, for the Organization's own root to sign",
+      description:
+        "PEM. Only for an Issuing CA under the Organization's own root (422 otherwise). Its subject, and its key in the KMS, which signs it; it asks for a CA that signs end-entity certificates only (pathLen 0). " +
+        "Each download is signed anew, so two downloads differ in their signature but not in what they ask for. Only Organization Administrators may.",
+      request: { params: IssuingCaParams },
+      responses: { 200: { description: "The CSR, PEM", content: { "application/pkcs10": { schema: z.string() } } }, ...errors(401, 403, 404, 422) },
+    }),
+    async (c) => {
+      const { orgId, id, issuingCaId } = c.req.valid("param");
+      const actor = await requireUser(c);
+      await authorize(actor, orgId, { privateCa: ["update"] });
+      const of = await findIssuingCa(db, orgId, issuingCaId);
+      if (!of || of.ca.id !== id) throw new HttpError(404, "Issuing CA not found");
+      const { issuing, ca } = of;
+      if (ca.kind !== "organization_root") throw new HttpError(422, `the platform's own root signs the Issuing CAs of the Private CA ${ca.name}, so they have no CSR`);
+      const csr = await makeCaCsr(kms, { key: issuing.key, context: orgId, algorithm: ca.keyAlgorithm }, new x509.Name(issuing.subject));
+      const commonName = new x509.Name(issuing.subject).getField("CN")[0] ?? "";
+      return c.body(csr.toString("pem"), 200, { "content-type": "application/pkcs10", "content-disposition": `attachment; filename="${fileNameOf(`${ca.name} ${commonName}`, "issuing-ca")}.csr"` });
+    },
+  );
+
+  app.openapi(
+    createRoute({
+      method: "post",
+      path: "/api/organizations/{orgId}/private-cas/{id}/issuing-cas/{issuingCaId}/certificate",
+      tags: ["Private CAs"],
+      summary: "Upload the certificate the Organization's own root signed for an Issuing CA's CSR",
+      description:
+        "Only for an Issuing CA under the Organization's own root that is `awaiting_signature` (422 otherwise). `certificate` is PEM. " +
+        "With the first Issuing CA of the Private CA to be signed, `root` (PEM, self-signed) is required, and `chain` (PEM, the one that signs the Issuing CA first, then on up; none when the root signs it itself) is given if there is one: the Private CA keeps them for all its Issuing CAs. " +
+        "Later ones are checked against what it keeps, and may give the same again but nothing else. " +
+        "Refused with 422 when the certificate is not for the CSR's key or subject, is not a CA certificate, has ended, or does not verify up to the root through the chain. " +
+        "Once accepted the Issuing CA is `active`, publishes a CRL at once and issues, within its permitted name rules. Only Organization Administrators may.",
+      request: {
+        params: IssuingCaParams,
+        body: {
+          content: {
+            "application/json": {
+              schema: z.object({
+                certificate: z.string().min(1).max(64_000),
+                root: z.string().max(64_000).optional(),
+                chain: z.string().max(256_000).optional(),
+              }),
+            },
+          },
+        },
+      },
+      responses: { 200: json(IssuingCa, "Accepted: the Issuing CA is active"), ...errors(400, 401, 403, 404, 422) },
+    }),
+    async (c) => {
+      const { orgId, id, issuingCaId } = c.req.valid("param");
+      const body = c.req.valid("json");
+      const actor = await requireUser(c);
+      await authorize(actor, orgId, { privateCa: ["update"] });
+      const [certificate] = certificatesAsked(body.certificate, "certificate");
+      if (certificatesAsked(body.certificate, "certificate").length > 1) throw new HttpError(400, "certificate must be the Issuing CA's certificate alone; give what is above it as `chain` and `root`");
+      const rootGiven = body.root === undefined ? undefined : certificatesAsked(body.root, "root");
+      if (rootGiven && rootGiven.length > 1) throw new HttpError(400, "root must be one certificate; give what is between it and the Issuing CA as `chain`");
+      const chainGiven = body.chain === undefined ? undefined : certificatesAsked(body.chain, "chain", { none: true });
+      const notFound = () => new HttpError(404, "Issuing CA not found");
+      if (!isId(id) || !isId(issuingCaId)) throw notFound();
+
+      const row = await unitOfWork.run(actor, async (tx, change) => {
+        // The Private CA first, then its Issuing CA, both locked: two first uploads at once must not each keep their own root.
+        const [ca] = await tx
+          .select()
+          .from(privateCa)
+          .where(and(eq(privateCa.organizationId, orgId), eq(privateCa.id, id)))
+          .for("update");
+        const [issuing] = ca ? await tx.select().from(issuingCa).where(and(eq(issuingCa.privateCaId, ca.id), eq(issuingCa.id, issuingCaId))).for("update") : [];
+        if (!ca || !issuing) throw notFound();
+        const of = { ca, issuing };
+        if (ca.kind !== "organization_root") throw new HttpError(422, `the platform's own root signs the Issuing CAs of the Private CA ${ca.name}, so none can be uploaded`);
+        if (issuing.status !== "awaiting_signature") throw new HttpError(422, `${issuingCaLabel(of)} is ${issuing.status}, not awaiting signature`);
+
+        const kept = ca.rootCertificatePem ? { root: new x509.X509Certificate(ca.rootCertificatePem), chain: certificatesAsked(ca.chainPem ?? "", "the chain", { none: true }) } : undefined;
+        // Compared by bytes: `equal` is a type guard, which would leave nothing to name in the refusal.
+        if (kept && rootGiven && !Buffer.from(rootGiven[0]!.rawData).equals(Buffer.from(kept.root.rawData))) throw new HttpError(422, `the Private CA ${ca.name} already has a root, ${kept.root.subject}, which its Issuing CAs share`);
+        if (kept && chainGiven && !sameCertificates(chainGiven, kept.chain)) throw new HttpError(422, `the Private CA ${ca.name} already has a chain above its Issuing CAs, which they share`);
+        const root = kept?.root ?? rootGiven?.[0];
+        if (!root) throw new HttpError(422, `the first Issuing CA of the Private CA ${ca.name} to be signed needs its root uploaded with it`);
+        const chain = kept?.chain ?? chainGiven ?? [];
+
+        const publicKey = await kms.publicKey(issuing.key, orgId);
+        const refusal = await signedCertificateRefusal(certificate!, { publicKey, subject: issuing.subject, root, chain, now: clock() });
+        if (refusal) throw new HttpError(422, refusal);
+
+        if (!kept) {
+          await tx
+            .update(privateCa)
+            .set({ rootCertificatePem: root.toString("pem"), chainPem: chain.length > 0 ? chain.map((cert) => cert.toString("pem")).join("\n") : null })
+            .where(eq(privateCa.id, ca.id));
+        }
+        const [updated] = await tx.update(issuingCa).set({ certificatePem: certificate!.toString("pem"), status: "active" }).where(eq(issuingCa.id, issuing.id)).returning();
+        await crls.publish(tx, change, orgId, { signer: "issuing", id: issuing.id });
+        await change.audit({
+          organizationId: orgId,
+          action: "private_ca.csr_signed",
+          target: { type: "private_ca", id: ca.id },
+          detail: {
+            name: ca.name,
+            issuingCa: { id: issuing.id, subject: issuing.subject, notAfter: certificate!.notAfter.toISOString(), ...(await identityOf(certificate!)) },
+            ...(!kept && { root: { subject: root.subject, ...(await identityOf(root)) }, chain: await Promise.all(chain.map(async (cert) => ({ subject: cert.subject, ...(await identityOf(cert)) }))) }),
+          },
+        });
+        return updated!;
+      });
+      return c.json(toIssuingCa(row), 200);
+    },
+  );
+
+  app.openapi(
+    createRoute({
+      method: "get",
       path: "/api/organizations/{orgId}/private-cas/{id}/chain",
       tags: ["Private CAs"],
       summary: "Download the Private CA's root",
@@ -626,15 +869,15 @@ export function registerPrivateCas(ctx: {
       method: "get",
       path: "/api/organizations/{orgId}/private-cas/{id}/issuing-cas/{issuingCaId}/chain",
       tags: ["Private CAs"],
-      summary: "Download an Issuing CA's chain: the Issuing CA, then its root",
-      description: "PEM.",
+      summary: "Download an Issuing CA's chain: the Issuing CA, then anything between it and its root, then its root",
+      description: "PEM. Empty while it awaits its signature.",
       request: { params: IssuingCaParams },
       responses: PemResponse("The chain, PEM"),
     }),
     async (c) => {
       const { orgId, id, issuingCaId } = c.req.valid("param");
       const { issuing, ca } = await findReadableIssuingCa(await requireUser(c), orgId, id, issuingCaId);
-      const chain = [issuing.certificatePem, ca.rootCertificatePem].filter((pem): pem is string => pem !== null).join("");
+      const chain = issuing.certificatePem ? [issuing.certificatePem, ca.chainPem, ca.rootCertificatePem].filter((pem): pem is string => pem !== null).join("\n") : "";
       const commonName = new x509.Name(issuing.subject).getField("CN")[0] ?? "";
       return pemFile(c, chain, `${fileNameOf(`${ca.name} ${commonName}`, "issuing-ca")}.chain.pem`);
     },

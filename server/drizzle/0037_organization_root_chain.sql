@@ -1,0 +1,1 @@
+ALTER TABLE "private_ca" ADD COLUMN "chain_pem" text;

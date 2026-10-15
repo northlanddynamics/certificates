@@ -37,6 +37,8 @@ const SIGNING_ALGORITHMS: Record<KeyAlgorithm, Algorithm & { hash: string }> = {
 function kmsSigning(kms: Kms, { key, context, algorithm }: CaKey) {
   const hash = SIGNATURE_HASH[algorithm];
   const subtle = {
+    // What a CSR is made with asks for the public key this way; the stand-in for it is its DER SubjectPublicKeyInfo.
+    exportKey: async (_format: "spki", publicKey: { spki: ArrayBuffer }) => publicKey.spki,
     digest: (alg: AlgorithmIdentifier, data: ArrayBuffer) => webcrypto.subtle.digest(alg, data),
     async sign(_alg: unknown, _key: unknown, data: ArrayBuffer) {
       const digest = new Uint8Array(await webcrypto.subtle.digest(hash, data));
@@ -196,6 +198,91 @@ export async function makeTlsServer(kms: Kms, by: Signer, input: { csr: string; 
     },
     crypto,
   );
+}
+
+/**
+ * A CSR for an Issuing CA of `key` and `subject`, signed with that key, for the Organization's own root to sign. It asks
+ * for a CA that signs end-entity certificates only (pathLen 0); what the root puts in what it signs is the root's to decide.
+ */
+export async function makeCaCsr(kms: Kms, key: CaKey, subject: x509.Name) {
+  const spki = new Uint8Array(await kms.publicKey(key.key, key.context)).buffer;
+  const publicKey = new x509.PublicKey(spki);
+  const { crypto, signingKey } = kmsSigning(kms, key);
+  return x509.Pkcs10CertificateRequestGenerator.create(
+    {
+      name: subject,
+      keys: { privateKey: signingKey, publicKey: { spki } as unknown as CryptoKey },
+      signingAlgorithm: SIGNING_ALGORITHMS[key.algorithm],
+      extensions: [...(await caExtensions(publicKey, 0))],
+    },
+    crypto,
+  );
+}
+
+/** The DER elements in `bytes`, one after another: each one's tag and content. */
+function derElements(bytes: Uint8Array) {
+  const elements: { tag: number; content: Uint8Array }[] = [];
+  for (let i = 0; i < bytes.length; ) {
+    const tag = bytes[i++]!;
+    let length = bytes[i++]!;
+    if (length & 0x80) {
+      const octets = length & 0x7f;
+      length = 0;
+      for (let k = 0; k < octets; k++) length = length * 256 + bytes[i++]!;
+    }
+    if (i + length > bytes.length) throw new Error("a DER element runs past its end");
+    elements.push({ tag, content: bytes.subarray(i, i + length) });
+    i += length;
+  }
+  return elements;
+}
+
+/** An iPAddress subtree's base (address, then mask) as CIDR, such as 10.0.0.0/8 or ::/0. */
+function ipRange(bytes: Uint8Array) {
+  const half = bytes.length / 2;
+  const address = bytes.subarray(0, half);
+  const prefix = [...bytes.subarray(half)].reduce((bits, byte) => bits + byte.toString(2).replace(/0/g, "").length, 0);
+  const text =
+    half === 4
+      ? [...address].join(".")
+      : (Array.from({ length: 8 }, (_, k) => ((address[2 * k]! << 8) | address[2 * k + 1]!).toString(16)).join(":").replace(/(^|:)0(:0)+(:|$)/, "::") || "::");
+  return `${text}/${prefix}`;
+}
+
+/** A GeneralName (RFC 5280, 4.2.1.6) in words, such as "dns:example.com" or "ip:10.0.0.0/8". */
+function generalNameOf({ tag, content }: { tag: number; content: Uint8Array }) {
+  const text = () => Buffer.from(content).toString("latin1");
+  switch (tag) {
+    case 0x81:
+      return `email:${text()}`;
+    case 0x82:
+      return `dns:${text()}`;
+    case 0x86:
+      return `uri:${text()}`;
+    case 0x87:
+      return `ip:${ipRange(content)}`;
+    case 0xa4:
+      return `dn:${new x509.Name(Buffer.from(content)).toString()}`;
+    default:
+      return `other:${Buffer.from(content).toString("hex")}`;
+  }
+}
+
+/**
+ * A CA certificate's name constraints (RFC 5280, 4.2.1.10): the subtrees it permits and those it excludes, each as
+ * `generalNameOf` gives it; none when it has none, or none that can be read.
+ */
+export function nameConstraintsOf(certificate: x509.X509Certificate): { permitted: string[]; excluded: string[] } | null {
+  const extension = certificate.extensions.find((e) => e.type === NAME_CONSTRAINTS);
+  if (!extension) return null;
+  try {
+    const [sequence] = derElements(new Uint8Array(extension.value));
+    const parts = derElements(sequence!.content);
+    const subtrees = (tag: number) => derElements(parts.find((p) => p.tag === tag)?.content ?? new Uint8Array()).map((subtree) => generalNameOf(derElements(subtree.content)[0]!));
+    return { permitted: subtrees(0xa0), excluded: subtrees(0xa1) };
+  } catch {
+    return null;
+  }
 }
 
 /** A certificate on a CRL: its serial (hex), when it was revoked, and its RFC 5280 CRLReason code. */
