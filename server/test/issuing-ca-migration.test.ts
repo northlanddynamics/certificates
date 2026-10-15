@@ -58,9 +58,10 @@ beforeAll(async () => {
   await migrateToBefore();
   h = await createHarness({}, { databaseUrl, migrate: false });
 });
+// The database is left for the next run to drop, before it connects: dropping it here, with force, would cut off the
+// harness's connections while they close.
 afterAll(async () => {
   await h?.close();
-  await server.query(`drop database if exists ${DATABASE} with (force)`);
   await server.end();
 });
 
