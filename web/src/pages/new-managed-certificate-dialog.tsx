@@ -16,6 +16,7 @@ import { api, can, ownerFromKey, ownerKey, type ManagedCertificate, type Me, typ
 import { issuerLabel } from "@/lib/managed-certificate";
 import { KEY_ALGORITHMS, KEY_ALGORITHM_LABELS, type KeyAlgorithm } from "@/lib/csr-generator";
 import { nameProblems, splitNames } from "@/lib/csr-names";
+import { permittedNamesLabel } from "@/lib/private-ca";
 
 type Org = Me["organizations"][number];
 type Environment = "staging" | "production";
@@ -120,6 +121,7 @@ function NewManagedCertificateForm({ org, direct, onCreated }: { org: Org; direc
     const target = STEPS[i];
     if (target && reachable(i)) setStep(target.id);
   };
+  const chosenCa = issuer.kind === "private_ca" ? activeCas.find((ca) => ca.id === issuer.privateCaId) : undefined;
   const registered = issuer.kind !== "acme" || accounts.data?.items.some((a) => a.environment === issuer.environment);
   const issuerTitle =
     issuer.kind === "acme" ? ENVIRONMENTS.find((e) => e.value === issuer.environment)?.title : issuerLabel({ kind: "private_ca", privateCa: activeCas.find((ca) => ca.id === issuer.privateCaId) ?? { id: issuer.privateCaId, name: "" } });
@@ -202,6 +204,7 @@ function NewManagedCertificateForm({ org, direct, onCreated }: { org: Org; direc
                         <FieldDescription>
                           The Organization's own CA ({ca.subject}). Trusted only where its root is installed; no DCV.
                         </FieldDescription>
+                        <FieldDescription>Permitted names: {permittedNamesLabel(ca.permittedNames)}.</FieldDescription>
                       </FieldContent>
                       <RadioGroupItem value={`private_ca:${ca.id}`} id={`new-mc-ca-${ca.id}`} />
                     </Field>
@@ -233,6 +236,7 @@ function NewManagedCertificateForm({ org, direct, onCreated }: { org: Org; direc
                   }}
                 />
                 <FieldDescription>One per line; wildcards as *.example.com. The certificate is issued for exactly these names.</FieldDescription>
+                {chosenCa && <FieldDescription>{chosenCa.name} permits only {permittedNamesLabel(chosenCa.permittedNames)}; other names are refused.</FieldDescription>}
                 {names.trim() !== "" && problems.map((problem) => <FieldError key={problem}>{problem}</FieldError>)}
               </Field>
               {parsedNames.length > 0 && problems.length === 0 && (

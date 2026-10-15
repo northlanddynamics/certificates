@@ -14,6 +14,7 @@ import { privateCa } from "./db/schema";
 import { HttpError, OrgParam, errors, isUniqueViolation, json } from "./http";
 import { IssuanceFailure } from "./issuance-failure";
 import type { Kms } from "./kms";
+import { constraintNamesOf, namesOutside, normalizePermittedNames, samePermittedNames, type PermittedNames } from "./permitted-names";
 import { PRIVATE_CA_KINDS, PRIVATE_CA_STATUSES } from "./private-ca-kinds";
 import type { Actor, UnitOfWork } from "./unit-of-work";
 
@@ -25,6 +26,26 @@ type PrivateCaRow = typeof privateCa.$inferSelect;
 
 export const PrivateCaParams = OrgParam.extend({ id: z.string().openapi({ param: { name: "id", in: "path" } }) });
 
+const MAX_RULES = 100;
+
+/** A Private CA's permitted name rules, as they are given and shown. */
+const PermittedNamesField = z
+  .object({
+    exact: z.array(z.string().max(255)).max(MAX_RULES).default([]).openapi({ description: "Names permitted exactly: a DNS name, or a wildcard (`*.` then a DNS name), which permits that wildcard alone." }),
+    zones: z.array(z.string().max(255)).max(MAX_RULES).default([]).openapi({ description: "Zones: each permits the name and every name beneath it, wildcards included. Never a wildcard." }),
+  })
+  .openapi({ description: "The names the Private CA may issue for, normalised as names are (lower case, no trailing dot). No IP addresses." });
+
+/** The rules given, normalised; a 400 when they cannot be rules. */
+function permittedNamesAsked(rules: PermittedNames): PermittedNames {
+  const normal = normalizePermittedNames(rules);
+  if ("invalid" in normal) throw new HttpError(400, normal.invalid);
+  return normal.rules;
+}
+
+/** A Private CA's rules, from its row. */
+export const permittedNamesOf = (row: PrivateCaRow): PermittedNames => ({ exact: row.permittedExactNames, zones: row.permittedZones });
+
 export const PrivateCa = z.object({
   id: z.string(),
   name: z.string(),
@@ -33,6 +54,9 @@ export const PrivateCa = z.object({
   keyAlgorithm: z.enum(KEY_ALGORITHMS),
   subject: z.string().openapi({ description: "The Issuing CA's subject, as a distinguished name." }),
   notAfter: z.string().nullable().openapi({ description: "When its Issuing CA ends; none until it has a certificate." }),
+  permittedNames: z
+    .object({ exact: z.array(z.string()), zones: z.array(z.string()) })
+    .openapi({ description: "Its permitted name rules: it issues for no other name. One made before there were rules has none, and issues for nothing until they are set." }),
   createdAt: z.string(),
 });
 
@@ -46,6 +70,7 @@ const toPrivateCa = (row: PrivateCaRow) => ({
   keyAlgorithm: row.keyAlgorithm,
   subject: row.subject,
   notAfter: certificateOf(row.issuingCertificatePem)?.notAfter.toISOString() ?? null,
+  permittedNames: permittedNamesOf(row),
   createdAt: row.createdAt.toISOString(),
 });
 
@@ -62,6 +87,12 @@ export async function findPrivateCa(db: Db | Tx, organizationId: string, id: str
 /** Why the Private CA issues nothing now, or none when it issues. */
 export const issuingRefusal = (ca: PrivateCaRow) => (ca.status === "active" && ca.issuingCertificatePem ? undefined : `the Private CA ${ca.name} is ${ca.status}, so it issues nothing`);
 
+/** Why the Private CA may not issue for the names (normalised): those its permitted name rules do not permit. None when it may. */
+export function namesRefusal(ca: PrivateCaRow, names: string[]) {
+  const outside = namesOutside(permittedNamesOf(ca), names);
+  return outside.length === 0 ? undefined : `${outside.join(", ")} ${outside.length === 1 ? "is" : "are"} outside the permitted names of the Private CA ${ca.name}`;
+}
+
 /** The chain of the Private CA, PEM: its Issuing CA, then the root when the platform has it. */
 const chainOf = (row: PrivateCaRow) => [row.issuingCertificatePem, row.rootCertificatePem].filter((pem): pem is string => pem !== null).join("");
 
@@ -70,7 +101,8 @@ export interface PrivateCas {
   /**
    * Signs a TLS server Certificate for the CSR and its names from the Organization's Private CA, valid from now for
    * at most TLS_VALIDITY_DAYS and never past its Issuing CA. Resolves with the chain (PEM, the Certificate then the
-   * Issuing CA) and the Private CA's name. Throws an IssuanceFailure when the Private CA cannot issue.
+   * Issuing CA) and the Private CA's name. Throws an IssuanceFailure when the Private CA cannot issue, or not for one of
+   * the names.
    */
   issueFrom(db: Db | Tx, organizationId: string, privateCaId: string, request: { csr: string; names: string[] }): Promise<{ chainPem: string; name: string }>;
   /** The Private CA's root (PEM), when the platform has it. */
@@ -84,6 +116,9 @@ export function createPrivateCas({ kms, clock }: { kms: Kms; clock: () => Date }
       if (!ca) throw new IssuanceFailure("internal", "the Private CA is gone");
       const refusal = issuingRefusal(ca);
       if (refusal) throw new IssuanceFailure("ca_rejected", refusal);
+      // A backstop: names outside the rules are refused when they are asked for, but the rules may have changed since.
+      const outside = namesRefusal(ca, names);
+      if (outside) throw new IssuanceFailure("name_not_permitted", outside);
       const issuing = new x509.X509Certificate(ca.issuingCertificatePem!);
       const notBefore = clock();
       if (issuing.notAfter <= notBefore) throw new IssuanceFailure("ca_rejected", `the Issuing CA of the Private CA ${ca.name} has ended`);
@@ -157,6 +192,7 @@ export function registerPrivateCas(ctx: {
                 subject: z.string().min(1).max(1000).openapi({ example: "CN=Acme Internal TLS, O=Acme" }),
                 keyAlgorithm: z.enum(KEY_ALGORITHMS).default("ecdsa-p256"),
                 lifetimeYears: z.number().int().min(1).max(MAX_LIFETIME_YEARS).default(10),
+                permittedNames: PermittedNamesField,
               }),
             },
           },
@@ -171,6 +207,7 @@ export function registerPrivateCas(ctx: {
       await authorize(actor, orgId, { privateCa: ["create"] });
       const subject = parseSubject(body.subject);
       if (!subject) throw new HttpError(400, "the subject must be a distinguished name with a common name, such as CN=Acme Internal TLS, O=Acme");
+      const permittedNames = permittedNamesAsked(body.permittedNames);
 
       const taken = () => new HttpError(409, `the Organization already has a Private CA named ${body.name}`);
       const [named] = await db
@@ -186,7 +223,7 @@ export function registerPrivateCas(ctx: {
       const rootKey = { key: await kms.createSigningKey(body.keyAlgorithm, orgId), context: orgId, algorithm: body.keyAlgorithm };
       const issuingKey = { key: await kms.createSigningKey(body.keyAlgorithm, orgId), context: orgId, algorithm: body.keyAlgorithm };
       const root = await makeRoot(kms, rootKey, { subject: rootSubjectOf(subject), notBefore, notAfter });
-      const issuing = await makeIssuingCa(kms, { ...rootKey, certificate: root }, issuingKey, { subject, notBefore, notAfter });
+      const issuing = await makeIssuingCa(kms, { ...rootKey, certificate: root }, issuingKey, { subject, notBefore, notAfter, permittedDnsNames: constraintNamesOf(permittedNames) });
 
       try {
         const row = await unitOfWork.run(actor, async (tx, change) => {
@@ -203,6 +240,8 @@ export function registerPrivateCas(ctx: {
               rootKey: rootKey.key,
               issuingCertificatePem: issuing.toString("pem"),
               issuingKey: issuingKey.key,
+              permittedExactNames: permittedNames.exact,
+              permittedZones: permittedNames.zones,
             })
             .returning();
           await change.audit({
@@ -215,6 +254,7 @@ export function registerPrivateCas(ctx: {
               keyAlgorithm: body.keyAlgorithm,
               subject: subject.toString(),
               notAfter: notAfter.toISOString(),
+              permittedNames,
               root: { serial: root.serialNumber, fingerprint: Buffer.from(await root.getThumbprint("SHA-256")).toString("hex") },
               issuingCa: { serial: issuing.serialNumber, fingerprint: Buffer.from(await issuing.getThumbprint("SHA-256")).toString("hex") },
             },
@@ -240,6 +280,55 @@ export function registerPrivateCas(ctx: {
     async (c) => {
       const { orgId, id } = c.req.valid("param");
       return c.json(toPrivateCa(await findReadable(await requireUser(c), orgId, id)), 200);
+    },
+  );
+
+  app.openapi(
+    createRoute({
+      method: "patch",
+      path: "/api/organizations/{orgId}/private-cas/{id}",
+      tags: ["Private CAs"],
+      summary: "Change a Private CA's permitted name rules",
+      description:
+        "The rules given replace its rules, and decide what it issues for from then on: what it has already issued is unaffected. " +
+        "A platform-made Issuing CA keeps the name constraints it was made with, which relying parties enforce; going beyond them needs a new Issuing CA. " +
+        "Only Organization Administrators may.",
+      request: {
+        params: PrivateCaParams,
+        body: { content: { "application/json": { schema: z.object({ permittedNames: PermittedNamesField.optional() }) } } },
+      },
+      responses: { 200: json(PrivateCa, "Changed"), ...errors(400, 401, 403, 404) },
+    }),
+    async (c) => {
+      const { orgId, id } = c.req.valid("param");
+      const body = c.req.valid("json");
+      const actor = await requireUser(c);
+      await authorize(actor, orgId, { privateCa: ["update"] });
+      const permittedNames = body.permittedNames && permittedNamesAsked(body.permittedNames);
+      if (!z.uuid().safeParse(id).success) throw new HttpError(404, "Private CA not found");
+      const row = await unitOfWork.run(actor, async (tx, change) => {
+        // Under the row's lock, so the rules the Audit Event says it changed from are the ones it replaced.
+        const [ca] = await tx
+          .select()
+          .from(privateCa)
+          .where(and(eq(privateCa.organizationId, orgId), eq(privateCa.id, id)))
+          .for("update");
+        if (!ca) throw new HttpError(404, "Private CA not found");
+        if (!permittedNames || samePermittedNames(permittedNamesOf(ca), permittedNames)) return ca;
+        const [updated] = await tx
+          .update(privateCa)
+          .set({ permittedExactNames: permittedNames.exact, permittedZones: permittedNames.zones })
+          .where(eq(privateCa.id, ca.id))
+          .returning();
+        await change.audit({
+          organizationId: orgId,
+          action: "private_ca.updated",
+          target: { type: "private_ca", id: ca.id },
+          detail: { name: ca.name, permittedNames: { from: permittedNamesOf(ca), to: permittedNames } },
+        });
+        return updated!;
+      });
+      return c.json(toPrivateCa(row), 200);
     },
   );
 

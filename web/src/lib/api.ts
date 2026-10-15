@@ -251,13 +251,20 @@ export interface PrivateCa {
   subject: string;
   /** When its Issuing CA ends. */
   notAfter: string | null;
+  permittedNames: PermittedNames;
   createdAt: string;
+}
+/** A Private CA's permitted name rules: names it may issue for exactly, and zones, each the name and everything beneath it. */
+export interface PermittedNames {
+  exact: string[];
+  zones: string[];
 }
 export interface NewPrivateCa {
   name: string;
   subject: string;
   keyAlgorithm: string;
   lifetimeYears: number;
+  permittedNames: PermittedNames;
 }
 /** An Organization's account with a CA; its key is never returned. */
 export interface AcmeAccount {
@@ -600,6 +607,7 @@ export const api = {
   runDeploymentAgain: (orgId: string, id: string) => call<Deployment>(`/api/organizations/${orgId}/deployments/${id}/runs`, { method: "POST", body: {} }),
   privateCas: (orgId: string) => call<{ items: PrivateCa[] }>(`/api/organizations/${orgId}/private-cas`),
   createPrivateCa: (orgId: string, body: NewPrivateCa) => call<PrivateCa>(`/api/organizations/${orgId}/private-cas`, { body }),
+  updatePrivateCa: (orgId: string, id: string, body: { permittedNames: PermittedNames }) => call<PrivateCa>(`/api/organizations/${orgId}/private-cas/${id}`, { method: "PATCH", body }),
   /** Where a Private CA's chain (its Issuing CA, then its root) downloads from. */
   privateCaChainUrl: (orgId: string, id: string) => `/api/organizations/${orgId}/private-cas/${id}/chain`,
   acmeAccounts: (orgId: string) => call<{ items: AcmeAccount[] }>(`/api/organizations/${orgId}/acme-accounts`),

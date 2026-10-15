@@ -48,6 +48,7 @@ function kmsSigning(kms: Kms, { key, context, algorithm }: CaKey) {
 }
 
 const EXTENDED_KEY_USAGE = "2.5.29.37";
+const NAME_CONSTRAINTS = "2.5.29.30";
 /** RFC 5280's upper bound on a common name. */
 const MAX_COMMON_NAME = 64;
 
@@ -79,6 +80,28 @@ const caExtensions = async (publicKey: x509.PublicKey, pathLength: number | unde
   await x509.SubjectKeyIdentifierExtension.create(publicKey, false, webcrypto as unknown as Crypto),
 ];
 
+/** A DER element: its tag, its length, its content. */
+function der(tag: number, ...content: Uint8Array[]): Buffer<ArrayBuffer> {
+  const body = Buffer.concat(content);
+  // Short form below 128; otherwise how many octets the length takes, then the length in them.
+  const octets: number[] = [];
+  for (let n = body.length; n > 0; n >>= 8) octets.unshift(n & 0xff);
+  const length = body.length < 0x80 ? [body.length] : [0x80 | octets.length, ...octets];
+  return Buffer.concat([Uint8Array.of(tag, ...length), body]);
+}
+
+/**
+ * Name constraints (RFC 5280, 4.2.1.10), critical, that permit the DNS names `dnsNames` and everything beneath each,
+ * and no IP address (every IPv4 and IPv6 address is excluded). @peculiar/x509 has no class for them, so they are
+ * encoded here: a GeneralSubtree is a SEQUENCE of its base, a dNSName [2] or an iPAddress [7] (address and mask).
+ */
+function nameConstraints(dnsNames: string[]) {
+  const subtree = (tag: number, value: Uint8Array) => der(0x30, der(tag, value));
+  const permitted = dnsNames.map((name) => subtree(0x82, Buffer.from(name, "ascii")));
+  const excluded = [subtree(0x87, new Uint8Array(8)), subtree(0x87, new Uint8Array(32))];
+  return new x509.Extension(NAME_CONSTRAINTS, true, der(0x30, der(0xa0, ...permitted), der(0xa1, ...excluded)));
+}
+
 /** A self-signed root for `key`. */
 export async function makeRoot(kms: Kms, key: CaKey, input: { subject: x509.Name; notBefore: Date; notAfter: Date }) {
   const publicKey = new x509.PublicKey(new Uint8Array(await kms.publicKey(key.key, key.context)).buffer);
@@ -98,8 +121,11 @@ export async function makeRoot(kms: Kms, key: CaKey, input: { subject: x509.Name
   );
 }
 
-/** An Issuing CA for `key`, signed by `by`: it may sign end-entity certificates only (pathLen 0). */
-export async function makeIssuingCa(kms: Kms, by: Signer, key: CaKey, input: { subject: x509.Name; notBefore: Date; notAfter: Date }) {
+/**
+ * An Issuing CA for `key`, signed by `by`: it may sign end-entity certificates only (pathLen 0), and only for the DNS
+ * names `permittedDnsNames` and those beneath them, as critical name constraints.
+ */
+export async function makeIssuingCa(kms: Kms, by: Signer, key: CaKey, input: { subject: x509.Name; notBefore: Date; notAfter: Date; permittedDnsNames: string[] }) {
   const publicKey = new x509.PublicKey(new Uint8Array(await kms.publicKey(key.key, key.context)).buffer);
   const { crypto, signingKey } = kmsSigning(kms, by);
   return x509.X509CertificateGenerator.create(
@@ -111,7 +137,11 @@ export async function makeIssuingCa(kms: Kms, by: Signer, key: CaKey, input: { s
       notAfter: input.notAfter,
       publicKey,
       signingKey,
-      extensions: [...(await caExtensions(publicKey, 0)), await x509.AuthorityKeyIdentifierExtension.create(by.certificate.publicKey, false, webcrypto as unknown as Crypto)],
+      extensions: [
+        ...(await caExtensions(publicKey, 0)),
+        await x509.AuthorityKeyIdentifierExtension.create(by.certificate.publicKey, false, webcrypto as unknown as Crypto),
+        nameConstraints(input.permittedDnsNames),
+      ],
     },
     crypto,
   );

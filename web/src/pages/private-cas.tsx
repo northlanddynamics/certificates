@@ -1,7 +1,7 @@
 import { useQuery } from "@tanstack/react-query";
 import { useParams } from "@tanstack/react-router";
 import { createColumnHelper, tableFeatures, useTable } from "@tanstack/react-table";
-import { DownloadIcon, PlusIcon } from "lucide-react";
+import { DownloadIcon, PencilIcon, PlusIcon } from "lucide-react";
 import { useState, type FormEvent } from "react";
 import { DataTable } from "@/components/data-table/data-table";
 import { Badge } from "@/components/ui/badge";
@@ -9,9 +9,12 @@ import { Button } from "@/components/ui/button";
 import { Dialog, DialogClose, DialogContent, DialogDescription, DialogFooter, DialogHeader, DialogTitle, DialogTrigger } from "@/components/ui/dialog";
 import { Input } from "@/components/ui/input";
 import { Label } from "@/components/ui/label";
-import { api, can, type PrivateCa } from "@/lib/api";
+import { Textarea } from "@/components/ui/textarea";
+import { api, can, type PermittedNames, type PrivateCa } from "@/lib/api";
 import { KEY_ALGORITHMS, KEY_ALGORITHM_LABELS, type KeyAlgorithm } from "@/lib/csr-generator";
+import { splitNames } from "@/lib/csr-names";
 import { keyAlgorithmLabel } from "@/lib/managed-certificate";
+import { permittedNamesLabel } from "@/lib/private-ca";
 import { useAction } from "@/lib/use-action";
 
 const ROUTE = "/app/organizations/$orgId/private-cas";
@@ -25,12 +28,13 @@ const columns = columnHelper.columns([
   columnHelper.accessor("name", { header: "Name", cell: ({ cell }) => <span className="font-medium">{cell.getValue()}</span> }),
   columnHelper.accessor("subject", { header: "Issuing CA", cell: ({ cell }) => <span className="break-all font-mono text-xs">{cell.getValue()}</span> }),
   columnHelper.accessor("keyAlgorithm", { header: "Key", cell: ({ cell }) => keyAlgorithmLabel(cell.getValue()) }),
+  columnHelper.accessor("permittedNames", { header: "Permitted names", cell: ({ cell }) => <span className="break-all text-xs">{permittedNamesLabel(cell.getValue())}</span> }),
   columnHelper.accessor("status", {
     header: "Status",
     cell: ({ cell }) => <Badge variant={cell.getValue() === "active" ? "default" : "secondary"}>{STATUS_LABEL[cell.getValue()]}</Badge>,
   }),
   columnHelper.accessor("notAfter", { header: "Expires", cell: ({ cell }) => (cell.getValue() ? date(cell.getValue()!) : <span className="text-muted-foreground">None yet</span>) }),
-  columnHelper.display({ id: "actions", header: () => <span className="sr-only">Actions</span>, cell: ({ row }) => <DownloadChain ca={row.original} /> }),
+  columnHelper.display({ id: "actions", header: () => <span className="sr-only">Actions</span>, cell: ({ row }) => <Actions ca={row.original} /> }),
 ]);
 const noRows: PrivateCa[] = [];
 
@@ -67,18 +71,95 @@ export function PrivateCasPage() {
   );
 }
 
-function DownloadChain({ ca }: { ca: PrivateCa }) {
+function Actions({ ca }: { ca: PrivateCa }) {
   const { orgId } = useParams({ from: ROUTE });
-  if (!ca.notAfter) return null;
+  const org = useQuery({ queryKey: ["me"], queryFn: api.me, select: (me) => me.organizations.find((o) => o.id === orgId) }).data;
   return (
-    <div className="flex justify-end">
-      <Button variant="outline" size="sm" asChild>
-        <a href={api.privateCaChainUrl(orgId, ca.id)} download aria-label={`Download the chain of ${ca.name}`}>
-          <DownloadIcon />
-          Chain
-        </a>
-      </Button>
+    <div className="flex justify-end gap-2">
+      {org && can(org, "privateCa", "update") && <EditPermittedNamesDialog orgId={orgId} ca={ca} />}
+      {ca.notAfter && (
+        <Button variant="outline" size="sm" asChild>
+          <a href={api.privateCaChainUrl(orgId, ca.id)} download aria-label={`Download the chain of ${ca.name}`}>
+            <DownloadIcon />
+            Chain
+          </a>
+        </Button>
+      )}
     </div>
+  );
+}
+
+/** Permitted name rules as they are typed: names and zones, a name to a line or a comma. */
+type RulesText = { exact: string; zones: string };
+const rulesOf = (text: RulesText): PermittedNames => ({ exact: splitNames(text.exact), zones: splitNames(text.zones) });
+const hasRules = (text: RulesText) => splitNames(text.exact).length + splitNames(text.zones).length > 0;
+
+/** The fields for a Private CA's permitted name rules. */
+function PermittedNamesFields({ id, value, onChange }: { id: string; value: RulesText; onChange: (value: RulesText) => void }) {
+  return (
+    <>
+      <div className="flex flex-col gap-2">
+        <Label htmlFor={`${id}-zones`}>Permitted zones</Label>
+        <Textarea id={`${id}-zones`} rows={3} value={value.zones} onChange={(e) => onChange({ ...value, zones: e.target.value })} placeholder="internal.example" />
+        <p className="text-xs text-muted-foreground">Each zone permits its name and every name beneath it, wildcards included. One to a line.</p>
+      </div>
+      <div className="flex flex-col gap-2">
+        <Label htmlFor={`${id}-exact`}>Permitted names</Label>
+        <Textarea id={`${id}-exact`} rows={3} value={value.exact} onChange={(e) => onChange({ ...value, exact: e.target.value })} placeholder="app.example.com" />
+        <p className="text-xs text-muted-foreground">Each permits that name alone; a wildcard such as *.svc.example.com permits that wildcard alone. No IP addresses.</p>
+      </div>
+    </>
+  );
+}
+
+function EditPermittedNamesDialog({ orgId, ca }: { orgId: string; ca: PrivateCa }) {
+  const [open, setOpen] = useState(false);
+  return (
+    <Dialog open={open} onOpenChange={setOpen}>
+      <DialogTrigger asChild>
+        <Button variant="outline" size="sm" aria-label={`Change the permitted names of ${ca.name}`}>
+          <PencilIcon />
+          Names
+        </Button>
+      </DialogTrigger>
+      <DialogContent className="sm:max-w-lg">
+        <DialogHeader>
+          <DialogTitle>Permitted names of {ca.name}</DialogTitle>
+          <DialogDescription>
+            What it issues for from now on; Certificates already issued are unaffected. Its Issuing CA keeps the name constraints it was made with, which relying parties enforce, so
+            permitting names beyond them needs a new Issuing CA.
+          </DialogDescription>
+        </DialogHeader>
+        {open && <EditPermittedNamesForm orgId={orgId} ca={ca} onDone={() => setOpen(false)} />}
+      </DialogContent>
+    </Dialog>
+  );
+}
+
+function EditPermittedNamesForm({ orgId, ca, onDone }: { orgId: string; ca: PrivateCa; onDone: () => void }) {
+  const [rules, setRules] = useState<RulesText>({ exact: ca.permittedNames.exact.join("\n"), zones: ca.permittedNames.zones.join("\n") });
+  const save = useAction(() => api.updatePrivateCa(orgId, ca.id, { permittedNames: rulesOf(rules) }), ["private-cas"], onDone);
+  return (
+    <form
+      className="flex flex-col gap-4"
+      onSubmit={(e: FormEvent) => {
+        e.preventDefault();
+        save.mutate(undefined);
+      }}
+    >
+      <PermittedNamesFields id={`private-ca-${ca.id}`} value={rules} onChange={setRules} />
+      {save.error && <p className="text-sm text-destructive">{save.error.message}</p>}
+      <DialogFooter>
+        <DialogClose asChild>
+          <Button type="button" variant="outline">
+            Cancel
+          </Button>
+        </DialogClose>
+        <Button type="submit" disabled={!hasRules(rules) || save.isPending}>
+          Save
+        </Button>
+      </DialogFooter>
+    </form>
   );
 }
 
@@ -109,8 +190,13 @@ function CreatePrivateCaForm({ orgId, onDone }: { orgId: string; onDone: () => v
   const [subject, setSubject] = useState("");
   const [keyAlgorithm, setKeyAlgorithm] = useState<KeyAlgorithm>("ecdsa-p256");
   const [lifetimeYears, setLifetimeYears] = useState("10");
-  const create = useAction(() => api.createPrivateCa(orgId, { name: name.trim(), subject: subject.trim(), keyAlgorithm, lifetimeYears: Number(lifetimeYears) }), ["private-cas"], onDone);
-  const ready = name.trim() !== "" && subject.trim() !== "" && Number.isInteger(Number(lifetimeYears)) && Number(lifetimeYears) >= 1 && Number(lifetimeYears) <= 30;
+  const [rules, setRules] = useState<RulesText>({ exact: "", zones: "" });
+  const create = useAction(
+    () => api.createPrivateCa(orgId, { name: name.trim(), subject: subject.trim(), keyAlgorithm, lifetimeYears: Number(lifetimeYears), permittedNames: rulesOf(rules) }),
+    ["private-cas"],
+    onDone,
+  );
+  const ready = name.trim() !== "" && subject.trim() !== "" && hasRules(rules) && Number.isInteger(Number(lifetimeYears)) && Number(lifetimeYears) >= 1 && Number(lifetimeYears) <= 30;
   return (
     <form
       className="flex flex-col gap-4"
@@ -148,6 +234,11 @@ function CreatePrivateCaForm({ orgId, onDone }: { orgId: string; onDone: () => v
         <Input id="private-ca-lifetime" type="number" min={1} max={30} value={lifetimeYears} onChange={(e) => setLifetimeYears(e.target.value)} />
         <p className="text-xs text-muted-foreground">How long the root and the Issuing CA are valid for. No Certificate it issues outlives it.</p>
       </div>
+      <PermittedNamesFields id="private-ca-new" value={rules} onChange={setRules} />
+      <p className="text-xs text-muted-foreground">
+        The Issuing CA carries them as name constraints, which relying parties enforce. You can change the names later, but not those constraints without a new Issuing CA, so
+        prefer broad zones.
+      </p>
       {create.error && <p className="text-sm text-destructive">{create.error.message}</p>}
       <DialogFooter>
         <DialogClose asChild>
