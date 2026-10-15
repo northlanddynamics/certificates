@@ -239,6 +239,13 @@
       "when": 1792081760341,
       "tag": "0033_private_ca_permitted_names",
       "breakpoints": true
+    },
+    {
+      "idx": 34,
+      "version": "7",
+      "when": 1792089400076,
+      "tag": "0034_private_ca_validity",
+      "breakpoints": true
     }
   ]
 }

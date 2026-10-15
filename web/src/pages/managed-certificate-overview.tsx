@@ -3,6 +3,7 @@ import type { ReactNode } from "react";
 import { Card, CardContent, CardHeader, CardTitle } from "@/components/ui/card";
 import type { Certificate, ManagedCertificate } from "@/lib/api";
 import { caLabel, issuerLabel, keyAlgorithmLabel } from "@/lib/managed-certificate";
+import { chosenValidityLabel } from "@/lib/private-ca";
 import { useCertificateFacts, useManagedCertificatePage } from "@/lib/use-managed-certificate";
 import { NameChange } from "./name-change-controls";
 import { Owners } from "./owner-controls";
@@ -56,6 +57,7 @@ export function ManagedCertificateOverview() {
               </ul>
             </Fact>
             <Fact label="Issued from">{issuerLabel(m.issuer)}</Fact>
+            {m.issuer.kind === "private_ca" && <Fact label="Validity">{chosenValidityLabel(m.validityDays)}</Fact>}
             <Fact label="Key algorithm">{keyAlgorithmLabel(m.keyAlgorithm)}</Fact>
             <Fact label="Key Custody">{KEY_CUSTODY_LABELS[m.keyCustody]}</Fact>
             <ProposalStatus m={m} />

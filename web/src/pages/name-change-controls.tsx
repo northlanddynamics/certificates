@@ -1,11 +1,12 @@
 import { useMutation, useQuery } from "@tanstack/react-query";
 import { useState, type FormEvent } from "react";
 import { Button } from "@/components/ui/button";
+import { Input } from "@/components/ui/input";
 import { Label } from "@/components/ui/label";
 import { Textarea } from "@/components/ui/textarea";
 import { api, can, type ManagedCertificate, type Me } from "@/lib/api";
 import { isOwner } from "@/lib/managed-certificate";
-import { permittedNamesLabel } from "@/lib/private-ca";
+import { chosenValidityLabel, daysLabel, isValidityDays, permittedNamesLabel } from "@/lib/private-ca";
 
 /** A Managed Certificate's name change: the one waiting for Approval, and for those who may, the means to make one. */
 export function NameChange({ org, m, userId, onChanged }: { org: Me["organizations"][number]; m: ManagedCertificate; userId?: string; onChanged: () => void }) {
@@ -15,8 +16,18 @@ export function NameChange({ org, m, userId, onChanged }: { org: Me["organizatio
   const mayChange = (direct || can(org, "managedCertificate", "proposeNameChange") || owns) && m.approval.status !== "pending" && m.approval.status !== "rejected";
   const [names, setNames] = useState("");
   const [csr, setCsr] = useState("");
+  // For a Private CA, the validity it is to have, in days: its own to begin with, and empty for the Private CA's default.
+  const current = m.validityDays === null ? "" : String(m.validityDays);
+  const [validity, setValidity] = useState(current);
+  const validityDays = validity.trim() === "" ? null : Number(validity);
   const change = useMutation({
-    mutationFn: () => api.changeNames(org.id, m.id, { names: names.split(/[\s,]+/).filter(Boolean), csr }),
+    mutationFn: () =>
+      api.changeNames(org.id, m.id, {
+        names: names.split(/[\s,]+/).filter(Boolean),
+        csr,
+        // Sent only when changed, so that the Managed Certificate otherwise keeps its own.
+        ...(m.issuer.kind === "private_ca" && validityDays !== m.validityDays && { validityDays }),
+      }),
     onSuccess: () => {
       setNames("");
       setCsr("");
@@ -40,7 +51,8 @@ export function NameChange({ org, m, userId, onChanged }: { org: Me["organizatio
     <div className="flex flex-col gap-1">
       {m.pendingNameChange && (
         <span className="text-muted-foreground">
-          Name change awaiting Approval, proposed by {m.pendingNameChange.proposedBy.email}: {m.pendingNameChange.names.join(", ")}. Renewal continues with the names above.
+          Name change awaiting Approval, proposed by {m.pendingNameChange.proposedBy.email}: {m.pendingNameChange.names.join(", ")}
+          {m.pendingNameChange.validityDays !== m.validityDays && `, valid for ${chosenValidityLabel(m.pendingNameChange.validityDays)}`}. Renewal continues with the names above.
         </span>
       )}
       {m.pendingNameChange?.proposedBy.id === userId && (
@@ -70,12 +82,34 @@ export function NameChange({ org, m, userId, onChanged }: { org: Me["organizatio
                 {privateCa.name} permits only {permittedNamesLabel(privateCa.permittedNames)}; other names are refused.
               </p>
             )}
+            {m.issuer.kind === "private_ca" && (
+              <>
+                <Label className="font-normal" htmlFor={`name-change-validity-${m.id}`}>
+                  Validity (days)
+                </Label>
+                <Input
+                  id={`name-change-validity-${m.id}`}
+                  type="number"
+                  min={1}
+                  max={privateCa?.validity.maximumDays}
+                  className="w-32"
+                  value={validity}
+                  placeholder={privateCa ? String(privateCa.validity.defaultDays) : undefined}
+                  onChange={(e) => setValidity(e.target.value)}
+                />
+                <p className="text-muted-foreground">
+                  {privateCa
+                    ? `Leave empty for ${privateCa.name}'s default of ${daysLabel(privateCa.validity.defaultDays)}; at most ${daysLabel(privateCa.validity.maximumDays)}.`
+                    : "Leave empty for the Private CA's default."}
+                </p>
+              </>
+            )}
             <Label className="font-normal" htmlFor={`name-change-csr-${m.id}`}>
               CSR for the new names (same key algorithm)
             </Label>
             <Textarea id={`name-change-csr-${m.id}`} className="font-mono text-xs" rows={5} value={csr} onChange={(e) => setCsr(e.target.value)} required />
             <span>
-              <Button type="submit" size="sm" variant="outline" disabled={change.isPending}>
+              <Button type="submit" size="sm" variant="outline" disabled={change.isPending || (validityDays !== null && !isValidityDays(validity, privateCa?.validity.maximumDays))}>
                 {direct ? "Change names" : "Propose"}
               </Button>
             </span>

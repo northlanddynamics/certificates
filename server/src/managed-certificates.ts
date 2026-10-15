@@ -21,7 +21,7 @@ import { Certificate, CertificateFacts, Issuance, ManagedCertificate, ManagedCer
 import { checkNamesAndCsr, csrField, namesField } from "./names-and-csr";
 import { OwnerRef, addOwner } from "./owners";
 import { roleCan } from "./permissions";
-import { findPrivateCa, issuingRefusal, namesRefusal } from "./private-ca";
+import { issuerRefusal, validityDaysField } from "./private-ca";
 import { revocationsOf } from "./revocation";
 import type { Actor, UnitOfWork } from "./unit-of-work";
 
@@ -51,17 +51,14 @@ export function registerManagedCertificates(ctx: {
 
   /**
    * The issuer asked for: `issuer`, or the ACME kind in `environment`. A Private CA must be one of the Organization's,
-   * active, and permit the names (normalised).
+   * active, permit the names (normalised), and allow the validity chosen, which only a Private CA lets be chosen.
    */
-  async function issuerAsked(orgId: string, body: { environment?: AcmeEnvironment; issuer?: z.infer<typeof IssuerField> }, names: string[]): Promise<Issuer> {
+  async function issuerAsked(orgId: string, body: { environment?: AcmeEnvironment; issuer?: z.infer<typeof IssuerField>; validityDays?: number }, names: string[]): Promise<Issuer> {
     if (body.issuer && body.environment) throw new HttpError(400, "give either `issuer` or `environment`, not both");
     const issuer = body.issuer ?? { kind: "acme", environment: body.environment ?? "staging" };
-    if (issuer.kind === "private_ca") {
-      const ca = await findPrivateCa(db, orgId, issuer.privateCaId);
-      if (!ca) throw new HttpError(422, "the Organization has no such Private CA");
-      const refusal = issuingRefusal(ca) ?? namesRefusal(ca, names);
-      if (refusal) throw new HttpError(422, refusal);
-    }
+    const validityDays = body.validityDays ?? null;
+    const refusal = await issuerRefusal(db, orgId, issuer, { names, validityDays });
+    if (refusal) throw new HttpError(refusal.status, refusal.message);
     return issuer;
   }
 
@@ -110,7 +107,7 @@ export function registerManagedCertificates(ctx: {
         "An Organization Administrator creates it outright and Issuance starts at once; anyone else proposes it, and it waits for an Approver to approve it, which starts Issuance. " +
         "Issuance runs in the background: the response shows it running, and the Managed Certificate shows the Certificate or the cause of the failure when it ends. " +
         "Its issuer is an ACME CA (staging unless `environment` says otherwise) or, given `issuer`, one of the Organization's active Private CAs, which issues with no DCV. " +
-          "Names outside a Private CA's permitted name rules are refused with 422, which names them.",
+          "Names outside a Private CA's permitted name rules are refused with 422, which names them, as is a `validityDays` above its maximum; `validityDays` with an ACME CA is refused with 400.",
       request: {
         params: OrgParam,
         body: {
@@ -122,6 +119,9 @@ export function registerManagedCertificates(ctx: {
                 csr: csrField,
                 environment: z.enum(ACME_ENVIRONMENTS).optional().openapi({ description: "Which of the Organization's ACME accounts to issue through, when `issuer` is not given; staging unless given." }),
                 issuer: IssuerField.optional(),
+                validityDays: validityDaysField
+                  .optional()
+                  .openapi({ description: "For a Private CA issuer only: how many days its Certificates are valid for, at most the Private CA's maximum; its default when not given." }),
                 owners: z.array(OwnerRef).max(MAX_OWNERS).default([]).openapi({ description: "Users and Teams of the Organization accountable for it; none is allowed." }),
               }),
             },
@@ -151,6 +151,7 @@ export function registerManagedCertificates(ctx: {
             keyAlgorithm: body.keyAlgorithm,
             keyCustody: "owner",
             ...issuerColumns(issuer),
+            validityDays: body.validityDays ?? null,
             csr: body.csr,
             ...(needsApproval && { approvalStatus: "pending", proposedById: actor.id, proposedByEmail: actor.email }),
           })
@@ -165,6 +166,7 @@ export function registerManagedCertificates(ctx: {
             keyCustody: "owner",
             ...(issuer.kind === "acme" && { environment: issuer.environment }),
             ...issuerDetail(issuer),
+            ...(body.validityDays !== undefined && { validityDays: body.validityDays }),
             csrFingerprint: csr.fingerprint,
           },
         });

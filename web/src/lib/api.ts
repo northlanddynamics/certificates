@@ -111,6 +111,8 @@ export interface Page<T> {
 /** A change of a Managed Certificate's names waiting for Approval. */
 export interface PendingNameChange {
   names: string[];
+  /** The validity the Managed Certificate is to have, as its `validityDays`. */
+  validityDays: number | null;
   proposedBy: { id: string; email: string };
   proposedAt: string;
 }
@@ -175,6 +177,8 @@ export interface ManagedCertificate {
   environment: "staging" | "production" | null;
   /** Where its Certificates come from: an ACME CA through the Organization's account in an environment, or one of its Private CAs. */
   issuer: Issuer;
+  /** For one issued from a Private CA, how many days its Certificates are valid for; none for the Private CA's default (and always for an ACME CA). */
+  validityDays: number | null;
   /** When it was archived: it then neither issues, renews nor deploys. */
   archivedAt: string | null;
   owners: Owner[];
@@ -191,6 +195,7 @@ export interface ManagedCertificate {
 export interface QueuedNameChange extends PendingNameChange {
   managedCertificateId: string;
   currentNames: string[];
+  currentValidityDays: number | null;
 }
 export const EXPORT_FORMATS: [string, string][] = [
   ["pem", "PEM"],
@@ -252,7 +257,13 @@ export interface PrivateCa {
   /** When its Issuing CA ends. */
   notAfter: string | null;
   permittedNames: PermittedNames;
+  validity: PrivateCaValidity;
   createdAt: string;
+}
+/** How long a Private CA's TLS Certificates are valid for, in days: at most the maximum, and the default when a Managed Certificate chooses none. */
+export interface PrivateCaValidity {
+  maximumDays: number;
+  defaultDays: number;
 }
 /** A Private CA's permitted name rules: names it may issue for exactly, and zones, each the name and everything beneath it. */
 export interface PermittedNames {
@@ -265,6 +276,7 @@ export interface NewPrivateCa {
   keyAlgorithm: string;
   lifetimeYears: number;
   permittedNames: PermittedNames;
+  validity: PrivateCaValidity;
 }
 /** An Organization's account with a CA; its key is never returned. */
 export interface AcmeAccount {
@@ -381,6 +393,8 @@ export interface NewManagedCertificate {
   keyAlgorithm: string;
   csr: string;
   issuer: { kind: "acme"; environment: "staging" | "production" } | { kind: "private_ca"; privateCaId: string };
+  /** For a Private CA issuer only; its default when not given. */
+  validityDays?: number;
   owners?: OwnerRef[];
 }
 export interface NotificationChannel {
@@ -533,7 +547,8 @@ export const api = {
   reject: (orgId: string, id: string, reason: string) =>
     call<ManagedCertificate>(`/api/organizations/${orgId}/managed-certificates/${id}/reject`, { body: { reason } }),
   /** An Organization Administrator's change applies at once; anyone else's is proposed and waits for Approval. */
-  changeNames: (orgId: string, id: string, body: { names: string[]; csr: string }) =>
+  /** `validityDays`: for a Private CA issuer only, null for its default; the Managed Certificate keeps its own when not given. */
+  changeNames: (orgId: string, id: string, body: { names: string[]; csr: string; validityDays?: number | null }) =>
     call<ManagedCertificate>(`/api/organizations/${orgId}/managed-certificates/${id}/name-change`, { body }),
   withdrawNameChange: (orgId: string, id: string) =>
     call<ManagedCertificate>(`/api/organizations/${orgId}/managed-certificates/${id}/name-change/withdraw`, { method: "POST", body: {} }),
@@ -607,7 +622,7 @@ export const api = {
   runDeploymentAgain: (orgId: string, id: string) => call<Deployment>(`/api/organizations/${orgId}/deployments/${id}/runs`, { method: "POST", body: {} }),
   privateCas: (orgId: string) => call<{ items: PrivateCa[] }>(`/api/organizations/${orgId}/private-cas`),
   createPrivateCa: (orgId: string, body: NewPrivateCa) => call<PrivateCa>(`/api/organizations/${orgId}/private-cas`, { body }),
-  updatePrivateCa: (orgId: string, id: string, body: { permittedNames: PermittedNames }) => call<PrivateCa>(`/api/organizations/${orgId}/private-cas/${id}`, { method: "PATCH", body }),
+  updatePrivateCa: (orgId: string, id: string, body: { permittedNames?: PermittedNames; validity?: PrivateCaValidity }) => call<PrivateCa>(`/api/organizations/${orgId}/private-cas/${id}`, { method: "PATCH", body }),
   /** Where a Private CA's chain (its Issuing CA, then its root) downloads from. */
   privateCaChainUrl: (orgId: string, id: string) => `/api/organizations/${orgId}/private-cas/${id}/chain`,
   acmeAccounts: (orgId: string) => call<{ items: AcmeAccount[] }>(`/api/organizations/${orgId}/acme-accounts`),

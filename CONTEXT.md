@@ -106,6 +106,10 @@ _Avoid_: internal CA, enterprise CA
 A Private CA's exact names and zones (a zone being a name and everything beneath it): the only names it issues for, refused when asked for otherwise. A platform-made Issuing CA carries them as X.509 name constraints, which do not change when the rules later do.
 _Avoid_: allowed domains, name policy
 
+**Validity Limits**:
+A Private CA's maximum and default validity for the TLS Certificates it issues, in days (397 for both unless set). A Managed Certificate on it may choose a validity at or below the maximum, when it is made or with a Name Change, and otherwise gets the default; what is issued is never valid past the maximum or past its Issuing CA's end.
+_Avoid_: lifetime policy, max age
+
 **Issuing CA**:
 The CA certificate and key that actually sign a Private CA's end-entity Certificates, under a root the platform made or the Organization's own. It may sign no CA beneath it.
 _Avoid_: intermediate, sub-CA

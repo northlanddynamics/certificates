@@ -11,10 +11,10 @@ import type { Issuances } from "./issuance";
 import { ManagedCertificate, ManagedCertificateParams, type ManagedCertificateReader } from "./managed-certificate-reader";
 import { sameNames } from "./names";
 import { checkNamesAndCsr, csrField, namesField } from "./names-and-csr";
-import { applyNames, endPendingNameChange, lockManagedCertificate, pendingNameChanges, refusalToChangeNames } from "./name-change";
+import { applyNames, endPendingNameChange, lockManagedCertificate, pendingNameChanges, refusalToChangeNames, validityChangeDetail } from "./name-change";
 import { issuerOf } from "./issuer";
 import { roleCan } from "./permissions";
-import { issuerNamesRefusal } from "./private-ca";
+import { issuerRefusal, validityDaysField } from "./private-ca";
 import type { Actor, UnitOfWork } from "./unit-of-work";
 
 export function registerNameChangeRoutes(ctx: {
@@ -36,7 +36,8 @@ export function registerNameChangeRoutes(ctx: {
       tags: ["Name changes"],
       summary: "Change the Managed Certificate's names, with a CSR for the new names",
       description:
-        "For a Managed Certificate issued from a Private CA, the new names must be within its permitted name rules. " +
+        "For a Managed Certificate issued from a Private CA, the new names must be within its permitted name rules, and the change may give it another `validityDays` " +
+        "(null for the Private CA's default; when not given, it keeps its own), at most the Private CA's maximum (422 above it, and 400 for one from an ACME CA). " +
         "An Organization Administrator's change applies at once and an Issuance of the new names begins. An Owner's waits for an Approver to approve it, " +
         "and until then Renewal continues with the last approved names and CSR; at most one is pending at a time. The CSR must be for the key algorithm of the Managed Certificate and ask for exactly the new names.",
       request: {
@@ -47,6 +48,7 @@ export function registerNameChangeRoutes(ctx: {
               schema: z.object({
                 names: namesField("All the names the Managed Certificate is to have."),
                 csr: csrField,
+                validityDays: validityDaysField.nullable().optional().openapi({ description: "For a Private CA issuer only: the validity it is to have, in days; null for the default. It keeps its own when not given." }),
               }),
             },
           },
@@ -74,9 +76,11 @@ export function registerNameChangeRoutes(ctx: {
         if (sameNames(names, mc.names)) {
           throw new HttpError(422, "the Managed Certificate already has the same names; to replace only its CSR, upload a new one");
         }
-        const outside = await issuerNamesRefusal(tx, orgId, issuerOf(mc), names);
-        if (outside) throw new HttpError(422, outside);
-        const detail = { from: mc.names, to: names, csrFingerprint: csr.fingerprint };
+        // Only a validity asked for is checked: one it keeps is clipped at Issuance to a maximum lowered since.
+        const refused = await issuerRefusal(tx, orgId, issuerOf(mc), { names, validityDays: body.validityDays ?? null });
+        if (refused) throw new HttpError(refused.status, refused.message);
+        const validityDays = body.validityDays === undefined ? mc.validityDays : body.validityDays;
+        const detail = { from: mc.names, to: names, ...validityChangeDetail(mc.validityDays, validityDays), csrFingerprint: csr.fingerprint };
         if (needsApproval) {
           await tx.insert(nameChange).values({
             organizationId: orgId,
@@ -84,13 +88,14 @@ export function registerNameChangeRoutes(ctx: {
             status: "pending",
             names: names,
             csr: body.csr,
+            validityDays,
             proposedById: actor.id,
             proposedByEmail: actor.email,
           });
           await change.audit({ organizationId: orgId, action: "name_change.proposed", target: { type: "managed_certificate", id: mc.id }, detail });
         } else {
           await change.audit({ organizationId: orgId, action: "managed_certificate.names_changed", target: { type: "managed_certificate", id: mc.id }, detail });
-          await applyNames(tx, change, actor, issuances, mc, { names: names, csr: body.csr });
+          await applyNames(tx, change, actor, issuances, mc, { names: names, csr: body.csr, validityDays });
         }
       });
       return c.json((await withState([await findManagedCertificate(orgId, id)]))[0]!, 201);
@@ -127,10 +132,10 @@ export function registerNameChangeRoutes(ctx: {
         organizationId: orgId,
         action: decision === "approved" ? "name_change.approved" : "name_change.rejected",
         target: { type: "managed_certificate", id: mc.id },
-        detail: { from: mc.names, to: pending.names, reason, proposedBy: pending.proposedByEmail },
+        detail: { from: mc.names, to: pending.names, ...validityChangeDetail(mc.validityDays, pending.validityDays), reason, proposedBy: pending.proposedByEmail },
       });
       await notifications.notify(tx, change, mc, { event: "approval.decided", detail: { of: "name_change", decision, reason, decidedBy: actor.email, names: pending.names } });
-      if (decision === "approved") await applyNames(tx, change, actor, issuances, mc, { names: pending.names, csr: pending.csr });
+      if (decision === "approved") await applyNames(tx, change, actor, issuances, mc, { names: pending.names, csr: pending.csr, validityDays: pending.validityDays });
     });
     return (await withState([await findManagedCertificate(orgId, id)]))[0]!;
   }

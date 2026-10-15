@@ -130,6 +130,10 @@ export const ManagedCertificate = z.object({
   keyCustody: z.enum(KEY_CUSTODIES).openapi({ description: "`owner`: the Owner holds the private key and submitted a CSR. `agent`: one Agent made the key and holds it, through its one Deployment." }),
   environment: z.enum(ACME_ENVIRONMENTS).nullable().openapi({ description: "The ACME environment, as in `issuer`; none for one issued from a Private CA." }),
   issuer: Issuer,
+  validityDays: z
+    .number()
+    .nullable()
+    .openapi({ description: "For one issued from a Private CA, how many days its Certificates are valid for, never past the Private CA's maximum or its Issuing CA's end; none for the Private CA's default, and always none for an ACME CA, which decides." }),
   createdAt: z.string(),
   archivedAt: z.string().nullable().openapi({ description: "When it was archived: it then neither issues, renews nor deploys, and is listed only when archived ones are asked for." }),
   owners: z.array(Owner).openapi({ description: "Users and Teams accountable for it, in the order they were added; none is allowed." }),
@@ -280,6 +284,7 @@ export function createManagedCertificateReader({ db, authorize, clock, agentOffl
         keyCustody: row.keyCustody,
         environment: row.environment,
         issuer: issuerShown(issuerOf(row), privateCaNames),
+        validityDays: row.validityDays,
         createdAt: row.createdAt.toISOString(),
         archivedAt: row.archivedAt?.toISOString() ?? null,
         owners: owners.get(row.id) ?? [],

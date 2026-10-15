@@ -69,19 +69,28 @@ export interface Issued {
   issuedBy: CertificateIssuer;
 }
 
+/**
+ * What an Issuance asks the issuer's CA for: a Certificate for the CSR and the Managed Certificate's (approved) `names`,
+ * which the CSR asks for, valid for the `validityDays` the Managed Certificate chose (none for the CA's default). Only a
+ * Private CA lets one be chosen; an ACME CA decides its own, and that kind ignores it. `dcv` gives the DNS challenge
+ * responder for a kind whose CA validates control of the names; another kind never asks for it. `replaces` is the
+ * Certificate (PEM) a Renewal replaces, for a CA that coordinates Renewals.
+ */
+export interface IssueRequest {
+  csr: string;
+  names: string[];
+  validityDays: number | null;
+  replaces?: string;
+  dcv: () => DnsChallengeResponder;
+}
+
 export interface Issuers {
   /**
-   * Has the issuer's CA issue for the CSR and the Managed Certificate's (approved) `names`, which the CSR asks for. `dcv` gives the DNS challenge responder for a kind whose CA validates control
-   * of the names; another kind never asks for it. `replaces` is the Certificate (PEM) a Renewal replaces, for a CA that
-   * coordinates Renewals. Throws an IssuanceFailure when the issuer cannot issue for the Organization (it has no ACME
-   * Account in the environment), and a CertificateAuthorityError when the CA says no or does not answer.
+   * Has the issuer's CA issue for the request. Throws an IssuanceFailure when the issuer cannot issue for the
+   * Organization (it has no ACME Account in the environment), and a CertificateAuthorityError when the CA says no or
+   * does not answer.
    */
-  issue(
-    db: Db | Tx,
-    organizationId: string,
-    issuer: Issuer,
-    request: { csr: string; names: string[]; replaces?: string; dcv: () => DnsChallengeResponder },
-  ): Promise<Issued>;
+  issue(db: Db | Tx, organizationId: string, issuer: Issuer, request: IssueRequest): Promise<Issued>;
   /** Has the CA a Certificate came from revoke it (PEM, its chain or the leaf alone) for `reason`. Throws a CertificateAuthorityError when the CA says no or does not answer. */
   revoke(db: Db | Tx, organizationId: string, issuedBy: CertificateIssuer, request: { certificate: string; reason: RevocationReason }): Promise<void>;
   /** What the CA a Certificate came from suggests about renewing it; null when it offers nothing. Throws a CertificateAuthorityError when it does not answer. */
@@ -92,7 +101,7 @@ export interface Issuers {
 
 /** What one kind of issuer does for the issuers of its kind: `Issuers`, for a Managed Certificate's issuer and a Certificate's of that kind. */
 interface KindOfIssuer<M extends Issuer, C extends CertificateIssuer> {
-  issue(db: Db | Tx, organizationId: string, issuer: M, request: { csr: string; names: string[]; replaces?: string; dcv: () => DnsChallengeResponder }): Promise<Issued>;
+  issue(db: Db | Tx, organizationId: string, issuer: M, request: IssueRequest): Promise<Issued>;
   revoke(db: Db | Tx, organizationId: string, issuedBy: C, request: { certificate: string; reason: RevocationReason }): Promise<void>;
   renewalInfo(issuedBy: C, certificate: string): Promise<RenewalInfo | null>;
   roots(db: Db | Tx, organizationId: string, issuedBy: C): Promise<string[]>;
@@ -127,8 +136,8 @@ export function createIssuers({ acme, secrets, privateCas }: { acme: AcmeCertifi
 
   // No DCV: the names a Private CA may issue for are the Organization's to decide. No ARI either.
   const privateCaKind: KindOfIssuer<Issuer & { kind: "private_ca" }, CertificateIssuer & { kind: "private_ca" }> = {
-    async issue(db, organizationId, issuer, { csr, names }) {
-      const { chainPem, name } = await privateCas.issueFrom(db, organizationId, issuer.privateCaId, { csr, names });
+    async issue(db, organizationId, issuer, { csr, names, validityDays }) {
+      const { chainPem, name } = await privateCas.issueFrom(db, organizationId, issuer.privateCaId, { csr, names, validityDays });
       return { chainPem, ca: name, issuedBy: { kind: "private_ca", privateCaId: issuer.privateCaId } };
     },
     async revoke() {

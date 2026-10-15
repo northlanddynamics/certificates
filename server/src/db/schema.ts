@@ -54,6 +54,9 @@ export const privateCa = pgTable(
      */
     permittedExactNames: text("permitted_exact_names").array().notNull().default(sql`'{}'`),
     permittedZones: text("permitted_zones").array().notNull().default(sql`'{}'`),
+    /** The longest a TLS Certificate it issues may be valid for, in days, and how long one is when its Managed Certificate chooses no validity. */
+    maxValidityDays: integer("max_validity_days").notNull().default(397),
+    defaultValidityDays: integer("default_validity_days").notNull().default(397),
     createdAt: timestamp("created_at", { withTimezone: true }).notNull().defaultNow(),
   },
   (t) => [
@@ -64,6 +67,7 @@ export const privateCa = pgTable(
     check("private_ca_status", sql`${t.status} in ('awaiting_signature', 'active', 'retired', 'revoked')`),
     check("private_ca_platform_root", sql`${t.kind} <> 'platform_root' or (${t.rootCertificatePem} is not null and ${t.rootKey} is not null)`),
     check("private_ca_signed", sql`${t.status} = 'awaiting_signature' or ${t.issuingCertificatePem} is not null`),
+    check("private_ca_validity", sql`${t.defaultValidityDays} between 1 and ${t.maxValidityDays}`),
   ],
 );
 
@@ -85,6 +89,11 @@ export const managedCertificate = pgTable(
     environment: text("environment").$type<AcmeEnvironment>(),
     /** The Private CA kind's reference: the Organization's Private CA its Certificates are issued from. */
     privateCaId: uuid("private_ca_id"),
+    /**
+     * The Private CA kind's validity: how many days its Certificates are valid for, at most the Private CA's maximum. Null
+     * when it chose none, and it gets the Private CA's default; always null for the ACME kind, whose CA decides.
+     */
+    validityDays: integer("validity_days"),
     /**
      * The CSR under which Certificates are issued, so Renewal can reuse it. With Key Custody: Owner it is submitted with the
      * Managed Certificate; with Key Custody: Agent it is none until the Agent has made the key and sent the CSR for it.
@@ -113,6 +122,7 @@ export const managedCertificate = pgTable(
       "managed_certificate_issuer_kind",
       sql`(${t.issuerKind} = 'acme' and ${t.environment} is not null and ${t.privateCaId} is null) or (${t.issuerKind} = 'private_ca' and ${t.privateCaId} is not null and ${t.environment} is null)`,
     ),
+    check("managed_certificate_validity", sql`${t.validityDays} is null or (${t.issuerKind} = 'private_ca' and ${t.validityDays} >= 1)`),
     foreignKey({ columns: [t.privateCaId, t.organizationId], foreignColumns: [privateCa.id, privateCa.organizationId] }),
     check("managed_certificate_key_custody", sql`${t.keyCustody} in ('owner', 'agent')`),
     check("managed_certificate_owner_has_csr", sql`${t.keyCustody} <> 'owner' or ${t.csr} is not null`),
@@ -143,6 +153,8 @@ export const nameChange = pgTable(
     names: text("names").array().notNull(),
     /** The CSR for `names`, which replaces the Managed Certificate's when the change is approved. */
     csr: text("csr").notNull(),
+    /** The validity, in days, the Managed Certificate has once the change is approved (its `validityDays`): its own when the change asked for none. */
+    validityDays: integer("validity_days"),
     proposedById: text("proposed_by_id").notNull(),
     proposedByEmail: text("proposed_by_email").notNull(),
     /** Who ended it, when and why it ended: an Approver's decision, the proposer's withdrawal, or what made the platform discard it (none, then). */
