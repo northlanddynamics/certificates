@@ -3,7 +3,7 @@
 // says to, and what was last said is stored (renewal_info) for the scheduler and the API to read. Like the scheduler
 // it keeps no state of its own: what is due to be asked is read from the table.
 import { and, eq, inArray, isNull, lte, or, sql } from "drizzle-orm";
-import type { CertificateAuthority } from "./certificate-authority";
+import { certificateIssuerOf, type Issuers } from "./issuer";
 import type { Db } from "./db/client";
 import { managedCertificate, renewalInfo } from "./db/schema";
 import { renewsAutomatically } from "./issuance";
@@ -46,10 +46,10 @@ export async function informationOf(db: Db, certificateIds: string[]): Promise<M
  * Asks the CA about the current Certificate of every automatic, live, approved Managed Certificate that is due to be
  * asked, and stores what it says at `now`. It never throws for one Certificate's trouble.
  */
-export async function refreshRenewalInfo({ db, certificateAuthority, now }: { db: Db; certificateAuthority: CertificateAuthority; now: Date }): Promise<void> {
+export async function refreshRenewalInfo({ db, issuers, now }: { db: Db; issuers: Issuers; now: Date }): Promise<void> {
   const current = currentCertificates(db);
   const due = await db
-    .select({ id: current.id, organizationId: current.organizationId, environment: current.environment, chainPem: current.chainPem })
+    .select({ id: current.id, organizationId: current.organizationId, issuerKind: current.issuerKind, environment: current.environment, acmeAccountId: current.acmeAccountId, chainPem: current.chainPem })
     .from(managedCertificate)
     .innerJoin(current, eq(current.managedCertificateId, managedCertificate.id))
     .leftJoin(renewalInfo, eq(renewalInfo.certificateId, current.id))
@@ -67,7 +67,7 @@ export async function refreshRenewalInfo({ db, certificateAuthority, now }: { db
   const after = (ms: number) => new Date(now.getTime() + ms);
   async function ask(row: (typeof due)[number]) {
     try {
-      const info = await certificateAuthority.renewalInfo(row.environment, row.chainPem);
+      const info = await issuers.renewalInfo(certificateIssuerOf(row), row.chainPem);
       const retry = info?.retryAfterMs == null ? DEFAULT_RECHECK_MS : Math.min(Math.max(info.retryAfterMs, SHORTEST_RECHECK_MS), LONGEST_RECHECK_MS);
       const values = { windowStart: info?.window.start ?? null, windowEnd: info?.window.end ?? null, checkedAt: now, nextCheckAt: after(retry) };
       await db

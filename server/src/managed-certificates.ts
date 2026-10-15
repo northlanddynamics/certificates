@@ -14,6 +14,7 @@ import { KEY_ALGORITHMS } from "./csr";
 import type { Db } from "./db/client";
 import { issuance, managedCertificate } from "./db/schema";
 import { HttpError, OrgParam, PageQuery, errors, json, pageOf } from "./http";
+import { issuerColumns } from "./issuer";
 import { InventoryQuery, inventoryCondition } from "./inventory-filters";
 import { refusalMessage, type Issuances } from "./issuance";
 import { Certificate, CertificateFacts, Issuance, ManagedCertificate, ManagedCertificateParams, toCertificate, toIssuance, type ManagedCertificateReader } from "./managed-certificate-reader";
@@ -121,7 +122,7 @@ export function registerManagedCertificates(ctx: {
             names,
             keyAlgorithm: body.keyAlgorithm,
             keyCustody: "owner",
-            environment: body.environment,
+            ...issuerColumns({ kind: "acme", environment: body.environment }),
             csr: body.csr,
             ...(needsApproval && { approvalStatus: "pending", proposedById: actor.id, proposedByEmail: actor.email }),
           })

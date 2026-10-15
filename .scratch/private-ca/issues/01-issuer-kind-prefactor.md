@@ -4,9 +4,9 @@
 
 **Blocked by:** None (can start immediately)
 
-**Status:** ready-for-agent
+**Status:** done
 
-- [ ] A Managed Certificate's issuer is stored as a kind plus that kind's reference; existing rows migrate to the ACME kind with their environment and ACME Account unchanged.
-- [ ] Issuance, Renewal, the Renewal scheduler (ARI) and Revocation reach the CA through the issuer, not by assuming ACME; their callers and API contracts do not change.
-- [ ] The API's Managed Certificate shape is unchanged (or only gains an issuer field defaulting to ACME); the web app needs no change.
-- [ ] Every existing test passes unchanged.
+- [x] A Managed Certificate's issuer is stored as a kind plus that kind's reference; existing rows migrate to the ACME kind with their environment and ACME Account unchanged.
+- [x] Issuance, Renewal, the Renewal scheduler (ARI) and Revocation reach the CA through the issuer, not by assuming ACME; their callers and API contracts do not change.
+- [x] The API's Managed Certificate shape is unchanged (or only gains an issuer field defaulting to ACME); the web app needs no change.
+- [x] Every existing test passes unchanged.

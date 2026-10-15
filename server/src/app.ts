@@ -10,7 +10,7 @@ import { registerAgents } from "./agents";
 import { registerApiKeys } from "./api-keys";
 import { PLATFORM_OPERATOR_ROLE, createAuth } from "./auth";
 import { registerCertificateExport } from "./certificate-export";
-import type { CertificateAuthority } from "./certificate-authority";
+import type { AcmeCertificateAuthority } from "./certificate-authority";
 import { registerDeploymentScripts } from "./deployment-scripts";
 import { registerDeployments } from "./deployments";
 import { registerDcvConfiguration } from "./dcv-configuration";
@@ -26,6 +26,7 @@ import { member, organization } from "./db/schema";
 import { createAuthorizer } from "./authorization";
 import { HttpError, errors, json } from "./http";
 import { createIssuances } from "./issuance";
+import { createIssuers } from "./issuer";
 import type { Kms } from "./kms";
 import { registerApprovals } from "./approvals";
 import { registerArchiveRoutes } from "./archive-routes";
@@ -70,7 +71,8 @@ export interface AppDeps {
   secret: string;
   /** Wraps each Organization's data key; see secrets.ts. */
   kms: Kms;
-  certificateAuthority: CertificateAuthority;
+  /** The ACME CA: the CA of a Managed Certificate whose issuer is of the ACME kind (issuer.ts). */
+  certificateAuthority: AcmeCertificateAuthority;
   /** How DCV checks that a challenge record is visible; the host's DNS resolvers, waiting up to two minutes, unless given. */
   dcv?: Partial<DcvConfig>;
   /** How the Agent protocol is run: see `AgentGatewayConfig` for what each setting is and its default. */
@@ -281,7 +283,8 @@ export function createApp(deps: AppDeps) {
   const dcvPlans = createDcvPlans(dnsProviders);
   registerDcvConfiguration({ app, db, requireUser, authorize, unitOfWork, dcvPlans });
   const dcv = createDcv(dnsProviders, dcvPlans, { resolver: createTxtResolver(), ...DEFAULT_DCV_CONFIG, ...deps.dcv });
-  const issuances = createIssuances({ db, unitOfWork, certificateAuthority: deps.certificateAuthority, dcv, secrets });
+  const issuers = createIssuers({ acme: deps.certificateAuthority, secrets });
+  const issuances = createIssuances({ db, unitOfWork, issuers, dcv });
   const notifications = createNotifications({
     db,
     unitOfWork,
@@ -312,15 +315,15 @@ export function createApp(deps: AppDeps) {
   const reader = createManagedCertificateReader({ db, authorize, clock, agentOfflineAfterSeconds: agentGateway.offlineAfterSeconds });
   registerManagedCertificates({ app, db, requireUser, authorize, unitOfWork, issuances, reader, clock, agentOfflineAfterSeconds: agentGateway.offlineAfterSeconds });
   const apiKeys = registerApiKeys({ app, db, auth, authConfig, requireUser, authorize, admit: loginPolicies.admit, unitOfWork });
-  registerCertificateExport({ app, apiKeys, unitOfWork, reader, certificateAuthority: deps.certificateAuthority });
+  registerCertificateExport({ app, apiKeys, unitOfWork, reader, issuers });
   registerOwnerRoutes({ app, requireUser, unitOfWork, reader });
   registerSubscriberRoutes({ app, db, requireUser, unitOfWork, reader });
   registerRenewalRoutes({ app, db, requireUser, unitOfWork, issuances, reader });
-  const renewals = createRenewalScheduler({ db, unitOfWork, issuances, certificateAuthority: deps.certificateAuthority, clock });
+  const renewals = createRenewalScheduler({ db, unitOfWork, issuances, issuers, clock });
   registerNameChangeRoutes({ app, requireUser, authorize, unitOfWork, issuances, reader, notifications });
   registerApprovals({ app, db, requireUser, authorize, unitOfWork, issuances, reader, notifications });
   registerArchiveRoutes({ app, requireUser, authorize, unitOfWork, issuances, reader });
-  registerRevocationRoutes({ app, db, requireUser, unitOfWork, reader, secrets, certificateAuthority: deps.certificateAuthority });
+  registerRevocationRoutes({ app, db, requireUser, unitOfWork, reader, issuers });
   registerHistory({ app, db, requireUser, reader });
   registerDeploymentScripts({ app, db, requireUser, authorize, unitOfWork });
   registerDeployments({ app, db, requireUser, authorize, unitOfWork, workItems, issuances, notifications });
