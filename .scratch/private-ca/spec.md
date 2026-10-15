@@ -181,7 +181,7 @@ Issuance and Revocation from a Private CA reuse the existing actions, with the i
 - Importing an existing CA's private key. Keys are only ever generated in the KMS.
 - Cross-certification, multiple Issuing CAs under one Private CA at once, and policy OIDs or CPS pointers in certificates.
 - Delta CRLs and partitioned CRLs.
-- Device certificates, Enrollment Profiles and SCEP, which are in `.scratch/device-enrollment/spec.md`.
+- Device certificates, Enrollment Profiles and SCEP, which are in `.scratch/device-enrollment/spec.md`. SCEP is built on our SDK, [`northlanddynamics/ts-scep`](https://github.com/northlanddynamics/ts-scep); the CA module here stays the only thing that signs with a Private CA's key.
 - **Notifications** for Issuing CA expiry and CRL publication failures. These are deferred until the end of this work and the device enrollment work, and will be decided then, together with the device enrollment notices. Until then, expiry and status are only visible in the UI and API.
 
 ## Further Notes

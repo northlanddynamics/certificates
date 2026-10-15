@@ -101,7 +101,11 @@ Behaviour:
 - **Rate limiting:** per profile and per source address.
 - **Over TLS:** Android requires HTTPS for SCEP.
 
-The PKCS#7/CMS work uses an existing library (`pkijs` with `@peculiar/x509`) rather than hand-rolled ASN.1.
+The SCEP protocol work uses our own SDK, [`northlanddynamics/ts-scep`](https://github.com/northlanddynamics/ts-scep), rather than hand-rolled ASN.1 or CMS:
+- Its `ScepServer` does the protocol: decoding the pkiMessage, verifying the signer, decrypting the envelope with the RA key, checking the CSR's signature, matching nonces and transaction IDs, and building the signed CertRep. It is served from Hono through `fetchHandler` (or `handle`), with one server per Enrollment Profile, configured with the RA certificate and key and the Issuing CA certificate and chain only. The CA's private key stays in the KMS and is never passed to it.
+- Its `ScepHandler` is where the platform's issuance flow below runs: `enroll` runs the profile checks and the validator, then issues through the CA module (`@peculiar/x509` with the KMS signer), and `poll` returns the stored result.
+- The SCEP device test helper uses its `ScepClient` and low-level builders rather than our own encoder.
+- Gaps in it are fixed upstream in `ts-scep`, not worked around here: today it has no RSA-OAEP key transport, it targets Node.js and is not yet proven under Bun, and it is not published to npm.
 
 **Issuance flow per request.**
 1. Decrypt the envelope with the RA key and verify its signer.
@@ -143,7 +147,7 @@ Device Certificates do not appear in the Managed Certificate inventory.
 - **What a good test does.** It acts as a device, Intune and a relying party would, through the public SCEP and CRL routes and the platform's API. It checks the SCEP responses, the certificates, the CRL, Intune's recorded calls and Audit Events, never internal tables.
 - **The seam.** The existing Seam A harness, with the local KMS. The outside world is replaced by:
   - **An Intune double** (`intune-double.ts`, prior art `oidc-idp-double.ts` and `saml-idp-double.ts`). It records validation requests and success/failure notifications, can be told to refuse, to fail transiently or to be unreachable, and can queue a revocation for a device.
-  - **A SCEP device helper.** It builds real `GetCACaps`, `GetCACert`, and `PKCSReq` messages with enveloped and signed data, with both PKCS#1 v1.5 and OAEP key transport, and parses CertRep.
+  - **A SCEP device helper.** Built on `ts-scep`'s client and builders, it sends real `GetCACaps`, `GetCACert`, and `PKCSReq` messages with enveloped and signed data, with both PKCS#1 v1.5 and OAEP key transport, and parses CertRep.
 - **Interoperability.** One test runs a real third-party SCEP client, `micromdm/scep`'s client, in a container next to Pebble and BIND in `docker-compose.yml`, against the app, and checks it gets a certificate.
 - **Scenarios:**
   - happy-path enrollment, checking the profile's EKU, key usage and validity (clipped), subject and SAN from the CSR, the chain to the root, and the CDP;
@@ -184,4 +188,5 @@ Device Certificates do not appear in the Managed Certificate inventory.
 - Sources for the Intune and KMS facts this spec relies on:
   - [Use APIs to add third-party CAs for SCEP to Intune](https://learn.microsoft.com/en-us/mem/intune/protect/scep-libraries-apis)
   - [Kandji SCEP Profile](https://support.kandji.io/scep): static challenge only
+  - [`ts-scep`](https://github.com/northlanddynamics/ts-scep): our RFC 8894 SDK (client, server and CMS/X.509 building blocks), tested against OpenSSL, sscep and `micromdm/scep`
   - [AWS KMS key spec reference](https://docs.aws.amazon.com/kms/latest/developerguide/symm-asymm-choose-key-spec.html): RSA decryption is OAEP-only
