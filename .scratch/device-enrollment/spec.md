@@ -102,10 +102,11 @@ Behaviour:
 - **Over TLS:** Android requires HTTPS for SCEP.
 
 The SCEP protocol work uses our own SDK, [`northlanddynamics/ts-scep`](https://github.com/northlanddynamics/ts-scep), rather than hand-rolled ASN.1 or CMS:
-- Its `ScepServer` does the protocol: decoding the pkiMessage, verifying the signer, decrypting the envelope with the RA key, checking the CSR's signature, matching nonces and transaction IDs, and building the signed CertRep. It is served from Hono through `fetchHandler` (or `handle`), with one server per Enrollment Profile, configured with the RA certificate and key and the Issuing CA certificate and chain only. The CA's private key stays in the KMS and is never passed to it.
+- Its `ScepServer` does the protocol: decoding the pkiMessage, verifying the signer, decrypting the envelope with the RA key, checking the CSR's signature, matching nonces and transaction IDs, and building the signed CertRep. It accepts PKCS#1 v1.5 and RSA-OAEP key transport and answers in the request's scheme (`requireOaep` stays off). It is served from Hono through `fetchHandler`, mounted before any middleware that reads the body (or `handleFetch` with the bytes when one has), with `maxBodyBytes` set, and one server per Enrollment Profile, configured with the RA certificate and key and the Issuing CA certificate and chain only. The CA's private key stays in the KMS and is never passed to it.
 - Its `ScepHandler` is where the platform's issuance flow below runs: `enroll` runs the profile checks and the validator, then issues through the CA module (`@peculiar/x509` with the KMS signer), and `poll` returns the stored result.
 - The SCEP device test helper uses its `ScepClient` and low-level builders rather than our own encoder.
-- Gaps in it are fixed upstream in `ts-scep`, not worked around here: today it has no RSA-OAEP key transport, it targets Node.js and is not yet proven under Bun, and it is not published to npm.
+- It supports Bun (1.4 or later, tested in its CI) and Hono. It is not yet published to npm, and the platform depends on the published package, which ships compiled JavaScript. Importing its TypeScript sources instead (a git dependency) would need legacy decorators in our tsconfig.
+- Gaps in it are fixed upstream in `ts-scep`, not worked around here.
 
 **Issuance flow per request.**
 1. Decrypt the envelope with the RA key and verify its signer.
@@ -188,5 +189,5 @@ Device Certificates do not appear in the Managed Certificate inventory.
 - Sources for the Intune and KMS facts this spec relies on:
   - [Use APIs to add third-party CAs for SCEP to Intune](https://learn.microsoft.com/en-us/mem/intune/protect/scep-libraries-apis)
   - [Kandji SCEP Profile](https://support.kandji.io/scep): static challenge only
-  - [`ts-scep`](https://github.com/northlanddynamics/ts-scep): our RFC 8894 SDK (client, server and CMS/X.509 building blocks), tested against OpenSSL, sscep and `micromdm/scep`
+  - [`ts-scep`](https://github.com/northlanddynamics/ts-scep): our RFC 8894 SDK (client, server and CMS/X.509 building blocks, PKCS#1 v1.5 and RSA-OAEP key transport, Node.js and Bun), tested against OpenSSL, sscep and `micromdm/scep`
   - [AWS KMS key spec reference](https://docs.aws.amazon.com/kms/latest/developerguide/symm-asymm-choose-key-spec.html): RSA decryption is OAEP-only
