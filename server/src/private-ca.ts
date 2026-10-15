@@ -13,6 +13,7 @@ import type { Db, Tx } from "./db/client";
 import { privateCa } from "./db/schema";
 import { HttpError, OrgParam, errors, isUniqueViolation, json } from "./http";
 import { IssuanceFailure } from "./issuance-failure";
+import type { Issuer } from "./issuer";
 import type { Kms } from "./kms";
 import { constraintNamesOf, namesOutside, normalizePermittedNames, samePermittedNames, type PermittedNames } from "./permitted-names";
 import { PRIVATE_CA_KINDS, PRIVATE_CA_STATUSES } from "./private-ca-kinds";
@@ -91,6 +92,13 @@ export const issuingRefusal = (ca: PrivateCaRow) => (ca.status === "active" && c
 export function namesRefusal(ca: PrivateCaRow, names: string[]) {
   const outside = namesOutside(permittedNamesOf(ca), names);
   return outside.length === 0 ? undefined : `${outside.join(", ")} ${outside.length === 1 ? "is" : "are"} outside the permitted names of the Private CA ${ca.name}`;
+}
+
+/** Why the issuer may not issue for the names (normalised): none for an ACME issuer, which checks control of them instead. */
+export async function issuerNamesRefusal(db: Db | Tx, organizationId: string, issuer: Issuer, names: string[]) {
+  if (issuer.kind !== "private_ca") return undefined;
+  const ca = await findPrivateCa(db, organizationId, issuer.privateCaId);
+  return ca ? namesRefusal(ca, names) : "the Organization has no such Private CA";
 }
 
 /** The chain of the Private CA, PEM: its Issuing CA, then the root when the platform has it. */

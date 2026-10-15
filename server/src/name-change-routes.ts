@@ -14,7 +14,7 @@ import { checkNamesAndCsr, csrField, namesField } from "./names-and-csr";
 import { applyNames, endPendingNameChange, lockManagedCertificate, pendingNameChanges, refusalToChangeNames } from "./name-change";
 import { issuerOf } from "./issuer";
 import { roleCan } from "./permissions";
-import { findPrivateCa, namesRefusal } from "./private-ca";
+import { issuerNamesRefusal } from "./private-ca";
 import type { Actor, UnitOfWork } from "./unit-of-work";
 
 export function registerNameChangeRoutes(ctx: {
@@ -74,12 +74,8 @@ export function registerNameChangeRoutes(ctx: {
         if (sameNames(names, mc.names)) {
           throw new HttpError(422, "the Managed Certificate already has the same names; to replace only its CSR, upload a new one");
         }
-        const issuer = issuerOf(mc);
-        if (issuer.kind === "private_ca") {
-          const ca = await findPrivateCa(tx, orgId, issuer.privateCaId);
-          const outside = ca && namesRefusal(ca, names);
-          if (outside) throw new HttpError(422, outside);
-        }
+        const outside = await issuerNamesRefusal(tx, orgId, issuerOf(mc), names);
+        if (outside) throw new HttpError(422, outside);
         const detail = { from: mc.names, to: names, csrFingerprint: csr.fingerprint };
         if (needsApproval) {
           await tx.insert(nameChange).values({
