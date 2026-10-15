@@ -1,7 +1,7 @@
 import { useQuery } from "@tanstack/react-query";
 import { useParams } from "@tanstack/react-router";
 import { createColumnHelper, tableFeatures, useTable } from "@tanstack/react-table";
-import { DownloadIcon, PencilIcon, PlusIcon } from "lucide-react";
+import { CalendarClockIcon, DownloadIcon, PencilIcon, PlusIcon } from "lucide-react";
 import { useState, type FormEvent } from "react";
 import { DataTable } from "@/components/data-table/data-table";
 import { Badge } from "@/components/ui/badge";
@@ -10,11 +10,11 @@ import { Dialog, DialogClose, DialogContent, DialogDescription, DialogFooter, Di
 import { Input } from "@/components/ui/input";
 import { Label } from "@/components/ui/label";
 import { Textarea } from "@/components/ui/textarea";
-import { api, can, type PermittedNames, type PrivateCa } from "@/lib/api";
+import { api, can, type PermittedNames, type PrivateCa, type PrivateCaValidity } from "@/lib/api";
 import { KEY_ALGORITHMS, KEY_ALGORITHM_LABELS, type KeyAlgorithm } from "@/lib/csr-generator";
 import { splitNames } from "@/lib/csr-names";
 import { keyAlgorithmLabel } from "@/lib/managed-certificate";
-import { permittedNamesLabel } from "@/lib/private-ca";
+import { MAX_VALIDITY_DAYS, isValidityDays, permittedNamesLabel, validityLabel } from "@/lib/private-ca";
 import { useAction } from "@/lib/use-action";
 
 const ROUTE = "/app/organizations/$orgId/private-cas";
@@ -29,6 +29,7 @@ const columns = columnHelper.columns([
   columnHelper.accessor("subject", { header: "Issuing CA", cell: ({ cell }) => <span className="break-all font-mono text-xs">{cell.getValue()}</span> }),
   columnHelper.accessor("keyAlgorithm", { header: "Key", cell: ({ cell }) => keyAlgorithmLabel(cell.getValue()) }),
   columnHelper.accessor("permittedNames", { header: "Permitted names", cell: ({ cell }) => <span className="break-all text-xs">{permittedNamesLabel(cell.getValue())}</span> }),
+  columnHelper.accessor("validity", { header: "Validity", cell: ({ cell }) => <span className="text-xs">{validityLabel(cell.getValue())}</span> }),
   columnHelper.accessor("status", {
     header: "Status",
     cell: ({ cell }) => <Badge variant={cell.getValue() === "active" ? "default" : "secondary"}>{STATUS_LABEL[cell.getValue()]}</Badge>,
@@ -76,7 +77,12 @@ function Actions({ ca }: { ca: PrivateCa }) {
   const org = useQuery({ queryKey: ["me"], queryFn: api.me, select: (me) => me.organizations.find((o) => o.id === orgId) }).data;
   return (
     <div className="flex justify-end gap-2">
-      {org && can(org, "privateCa", "update") && <EditPermittedNamesDialog orgId={orgId} ca={ca} />}
+      {org && can(org, "privateCa", "update") && (
+        <>
+          <EditPermittedNamesDialog orgId={orgId} ca={ca} />
+          <EditValidityDialog orgId={orgId} ca={ca} />
+        </>
+      )}
       {ca.notAfter && (
         <Button variant="outline" size="sm" asChild>
           <a href={api.privateCaChainUrl(orgId, ca.id)} download aria-label={`Download the chain of ${ca.name}`}>
@@ -109,6 +115,91 @@ function PermittedNamesFields({ id, value, onChange }: { id: string; value: Rule
         <p className="text-xs text-muted-foreground">Each permits that name alone; a wildcard such as *.svc.example.com permits that wildcard alone. No IP addresses.</p>
       </div>
     </>
+  );
+}
+
+/** Validity limits as they are typed: days, as text. */
+type ValidityText = { maximumDays: string; defaultDays: string };
+const validityTextOf = (v: PrivateCaValidity): ValidityText => ({ maximumDays: String(v.maximumDays), defaultDays: String(v.defaultDays) });
+const validityOfText = (text: ValidityText): PrivateCaValidity => ({ maximumDays: Number(text.maximumDays), defaultDays: Number(text.defaultDays) });
+/** Why the limits typed cannot be saved; none when they can. */
+function validityProblem(text: ValidityText) {
+  if (!isValidityDays(text.maximumDays) || !isValidityDays(text.defaultDays)) return `Each is a whole number of days from 1 to ${MAX_VALIDITY_DAYS}.`;
+  if (Number(text.defaultDays) > Number(text.maximumDays)) return "The default cannot be above the maximum.";
+  return undefined;
+}
+
+/** The fields for a Private CA's validity limits. */
+function ValidityFields({ id, value, onChange }: { id: string; value: ValidityText; onChange: (value: ValidityText) => void }) {
+  const problem = validityProblem(value);
+  return (
+    <div className="flex flex-col gap-2">
+      <div className="flex gap-4">
+        <div className="flex flex-col gap-2">
+          <Label htmlFor={`${id}-default`}>Default validity (days)</Label>
+          <Input id={`${id}-default`} type="number" min={1} max={MAX_VALIDITY_DAYS} className="w-32" value={value.defaultDays} onChange={(e) => onChange({ ...value, defaultDays: e.target.value })} />
+        </div>
+        <div className="flex flex-col gap-2">
+          <Label htmlFor={`${id}-maximum`}>Maximum validity (days)</Label>
+          <Input id={`${id}-maximum`} type="number" min={1} max={MAX_VALIDITY_DAYS} className="w-32" value={value.maximumDays} onChange={(e) => onChange({ ...value, maximumDays: e.target.value })} />
+        </div>
+      </div>
+      <p className="text-xs text-muted-foreground">
+        A Managed Certificate may choose a validity up to the maximum, and otherwise gets the default. No Certificate outlives the Issuing CA.
+      </p>
+      {problem && <p className="text-xs text-destructive">{problem}</p>}
+    </div>
+  );
+}
+
+function EditValidityDialog({ orgId, ca }: { orgId: string; ca: PrivateCa }) {
+  const [open, setOpen] = useState(false);
+  return (
+    <Dialog open={open} onOpenChange={setOpen}>
+      <DialogTrigger asChild>
+        <Button variant="outline" size="sm" aria-label={`Change the validity of ${ca.name}`}>
+          <CalendarClockIcon />
+          Validity
+        </Button>
+      </DialogTrigger>
+      <DialogContent className="sm:max-w-lg">
+        <DialogHeader>
+          <DialogTitle>Validity of {ca.name}</DialogTitle>
+          <DialogDescription>
+            How long the Certificates it issues from now on are valid for; Certificates already issued are unaffected. A Managed Certificate that chose more than a lowered maximum
+            gets the maximum.
+          </DialogDescription>
+        </DialogHeader>
+        {open && <EditValidityForm orgId={orgId} ca={ca} onDone={() => setOpen(false)} />}
+      </DialogContent>
+    </Dialog>
+  );
+}
+
+function EditValidityForm({ orgId, ca, onDone }: { orgId: string; ca: PrivateCa; onDone: () => void }) {
+  const [validity, setValidity] = useState<ValidityText>(validityTextOf(ca.validity));
+  const save = useAction(() => api.updatePrivateCa(orgId, ca.id, { validity: validityOfText(validity) }), ["private-cas"], onDone);
+  return (
+    <form
+      className="flex flex-col gap-4"
+      onSubmit={(e: FormEvent) => {
+        e.preventDefault();
+        save.mutate(undefined);
+      }}
+    >
+      <ValidityFields id={`private-ca-${ca.id}-validity`} value={validity} onChange={setValidity} />
+      {save.error && <p className="text-sm text-destructive">{save.error.message}</p>}
+      <DialogFooter>
+        <DialogClose asChild>
+          <Button type="button" variant="outline">
+            Cancel
+          </Button>
+        </DialogClose>
+        <Button type="submit" disabled={validityProblem(validity) !== undefined || save.isPending}>
+          Save
+        </Button>
+      </DialogFooter>
+    </form>
   );
 }
 
@@ -191,12 +282,21 @@ function CreatePrivateCaForm({ orgId, onDone }: { orgId: string; onDone: () => v
   const [keyAlgorithm, setKeyAlgorithm] = useState<KeyAlgorithm>("ecdsa-p256");
   const [lifetimeYears, setLifetimeYears] = useState("10");
   const [rules, setRules] = useState<RulesText>({ exact: "", zones: "" });
+  const [validity, setValidity] = useState<ValidityText>({ maximumDays: "397", defaultDays: "397" });
   const create = useAction(
-    () => api.createPrivateCa(orgId, { name: name.trim(), subject: subject.trim(), keyAlgorithm, lifetimeYears: Number(lifetimeYears), permittedNames: rulesOf(rules) }),
+    () =>
+      api.createPrivateCa(orgId, {
+        name: name.trim(),
+        subject: subject.trim(),
+        keyAlgorithm,
+        lifetimeYears: Number(lifetimeYears),
+        permittedNames: rulesOf(rules),
+        validity: validityOfText(validity),
+      }),
     ["private-cas"],
     onDone,
   );
-  const ready = name.trim() !== "" && subject.trim() !== "" && hasRules(rules) && Number.isInteger(Number(lifetimeYears)) && Number(lifetimeYears) >= 1 && Number(lifetimeYears) <= 30;
+  const ready = name.trim() !== "" && subject.trim() !== "" && hasRules(rules) && validityProblem(validity) === undefined && Number.isInteger(Number(lifetimeYears)) && Number(lifetimeYears) >= 1 && Number(lifetimeYears) <= 30;
   return (
     <form
       className="flex flex-col gap-4"
@@ -239,6 +339,7 @@ function CreatePrivateCaForm({ orgId, onDone }: { orgId: string; onDone: () => v
         The Issuing CA carries them as name constraints, which relying parties enforce. You can change the names later, but not those constraints without a new Issuing CA, so
         prefer broad zones.
       </p>
+      <ValidityFields id="private-ca-new-validity" value={validity} onChange={setValidity} />
       {create.error && <p className="text-sm text-destructive">{create.error.message}</p>}
       <DialogFooter>
         <DialogClose asChild>

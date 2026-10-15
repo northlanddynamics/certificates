@@ -106,7 +106,11 @@ export const Renewal = z.object({
 const Issuer = z
   .discriminatedUnion("kind", [
     z.object({ kind: z.literal("acme"), environment: z.enum(ACME_ENVIRONMENTS) }),
-    z.object({ kind: z.literal("private_ca"), privateCa: z.object({ id: z.string(), name: z.string() }) }),
+    z.object({
+      kind: z.literal("private_ca"),
+      privateCa: z.object({ id: z.string(), name: z.string() }),
+      validityDays: z.number().nullable().openapi({ description: "How many days its Certificates are valid for (never past the Private CA's maximum or its Issuing CA's end); none for the Private CA's default." }),
+    }),
   ])
   .openapi({ description: "Where its Certificates come from: `acme`, through the Organization's ACME account in `environment`; `private_ca`, from one of the Organization's Private CAs, with no DCV." });
 
@@ -148,7 +152,7 @@ type ManagedCertificateRow = typeof managedCertificate.$inferSelect;
 
 /** The issuer as the API shows it: a Private CA by its id and name, so that whoever decides on it sees which CA it is. */
 const issuerShown = (issuer: IssuerOfRow, privateCaNames: Map<string, string>): z.infer<typeof Issuer> =>
-  issuer.kind === "acme" ? issuer : { kind: "private_ca", privateCa: { id: issuer.privateCaId, name: privateCaNames.get(issuer.privateCaId) ?? "" } };
+  issuer.kind === "acme" ? issuer : { kind: "private_ca", privateCa: { id: issuer.privateCaId, name: privateCaNames.get(issuer.privateCaId) ?? "" }, validityDays: issuer.validityDays };
 export const toIssuance = (row: typeof issuance.$inferSelect) => ({
   id: row.id,
   kind: row.kind,

@@ -238,7 +238,10 @@ export interface CertificateFacts extends Certificate {
   chain: ChainCertificate[];
   acmeAccount: { id: string; environment: AcmeAccount["environment"] } | null;
 }
-export type Issuer = { kind: "acme"; environment: "staging" | "production" } | { kind: "private_ca"; privateCa: { id: string; name: string } };
+export type Issuer =
+  | { kind: "acme"; environment: "staging" | "production" }
+  /** `validityDays`: how many days its Certificates are valid for; none for the Private CA's default. */
+  | { kind: "private_ca"; privateCa: { id: string; name: string }; validityDays: number | null };
 /** An Organization's own CA, whose keys are in the KMS. */
 export interface PrivateCa {
   id: string;
@@ -252,7 +255,13 @@ export interface PrivateCa {
   /** When its Issuing CA ends. */
   notAfter: string | null;
   permittedNames: PermittedNames;
+  validity: PrivateCaValidity;
   createdAt: string;
+}
+/** How long a Private CA's TLS Certificates are valid for, in days: at most the maximum, and the default when a Managed Certificate chooses none. */
+export interface PrivateCaValidity {
+  maximumDays: number;
+  defaultDays: number;
 }
 /** A Private CA's permitted name rules: names it may issue for exactly, and zones, each the name and everything beneath it. */
 export interface PermittedNames {
@@ -265,6 +274,7 @@ export interface NewPrivateCa {
   keyAlgorithm: string;
   lifetimeYears: number;
   permittedNames: PermittedNames;
+  validity: PrivateCaValidity;
 }
 /** An Organization's account with a CA; its key is never returned. */
 export interface AcmeAccount {
@@ -380,7 +390,7 @@ export interface NewManagedCertificate {
   names: string[];
   keyAlgorithm: string;
   csr: string;
-  issuer: { kind: "acme"; environment: "staging" | "production" } | { kind: "private_ca"; privateCaId: string };
+  issuer: { kind: "acme"; environment: "staging" | "production" } | { kind: "private_ca"; privateCaId: string; validityDays?: number };
   owners?: OwnerRef[];
 }
 export interface NotificationChannel {
@@ -607,7 +617,7 @@ export const api = {
   runDeploymentAgain: (orgId: string, id: string) => call<Deployment>(`/api/organizations/${orgId}/deployments/${id}/runs`, { method: "POST", body: {} }),
   privateCas: (orgId: string) => call<{ items: PrivateCa[] }>(`/api/organizations/${orgId}/private-cas`),
   createPrivateCa: (orgId: string, body: NewPrivateCa) => call<PrivateCa>(`/api/organizations/${orgId}/private-cas`, { body }),
-  updatePrivateCa: (orgId: string, id: string, body: { permittedNames: PermittedNames }) => call<PrivateCa>(`/api/organizations/${orgId}/private-cas/${id}`, { method: "PATCH", body }),
+  updatePrivateCa: (orgId: string, id: string, body: { permittedNames?: PermittedNames; validity?: PrivateCaValidity }) => call<PrivateCa>(`/api/organizations/${orgId}/private-cas/${id}`, { method: "PATCH", body }),
   /** Where a Private CA's chain (its Issuing CA, then its root) downloads from. */
   privateCaChainUrl: (orgId: string, id: string) => `/api/organizations/${orgId}/private-cas/${id}/chain`,
   acmeAccounts: (orgId: string) => call<{ items: AcmeAccount[] }>(`/api/organizations/${orgId}/acme-accounts`),

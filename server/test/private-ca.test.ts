@@ -481,3 +481,139 @@ describe("names outside a Private CA's permitted name rules", () => {
     expect((await ended(created.body.id)).issuance.status).toBe("succeeded");
   });
 });
+
+describe("a Private CA's validity limits", () => {
+  test("are 397 days for both its maximum and its default unless set, and shown to everyone in the Organization", async () => {
+    const ca = await createCa();
+
+    expect(ca).toMatchObject({ validity: { maximumDays: 397, defaultDays: 397 } });
+    const member = await join("member@acme.test", "member");
+    expect((await h.api(`${cas()}/${ca.id}`, { cookie: member })).body.validity).toEqual({ maximumDays: 397, defaultDays: 397 });
+  });
+
+  test("are set when it is created, as an Audit Event, and a default above the maximum is refused", async () => {
+    const ca = await createCa({ ...NEW_CA, validity: { maximumDays: 825, defaultDays: 90 } });
+
+    expect(ca).toMatchObject({ validity: { maximumDays: 825, defaultDays: 90 } });
+    expect((await auditOf()).find((e) => e.action === "private_ca.created")!.detail.validity).toEqual({ maximumDays: 825, defaultDays: 90 });
+
+    const refused = await h.api(cas(), { cookie: org.cookie, body: { ...NEW_CA, name: "Too long", validity: { maximumDays: 30, defaultDays: 90 } } });
+    expect(refused.status).toBe(422);
+    expect((await h.api(cas(), { cookie: org.cookie })).body.items).toHaveLength(1);
+  });
+
+  test("an Organization Administrator changes them later, each field changed in the Audit Event, and a default above the maximum is refused", async () => {
+    const ca = await createCa();
+    const patch = (body: unknown, cookie = org.cookie) => h.api(`${cas()}/${ca.id}`, { cookie, method: "PATCH", body });
+
+    const res = await patch({ validity: { maximumDays: 825, defaultDays: 397 } });
+    expect(res.status).toBe(200);
+    expect(res.body.validity).toEqual({ maximumDays: 825, defaultDays: 397 });
+    expect((await auditOf()).filter((e) => e.action === "private_ca.updated").map((e) => e.detail)).toEqual([{ name: "Internal TLS", validity: { maximumDays: { from: 397, to: 825 } } }]);
+
+    expect((await patch({ validity: { maximumDays: 30, defaultDays: 90 } })).status).toBe(422);
+    expect((await patch({ validity: { maximumDays: 825, defaultDays: 397 } })).status).toBe(200);
+    expect((await patch({ validity: { maximumDays: 0, defaultDays: 0 } })).status).toBe(400);
+    const member = await join("member@acme.test", "member");
+    expect((await patch({ validity: { maximumDays: 90, defaultDays: 90 } }, member)).status).toBe(403);
+
+    expect((await h.api(`${cas()}/${ca.id}`, { cookie: org.cookie })).body.validity).toEqual({ maximumDays: 825, defaultDays: 397 });
+    expect((await auditOf()).filter((e) => e.action === "private_ca.updated")).toHaveLength(1);
+  });
+
+  test("change with the permitted name rules in one Audit Event", async () => {
+    const ca = await createCa();
+
+    const res = await h.api(`${cas()}/${ca.id}`, { cookie: org.cookie, method: "PATCH", body: { permittedNames: { exact: [], zones: ["lab.acme"] }, validity: { maximumDays: 397, defaultDays: 30 } } });
+
+    expect(res.status).toBe(200);
+    expect((await auditOf()).filter((e) => e.action === "private_ca.updated").map((e) => e.detail)).toEqual([
+      { name: "Internal TLS", permittedNames: { from: NEW_CA.permittedNames, to: { exact: [], zones: ["lab.acme"] } }, validity: { defaultDays: { from: 397, to: 30 } } },
+    ]);
+  });
+});
+
+describe("the validity of a Certificate from a Private CA", () => {
+  const JAN_1 = Date.parse("2026-01-01T00:00:00Z");
+  const days = (n: number) => new Date(JAN_1 + n * 86_400_000).toISOString();
+  const leafOf = async (body: Record<string, unknown>) => {
+    const created = await h.api(mcs(), { cookie: org.cookie, body });
+    expect(created.status).toBe(201);
+    const mc = await ended(created.body.id);
+    expect(mc.issuance.status).toBe("succeeded");
+    return { mc, leaf: (await downloaded(mc.id, "leaf"))[0]! };
+  };
+  const onCa = (privateCaId: string, validityDays?: number) => ({ issuer: { kind: "private_ca", privateCaId, ...(validityDays && { validityDays }) } });
+
+  test("is the Private CA's default when the Managed Certificate chooses none", async () => {
+    const ca = await createCa({ ...NEW_CA, validity: { maximumDays: 397, defaultDays: 90 } });
+
+    const { mc, leaf } = await leafOf({ ...(await request(["app.internal.acme"])), ...onCa(ca.id) });
+
+    expect(mc.issuer).toMatchObject({ kind: "private_ca", validityDays: null });
+    expect(leaf.notBefore.toISOString()).toBe(days(0));
+    expect(leaf.notAfter.toISOString()).toBe(days(90));
+  });
+
+  test("is what the Managed Certificate chooses, at or below the maximum, which is shown and audited", async () => {
+    const ca = await createCa();
+
+    const { mc, leaf } = await leafOf({ ...(await request(["app.internal.acme"])), ...onCa(ca.id, 7) });
+
+    expect(mc.issuer).toMatchObject({ kind: "private_ca", privateCa: { id: ca.id }, validityDays: 7 });
+    expect(leaf.notAfter.toISOString()).toBe(days(7));
+    expect((await auditOf()).find((e) => e.action === "managed_certificate.created")!.detail).toMatchObject({ validityDays: 7 });
+    expect((await leafOf({ ...(await request(["max.internal.acme"])), ...onCa(ca.id, 397) })).leaf.notAfter.toISOString()).toBe(days(397));
+  });
+
+  test("above the Private CA's maximum is refused when a Managed Certificate is created or proposed, and nothing is created", async () => {
+    const ca = await createCa({ ...NEW_CA, validity: { maximumDays: 90, defaultDays: 30 } });
+    const member = await join("member@acme.test", "member");
+
+    for (const cookie of [org.cookie, member]) {
+      const res = await h.api(mcs(), { cookie, body: { ...(await request(["app.internal.acme"])), ...onCa(ca.id, 91) } });
+      expect(res.status).toBe(422);
+      expect(res.body.error).toContain("90 days");
+    }
+    expect((await h.api(mcs(), { cookie: org.cookie })).body.items).toEqual([]);
+  });
+
+  test("is the maximum when the maximum was lowered below what the Managed Certificate chose", async () => {
+    const ca = await createCa();
+    const member = await join("member@acme.test", "member");
+    const proposed = await h.api(mcs(), { cookie: member, body: { ...(await request(["app.internal.acme"])), ...onCa(ca.id, 200) } });
+    expect(proposed.status).toBe(201);
+    expect((await h.api(`${cas()}/${ca.id}`, { cookie: org.cookie, method: "PATCH", body: { validity: { maximumDays: 100, defaultDays: 30 } } })).status).toBe(200);
+
+    expect((await h.api(`${mcs()}/${proposed.body.id}/approve`, { cookie: org.cookie, body: {} })).status).toBe(200);
+
+    const mc = await ended(proposed.body.id);
+    expect(mc.issuance.status).toBe("succeeded");
+    expect((await downloaded(mc.id, "leaf"))[0]!.notAfter.toISOString()).toBe(days(100));
+  });
+
+  test("never outlives the Issuing CA: it ends when the Issuing CA ends", async () => {
+    const ca = await createCa({ ...NEW_CA, lifetimeYears: 1, validity: { maximumDays: 825, defaultDays: 825 } });
+
+    const { leaf } = await leafOf({ ...(await request(["app.internal.acme"])), ...onCa(ca.id, 500) });
+
+    expect(leaf.notAfter.toISOString()).toBe("2027-01-01T00:00:00.000Z");
+    expect(leaf.notAfter.toISOString()).toBe(ca.notAfter);
+  });
+
+  test("is renewed under the Renewal Policy as any Certificate is: its days before the end, but not in the first tenth of its life", async () => {
+    const ca = await createCa();
+    const { mc } = await leafOf({ ...(await request(["app.internal.acme"])), ...onCa(ca.id, 10) });
+    expect(mc.renewal).toMatchObject({ policy: { mode: "automatic", daysBeforeExpiry: 30 }, dueAt: days(1), dueBecause: "policy" });
+
+    h.setNow(new Date(JAN_1 + 86_400_000 - 60_000));
+    expect(await h.runRenewalScheduler()).toBe(0);
+    h.setNow(new Date(days(1)));
+    expect(await h.runRenewalScheduler()).toBe(1);
+
+    const renewed = await ended(mc.id);
+    expect(renewed.issuance).toMatchObject({ kind: "renewal", status: "succeeded" });
+    expect(renewed.currentCertificate).toMatchObject({ notBefore: days(1), notAfter: days(11) });
+  });
+});
+

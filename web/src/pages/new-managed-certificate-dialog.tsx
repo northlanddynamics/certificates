@@ -8,6 +8,7 @@ import { Button } from "@/components/ui/button";
 import { Checkbox } from "@/components/ui/checkbox";
 import { Dialog, DialogContent, DialogDescription, DialogTitle, DialogTrigger } from "@/components/ui/dialog";
 import { Field, FieldContent, FieldDescription, FieldError, FieldGroup, FieldLabel, FieldLegend, FieldSet, FieldTitle } from "@/components/ui/field";
+import { Input } from "@/components/ui/input";
 import { RadioGroup, RadioGroupItem } from "@/components/ui/radio-group";
 import { Select, SelectContent, SelectItem, SelectTrigger, SelectValue } from "@/components/ui/select";
 import { Sidebar, SidebarContent, SidebarGroup, SidebarGroupContent, SidebarMenu, SidebarMenuButton, SidebarMenuItem, SidebarProvider } from "@/components/ui/sidebar";
@@ -16,7 +17,7 @@ import { api, can, ownerFromKey, ownerKey, type ManagedCertificate, type Me, typ
 import { issuerLabel } from "@/lib/managed-certificate";
 import { KEY_ALGORITHMS, KEY_ALGORITHM_LABELS, type KeyAlgorithm } from "@/lib/csr-generator";
 import { nameProblems, splitNames } from "@/lib/csr-names";
-import { permittedNamesLabel } from "@/lib/private-ca";
+import { daysLabel, isValidityDays, permittedNamesLabel, validityLabel } from "@/lib/private-ca";
 
 type Org = Me["organizations"][number];
 type Environment = "staging" | "production";
@@ -80,6 +81,8 @@ export function NewManagedCertificateDialog({ org, onCreated }: { org: Org; onCr
 function NewManagedCertificateForm({ org, direct, onCreated }: { org: Org; direct: boolean; onCreated: (created: ManagedCertificate) => void }) {
   const [step, setStep] = useState<StepId>("authority");
   const [issuer, setIssuer] = useState<IssuerChoice>({ kind: "acme", environment: "staging" });
+  // The validity chosen for a Private CA, in days; empty for its default.
+  const [validityDays, setValidityDays] = useState("");
   const [names, setNames] = useState("");
   const [keyAlgorithm, setKeyAlgorithm] = useState<KeyAlgorithm>("ecdsa-p256");
   const [csr, setCsr] = useState("");
@@ -99,7 +102,7 @@ function NewManagedCertificateForm({ org, direct, onCreated }: { org: Org; direc
         names: splitNames(names),
         keyAlgorithm,
         csr,
-        issuer,
+        issuer: issuer.kind === "private_ca" && chosenValidity !== null ? { ...issuer, validityDays: chosenValidity } : issuer,
         owners: owners.map(ownerFromKey),
       }),
     onSuccess: onCreated,
@@ -111,8 +114,12 @@ function NewManagedCertificateForm({ org, direct, onCreated }: { org: Org; direc
 
   const parsedNames = splitNames(names);
   const problems = nameProblems(parsedNames);
-  // Whether each step holds what it needs. The Authority, Ownership and Review steps always do: one CA is always chosen, Owners are optional, and Review only shows what was entered.
-  const complete: Record<StepId, boolean> = { authority: true, names: problems.length === 0, subject: csr.trim() !== "", ownership: true, review: true };
+  // Whether each step holds what it needs. The Authority step does unless its validity is out of range (one CA is always chosen); the Ownership and Review steps always do: Owners are optional, and Review only shows what was entered.
+  const chosenCa = issuer.kind === "private_ca" ? activeCas.find((ca) => ca.id === issuer.privateCaId) : undefined;
+  // The validity chosen, in days; none for the Private CA's default.
+  const chosenValidity = validityDays.trim() === "" ? null : Number(validityDays);
+  const validityOk = !chosenCa || chosenValidity === null || isValidityDays(validityDays, chosenCa.validity.maximumDays);
+  const complete: Record<StepId, boolean> = { authority: validityOk, names: problems.length === 0, subject: csr.trim() !== "", ownership: true, review: true };
   const index = STEPS.findIndex((s) => s.id === step);
   const last = index === STEPS.length - 1;
   // A step may be opened once every step before it is complete.
@@ -121,10 +128,9 @@ function NewManagedCertificateForm({ org, direct, onCreated }: { org: Org; direc
     const target = STEPS[i];
     if (target && reachable(i)) setStep(target.id);
   };
-  const chosenCa = issuer.kind === "private_ca" ? activeCas.find((ca) => ca.id === issuer.privateCaId) : undefined;
   const registered = issuer.kind !== "acme" || accounts.data?.items.some((a) => a.environment === issuer.environment);
   const issuerTitle =
-    issuer.kind === "acme" ? ENVIRONMENTS.find((e) => e.value === issuer.environment)?.title : issuerLabel({ kind: "private_ca", privateCa: activeCas.find((ca) => ca.id === issuer.privateCaId) ?? { id: issuer.privateCaId, name: "" } });
+    issuer.kind === "acme" ? ENVIRONMENTS.find((e) => e.value === issuer.environment)?.title : issuerLabel({ kind: "private_ca", privateCa: chosenCa ?? { id: issuer.privateCaId, name: "" }, validityDays: null });
 
   const dropGeneratedCsr = () => {
     if (generated !== null && csr === generated) setCsr("");
@@ -200,17 +206,39 @@ function NewManagedCertificateForm({ org, direct, onCreated }: { org: Org; direc
                   <FieldLabel key={ca.id} htmlFor={`new-mc-ca-${ca.id}`}>
                     <Field orientation="horizontal">
                       <FieldContent>
-                        <FieldTitle>{issuerLabel({ kind: "private_ca", privateCa: ca })}</FieldTitle>
+                        <FieldTitle>{issuerLabel({ kind: "private_ca", privateCa: ca, validityDays: null })}</FieldTitle>
                         <FieldDescription>
                           The Organization's own CA ({ca.subject}). Trusted only where its root is installed; no DCV.
                         </FieldDescription>
                         <FieldDescription>Permitted names: {permittedNamesLabel(ca.permittedNames)}.</FieldDescription>
+                        <FieldDescription>Validity: {validityLabel(ca.validity)}.</FieldDescription>
                       </FieldContent>
                       <RadioGroupItem value={`private_ca:${ca.id}`} id={`new-mc-ca-${ca.id}`} />
                     </Field>
                   </FieldLabel>
                 ))}
               </RadioGroup>
+              {chosenCa && (
+                <Field data-invalid={!validityOk}>
+                  <FieldLabel htmlFor="new-mc-validity">Validity (days)</FieldLabel>
+                  <Input
+                    id="new-mc-validity"
+                    type="number"
+                    min={1}
+                    max={chosenCa.validity.maximumDays}
+                    className="w-32"
+                    value={validityDays}
+                    placeholder={String(chosenCa.validity.defaultDays)}
+                    aria-invalid={!validityOk}
+                    onChange={(e) => setValidityDays(e.target.value)}
+                  />
+                  <FieldDescription>
+                    Leave empty for {chosenCa.name}'s default of {daysLabel(chosenCa.validity.defaultDays)}; at most {daysLabel(chosenCa.validity.maximumDays)}. No Certificate outlives its
+                    Issuing CA, so one issued near its end is shorter.
+                  </FieldDescription>
+                  {!validityOk && <FieldError>Choose a whole number of days from 1 to {chosenCa.validity.maximumDays}.</FieldError>}
+                </Field>
+              )}
               {issuer.kind === "acme" && accounts.data && !registered && (
                 <FieldError>
                   The Organization has no {issuer.environment} ACME account yet, so Issuance would fail. An Organization Administrator can register one under ACME accounts.
@@ -338,6 +366,7 @@ function NewManagedCertificateForm({ org, direct, onCreated }: { org: Org; direc
                 </FieldDescription>
                 <Summary
                   issuer={issuerTitle ?? ""}
+                  validity={chosenCa ? (chosenValidity !== null ? daysLabel(chosenValidity) : `${daysLabel(chosenCa.validity.defaultDays)} (the default)`) : null}
                   names={parsedNames}
                   keyAlgorithm={keyAlgorithm}
                   csr={generated !== null && csr === generated ? "Generated in this browser" : "Provided"}
@@ -367,9 +396,10 @@ function NewManagedCertificateForm({ org, direct, onCreated }: { org: Org; direc
   );
 }
 
-function Summary({ issuer, names, keyAlgorithm, csr, owners }: { issuer: string; names: string[]; keyAlgorithm: KeyAlgorithm; csr: string; owners: string[] }) {
+function Summary({ issuer, validity, names, keyAlgorithm, csr, owners }: { issuer: string; validity: string | null; names: string[]; keyAlgorithm: KeyAlgorithm; csr: string; owners: string[] }) {
   const rows: { label: string; value: ReactNode }[] = [
     { label: "Issued from", value: issuer },
+    ...(validity ? [{ label: "Validity", value: validity }] : []),
     { label: "Domain names", value: <ul className="flex flex-col gap-0.5 font-mono text-xs">{names.map((name) => <li key={name}>{name}</li>)}</ul> },
     { label: "Key algorithm", value: KEY_ALGORITHM_LABELS[keyAlgorithm] },
     { label: "CSR", value: csr },
