@@ -5,7 +5,7 @@ import { OpenAPIHono, createRoute, z } from "@hono/zod-openapi";
 import { and, asc, eq } from "drizzle-orm";
 import { createPrivateKey } from "node:crypto";
 import type { Authorizer } from "./authorization";
-import { ACME_ENVIRONMENTS, CertificateAuthorityError, type CertificateAuthority } from "./certificate-authority";
+import { ACME_ENVIRONMENTS, CertificateAuthorityError, type AcmeCertificateAuthority } from "./certificate-authority";
 import type { Db } from "./db/client";
 import { acmeAccount } from "./db/schema";
 import { HttpError, OrgParam, errors, isUniqueViolation, json } from "./http";
@@ -54,7 +54,7 @@ export function registerAcmeAccounts(ctx: {
   authorize: Authorizer["authorize"];
   unitOfWork: UnitOfWork;
   secrets: Secrets;
-  certificateAuthority: CertificateAuthority;
+  certificateAuthority: AcmeCertificateAuthority;
 }) {
   const { app, db, requireUser, authorize, unitOfWork, secrets, certificateAuthority: ca } = ctx;
 

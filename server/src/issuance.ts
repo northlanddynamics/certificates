@@ -1,19 +1,20 @@
 // Issuance: turns "issue these names for this Managed Certificate with its CSR" into a Certificate. An Issuance is
 // recorded when it is asked for and runs in the background (a CA with DNS propagation can take minutes, longer than a
-// request should wait): it does DCV through the Organization's DNS Provider, has the CA finalize the order with the
-// CSR, and ends by storing the Certificate, or with the cause of its failure. Either end is one audited change.
+// request should wait): it has the Managed Certificate's issuer (issuer.ts) issue for the CSR, doing DCV through the
+// Organization's DNS Providers for an issuer whose CA asks for it, and ends by storing the Certificate, or with the cause
+// of its failure. Either end is one audited change.
 // A Renewal of a Managed Certificate whose key an Agent holds begins by waiting: the Agent is asked for a new key and its
 // CSR (deployments.ts), and the Issuance runs once it is sent, however long the Agent is away.
 import { X509Certificate, createHash } from "node:crypto";
 import { and, desc, eq, inArray, isNull, ne } from "drizzle-orm";
-import { CertificateAuthorityError, type CertificateAuthority } from "./certificate-authority";
+import { CertificateAuthorityError } from "./certificate-authority";
 import { parseCsr } from "./csr";
 import type { Dcv } from "./dcv";
 import type { Db, Tx } from "./db/client";
-import { acmeAccount, certificate, issuance, managedCertificate } from "./db/schema";
+import { certificate, issuance, managedCertificate } from "./db/schema";
 import { sameNames } from "./names";
 import { IssuanceFailure, type IssuanceFailureCode } from "./issuance-failure";
-import type { Secrets } from "./secrets";
+import { certificateIssuerColumns, issuerOf, type Issued, type Issuers } from "./issuer";
 import type { Actor, Change, UnitOfWork } from "./unit-of-work";
 
 /**
@@ -130,9 +131,8 @@ export interface Issuances {
 export interface IssuancesDeps {
   db: Db;
   unitOfWork: UnitOfWork;
-  certificateAuthority: CertificateAuthority;
+  issuers: Issuers;
   dcv: Dcv;
-  secrets: Secrets;
 }
 
 /** What the leaf of the chain the CA served says about itself. */
@@ -164,7 +164,7 @@ function failureOf(err: unknown): Failure {
   return { code: "internal", message: "the platform failed while issuing; see its log" };
 }
 
-export function createIssuances({ db, unitOfWork, certificateAuthority: ca, dcv, secrets }: IssuancesDeps): Issuances {
+export function createIssuances({ db, unitOfWork, issuers, dcv }: IssuancesDeps): Issuances {
   const running = new Set<Promise<void>>();
   const issuedListeners: ((tx: Tx, change: Change, issued: IssuedCertificate) => Promise<void>)[] = [];
   let askForKey: ((tx: Tx, change: Change, waiting: AwaitingKey) => Promise<Refusal | undefined>) | undefined;
@@ -231,10 +231,11 @@ export function createIssuances({ db, unitOfWork, certificateAuthority: ca, dcv,
   async function run(issuanceId: string) {
     const [row] = await db.select().from(issuance).where(eq(issuance.id, issuanceId));
     if (!row || row.status !== "running" || row.awaitingKey) return;
-    const responder = dcv.responderFor(db, row.organizationId);
-    let chainPem: string;
+    // Made only for an issuer whose CA validates control of the names.
+    let responder: ReturnType<Dcv["responderFor"]> | undefined;
+    const leftovers = () => responder?.leftovers() ?? [];
+    let issued: Issued;
     let mc: typeof managedCertificate.$inferSelect;
-    let accountId: string;
     try {
       const [found] = await db
         .select()
@@ -242,14 +243,6 @@ export function createIssuances({ db, unitOfWork, certificateAuthority: ca, dcv,
         .where(and(eq(managedCertificate.id, row.managedCertificateId), eq(managedCertificate.organizationId, row.organizationId)));
       if (!found) throw new Error("the Managed Certificate is gone");
       mc = found;
-      const [account] = await db
-        .select()
-        .from(acmeAccount)
-        .where(and(eq(acmeAccount.organizationId, row.organizationId), eq(acmeAccount.environment, mc.environment)));
-      if (!account) throw new IssuanceFailure("no_acme_account", `the Organization has no ${mc.environment} ACME account; register one first`);
-      accountId = account.id;
-
-      const accountKey = await secrets.open(db, row.organizationId, account.secretId);
       // An Issuance of a Managed Certificate that has a Certificate is its Renewal, and names the Certificate it replaces so a CA with ARI can tell.
       // Not when its names have changed since: that Certificate is not what this one renews, and a CA may refuse the order for saying so.
       const [replaced] = await db
@@ -259,20 +252,24 @@ export function createIssuances({ db, unitOfWork, certificateAuthority: ca, dcv,
         .orderBy(desc(certificate.createdAt), desc(certificate.id))
         .limit(1);
       if (mc.csr === null) throw new IssuanceFailure("internal", "the Managed Certificate has no CSR to issue from");
-      chainPem = await ca.issue(mc.environment, { accountUrl: account.accountUrl, accountKey }, { csr: mc.csr, responder, replaces: replaced && sameNames(replaced.names, mc.names) ? replaced.chainPem : undefined });
+      issued = await issuers.issue(db, row.organizationId, issuerOf(mc), {
+        csr: mc.csr,
+        replaces: replaced && sameNames(replaced.names, mc.names) ? replaced.chainPem : undefined,
+        dcv: () => (responder ??= dcv.responderFor(db, row.organizationId)),
+      });
     } catch (err) {
-      return fail(row, failureOf(err), responder.leftovers());
+      return fail(row, failureOf(err), leftovers());
     }
 
     // The CA has issued: from here on the Certificate is kept whatever else happens to the Issuance.
     try {
-      const issued = readLeaf(chainPem);
+      const leaf = readLeaf(issued.chainPem);
       const csr = await parseCsr(mc.csr!);
-      if (!issued.publicKey.equals(csr.publicKey)) throw new IssuanceFailure("ca_rejected", "the CA issued a Certificate for a different key than the CSR's");
-      if (issued.names.length !== mc.names.length || !mc.names.every((name) => issued.names.includes(name))) {
-        throw new IssuanceFailure("ca_rejected", `the CA issued a Certificate for ${issued.names.join(", ")}, not for the names asked (${mc.names.join(", ")})`);
+      if (!leaf.publicKey.equals(csr.publicKey)) throw new IssuanceFailure("ca_rejected", "the CA issued a Certificate for a different key than the CSR's");
+      if (leaf.names.length !== mc.names.length || !mc.names.every((name) => leaf.names.includes(name))) {
+        throw new IssuanceFailure("ca_rejected", `the CA issued a Certificate for ${leaf.names.join(", ")}, not for the names asked (${mc.names.join(", ")})`);
       }
-      const { publicKey: _publicKey, ...stored } = issued;
+      const { publicKey: _publicKey, ...stored } = leaf;
       const certificateId = crypto.randomUUID();
       await unitOfWork.run(actorOf(row), async (tx, change) => {
         await tx.insert(certificate).values({
@@ -280,10 +277,9 @@ export function createIssuances({ db, unitOfWork, certificateAuthority: ca, dcv,
           organizationId: row.organizationId,
           managedCertificateId: mc.id,
           ...stored,
-          chainPem,
-          ca: ca.name,
-          environment: mc.environment,
-          acmeAccountId: accountId,
+          chainPem: issued.chainPem,
+          ca: issued.ca,
+          ...certificateIssuerColumns(issued.issuedBy),
           issuedAt: change.occurredAt,
         });
         await end(tx, change, row, { kind: "succeeded", certificateId });
@@ -298,7 +294,7 @@ export function createIssuances({ db, unitOfWork, certificateAuthority: ca, dcv,
             serial: stored.serial,
             names: stored.names,
             notAfter: stored.notAfter.toISOString(),
-            ...leftoverDetail(responder.leftovers()),
+            ...leftoverDetail(leftovers()),
           },
         });
         await tell(tx, change, issuedListeners, { organizationId: row.organizationId, managedCertificateId: mc.id, certificateId });
@@ -311,7 +307,7 @@ export function createIssuances({ db, unitOfWork, certificateAuthority: ca, dcv,
         });
       });
     } catch (err) {
-      await fail(row, failureOf(err), responder.leftovers());
+      await fail(row, failureOf(err), leftovers());
     }
   }
 

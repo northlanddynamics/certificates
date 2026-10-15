@@ -3,14 +3,14 @@
 // and nothing else is done to the Managed Certificate (a replacement is issued by Renewal, when asked for).
 import { OpenAPIHono, createRoute, z } from "@hono/zod-openapi";
 import { and, eq } from "drizzle-orm";
-import { CertificateAuthorityError, type CertificateAuthority } from "./certificate-authority";
+import { CertificateAuthorityError } from "./certificate-authority";
 import type { Db } from "./db/client";
-import { acmeAccount, certificate, certificateRevocation } from "./db/schema";
+import { certificate, certificateRevocation } from "./db/schema";
 import { HttpError, errors, json } from "./http";
+import { certificateIssuerOf, type Issuers } from "./issuer";
 import { Certificate, ManagedCertificateParams, toCertificate, type ManagedCertificateReader } from "./managed-certificate-reader";
 import { lockManagedCertificate } from "./name-change";
 import { RevocationReasonName, revocationsOf } from "./revocation";
-import type { Secrets } from "./secrets";
 import type { Actor, UnitOfWork } from "./unit-of-work";
 
 const CertificateParams = ManagedCertificateParams.extend({ certificateId: z.string().openapi({ param: { name: "certificateId", in: "path" } }) });
@@ -21,10 +21,9 @@ export function registerRevocationRoutes(ctx: {
   requireUser(c: any): Promise<Actor>;
   unitOfWork: UnitOfWork;
   reader: ManagedCertificateReader;
-  secrets: Secrets;
-  certificateAuthority: CertificateAuthority;
+  issuers: Issuers;
 }) {
-  const { app, db, requireUser, unitOfWork, reader, secrets, certificateAuthority } = ctx;
+  const { app, db, requireUser, unitOfWork, reader, issuers } = ctx;
   const { findAsOwnerOr } = reader;
 
   app.openapi(
@@ -57,14 +56,8 @@ export function registerRevocationRoutes(ctx: {
         // Under the Managed Certificate's lock, so two who revoke the same Certificate at once take turns and the second finds it revoked.
         await lockManagedCertificate(tx, orgId, mc.id);
         if ((await revocationsOf(tx, [issued.id])).has(issued.id)) throw new HttpError(409, "the Certificate is already revoked");
-        const [account] = await tx
-          .select()
-          .from(acmeAccount)
-          .where(and(eq(acmeAccount.id, issued.acmeAccountId), eq(acmeAccount.organizationId, orgId)));
-        if (!account) throw new Error("the ACME account the Certificate was issued through is gone");
-        const accountKey = await secrets.open(tx, orgId, account.secretId);
         try {
-          await certificateAuthority.revoke(issued.environment, { accountUrl: account.accountUrl, accountKey }, { certificate: issued.chainPem, reason });
+          await issuers.revoke(tx, orgId, certificateIssuerOf(issued), { certificate: issued.chainPem, reason });
         } catch (err) {
           if (!(err instanceof CertificateAuthorityError)) throw err;
           // A CA that says no is the caller's to fix, 422; one that does not answer is 502.

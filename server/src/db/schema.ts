@@ -7,6 +7,7 @@ import type { ScriptInterpreter } from "../deployment-script-kinds";
 import type { DnsProviderType } from "../dns-provider-kinds";
 import type { IssuanceFailureCode } from "../issuance-failure";
 import type { IssuanceKind } from "../issuance-kinds";
+import type { IssuerKind } from "../issuer";
 import type { KeyAlgorithm, KeyCustody } from "../csr";
 import type { AgentArch, AgentOs } from "../agent-kinds";
 import type { ApprovalStatus } from "../approval";
@@ -33,7 +34,9 @@ export const managedCertificate = pgTable(
     names: text("names").array().notNull(),
     keyAlgorithm: text("key_algorithm").$type<KeyAlgorithm>().notNull(),
     keyCustody: text("key_custody").$type<KeyCustody>().notNull(),
-    /** Which of the Organization's ACME accounts, by environment, Certificates are obtained through. */
+    /** Its issuer (issuer.ts): the kind of CA its Certificates come from, and that kind's reference in the columns below. */
+    issuerKind: text("issuer_kind").$type<IssuerKind>().notNull().default("acme"),
+    /** The ACME kind's reference: which of the Organization's ACME accounts, by environment, Certificates are obtained through. */
     environment: text("environment").$type<AcmeEnvironment>().notNull(),
     /**
      * The CSR under which Certificates are issued, so Renewal can reuse it. With Key Custody: Owner it is submitted with the
@@ -59,6 +62,7 @@ export const managedCertificate = pgTable(
   },
   (t) => [
     index("managed_certificate_org_idx").on(t.organizationId),
+    check("managed_certificate_issuer_kind", sql`${t.issuerKind} in ('acme')`),
     check("managed_certificate_key_custody", sql`${t.keyCustody} in ('owner', 'agent')`),
     check("managed_certificate_owner_has_csr", sql`${t.keyCustody} <> 'owner' or ${t.csr} is not null`),
     check("managed_certificate_renewal_mode", sql`${t.renewalMode} in ('automatic', 'manual')`),
@@ -348,8 +352,9 @@ export const certificate = pgTable(
     names: text("names").array().notNull(),
     /** The leaf followed by the intermediates the CA served, PEM. */
     chainPem: text("chain_pem").notNull(),
-    /** The CA it came from (its name in the Certificate Authority interface), and the ACME account used there. */
+    /** The CA it came from (what that CA calls itself), and the issuer (issuer.ts) it came from: its kind, and for ACME the environment and account used there. */
     ca: text("ca").notNull(),
+    issuerKind: text("issuer_kind").$type<IssuerKind>().notNull().default("acme"),
     environment: text("environment").$type<AcmeEnvironment>().notNull(),
     acmeAccountId: uuid("acme_account_id")
       .notNull()
@@ -359,6 +364,7 @@ export const certificate = pgTable(
   },
   (t) => [
     unique("certificate_organization_fingerprint_unique").on(t.organizationId, t.fingerprint),
+    check("certificate_issuer_kind", sql`${t.issuerKind} in ('acme')`),
     index("certificate_managed_certificate_idx").on(t.managedCertificateId, t.createdAt),
     foreignKey({ columns: [t.managedCertificateId, t.organizationId], foreignColumns: [managedCertificate.id, managedCertificate.organizationId] }),
   ],

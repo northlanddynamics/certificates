@@ -205,6 +205,16 @@ describe("key algorithms and names", () => {
     expect(created.body.environment).toBe("production");
     expect((await ended(created.body.id)).issuance.failure).toMatchObject({ code: "no_acme_account", message: expect.stringContaining("production") });
   });
+
+  test("a Managed Certificate's issuer is the ACME CA in the environment it was created for", async () => {
+    await readyToIssue();
+    const staging = await admin().create(await request([host()]));
+    const production = await admin().create(await request([host()], "ecdsa-p256", { environment: "production" }));
+    expect(staging.body.issuer).toEqual({ kind: "acme", environment: "staging" });
+    expect((await admin().get(production.body.id)).body.issuer).toEqual({ kind: "acme", environment: "production" });
+    expect((await admin().list()).body.items.map((item: any) => item.issuer)).toContainEqual({ kind: "acme", environment: "staging" });
+    await h.settleIssuances();
+  });
 });
 
 describe("a CSR must match the Managed Certificate", () => {

@@ -11,6 +11,7 @@ import { KEY_ALGORITHMS, KEY_CUSTODIES } from "./csr";
 import type { Db } from "./db/client";
 import { agent, certificate, deployment, issuance, managedCertificate } from "./db/schema";
 import { HttpError, OrgParam } from "./http";
+import { issuerOf } from "./issuer";
 import { ISSUANCE_FAILURE_CODES } from "./issuance-failure";
 import { ISSUANCE_KINDS } from "./issuance-kinds";
 import { PendingNameChange, pendingNameChanges, toPendingNameChange } from "./name-change";
@@ -98,6 +99,10 @@ export const Renewal = z.object({
     .openapi({ description: "Set while the latest Renewal of a Managed Certificate that has a Certificate has failed." }),
 });
 
+const Issuer = z
+  .discriminatedUnion("kind", [z.object({ kind: z.literal("acme"), environment: z.enum(ACME_ENVIRONMENTS) })])
+  .openapi({ description: "Where its Certificates come from: `acme`, through the Organization's ACME account in `environment`." });
+
 export const Approval = z.object({
   status: z.enum(APPROVAL_STATUSES).openapi({ description: "`not_required` for one an Organization Administrator created." }),
   proposedBy: Person.nullable(),
@@ -117,6 +122,7 @@ export const ManagedCertificate = z.object({
   keyAlgorithm: z.enum(KEY_ALGORITHMS),
   keyCustody: z.enum(KEY_CUSTODIES).openapi({ description: "`owner`: the Owner holds the private key and submitted a CSR. `agent`: one Agent made the key and holds it, through its one Deployment." }),
   environment: z.enum(ACME_ENVIRONMENTS),
+  issuer: Issuer,
   createdAt: z.string(),
   archivedAt: z.string().nullable().openapi({ description: "When it was archived: it then neither issues, renews nor deploys, and is listed only when archived ones are asked for." }),
   owners: z.array(Owner).openapi({ description: "Users and Teams accountable for it, in the order they were added; none is allowed." }),
@@ -257,6 +263,7 @@ export function createManagedCertificateReader({ db, authorize, clock, agentOffl
         keyAlgorithm: row.keyAlgorithm,
         keyCustody: row.keyCustody,
         environment: row.environment,
+        issuer: issuerOf(row),
         createdAt: row.createdAt.toISOString(),
         archivedAt: row.archivedAt?.toISOString() ?? null,
         owners: owners.get(row.id) ?? [],

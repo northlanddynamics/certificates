@@ -4,7 +4,7 @@
 // Organization's. There is no private key in any of it: the platform never has one (ADR 0002).
 import { OpenAPIHono, createRoute, z } from "@hono/zod-openapi";
 import type { ApiKeys } from "./api-keys";
-import type { CertificateAuthority } from "./certificate-authority";
+import { certificateIssuerOf, type Issuers } from "./issuer";
 import { HttpError, errors } from "./http";
 import { EXPORT_CHAINS, EXPORT_FORMATS, RootNotKnownError, encode, select } from "./export";
 import type { ManagedCertificateReader } from "./managed-certificate-reader";
@@ -30,9 +30,9 @@ export function registerCertificateExport(ctx: {
   apiKeys: ApiKeys;
   unitOfWork: UnitOfWork;
   reader: ManagedCertificateReader;
-  certificateAuthority: CertificateAuthority;
+  issuers: Issuers;
 }) {
-  const { app, apiKeys, unitOfWork, reader, certificateAuthority } = ctx;
+  const { app, apiKeys, unitOfWork, reader, issuers } = ctx;
 
   /** `certificateId` is the Certificate asked for, or the current one when left out. */
   async function serve(c: any, orgId: string, id: string, certificateId: string | undefined, { format, chain }: z.infer<typeof ExportQuery>) {
@@ -45,7 +45,7 @@ export function registerCertificateExport(ctx: {
     const wanted = certificateId ? certificates.find((row) => row.id === certificateId) : certificates[0];
     if (!wanted) throw new HttpError(404, certificateId ? "Certificate not found" : "no Certificate has been issued for this Managed Certificate yet");
 
-    const encoded = await select(wanted.chainPem, chain, () => certificateAuthority.roots(wanted.environment))
+    const encoded = await select(wanted.chainPem, chain, () => issuers.roots(certificateIssuerOf(wanted)))
       .then((certs) => encode(certs, format))
       .catch((err) => {
         if (err instanceof RootNotKnownError) throw new HttpError(422, err.message);

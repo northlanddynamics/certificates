@@ -4,10 +4,10 @@
 // that is repeated, or run by two platform instances at once, starts a Renewal once (a Managed Certificate has at most
 // one Issuance running). Its time is the clock it is given, so tests control it.
 import { and, eq, or, sql } from "drizzle-orm";
-import type { CertificateAuthority } from "./certificate-authority";
 import type { Db } from "./db/client";
 import { issuance, managedCertificate, renewalInfo } from "./db/schema";
 import { renewsAutomatically, type Issuances } from "./issuance";
+import type { Issuers } from "./issuer";
 import { currentCertificates, failuresOf, nextAttemptAt } from "./renewal";
 import { refreshRenewalInfo, informationOf } from "./renewal-information";
 import type { UnitOfWork } from "./unit-of-work";
@@ -21,13 +21,13 @@ export function createRenewalScheduler({
   db,
   unitOfWork,
   issuances,
-  certificateAuthority,
+  issuers,
   clock,
 }: {
   db: Db;
   unitOfWork: UnitOfWork;
   issuances: Issuances;
-  certificateAuthority: CertificateAuthority;
+  issuers: Issuers;
   clock: () => Date;
 }): RenewalScheduler {
   const current = currentCertificates(db);
@@ -36,7 +36,7 @@ export function createRenewalScheduler({
     async tick() {
       const now = clock();
       // The CA's windows first, so that a Renewal it has just asked for is seen by this pass.
-      await refreshRenewalInfo({ db, certificateAuthority, now });
+      await refreshRenewalInfo({ db, issuers, now });
       // Automatic, live, approved, with a Certificate to renew and none being issued. The days rule, or the start of the
       // CA's window, is checked in the database (the days in seconds, as a day interval would follow the session's time
       // zone through a clock change) to leave out most of them; the rest of what makes one due (nextAttemptAt) is checked here.
