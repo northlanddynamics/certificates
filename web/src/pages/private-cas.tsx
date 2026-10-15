@@ -1,8 +1,8 @@
 import { useQuery } from "@tanstack/react-query";
 import { useParams } from "@tanstack/react-router";
-import { createColumnHelper, rowExpandingFeature, tableFeatures, useTable } from "@tanstack/react-table";
+import { createColumnHelper, createExpandedRowModel, rowExpandingFeature, tableFeatures, useTable } from "@tanstack/react-table";
 import { MoreHorizontalIcon, PlusIcon } from "lucide-react";
-import { useState, type FormEvent } from "react";
+import { useMemo, useState, type FormEvent } from "react";
 import { DataTable } from "@/components/data-table/data-table";
 import { ExpandButton } from "@/components/data-table/expand-button";
 import { Badge } from "@/components/ui/badge";
@@ -11,52 +11,86 @@ import { Dialog, DialogClose, DialogContent, DialogDescription, DialogFooter, Di
 import { DropdownMenu, DropdownMenuContent, DropdownMenuItem, DropdownMenuSeparator, DropdownMenuTrigger } from "@/components/ui/dropdown-menu";
 import { Input } from "@/components/ui/input";
 import { Label } from "@/components/ui/label";
-import { Table, TableBody, TableCell, TableHead, TableHeader, TableRow } from "@/components/ui/table";
 import { Textarea } from "@/components/ui/textarea";
 import { api, can, type PermittedNames, type PrivateCa, type PrivateCaValidity } from "@/lib/api";
 import { KEY_ALGORITHMS, KEY_ALGORITHM_LABELS, type KeyAlgorithm } from "@/lib/csr-generator";
 import { splitNames } from "@/lib/csr-names";
 import { keyAlgorithmLabel } from "@/lib/managed-certificate";
-import { DEFAULT_VALIDITY_DAYS, MAX_VALIDITY_DAYS, isValidityDays, permittedNamesLabel, rootSubjectOf, validityLabel } from "@/lib/private-ca";
+import { DEFAULT_VALIDITY_DAYS, MAX_VALIDITY_DAYS, isValidityDays, permittedNamesLabel, rootSubjectOf } from "@/lib/private-ca";
 import { useAction } from "@/lib/use-action";
 
 const ROUTE = "/app/organizations/$orgId/private-cas";
 const STATUS_LABEL: Record<PrivateCa["status"], string> = { awaiting_signature: "Awaiting signature", active: "Active", retired: "Retired", revoked: "Revoked" };
 const date = (iso: string) => new Date(iso).toLocaleDateString(undefined, { year: "numeric", month: "short", day: "numeric" });
 
-// A row is a Private CA's root; it opens to the intermediates under it. The server lists every Private CA, and an
-// Organization has few, so there is nothing to page.
-const features = tableFeatures({ rowExpandingFeature });
-const columnHelper = createColumnHelper<typeof features, PrivateCa>();
+/** A CA in a Private CA's hierarchy: its root, which opens to the intermediates it signs, or one of those. */
+type CaRow = {
+  id: string;
+  ca: PrivateCa;
+  level: "root" | "intermediate";
+  subject: string | undefined;
+  notAfter: string | undefined;
+  subRows?: CaRow[];
+};
+const rowsOf = (ca: PrivateCa): CaRow => ({
+  id: ca.id,
+  ca,
+  level: "root",
+  subject: ca.root?.subject,
+  notAfter: ca.root?.notAfter,
+  subRows: [{ id: `${ca.id}-issuing`, ca, level: "intermediate", subject: ca.subject, notAfter: ca.notAfter ?? undefined }],
+});
+
+// The server lists every Private CA, and an Organization has few, so there is nothing to page.
+const features = tableFeatures({ rowExpandingFeature, expandedRowModel: createExpandedRowModel() });
+const columnHelper = createColumnHelper<typeof features, CaRow>();
 const columns = columnHelper.columns([
   columnHelper.display({
     id: "expand",
     header: () => <span className="sr-only">Intermediates</span>,
-    cell: ({ row }) => <ExpandButton open={row.getIsExpanded()} what={`the root of ${row.original.name}`} onToggle={() => row.toggleExpanded()} />,
+    cell: ({ row }) =>
+      row.getCanExpand() ? <ExpandButton open={row.getIsExpanded()} what={`the root of ${row.original.ca.name}`} onToggle={() => row.toggleExpanded()} /> : null,
   }),
-  columnHelper.accessor("name", {
+  columnHelper.display({
+    id: "name",
     header: "Name",
-    cell: ({ cell }) => (
-      <span className="flex items-center gap-2">
-        <span className="font-medium">{cell.getValue()}</span>
-        <Badge variant="outline">Root CA</Badge>
-      </span>
-    ),
+    cell: ({ row }) =>
+      row.original.level === "root" ? (
+        <span className="flex items-center gap-2">
+          <span className="font-medium">{row.original.ca.name}</span>
+          <Badge variant="outline">Root CA</Badge>
+        </span>
+      ) : (
+        <span className="flex items-center gap-2 pl-4">
+          <span className="text-muted-foreground">└</span>
+          <Badge variant="outline">Issuing CA</Badge>
+        </span>
+      ),
   }),
-  columnHelper.accessor((ca) => ca.root?.subject, {
-    id: "subject",
+  columnHelper.accessor("subject", {
     header: "Subject",
-    cell: ({ cell }) => (cell.getValue() ? <span className="break-all font-mono text-xs">{cell.getValue()}</span> : <span className="text-muted-foreground">The Organization's own</span>),
+    cell: ({ cell }) => (cell.getValue() ? <span className="block max-w-64 whitespace-normal break-all font-mono text-xs">{cell.getValue()}</span> : <span className="text-muted-foreground">The Organization's own</span>),
   }),
-  columnHelper.accessor("keyAlgorithm", { header: "Key", cell: ({ cell }) => keyAlgorithmLabel(cell.getValue()) }),
-  columnHelper.accessor("status", {
+  columnHelper.display({ id: "key", header: "Key", cell: ({ row }) => keyAlgorithmLabel(row.original.ca.keyAlgorithm) }),
+  columnHelper.display({
+    id: "permittedNames",
+    header: "Permitted names",
+    cell: ({ row }) => (row.original.level === "intermediate" ? <span className="block max-w-56 whitespace-normal break-all text-xs">{permittedNamesLabel(row.original.ca.permittedNames)}</span> : null),
+  }),
+  columnHelper.display({
+    id: "status",
     header: "Status",
-    cell: ({ cell }) => <Badge variant={cell.getValue() === "active" ? "default" : "secondary"}>{STATUS_LABEL[cell.getValue()]}</Badge>,
+    cell: ({ row }) =>
+      row.original.level === "root" ? <Badge variant={row.original.ca.status === "active" ? "default" : "secondary"}>{STATUS_LABEL[row.original.ca.status]}</Badge> : null,
   }),
-  columnHelper.accessor((ca) => ca.root?.notAfter, { id: "expires", header: "Expires", cell: ({ cell }) => (cell.getValue() ? date(cell.getValue()!) : <span className="text-muted-foreground">Unknown</span>) }),
-  columnHelper.display({ id: "actions", header: () => <span className="sr-only">Actions</span>, cell: ({ row }) => <PrivateCaActions ca={row.original} /> }),
+  columnHelper.accessor("notAfter", { header: "Expires", cell: ({ cell }) => (cell.getValue() ? date(cell.getValue()!) : <span className="text-muted-foreground">Unknown</span>) }),
+  columnHelper.display({
+    id: "actions",
+    header: () => <span className="sr-only">Actions</span>,
+    cell: ({ row }) => (row.original.level === "root" ? <PrivateCaActions ca={row.original.ca} /> : null),
+  }),
 ]);
-const noRows: PrivateCa[] = [];
+const noRows: CaRow[] = [];
 
 /**
  * The Organization's Private CAs: its own CAs, whose keys the platform holds only in a KMS. A Managed Certificate can be
@@ -67,7 +101,8 @@ export function PrivateCasPage() {
   const org = useQuery({ queryKey: ["me"], queryFn: api.me, select: (me) => me.organizations.find((o) => o.id === orgId) }).data;
   const allowed = org ? can(org, "privateCa", "read") : false;
   const cas = useQuery({ queryKey: ["private-cas", orgId], queryFn: () => api.privateCas(orgId), enabled: allowed });
-  const table = useTable({ features, columns, data: cas.data?.items ?? noRows, getRowId: (ca) => ca.id, getRowCanExpand: () => true });
+  const rows = useMemo(() => cas.data?.items.map(rowsOf) ?? noRows, [cas.data]);
+  const table = useTable({ features, columns, data: rows, getRowId: (row) => row.id, getSubRows: (row) => row.subRows });
 
   return (
     <div className="flex flex-col gap-6">
@@ -83,45 +118,11 @@ export function PrivateCasPage() {
         <p className="text-sm text-muted-foreground">You may not see the Private CAs.</p>
       ) : (
         <div className="flex flex-col gap-4">
-          <DataTable table={table} empty={cas.isPending ? "Loading…" : "No Private CA yet."} details={(ca) => <Intermediates ca={ca} />} />
+          <DataTable table={table} empty={cas.isPending ? "Loading…" : "No Private CA yet."} />
           {cas.error && <p className="text-sm text-destructive">{cas.error.message}</p>}
         </div>
       )}
     </div>
-  );
-}
-
-/** The intermediates under a Private CA's root: its Issuing CA, which issues the Certificates. */
-function Intermediates({ ca }: { ca: PrivateCa }) {
-  return (
-    <Table>
-      <TableHeader>
-        <TableRow className="hover:bg-transparent">
-          <TableHead>Intermediate</TableHead>
-          <TableHead>Subject</TableHead>
-          <TableHead>Permitted names</TableHead>
-          <TableHead>Validity</TableHead>
-          <TableHead>Expires</TableHead>
-        </TableRow>
-      </TableHeader>
-      <TableBody>
-        <TableRow className="hover:bg-transparent">
-          <TableCell>
-            <Badge variant="outline">Issuing CA</Badge>
-          </TableCell>
-          <TableCell className="whitespace-normal">
-            <span className="break-all font-mono text-xs">{ca.subject}</span>
-          </TableCell>
-          <TableCell className="whitespace-normal">
-            <span className="break-all text-xs">{permittedNamesLabel(ca.permittedNames)}</span>
-          </TableCell>
-          <TableCell>
-            <span className="text-xs">{validityLabel(ca.validity)}</span>
-          </TableCell>
-          <TableCell>{ca.notAfter ? date(ca.notAfter) : <span className="text-muted-foreground">None yet</span>}</TableCell>
-        </TableRow>
-      </TableBody>
-    </Table>
   );
 }
 
