@@ -49,6 +49,7 @@ import { createFetchWebhooks, createNotifications, type WebhookSender } from "./
 import { registerSubscriberRoutes } from "./subscriber-routes";
 import { removeTeamFromSubscribers, removeUserFromSubscribers } from "./subscribers";
 import { createOrganizations } from "./organizations";
+import { createPrivateCas, registerPrivateCas } from "./private-ca";
 import { ROLE_NAMES, permissionsOf } from "./permissions";
 import { createSecrets } from "./secrets";
 import { registerSsoConnections } from "./sso-connections";
@@ -283,7 +284,8 @@ export function createApp(deps: AppDeps) {
   const dcvPlans = createDcvPlans(dnsProviders);
   registerDcvConfiguration({ app, db, requireUser, authorize, unitOfWork, dcvPlans });
   const dcv = createDcv(dnsProviders, dcvPlans, { resolver: createTxtResolver(), ...DEFAULT_DCV_CONFIG, ...deps.dcv });
-  const issuers = createIssuers({ acme: deps.certificateAuthority, secrets });
+  registerPrivateCas({ app, db, requireUser, authorize, unitOfWork, kms: deps.kms, clock });
+  const issuers = createIssuers({ acme: deps.certificateAuthority, secrets, privateCas: createPrivateCas({ kms: deps.kms, clock }) });
   const issuances = createIssuances({ db, unitOfWork, issuers, dcv });
   const notifications = createNotifications({
     db,
@@ -315,7 +317,7 @@ export function createApp(deps: AppDeps) {
   const reader = createManagedCertificateReader({ db, authorize, clock, agentOfflineAfterSeconds: agentGateway.offlineAfterSeconds });
   registerManagedCertificates({ app, db, requireUser, authorize, unitOfWork, issuances, reader, clock, agentOfflineAfterSeconds: agentGateway.offlineAfterSeconds });
   const apiKeys = registerApiKeys({ app, db, auth, authConfig, requireUser, authorize, admit: loginPolicies.admit, unitOfWork });
-  registerCertificateExport({ app, apiKeys, unitOfWork, reader, issuers });
+  registerCertificateExport({ app, db, apiKeys, unitOfWork, reader, issuers });
   registerOwnerRoutes({ app, requireUser, unitOfWork, reader });
   registerSubscriberRoutes({ app, db, requireUser, unitOfWork, reader });
   registerRenewalRoutes({ app, db, requireUser, unitOfWork, issuances, reader });

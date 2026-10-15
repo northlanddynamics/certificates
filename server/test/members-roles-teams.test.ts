@@ -116,8 +116,8 @@ describe("what the caller may do", () => {
 
     // Approvers and Members hold only what is granted them on purpose (see permissions.ts).
     const permissionsOf = async (cookie: string) => (await h.api("/api/me", { cookie })).body.organizations[0].permissions;
-    expect(await permissionsOf(memberCookie)).toEqual({ managedCertificate: ["propose", "download"], notificationChannel: ["read"] });
-    expect(await permissionsOf(approverCookie)).toEqual({ managedCertificate: ["read", "propose", "download"], approval: ["read", "decide"], notificationChannel: ["read"] });
+    expect(await permissionsOf(memberCookie)).toEqual({ managedCertificate: ["propose", "download"], notificationChannel: ["read"], privateCa: ["read"] });
+    expect(await permissionsOf(approverCookie)).toEqual({ managedCertificate: ["read", "propose", "download"], approval: ["read", "decide"], notificationChannel: ["read"], privateCa: ["read"] });
   });
 });
 

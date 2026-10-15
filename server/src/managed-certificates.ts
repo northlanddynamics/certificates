@@ -8,23 +8,32 @@ import { OpenAPIHono, createRoute, z } from "@hono/zod-openapi";
 import { and, asc, desc, eq } from "drizzle-orm";
 import { silentSince } from "./agents";
 import type { Authorizer } from "./authorization";
-import { ACME_ENVIRONMENTS } from "./certificate-authority";
+import { ACME_ENVIRONMENTS, type AcmeEnvironment } from "./certificate-authority";
 import { certificateFacts } from "./certificate-facts";
 import { KEY_ALGORITHMS } from "./csr";
 import type { Db } from "./db/client";
 import { issuance, managedCertificate } from "./db/schema";
 import { HttpError, OrgParam, PageQuery, errors, json, pageOf } from "./http";
-import { issuerColumns } from "./issuer";
+import { issuerColumns, issuerDetail, type Issuer } from "./issuer";
 import { InventoryQuery, inventoryCondition } from "./inventory-filters";
 import { refusalMessage, type Issuances } from "./issuance";
 import { Certificate, CertificateFacts, Issuance, ManagedCertificate, ManagedCertificateParams, toCertificate, toIssuance, type ManagedCertificateReader } from "./managed-certificate-reader";
 import { checkNamesAndCsr, csrField, namesField } from "./names-and-csr";
 import { OwnerRef, addOwner } from "./owners";
 import { roleCan } from "./permissions";
+import { findPrivateCa } from "./private-ca";
 import { revocationsOf } from "./revocation";
 import type { Actor, UnitOfWork } from "./unit-of-work";
 
 const MAX_OWNERS = 50;
+
+/** The issuer a Managed Certificate is created or proposed with. */
+const IssuerField = z
+  .discriminatedUnion("kind", [
+    z.object({ kind: z.literal("acme"), environment: z.enum(ACME_ENVIRONMENTS).default("staging") }),
+    z.object({ kind: z.literal("private_ca"), privateCaId: z.string() }),
+  ])
+  .openapi({ description: "`acme`: through the Organization's ACME account in `environment`. `private_ca`: from one of the Organization's active Private CAs, with no DCV." });
 export function registerManagedCertificates(ctx: {
   app: OpenAPIHono;
   db: Db;
@@ -39,6 +48,18 @@ export function registerManagedCertificates(ctx: {
 }) {
   const { app, db, requireUser, authorize, unitOfWork, issuances, reader, clock, agentOfflineAfterSeconds } = ctx;
   const { findManagedCertificate, findReadable, visibleTo, certificatesOf, withState } = reader;
+
+  /** The issuer asked for: `issuer`, or the ACME kind in `environment`. A Private CA must be one of the Organization's, and active. */
+  async function issuerAsked(orgId: string, body: { environment?: AcmeEnvironment; issuer?: z.infer<typeof IssuerField> }): Promise<Issuer> {
+    if (body.issuer && body.environment) throw new HttpError(400, "give either `issuer` or `environment`, not both");
+    const issuer = body.issuer ?? { kind: "acme", environment: body.environment ?? "staging" };
+    if (issuer.kind === "private_ca") {
+      const ca = await findPrivateCa(db, orgId, issuer.privateCaId);
+      if (!ca) throw new HttpError(422, "the Organization has no such Private CA");
+      if (ca.status !== "active") throw new HttpError(422, `the Private CA ${ca.name} is ${ca.status}, so it issues nothing`);
+    }
+    return issuer;
+  }
 
   app.openapi(
     createRoute({
@@ -84,7 +105,7 @@ export function registerManagedCertificates(ctx: {
         "The Owner keeps the private key and submits a CSR for it. The CSR must be for the key algorithm given and ask for exactly the names given. " +
         "An Organization Administrator creates it outright and Issuance starts at once; anyone else proposes it, and it waits for an Approver to approve it, which starts Issuance. " +
         "Issuance runs in the background: the response shows it running, and the Managed Certificate shows the Certificate or the cause of the failure when it ends. " +
-        "Staging is the default environment.",
+        "Its issuer is an ACME CA (staging unless `environment` says otherwise) or, given `issuer`, one of the Organization's active Private CAs, which issues with no DCV.",
       request: {
         params: OrgParam,
         body: {
@@ -94,7 +115,8 @@ export function registerManagedCertificates(ctx: {
                 names: namesField("The DNS names to issue for."),
                 keyAlgorithm: z.enum(KEY_ALGORITHMS),
                 csr: csrField,
-                environment: z.enum(ACME_ENVIRONMENTS).default("staging").openapi({ description: "Which of the Organization's ACME accounts to issue through." }),
+                environment: z.enum(ACME_ENVIRONMENTS).optional().openapi({ description: "Which of the Organization's ACME accounts to issue through, when `issuer` is not given; staging unless given." }),
+                issuer: IssuerField.optional(),
                 owners: z.array(OwnerRef).max(MAX_OWNERS).default([]).openapi({ description: "Users and Teams of the Organization accountable for it; none is allowed." }),
               }),
             },
@@ -113,6 +135,7 @@ export function registerManagedCertificates(ctx: {
       if (needsApproval) await authorize(actor, orgId, { managedCertificate: ["propose"] });
 
       const { names, csr } = await checkNamesAndCsr(body);
+      const issuer = await issuerAsked(orgId, body);
 
       const created = await unitOfWork.run(actor, async (tx, change) => {
         const [row] = await tx
@@ -122,7 +145,7 @@ export function registerManagedCertificates(ctx: {
             names,
             keyAlgorithm: body.keyAlgorithm,
             keyCustody: "owner",
-            ...issuerColumns({ kind: "acme", environment: body.environment }),
+            ...issuerColumns(issuer),
             csr: body.csr,
             ...(needsApproval && { approvalStatus: "pending", proposedById: actor.id, proposedByEmail: actor.email }),
           })
@@ -131,7 +154,14 @@ export function registerManagedCertificates(ctx: {
           organizationId: orgId,
           action: needsApproval ? "managed_certificate.proposed" : "managed_certificate.created",
           target: { type: "managed_certificate", id: row!.id },
-          detail: { names, keyAlgorithm: body.keyAlgorithm, keyCustody: "owner", environment: body.environment, csrFingerprint: csr.fingerprint },
+          detail: {
+            names,
+            keyAlgorithm: body.keyAlgorithm,
+            keyCustody: "owner",
+            ...(issuer.kind === "acme" && { environment: issuer.environment }),
+            ...issuerDetail(issuer),
+            csrFingerprint: csr.fingerprint,
+          },
         });
         // Whoever creates or proposes may name the Owners at the same time; each is audited as added (naming one twice adds it once).
         for (const ref of body.owners) await addOwner(tx, change, orgId, row!.id, ref);
@@ -240,7 +270,7 @@ export function registerManagedCertificates(ctx: {
       const row = (await certificatesOf(orgId, mc.id)).find((r) => r.id === certificateId);
       if (!row) throw new HttpError(404, "Certificate not found");
       const revocations = await revocationsOf(db, [row.id]);
-      return c.json({ ...toCertificate(row, revocations.get(row.id)), ...certificateFacts(row.chainPem), acmeAccount: { id: row.acmeAccountId, environment: row.environment } }, 200);
+      return c.json({ ...toCertificate(row, revocations.get(row.id)), ...certificateFacts(row.chainPem), acmeAccount: row.acmeAccountId && row.environment ? { id: row.acmeAccountId, environment: row.environment } : null }, 200);
     },
   );
 }

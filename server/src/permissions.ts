@@ -13,7 +13,7 @@ export const APPROVER_ROLE = "approver";
 export const MEMBER_ROLE = "member";
 
 // Every permission there is. The organization, member, invitation and team resources are the ones Better Auth's
-// organization plugin checks itself; `audit`, `acmeAccount`, `dnsProvider`, `validationZone`, `dcvRule`, `managedCertificate`, `approval`, `agent`, `deploymentScript`, `deployment`, `notificationChannel`, `auditForwarder`, `loginPolicy`, `ssoConnection` and `apiKey` are ours (the last is the plugin's too).
+// organization plugin checks itself; `audit`, `acmeAccount`, `dnsProvider`, `validationZone`, `dcvRule`, `managedCertificate`, `approval`, `agent`, `deploymentScript`, `deployment`, `notificationChannel`, `auditForwarder`, `loginPolicy`, `ssoConnection`, `privateCa` and `apiKey` are ours (the last is the plugin's too).
 const statements = {
   organization: ["update", "delete"],
   member: ["create", "update", "delete"],
@@ -57,6 +57,9 @@ const statements = {
   ssoConnection: ["read", "create", "update", "delete", "test"],
   // The Organization's own API keys (a user's keys need none): the organization plugin asks for these names.
   apiKey: ["create", "read", "update", "delete"],
+  // Private CAs: the Organization's own CAs. Everyone may `read` them, to see which exist and download their chains, so
+  // as to propose against the right one; only Organization Administrators `create`, `update`, `retire` or `revoke` one.
+  privateCa: ["read", "create", "update", "retire", "revoke"],
 } as const;
 
 export type Permissions = { [R in keyof typeof statements]?: (typeof statements)[R][number][] };
@@ -69,8 +72,8 @@ export const ac = createAccessControl(statements);
 // to decide knowingly while a Member sees only their own.
 export const orgRoles = {
   [ORG_ADMIN_ROLE]: ac.newRole(statements),
-  [APPROVER_ROLE]: ac.newRole({ managedCertificate: ["read", "propose", "download"], approval: ["read", "decide"], notificationChannel: ["read"] }),
-  [MEMBER_ROLE]: ac.newRole({ managedCertificate: ["propose", "download"], notificationChannel: ["read"] }),
+  [APPROVER_ROLE]: ac.newRole({ managedCertificate: ["read", "propose", "download"], approval: ["read", "decide"], notificationChannel: ["read"], privateCa: ["read"] }),
+  [MEMBER_ROLE]: ac.newRole({ managedCertificate: ["propose", "download"], notificationChannel: ["read"], privateCa: ["read"] }),
 };
 
 const roleOf = (name: string) => (Object.hasOwn(orgRoles, name) ? orgRoles[name as keyof typeof orgRoles] : undefined);

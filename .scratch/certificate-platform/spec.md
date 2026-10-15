@@ -251,7 +251,7 @@ The platform **never holds private keys**. The key either stays with the Owner, 
 ## Out of Scope
 
 - Certificate discovery of any kind: network or TLS scanning, Agent host scanning, Certificate Transparency monitoring, cloud API inventory, and importing from DigiCert TLM. This covers **Endpoint**, **Observation**, **Discovered Certificate** and **Adoption**.
-- CAs other than Let's Encrypt: other ACME CAs, EAB, and Private CA. The CA interface must allow them later.
+- CAs other than Let's Encrypt: other ACME CAs and EAB. The CA interface must allow them later. (Private CAs are specified in `.scratch/private-ca/spec.md`.)
 - SCEP and **Enrollment Profiles** for device or client certificates.
 - Built-in deployment actions (IIS rebind, Windows certificate store import and so on). Deployment Scripts only.
 - Generating or holding private keys on the platform, and PFX or JKS export from the platform.

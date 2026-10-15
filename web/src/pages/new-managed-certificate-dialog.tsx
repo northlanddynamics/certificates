@@ -18,6 +18,13 @@ import { nameProblems, splitNames } from "@/lib/csr-names";
 
 type Org = Me["organizations"][number];
 type Environment = "staging" | "production";
+/** The CA chosen: an ACME environment, or one of the Organization's Private CAs by id. */
+type Authority = { kind: "acme"; environment: Environment } | { kind: "private_ca"; privateCaId: string };
+const authorityValue = (a: Authority) => (a.kind === "acme" ? `acme:${a.environment}` : `private_ca:${a.privateCaId}`);
+const authorityOf = (value: string): Authority => {
+  const [kind, ref] = value.split(":") as [string, string];
+  return kind === "acme" ? { kind: "acme", environment: ref as Environment } : { kind: "private_ca", privateCaId: ref };
+};
 
 const STEPS = [
   { id: "authority", title: "Certificate Authority", icon: LandmarkIcon },
@@ -69,7 +76,7 @@ export function NewManagedCertificateDialog({ org, onCreated }: { org: Org; onCr
 // Every step's state lives here, so moving between steps never loses what was entered.
 function NewManagedCertificateForm({ org, direct, onCreated }: { org: Org; direct: boolean; onCreated: (created: ManagedCertificate) => void }) {
   const [step, setStep] = useState<StepId>("authority");
-  const [environment, setEnvironment] = useState<Environment>("staging");
+  const [authority, setAuthority] = useState<Authority>({ kind: "acme", environment: "staging" });
   const [names, setNames] = useState("");
   const [keyAlgorithm, setKeyAlgorithm] = useState<KeyAlgorithm>("ecdsa-p256");
   const [csr, setCsr] = useState("");
@@ -79,6 +86,8 @@ function NewManagedCertificateForm({ org, direct, onCreated }: { org: Org; direc
   const [owners, setOwners] = useState<string[]>([]);
   const canReadAccounts = can(org, "acmeAccount", "read");
   const accounts = useQuery({ queryKey: ["acme-accounts", org.id], queryFn: () => api.acmeAccounts(org.id), enabled: canReadAccounts });
+  const privateCas = useQuery({ queryKey: ["private-cas", org.id], queryFn: () => api.privateCas(org.id), enabled: can(org, "privateCa", "read") });
+  const activeCas = privateCas.data?.items.filter((ca) => ca.status === "active") ?? [];
   const people = useQuery({ queryKey: ["members", org.id], queryFn: () => api.members(org.id) });
   const teams = useQuery({ queryKey: ["teams", org.id], queryFn: () => api.teams(org.id) });
   const create = useMutation({
@@ -87,7 +96,7 @@ function NewManagedCertificateForm({ org, direct, onCreated }: { org: Org; direc
         names: splitNames(names),
         keyAlgorithm,
         csr,
-        environment,
+        issuer: authority,
         owners: owners.map(ownerFromKey),
       }),
     onSuccess: onCreated,
@@ -99,7 +108,7 @@ function NewManagedCertificateForm({ org, direct, onCreated }: { org: Org; direc
 
   const parsedNames = splitNames(names);
   const problems = nameProblems(parsedNames);
-  // Whether each step holds what it needs. The Authority, Ownership and Review steps always do: one environment is always chosen, Owners are optional, and Review only shows what was entered.
+  // Whether each step holds what it needs. The Authority, Ownership and Review steps always do: one CA is always chosen, Owners are optional, and Review only shows what was entered.
   const complete: Record<StepId, boolean> = { authority: true, names: problems.length === 0, subject: csr.trim() !== "", ownership: true, review: true };
   const index = STEPS.findIndex((s) => s.id === step);
   const last = index === STEPS.length - 1;
@@ -109,7 +118,9 @@ function NewManagedCertificateForm({ org, direct, onCreated }: { org: Org; direc
     const target = STEPS[i];
     if (target && reachable(i)) setStep(target.id);
   };
-  const registered = accounts.data?.items.some((a) => a.environment === environment);
+  const registered = authority.kind !== "acme" || accounts.data?.items.some((a) => a.environment === authority.environment);
+  const authorityTitle =
+    authority.kind === "acme" ? ENVIRONMENTS.find((e) => e.value === authority.environment)?.title : `Private CA ${activeCas.find((ca) => ca.id === authority.privateCaId)?.name ?? ""}`;
 
   const dropGeneratedCsr = () => {
     if (generated !== null && csr === generated) setCsr("");
@@ -166,10 +177,10 @@ function NewManagedCertificateForm({ org, direct, onCreated }: { org: Org; direc
             <FieldSet>
               <FieldLegend>Where should it be issued from?</FieldLegend>
               <FieldDescription>
-                {direct ? "Issuance starts as soon as it is created." : "An Approver must approve it before any Certificate is issued."} It is issued under the
-                Organization's ACME account for the environment you choose.
+                {direct ? "Issuance starts as soon as it is created." : "An Approver must approve it before any Certificate is issued."} An ACME CA issues it under the
+                Organization's account for the environment you choose, after checking control of the names (DCV); one of the Organization's Private CAs issues it with no DCV.
               </FieldDescription>
-              <RadioGroup value={environment} onValueChange={(value) => setEnvironment(value as Environment)}>
+              <RadioGroup value={authorityValue(authority)} onValueChange={(value) => setAuthority(authorityOf(value))}>
                 {ENVIRONMENTS.map((env) => (
                   <FieldLabel key={env.value} htmlFor={`new-mc-env-${env.value}`}>
                     <Field orientation="horizontal">
@@ -177,14 +188,27 @@ function NewManagedCertificateForm({ org, direct, onCreated }: { org: Org; direc
                         <FieldTitle>{env.title}</FieldTitle>
                         <FieldDescription>{env.description}</FieldDescription>
                       </FieldContent>
-                      <RadioGroupItem value={env.value} id={`new-mc-env-${env.value}`} />
+                      <RadioGroupItem value={`acme:${env.value}`} id={`new-mc-env-${env.value}`} />
+                    </Field>
+                  </FieldLabel>
+                ))}
+                {activeCas.map((ca) => (
+                  <FieldLabel key={ca.id} htmlFor={`new-mc-ca-${ca.id}`}>
+                    <Field orientation="horizontal">
+                      <FieldContent>
+                        <FieldTitle>Private CA {ca.name}</FieldTitle>
+                        <FieldDescription>
+                          The Organization's own CA ({ca.subject}). Trusted only where its root is installed; no DCV.
+                        </FieldDescription>
+                      </FieldContent>
+                      <RadioGroupItem value={`private_ca:${ca.id}`} id={`new-mc-ca-${ca.id}`} />
                     </Field>
                   </FieldLabel>
                 ))}
               </RadioGroup>
-              {accounts.data && !registered && (
+              {authority.kind === "acme" && accounts.data && !registered && (
                 <FieldError>
-                  The Organization has no {environment} ACME account yet, so Issuance would fail. An Organization Administrator can register one under ACME accounts.
+                  The Organization has no {authority.environment} ACME account yet, so Issuance would fail. An Organization Administrator can register one under ACME accounts.
                 </FieldError>
               )}
             </FieldSet>
@@ -307,7 +331,7 @@ function NewManagedCertificateForm({ org, direct, onCreated }: { org: Org; direc
                   {direct ? "Issuance starts as soon as it is created." : "An Approver must approve it before any Certificate is issued."} Use Back to change anything.
                 </FieldDescription>
                 <Summary
-                  environment={environment}
+                  authority={authorityTitle ?? ""}
                   names={parsedNames}
                   keyAlgorithm={keyAlgorithm}
                   csr={generated !== null && csr === generated ? "Generated in this browser" : "Provided"}
@@ -337,9 +361,9 @@ function NewManagedCertificateForm({ org, direct, onCreated }: { org: Org; direc
   );
 }
 
-function Summary({ environment, names, keyAlgorithm, csr, owners }: { environment: Environment; names: string[]; keyAlgorithm: KeyAlgorithm; csr: string; owners: string[] }) {
+function Summary({ authority, names, keyAlgorithm, csr, owners }: { authority: string; names: string[]; keyAlgorithm: KeyAlgorithm; csr: string; owners: string[] }) {
   const rows: { label: string; value: ReactNode }[] = [
-    { label: "Issued from", value: ENVIRONMENTS.find((e) => e.value === environment)?.title },
+    { label: "Issued from", value: authority },
     { label: "Domain names", value: <ul className="flex flex-col gap-0.5 font-mono text-xs">{names.map((name) => <li key={name}>{name}</li>)}</ul> },
     { label: "Key algorithm", value: KEY_ALGORITHM_LABELS[keyAlgorithm] },
     { label: "CSR", value: csr },

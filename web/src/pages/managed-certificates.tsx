@@ -13,7 +13,7 @@ import { Tabs, TabsContent, TabsList, TabsTrigger } from "@/components/ui/tabs";
 import { Table, TableBody, TableCell, TableHead, TableHeader, TableRow } from "@/components/ui/table";
 import { api, can, ownerLabel, type InventoryFilters, type ManagedCertificate, type Me } from "@/lib/api";
 import { KEY_ALGORITHMS, KEY_ALGORITHM_LABELS } from "@/lib/csr-generator";
-import { keyAlgorithmLabel, status } from "@/lib/managed-certificate";
+import { issuerLabel, keyAlgorithmLabel, status } from "@/lib/managed-certificate";
 
 type Org = Me["organizations"][number];
 
@@ -213,7 +213,7 @@ function ApprovalQueue({ org, onDecided: decided }: { org: Org; onDecided: () =>
       id: m.id,
       names: m.names.join(", "),
       request: "New",
-      detail: `${keyAlgorithmLabel(m.keyAlgorithm)}, ${m.environment}`,
+      detail: `${keyAlgorithmLabel(m.keyAlgorithm)}, ${issuerLabel(m.issuer)}`,
       proposedBy: m.approval.proposedBy?.email,
       label: m.names.join(", "),
       approve: () => approve.mutate(m.id),

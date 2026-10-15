@@ -171,7 +171,10 @@ export interface ManagedCertificate {
   keyAlgorithm: string;
   /** Who holds the private key: the Owner, who submitted a CSR, or one Agent, through its one Deployment. */
   keyCustody: "owner" | "agent";
-  environment: "staging" | "production";
+  /** The ACME environment, as in `issuer`; none for one issued from a Private CA. */
+  environment: "staging" | "production" | null;
+  /** Where its Certificates come from: an ACME CA through the Organization's account in an environment, or one of its Private CAs. */
+  issuer: Issuer;
   /** When it was archived: it then neither issues, renews nor deploys. */
   archivedAt: string | null;
   owners: Owner[];
@@ -208,8 +211,11 @@ export interface Certificate {
   notAfter: string;
   names: string[];
   ca: string;
-  environment: "staging" | "production";
-  acmeAccountId: string;
+  /** The ACME environment and account it was issued through; none for a Certificate from a Private CA. */
+  environment: "staging" | "production" | null;
+  acmeAccountId: string | null;
+  /** The Private CA that issued it; none for a Certificate from an ACME CA. */
+  privateCaId: string | null;
   issuedAt: string;
   revocation: Revocation | null;
 }
@@ -230,7 +236,28 @@ export interface CertificateFacts extends Certificate {
   signatureAlgorithm: string;
   /** The leaf and the intermediates the CA served, leaf first. */
   chain: ChainCertificate[];
-  acmeAccount: { id: string; environment: AcmeAccount["environment"] };
+  acmeAccount: { id: string; environment: AcmeAccount["environment"] } | null;
+}
+export type Issuer = { kind: "acme"; environment: "staging" | "production" } | { kind: "private_ca"; privateCa: { id: string; name: string } };
+/** An Organization's own CA, whose keys are in the KMS. */
+export interface PrivateCa {
+  id: string;
+  name: string;
+  kind: "platform_root" | "organization_root";
+  /** Only an active one issues. */
+  status: "awaiting_signature" | "active" | "retired" | "revoked";
+  keyAlgorithm: string;
+  /** The Issuing CA's subject. */
+  subject: string;
+  /** When its Issuing CA ends. */
+  notAfter: string | null;
+  createdAt: string;
+}
+export interface NewPrivateCa {
+  name: string;
+  subject: string;
+  keyAlgorithm: string;
+  lifetimeYears: number;
 }
 /** An Organization's account with a CA; its key is never returned. */
 export interface AcmeAccount {
@@ -346,7 +373,7 @@ export interface NewManagedCertificate {
   names: string[];
   keyAlgorithm: string;
   csr: string;
-  environment: "staging" | "production";
+  issuer: { kind: "acme"; environment: "staging" | "production" } | { kind: "private_ca"; privateCaId: string };
   owners?: OwnerRef[];
 }
 export interface NotificationChannel {
@@ -571,6 +598,10 @@ export const api = {
   deploymentRuns: (orgId: string, id: string, paging: { page: number; pageSize: number }) =>
     call<Page<DeploymentRun>>(`/api/organizations/${orgId}/deployments/${id}/runs?${new URLSearchParams({ page: String(paging.page), pageSize: String(paging.pageSize) })}`),
   runDeploymentAgain: (orgId: string, id: string) => call<Deployment>(`/api/organizations/${orgId}/deployments/${id}/runs`, { method: "POST", body: {} }),
+  privateCas: (orgId: string) => call<{ items: PrivateCa[] }>(`/api/organizations/${orgId}/private-cas`),
+  createPrivateCa: (orgId: string, body: NewPrivateCa) => call<PrivateCa>(`/api/organizations/${orgId}/private-cas`, { body }),
+  /** Where a Private CA's chain (its Issuing CA, then its root) downloads from. */
+  privateCaChainUrl: (orgId: string, id: string) => `/api/organizations/${orgId}/private-cas/${id}/chain`,
   acmeAccounts: (orgId: string) => call<{ items: AcmeAccount[] }>(`/api/organizations/${orgId}/acme-accounts`),
   registerAcmeAccount: (orgId: string, body: { environment: AcmeAccount["environment"]; contactEmail?: string }) =>
     call<AcmeAccount>(`/api/organizations/${orgId}/acme-accounts`, { body: { ...body, termsOfServiceAgreed: true } }),

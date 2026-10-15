@@ -225,6 +225,13 @@
       "when": 1792033857662,
       "tag": "0031_issuer_kind",
       "breakpoints": true
+    },
+    {
+      "idx": 32,
+      "version": "7",
+      "when": 1792068659012,
+      "tag": "0032_private_ca",
+      "breakpoints": true
     }
   ]
 }

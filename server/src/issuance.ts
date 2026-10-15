@@ -14,7 +14,7 @@ import type { Db, Tx } from "./db/client";
 import { certificate, issuance, managedCertificate } from "./db/schema";
 import { sameNames } from "./names";
 import { IssuanceFailure, type IssuanceFailureCode } from "./issuance-failure";
-import { certificateIssuerColumns, issuerOf, type Issued, type Issuers } from "./issuer";
+import { certificateIssuerColumns, issuerDetail, issuerOf, type Issued, type Issuers } from "./issuer";
 import type { Actor, Change, UnitOfWork } from "./unit-of-work";
 
 /**
@@ -294,6 +294,7 @@ export function createIssuances({ db, unitOfWork, issuers, dcv }: IssuancesDeps)
             serial: stored.serial,
             names: stored.names,
             notAfter: stored.notAfter.toISOString(),
+            ...issuerDetail(issued.issuedBy),
             ...leftoverDetail(leftovers()),
           },
         });
@@ -378,7 +379,7 @@ export function createIssuances({ db, unitOfWork, issuers, dcv }: IssuancesDeps)
         organizationId,
         action: "issuance.started",
         target: { type: "managed_certificate", id },
-        detail: { issuanceId: row!.id, ...(renewal && { renewal }) },
+        detail: { issuanceId: row!.id, ...(renewal && { renewal }), ...issuerDetail(issuerOf(mc)) },
       });
       if (!awaitingKey) change.afterCommit(() => start(row!.id));
       return { issuanceId: row!.id };
