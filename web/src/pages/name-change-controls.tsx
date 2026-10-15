@@ -6,7 +6,7 @@ import { Label } from "@/components/ui/label";
 import { Textarea } from "@/components/ui/textarea";
 import { api, can, type ManagedCertificate, type Me } from "@/lib/api";
 import { isOwner } from "@/lib/managed-certificate";
-import { chosenValidityLabel, daysLabel, isValidityDays, permittedNamesLabel } from "@/lib/private-ca";
+import { chosenValidityLabel, daysLabel, isValidityDays, permitsOnlyLabel } from "@/lib/private-ca";
 
 /** A Managed Certificate's name change: the one waiting for Approval, and for those who may, the means to make one. */
 export function NameChange({ org, m, userId, onChanged }: { org: Me["organizations"][number]; m: ManagedCertificate; userId?: string; onChanged: () => void }) {
@@ -79,7 +79,7 @@ export function NameChange({ org, m, userId, onChanged }: { org: Me["organizatio
             <Textarea id={`new-names-${m.id}`} value={names} onChange={(e) => setNames(e.target.value)} required />
             {privateCa && (
               <p className="text-muted-foreground">
-                {privateCa.name} permits only {permittedNamesLabel(privateCa.permittedNames)}; other names are refused.
+                {permitsOnlyLabel(privateCa)}
               </p>
             )}
             {m.issuer.kind === "private_ca" && (

@@ -1,12 +1,12 @@
 import { useQuery } from "@tanstack/react-query";
 import { useParams } from "@tanstack/react-router";
-import { createColumnHelper, tableFeatures, useTable } from "@tanstack/react-table";
-import { CalendarClockIcon, DownloadIcon, PencilIcon, PlusIcon } from "lucide-react";
-import { useState, type FormEvent } from "react";
-import { DataTable } from "@/components/data-table/data-table";
+import { MoreHorizontalIcon, PlusIcon } from "lucide-react";
+import { useState, type FormEvent, type ReactNode } from "react";
 import { Badge } from "@/components/ui/badge";
 import { Button } from "@/components/ui/button";
+import { Card, CardAction, CardContent, CardHeader, CardTitle } from "@/components/ui/card";
 import { Dialog, DialogClose, DialogContent, DialogDescription, DialogFooter, DialogHeader, DialogTitle, DialogTrigger } from "@/components/ui/dialog";
+import { DropdownMenu, DropdownMenuContent, DropdownMenuItem, DropdownMenuSeparator, DropdownMenuTrigger } from "@/components/ui/dropdown-menu";
 import { Input } from "@/components/ui/input";
 import { Label } from "@/components/ui/label";
 import { Textarea } from "@/components/ui/textarea";
@@ -14,30 +14,12 @@ import { api, can, type PermittedNames, type PrivateCa, type PrivateCaValidity }
 import { KEY_ALGORITHMS, KEY_ALGORITHM_LABELS, type KeyAlgorithm } from "@/lib/csr-generator";
 import { splitNames } from "@/lib/csr-names";
 import { keyAlgorithmLabel } from "@/lib/managed-certificate";
-import { DEFAULT_VALIDITY_DAYS, MAX_VALIDITY_DAYS, isValidityDays, permittedNamesLabel, validityLabel } from "@/lib/private-ca";
+import { DEFAULT_VALIDITY_DAYS, MAX_VALIDITY_DAYS, isValidityDays, permittedNamesLabel, rootSubjectOf, validityLabel } from "@/lib/private-ca";
 import { useAction } from "@/lib/use-action";
 
 const ROUTE = "/app/organizations/$orgId/private-cas";
 const STATUS_LABEL: Record<PrivateCa["status"], string> = { awaiting_signature: "Awaiting signature", active: "Active", retired: "Retired", revoked: "Revoked" };
 const date = (iso: string) => new Date(iso).toLocaleDateString(undefined, { year: "numeric", month: "short", day: "numeric" });
-
-// The server lists every Private CA, and an Organization has few, so there is nothing to page.
-const features = tableFeatures({});
-const columnHelper = createColumnHelper<typeof features, PrivateCa>();
-const columns = columnHelper.columns([
-  columnHelper.accessor("name", { header: "Name", cell: ({ cell }) => <span className="font-medium">{cell.getValue()}</span> }),
-  columnHelper.accessor("subject", { header: "Issuing CA", cell: ({ cell }) => <span className="break-all font-mono text-xs">{cell.getValue()}</span> }),
-  columnHelper.accessor("keyAlgorithm", { header: "Key", cell: ({ cell }) => keyAlgorithmLabel(cell.getValue()) }),
-  columnHelper.accessor("permittedNames", { header: "Permitted names", cell: ({ cell }) => <span className="break-all text-xs">{permittedNamesLabel(cell.getValue())}</span> }),
-  columnHelper.accessor("validity", { header: "Validity", cell: ({ cell }) => <span className="text-xs">{validityLabel(cell.getValue())}</span> }),
-  columnHelper.accessor("status", {
-    header: "Status",
-    cell: ({ cell }) => <Badge variant={cell.getValue() === "active" ? "default" : "secondary"}>{STATUS_LABEL[cell.getValue()]}</Badge>,
-  }),
-  columnHelper.accessor("notAfter", { header: "Expires", cell: ({ cell }) => (cell.getValue() ? date(cell.getValue()!) : <span className="text-muted-foreground">None yet</span>) }),
-  columnHelper.display({ id: "actions", header: () => <span className="sr-only">Actions</span>, cell: ({ row }) => <Actions ca={row.original} /> }),
-]);
-const noRows: PrivateCa[] = [];
 
 /**
  * The Organization's Private CAs: its own CAs, whose keys the platform holds only in a KMS. A Managed Certificate can be
@@ -48,7 +30,6 @@ export function PrivateCasPage() {
   const org = useQuery({ queryKey: ["me"], queryFn: api.me, select: (me) => me.organizations.find((o) => o.id === orgId) }).data;
   const allowed = org ? can(org, "privateCa", "read") : false;
   const cas = useQuery({ queryKey: ["private-cas", orgId], queryFn: () => api.privateCas(orgId), enabled: allowed });
-  const table = useTable({ features, columns, data: cas.data?.items ?? noRows, getRowId: (ca) => ca.id });
 
   return (
     <div className="flex flex-col gap-6">
@@ -57,14 +38,20 @@ export function PrivateCasPage() {
         {org && can(org, "privateCa", "create") && <CreatePrivateCaDialog orgId={orgId} />}
       </div>
       <p className="text-sm text-muted-foreground">
-        The Organization's own CAs, for internal names a public CA will not validate. The platform makes a root and an Issuing CA under it, each with its own key in the KMS,
-        which never leaves it. A Managed Certificate issued from one needs no DCV; download the chain to install its root wherever its Certificates must be trusted.
+        The Organization's own CAs, for internal names a public CA will not validate. Each is a root and an Issuing CA under it, each with its own key in the KMS, which never
+        leaves it. A Managed Certificate issued from one needs no DCV; download the chain to install its root wherever its Certificates must be trusted.
       </p>
       {org && !allowed ? (
         <p className="text-sm text-muted-foreground">You may not see the Private CAs.</p>
       ) : (
         <div className="flex flex-col gap-4">
-          <DataTable table={table} empty={cas.isPending ? "Loading…" : "No Private CA yet."} />
+          {cas.isPending ? (
+            <p className="text-sm text-muted-foreground">Loading…</p>
+          ) : cas.data?.items.length === 0 ? (
+            <p className="text-sm text-muted-foreground">No Private CA yet.</p>
+          ) : (
+            cas.data?.items.map((ca) => <PrivateCaCard key={ca.id} ca={ca} />)
+          )}
           {cas.error && <p className="text-sm text-destructive">{cas.error.message}</p>}
         </div>
       )}
@@ -72,26 +59,88 @@ export function PrivateCasPage() {
   );
 }
 
-function Actions({ ca }: { ca: PrivateCa }) {
+/** A Private CA as its hierarchy: the root, and the Issuing CA it signs, which issues the Certificates. */
+function PrivateCaCard({ ca }: { ca: PrivateCa }) {
+  return (
+    <Card className="gap-4">
+      <CardHeader>
+        <CardTitle className="flex items-center gap-2">
+          {ca.name}
+          <Badge variant={ca.status === "active" ? "default" : "secondary"}>{STATUS_LABEL[ca.status]}</Badge>
+        </CardTitle>
+        <CardAction>
+          <PrivateCaActions ca={ca} />
+        </CardAction>
+      </CardHeader>
+      <CardContent className="flex flex-col gap-3">
+        <CaTier title="Root CA" subject={ca.root?.subject} notAfter={ca.root?.notAfter}>
+          {ca.root ? `${keyAlgorithmLabel(ca.keyAlgorithm)}. Self-signed; install it wherever the Certificates must be trusted.` : "The Organization's own; the platform does not hold it."}
+        </CaTier>
+        <div className="ml-3 border-l pl-4">
+          <CaTier title="Issuing CA" subject={ca.subject} notAfter={ca.notAfter ?? undefined}>
+            <dl className="grid grid-cols-[auto_1fr] gap-x-4 gap-y-1">
+              <dt className="text-muted-foreground">Key</dt>
+              <dd>{keyAlgorithmLabel(ca.keyAlgorithm)}</dd>
+              <dt className="text-muted-foreground">Permitted names</dt>
+              <dd className="break-all">{permittedNamesLabel(ca.permittedNames)}</dd>
+              <dt className="text-muted-foreground">Validity</dt>
+              <dd>{validityLabel(ca.validity)}</dd>
+            </dl>
+          </CaTier>
+        </div>
+      </CardContent>
+    </Card>
+  );
+}
+
+/** One CA in a Private CA's hierarchy: what it is, its subject and when it ends. */
+function CaTier({ title, subject, notAfter, children }: { title: string; subject?: string; notAfter?: string; children: ReactNode }) {
+  return (
+    <div className="flex flex-col gap-1 text-sm">
+      <div className="flex flex-wrap items-baseline justify-between gap-x-4">
+        <span className="font-medium">{title}</span>
+        <span className="text-xs text-muted-foreground">{notAfter ? `Expires ${date(notAfter)}` : "No certificate yet"}</span>
+      </div>
+      {subject && <span className="break-all font-mono text-xs">{subject}</span>}
+      <div className="text-xs">{children}</div>
+    </div>
+  );
+}
+
+function PrivateCaActions({ ca }: { ca: PrivateCa }) {
   const { orgId } = useParams({ from: ROUTE });
   const org = useQuery({ queryKey: ["me"], queryFn: api.me, select: (me) => me.organizations.find((o) => o.id === orgId) }).data;
+  const [editing, setEditing] = useState<"names" | "validity" | null>(null);
+  const mayUpdate = org ? can(org, "privateCa", "update") : false;
+  if (!mayUpdate && !ca.notAfter) return null;
   return (
-    <div className="flex justify-end gap-2">
-      {org && can(org, "privateCa", "update") && (
-        <>
-          <EditPermittedNamesDialog orgId={orgId} ca={ca} />
-          <EditValidityDialog orgId={orgId} ca={ca} />
-        </>
-      )}
-      {ca.notAfter && (
-        <Button variant="outline" size="sm" asChild>
-          <a href={api.privateCaChainUrl(orgId, ca.id)} download aria-label={`Download the chain of ${ca.name}`}>
-            <DownloadIcon />
-            Chain
-          </a>
-        </Button>
-      )}
-    </div>
+    <>
+      <DropdownMenu>
+        <DropdownMenuTrigger asChild>
+          <Button variant="ghost" size="icon-sm" aria-label={`Actions for ${ca.name}`}>
+            <MoreHorizontalIcon />
+          </Button>
+        </DropdownMenuTrigger>
+        <DropdownMenuContent align="end" className="w-44">
+          {mayUpdate && (
+            <>
+              <DropdownMenuItem onSelect={() => setEditing("names")}>Permitted names…</DropdownMenuItem>
+              <DropdownMenuItem onSelect={() => setEditing("validity")}>Validity…</DropdownMenuItem>
+            </>
+          )}
+          {mayUpdate && ca.notAfter && <DropdownMenuSeparator />}
+          {ca.notAfter && (
+            <DropdownMenuItem asChild>
+              <a href={api.privateCaChainUrl(orgId, ca.id)} download>
+                Download chain
+              </a>
+            </DropdownMenuItem>
+          )}
+        </DropdownMenuContent>
+      </DropdownMenu>
+      <EditPermittedNamesDialog orgId={orgId} ca={ca} open={editing === "names"} onOpenChange={(open) => setEditing(open ? "names" : null)} />
+      <EditValidityDialog orgId={orgId} ca={ca} open={editing === "validity"} onOpenChange={(open) => setEditing(open ? "validity" : null)} />
+    </>
   );
 }
 
@@ -152,16 +201,11 @@ function ValidityFields({ id, value, onChange }: { id: string; value: ValidityTe
   );
 }
 
-function EditValidityDialog({ orgId, ca }: { orgId: string; ca: PrivateCa }) {
-  const [open, setOpen] = useState(false);
+type EditDialogProps = { orgId: string; ca: PrivateCa; open: boolean; onOpenChange: (open: boolean) => void };
+
+function EditValidityDialog({ orgId, ca, open, onOpenChange }: EditDialogProps) {
   return (
-    <Dialog open={open} onOpenChange={setOpen}>
-      <DialogTrigger asChild>
-        <Button variant="outline" size="sm" aria-label={`Change the validity of ${ca.name}`}>
-          <CalendarClockIcon />
-          Validity
-        </Button>
-      </DialogTrigger>
+    <Dialog open={open} onOpenChange={onOpenChange}>
       <DialogContent className="sm:max-w-lg">
         <DialogHeader>
           <DialogTitle>Validity of {ca.name}</DialogTitle>
@@ -170,7 +214,7 @@ function EditValidityDialog({ orgId, ca }: { orgId: string; ca: PrivateCa }) {
             gets the maximum.
           </DialogDescription>
         </DialogHeader>
-        {open && <EditValidityForm orgId={orgId} ca={ca} onDone={() => setOpen(false)} />}
+        {open && <EditValidityForm orgId={orgId} ca={ca} onDone={() => onOpenChange(false)} />}
       </DialogContent>
     </Dialog>
   );
@@ -203,16 +247,9 @@ function EditValidityForm({ orgId, ca, onDone }: { orgId: string; ca: PrivateCa;
   );
 }
 
-function EditPermittedNamesDialog({ orgId, ca }: { orgId: string; ca: PrivateCa }) {
-  const [open, setOpen] = useState(false);
+function EditPermittedNamesDialog({ orgId, ca, open, onOpenChange }: EditDialogProps) {
   return (
-    <Dialog open={open} onOpenChange={setOpen}>
-      <DialogTrigger asChild>
-        <Button variant="outline" size="sm" aria-label={`Change the permitted names of ${ca.name}`}>
-          <PencilIcon />
-          Names
-        </Button>
-      </DialogTrigger>
+    <Dialog open={open} onOpenChange={onOpenChange}>
       <DialogContent className="sm:max-w-lg">
         <DialogHeader>
           <DialogTitle>Permitted names of {ca.name}</DialogTitle>
@@ -221,7 +258,7 @@ function EditPermittedNamesDialog({ orgId, ca }: { orgId: string; ca: PrivateCa 
             permitting names beyond them needs a new Issuing CA.
           </DialogDescription>
         </DialogHeader>
-        {open && <EditPermittedNamesForm orgId={orgId} ca={ca} onDone={() => setOpen(false)} />}
+        {open && <EditPermittedNamesForm orgId={orgId} ca={ca} onDone={() => onOpenChange(false)} />}
       </DialogContent>
     </Dialog>
   );
@@ -264,7 +301,7 @@ function CreatePrivateCaDialog({ orgId }: { orgId: string }) {
           New Private CA
         </Button>
       </DialogTrigger>
-      <DialogContent className="sm:max-w-lg">
+      <DialogContent className="max-h-[90vh] overflow-y-auto sm:max-w-lg">
         <DialogHeader>
           <DialogTitle>New Private CA</DialogTitle>
           <DialogDescription>The platform makes a root and an Issuing CA under it, with separate keys in the KMS. It can issue at once.</DialogDescription>
@@ -309,37 +346,47 @@ function CreatePrivateCaForm({ orgId, onDone }: { orgId: string; onDone: () => v
         <Label htmlFor="private-ca-name">Name</Label>
         <Input id="private-ca-name" value={name} onChange={(e) => setName(e.target.value)} placeholder="Internal TLS" />
       </div>
-      <div className="flex flex-col gap-2">
-        <Label htmlFor="private-ca-subject">Subject</Label>
-        <Input id="private-ca-subject" className="font-mono text-xs" value={subject} onChange={(e) => setSubject(e.target.value)} placeholder="CN=Acme Internal TLS, O=Acme" />
-        <p className="text-xs text-muted-foreground">The Issuing CA's distinguished name, with a common name. The root's is the same, with "Root" after the common name.</p>
+      <div className="flex gap-4">
+        <div className="flex flex-1 flex-col gap-2">
+          <Label htmlFor="private-ca-algorithm">Key algorithm</Label>
+          <select
+            id="private-ca-algorithm"
+            className="h-9 rounded-md border bg-transparent px-3 text-sm"
+            value={keyAlgorithm}
+            onChange={(e) => setKeyAlgorithm(e.target.value as KeyAlgorithm)}
+          >
+            {KEY_ALGORITHMS.map((value) => (
+              <option key={value} value={value}>
+                {KEY_ALGORITHM_LABELS[value]}
+              </option>
+            ))}
+          </select>
+        </div>
+        <div className="flex flex-col gap-2">
+          <Label htmlFor="private-ca-lifetime">Lifetime (years)</Label>
+          <Input id="private-ca-lifetime" type="number" min={1} max={30} className="w-32" value={lifetimeYears} onChange={(e) => setLifetimeYears(e.target.value)} />
+        </div>
       </div>
-      <div className="flex flex-col gap-2">
-        <Label htmlFor="private-ca-algorithm">Key algorithm</Label>
-        <select
-          id="private-ca-algorithm"
-          className="h-9 rounded-md border bg-transparent px-3 text-sm"
-          value={keyAlgorithm}
-          onChange={(e) => setKeyAlgorithm(e.target.value as KeyAlgorithm)}
-        >
-          {KEY_ALGORITHMS.map((value) => (
-            <option key={value} value={value}>
-              {KEY_ALGORITHM_LABELS[value]}
-            </option>
-          ))}
-        </select>
-      </div>
-      <div className="flex flex-col gap-2">
-        <Label htmlFor="private-ca-lifetime">Lifetime (years)</Label>
-        <Input id="private-ca-lifetime" type="number" min={1} max={30} value={lifetimeYears} onChange={(e) => setLifetimeYears(e.target.value)} />
-        <p className="text-xs text-muted-foreground">How long the root and the Issuing CA are valid for. No Certificate it issues outlives it.</p>
-      </div>
-      <PermittedNamesFields id="private-ca-new" value={rules} onChange={setRules} />
-      <p className="text-xs text-muted-foreground">
-        The Issuing CA carries them as name constraints, which relying parties enforce. You can change the names later, but not those constraints without a new Issuing CA, so
-        prefer broad zones.
-      </p>
-      <ValidityFields id="private-ca-new-validity" value={validity} onChange={setValidity} />
+      <p className="-mt-2 text-xs text-muted-foreground">For both the root and the Issuing CA, each with its own key. No Certificate outlives them.</p>
+      <fieldset className="flex flex-col gap-1 rounded-md border p-3">
+        <legend className="px-1 text-sm font-medium">Root CA</legend>
+        <span className="break-all font-mono text-xs">{subject.trim() ? rootSubjectOf(subject.trim()) : <span className="font-sans text-muted-foreground">From the Issuing CA's subject</span>}</span>
+        <p className="text-xs text-muted-foreground">Self-signed. Its subject is the Issuing CA's, with "Root" after the common name.</p>
+      </fieldset>
+      <fieldset className="ml-3 flex flex-col gap-4 rounded-md border p-3">
+        <legend className="px-1 text-sm font-medium">Issuing CA, signed by the root</legend>
+        <div className="flex flex-col gap-2">
+          <Label htmlFor="private-ca-subject">Subject</Label>
+          <Input id="private-ca-subject" className="font-mono text-xs" value={subject} onChange={(e) => setSubject(e.target.value)} placeholder="CN=Acme Internal TLS, O=Acme" />
+          <p className="text-xs text-muted-foreground">A distinguished name, with a common name.</p>
+        </div>
+        <PermittedNamesFields id="private-ca-new" value={rules} onChange={setRules} />
+        <p className="-mt-2 text-xs text-muted-foreground">
+          The Issuing CA carries them as name constraints, which relying parties enforce. You can change the names later, but not those constraints without a new Issuing CA, so
+          prefer broad zones.
+        </p>
+        <ValidityFields id="private-ca-new-validity" value={validity} onChange={setValidity} />
+      </fieldset>
       {create.error && <p className="text-sm text-destructive">{create.error.message}</p>}
       <DialogFooter>
         <DialogClose asChild>
