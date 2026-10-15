@@ -5,17 +5,18 @@
 // Approver approves it. It may have Owners (owners.ts), who with Approvers and Organization Administrators are the
 // ones who see it (see managed-certificate-reader.ts). This module serves the inventory and the Managed Certificate itself.
 import { OpenAPIHono, createRoute, z } from "@hono/zod-openapi";
-import { and, asc, eq } from "drizzle-orm";
+import { and, asc, desc, eq } from "drizzle-orm";
 import { silentSince } from "./agents";
 import type { Authorizer } from "./authorization";
 import { ACME_ENVIRONMENTS } from "./certificate-authority";
+import { certificateFacts } from "./certificate-facts";
 import { KEY_ALGORITHMS } from "./csr";
 import type { Db } from "./db/client";
 import { issuance, managedCertificate } from "./db/schema";
 import { HttpError, OrgParam, PageQuery, errors, json, pageOf } from "./http";
 import { InventoryQuery, inventoryCondition } from "./inventory-filters";
 import { refusalMessage, type Issuances } from "./issuance";
-import { Certificate, Issuance, ManagedCertificate, ManagedCertificateParams, toCertificate, toIssuance, type ManagedCertificateReader } from "./managed-certificate-reader";
+import { Certificate, CertificateFacts, Issuance, ManagedCertificate, ManagedCertificateParams, toCertificate, toIssuance, type ManagedCertificateReader } from "./managed-certificate-reader";
 import { checkNamesAndCsr, csrField, namesField } from "./names-and-csr";
 import { OwnerRef, addOwner } from "./owners";
 import { roleCan } from "./permissions";
@@ -160,6 +161,28 @@ export function registerManagedCertificates(ctx: {
 
   app.openapi(
     createRoute({
+      method: "get",
+      path: "/api/organizations/{orgId}/managed-certificates/{id}/issuances",
+      tags: ["Managed Certificates"],
+      summary: "Every attempt to issue a Certificate for the Managed Certificate, the newest first",
+      description: "Each with its kind (first issue, Renewal, Name Change), status and failure, so a failure a later attempt cleared can still be explained.",
+      request: { params: ManagedCertificateParams },
+      responses: { 200: json(z.object({ items: z.array(Issuance) })), ...errors(401, 403, 404) },
+    }),
+    async (c) => {
+      const { orgId, id } = c.req.valid("param");
+      const mc = await findReadable(await requireUser(c), orgId, id);
+      const rows = await db
+        .select()
+        .from(issuance)
+        .where(and(eq(issuance.organizationId, orgId), eq(issuance.managedCertificateId, mc.id)))
+        .orderBy(desc(issuance.startedAt), desc(issuance.createdAt));
+      return c.json({ items: rows.map(toIssuance) }, 200);
+    },
+  );
+
+  app.openapi(
+    createRoute({
       method: "post",
       path: "/api/organizations/{orgId}/managed-certificates/{id}/issuances",
       tags: ["Managed Certificates"],
@@ -195,6 +218,28 @@ export function registerManagedCertificates(ctx: {
       const rows = await certificatesOf(orgId, mc.id);
       const revocations = await revocationsOf(db, rows.map((row) => row.id));
       return c.json({ items: rows.map((row) => toCertificate(row, revocations.get(row.id))) }, 200);
+    },
+  );
+
+  app.openapi(
+    createRoute({
+      method: "get",
+      path: "/api/organizations/{orgId}/managed-certificates/{id}/certificates/{certificateId}",
+      tags: ["Managed Certificates"],
+      summary: "One Certificate of the Managed Certificate, with everything it says about itself",
+      description:
+        "Its subject and names, issuer, serial, signature algorithm, the chain the CA served (leaf first), the CA and ACME Account it was issued through, and its revocation if any. " +
+        "Whoever may see the Managed Certificate may see its Certificates; a Certificate of another Managed Certificate is not found.",
+      request: { params: ManagedCertificateParams.extend({ certificateId: z.string().openapi({ param: { name: "certificateId", in: "path" } }) }) },
+      responses: { 200: json(CertificateFacts), ...errors(401, 403, 404) },
+    }),
+    async (c) => {
+      const { orgId, id, certificateId } = c.req.valid("param");
+      const mc = await findReadable(await requireUser(c), orgId, id);
+      const row = (await certificatesOf(orgId, mc.id)).find((r) => r.id === certificateId);
+      if (!row) throw new HttpError(404, "Certificate not found");
+      const revocations = await revocationsOf(db, [row.id]);
+      return c.json({ ...toCertificate(row, revocations.get(row.id)), ...certificateFacts(row.chainPem), acmeAccount: { id: row.acmeAccountId, environment: row.environment } }, 200);
     },
   );
 }

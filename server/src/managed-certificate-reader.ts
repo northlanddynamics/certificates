@@ -12,6 +12,7 @@ import type { Db } from "./db/client";
 import { agent, certificate, deployment, issuance, managedCertificate } from "./db/schema";
 import { HttpError, OrgParam } from "./http";
 import { ISSUANCE_FAILURE_CODES } from "./issuance-failure";
+import { ISSUANCE_KINDS } from "./issuance-kinds";
 import { PendingNameChange, pendingNameChanges, toPendingNameChange } from "./name-change";
 import { isOwner, ownedByUser, ownersOf } from "./owners";
 import { roleCan, type Permissions } from "./permissions";
@@ -22,9 +23,13 @@ import type { Actor } from "./unit-of-work";
 
 export const ManagedCertificateParams = OrgParam.extend({ id: z.string().openapi({ param: { name: "id", in: "path" } }) });
 
+export const Person = z.object({ id: z.string(), email: z.string() });
+
 export const Issuance = z.object({
   id: z.string(),
+  kind: z.enum(ISSUANCE_KINDS).openapi({ description: "`first_issue`: it had no Certificate yet. `renewal`: it had one for its names. `name_change`: it had one for other names, which a Name Change replaced." }),
   status: z.enum(["running", "succeeded", "failed"]),
+  requestedBy: Person.nullable().openapi({ description: "Who asked for it; none when the Renewal scheduler did." }),
   startedAt: z.string(),
   finishedAt: z.string().nullable(),
   failure: z
@@ -47,6 +52,23 @@ export const Certificate = z.object({
   acmeAccountId: z.string(),
   issuedAt: z.string(),
   revocation: Revocation.nullable().openapi({ description: "Set once the CA has been told to revoke it, by whom and why." }),
+});
+
+const ChainCertificate = z.object({
+  subject: z.string(),
+  issuer: z.string(),
+  serial: z.string().openapi({ description: "Upper-case hex." }),
+  fingerprint: z.string().openapi({ description: "SHA-256 of the certificate, lower-case hex." }),
+  notBefore: z.string(),
+  notAfter: z.string(),
+});
+
+export const CertificateFacts = Certificate.extend({
+  subject: z.string().openapi({ description: "The leaf's subject, as a distinguished name; `names` are its subject alternative names." }),
+  issuer: z.string().openapi({ description: "The distinguished name of the CA certificate that signed it." }),
+  signatureAlgorithm: z.string().openapi({ description: "How the CA signed it, such as `ECDSA with SHA-256`." }),
+  chain: z.array(ChainCertificate).openapi({ description: "The leaf and the intermediates the CA served, leaf first." }),
+  acmeAccount: z.object({ id: z.string(), environment: z.enum(ACME_ENVIRONMENTS) }).openapi({ description: "The Organization's ACME account it was issued through." }),
 });
 
 export const RenewalPolicy = z.object({
@@ -75,8 +97,6 @@ export const Renewal = z.object({
     .nullable()
     .openapi({ description: "Set while the latest Renewal of a Managed Certificate that has a Certificate has failed." }),
 });
-
-export const Person = z.object({ id: z.string(), email: z.string() });
 
 export const Approval = z.object({
   status: z.enum(APPROVAL_STATUSES).openapi({ description: "`not_required` for one an Organization Administrator created." }),
@@ -114,7 +134,9 @@ export const ManagedCertificate = z.object({
 type ManagedCertificateRow = typeof managedCertificate.$inferSelect;
 export const toIssuance = (row: typeof issuance.$inferSelect) => ({
   id: row.id,
+  kind: row.kind,
   status: row.status,
+  requestedBy: row.requestedById && row.requestedByEmail ? { id: row.requestedById, email: row.requestedByEmail } : null,
   startedAt: row.startedAt.toISOString(),
   finishedAt: row.finishedAt?.toISOString() ?? null,
   failure: row.failureCode && row.failureMessage ? { code: row.failureCode, message: row.failureMessage } : null,

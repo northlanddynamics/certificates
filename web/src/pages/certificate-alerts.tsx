@@ -7,7 +7,7 @@ import { Dialog, DialogContent, DialogDescription, DialogFooter, DialogHeader, D
 import { Field, FieldLabel } from "@/components/ui/field";
 import { Textarea } from "@/components/ui/textarea";
 import { api, can, type ManagedCertificate, type Me } from "@/lib/api";
-import { isOwner } from "@/lib/managed-certificate";
+import { ISSUANCE_KIND_WORDS, isOwner } from "@/lib/managed-certificate";
 
 const when = (iso: string) => new Date(iso).toLocaleString();
 
@@ -112,7 +112,10 @@ export function AlertStrip({ org, m, userId, onChanged }: { org: Me["organizatio
   const approveNames = useMutation({ mutationFn: () => api.approveNameChange(org.id, m.id), onSuccess: onChanged });
   const rejectNames = useMutation({ mutationFn: (reason: string) => api.rejectNameChange(org.id, m.id, reason), onSuccess: onChanged });
 
-  const failure = m.renewal.failing?.lastFailure ?? m.issuance?.failure ?? null;
+  // The latest attempt is the newest: its failure stands until a later attempt succeeds, which replaces it.
+  const failed = m.issuance?.status === "failed" ? m.issuance : null;
+  const failure = m.renewal.failing?.lastFailure ?? failed?.failure ?? null;
+  const failedAt = m.renewal.failing?.lastFailure.at ?? failed?.finishedAt ?? null;
   const mayRetry = renewing ? mayRenew : mayIssue;
   const proposal = m.approval.status === "pending" ? m.approval : null;
   const nameChange = m.pendingNameChange;
@@ -132,9 +135,16 @@ export function AlertStrip({ org, m, userId, onChanged }: { org: Me["organizatio
       {failure && m.issuance?.status !== "running" && (
         <Alert variant="destructive">
           <CircleAlertIcon />
-          <AlertTitle>{m.renewal.failing ? `Renewal failed ${m.renewal.failing.failures} time${m.renewal.failing.failures === 1 ? "" : "s"}` : "Issuance failed"}</AlertTitle>
+          <AlertTitle>
+            {m.renewal.failing && failed?.kind !== "name_change"
+              ? `Renewal failed ${m.renewal.failing.failures} time${m.renewal.failing.failures === 1 ? "" : "s"}`
+              : `${ISSUANCE_KIND_WORDS[failed?.kind ?? "first_issue"]} failed`}
+          </AlertTitle>
           <AlertDescription>
-            {failure.message}
+            <p>
+              {failure.message}
+              {failedAt && <span className="text-muted-foreground"> ({when(failedAt)})</span>}
+            </p>
             {m.renewal.failing?.nextAttemptAt && <p>Next attempt {when(m.renewal.failing.nextAttemptAt)}.</p>}
             {retry.error && <p>{retry.error.message}</p>}
           </AlertDescription>

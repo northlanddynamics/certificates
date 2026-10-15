@@ -8,6 +8,7 @@
 
 - [ ] A smoke test drives the guided Deployment in the browser and confirms a Deployment Run succeeded with the issued Certificate's fingerprint.
 - [ ] A smoke test drives a Member's CSR proposal, an Approver's approval and the Owner's PEM download.
+- [ ] A smoke test drives a Member's Proposal, then an Approver deciding it from the Managed Certificate's details page.
 - [ ] The smoke tests run in CI against Pebble and a test DNS server.
 
 ## Comments

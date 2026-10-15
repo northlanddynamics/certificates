@@ -2,12 +2,12 @@ import { useParams } from "@tanstack/react-router";
 import type { ReactNode } from "react";
 import { Card, CardContent, CardHeader, CardTitle } from "@/components/ui/card";
 import type { Certificate, ManagedCertificate } from "@/lib/api";
-import { keyAlgorithmLabel } from "@/lib/managed-certificate";
-import { useManagedCertificatePage } from "@/lib/use-managed-certificate";
+import { caLabel, keyAlgorithmLabel } from "@/lib/managed-certificate";
+import { useCertificateFacts, useManagedCertificatePage } from "@/lib/use-managed-certificate";
 import { NameChange } from "./name-change-controls";
 import { Owners } from "./owner-controls";
 import { Renewal } from "./renewal-controls";
-import { Revoke, revokedLine } from "./revocation-controls";
+import { revokedLine } from "./revocation-controls";
 
 const KEY_CUSTODY_LABELS = { owner: "Owner", agent: "Agent" } as const;
 
@@ -35,6 +35,8 @@ export function ManagedCertificateOverview() {
   const { orgId, id } = useParams({ from: "/app/organizations/$orgId/certificates/$id/" });
   const { org, userId, certificate, refresh } = useManagedCertificatePage(orgId, id);
   const m = certificate.data;
+  // What the current Certificate says about itself (its issuer); the rest is on the Managed Certificate already.
+  const facts = useCertificateFacts(orgId, id, m?.currentCertificate?.id);
   if (!org || !m) return null;
 
   const current = m.currentCertificate;
@@ -71,11 +73,21 @@ export function ManagedCertificateOverview() {
         <CardContent className="flex flex-col gap-4 text-sm">
           {current ? (
             <dl className="flex flex-col gap-3">
+              <Fact label="Issuer">
+                {facts.data?.issuer ?? (facts.error ? <span className="text-destructive">{facts.error.message}</span> : <span className="text-muted-foreground">…</span>)}
+              </Fact>
+              <Fact label="Serial">
+                <span className="font-mono text-xs break-all">{current.serial}</span>
+              </Fact>
               <Fact label="Fingerprint">
                 <span className="font-mono text-xs break-all">{current.fingerprint}</span>
               </Fact>
               <Fact label="Valid">
                 {date(current.notBefore)} to {date(current.notAfter)} ({daysLeft(current)})
+              </Fact>
+              <Fact label="CA">{caLabel(current.ca)}</Fact>
+              <Fact label="ACME Account">
+                <span className="capitalize">{current.environment}</span> <span className="font-mono text-xs text-muted-foreground">{current.acmeAccountId}</span>
               </Fact>
               {current.revocation && (
                 <Fact label="Revoked">
@@ -86,8 +98,6 @@ export function ManagedCertificateOverview() {
           ) : (
             <p className="text-muted-foreground">No Certificate yet.</p>
           )}
-          {/* Revoke stays here until the Issued certificates tab holds it; an archived page offers only Download. */}
-          {!m.archivedAt && <Revoke org={org} m={m} userId={userId} onChanged={refresh} />}
         </CardContent>
       </Card>
 
