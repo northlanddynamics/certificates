@@ -2,15 +2,13 @@
 // carries the environment whose ACME Account they are obtained through, is the only kind so far. Issuance, Renewal, the
 // asking about renewal windows, Revocation and exports reach the CA through here and never assume ACME: accounts, DCV
 // and ARI are the ACME kind's concern (certificate-authority.ts).
-import { and, eq } from "drizzle-orm";
+import { and, eq, type SQL } from "drizzle-orm";
 import type { AcmeCertificateAuthority, AcmeEnvironment, DnsChallengeResponder, RenewalInfo, RevocationReason } from "./certificate-authority";
 import type { Db, Tx } from "./db/client";
 import { acmeAccount } from "./db/schema";
 import { IssuanceFailure } from "./issuance-failure";
+import type { IssuerKind } from "./issuer-kinds";
 import type { Secrets } from "./secrets";
-
-export const ISSUER_KINDS = ["acme"] as const;
-export type IssuerKind = (typeof ISSUER_KINDS)[number];
 
 /** A Managed Certificate's issuer, as it is stored: its kind and that kind's reference. */
 export type Issuer = { kind: "acme"; environment: AcmeEnvironment };
@@ -62,46 +60,53 @@ export interface Issuers {
   roots(issuedBy: CertificateIssuer): Promise<string[]>;
 }
 
+/** What one kind of issuer does for the issuers of its kind: `Issuers`, for a Managed Certificate's issuer and a Certificate's of that kind. */
+interface KindOfIssuer<M extends Issuer, C extends CertificateIssuer> {
+  issue(db: Db | Tx, organizationId: string, issuer: M, request: { csr: string; replaces?: string; dcv: () => DnsChallengeResponder }): Promise<Issued>;
+  revoke(db: Db | Tx, organizationId: string, issuedBy: C, request: { certificate: string; reason: RevocationReason }): Promise<void>;
+  renewalInfo(issuedBy: C, certificate: string): Promise<RenewalInfo | null>;
+  roots(issuedBy: C): Promise<string[]>;
+}
+
 export function createIssuers({ acme, secrets }: { acme: AcmeCertificateAuthority; secrets: Secrets }): Issuers {
-  return {
+  /** The Organization's ACME account that `which` selects, and its key; none when it has no such account. */
+  async function openAccount(db: Db | Tx, organizationId: string, which: SQL) {
+    const [account] = await db
+      .select()
+      .from(acmeAccount)
+      .where(and(eq(acmeAccount.organizationId, organizationId), which));
+    if (!account) return null;
+    return { id: account.id, accountUrl: account.accountUrl, accountKey: await secrets.open(db, organizationId, account.secretId) };
+  }
+
+  const acmeKind: KindOfIssuer<Issuer & { kind: "acme" }, CertificateIssuer & { kind: "acme" }> = {
     async issue(db, organizationId, issuer, { csr, replaces, dcv }) {
-      switch (issuer.kind) {
-        case "acme": {
-          const [account] = await db
-            .select()
-            .from(acmeAccount)
-            .where(and(eq(acmeAccount.organizationId, organizationId), eq(acmeAccount.environment, issuer.environment)));
-          if (!account) throw new IssuanceFailure("no_acme_account", `the Organization has no ${issuer.environment} ACME account; register one first`);
-          const accountKey = await secrets.open(db, organizationId, account.secretId);
-          const chainPem = await acme.issue(issuer.environment, { accountUrl: account.accountUrl, accountKey }, { csr, responder: dcv(), replaces });
-          return { chainPem, ca: acme.name, issuedBy: { kind: "acme", environment: issuer.environment, acmeAccountId: account.id } };
-        }
-      }
+      const account = await openAccount(db, organizationId, eq(acmeAccount.environment, issuer.environment));
+      if (!account) throw new IssuanceFailure("no_acme_account", `the Organization has no ${issuer.environment} ACME account; register one first`);
+      const chainPem = await acme.issue(issuer.environment, account, { csr, responder: dcv(), replaces });
+      return { chainPem, ca: acme.name, issuedBy: { kind: "acme", environment: issuer.environment, acmeAccountId: account.id } };
     },
     async revoke(db, organizationId, issuedBy, request) {
-      switch (issuedBy.kind) {
-        case "acme": {
-          const [account] = await db
-            .select()
-            .from(acmeAccount)
-            .where(and(eq(acmeAccount.id, issuedBy.acmeAccountId), eq(acmeAccount.organizationId, organizationId)));
-          if (!account) throw new Error("the ACME account the Certificate was issued through is gone");
-          const accountKey = await secrets.open(db, organizationId, account.secretId);
-          return acme.revoke(issuedBy.environment, { accountUrl: account.accountUrl, accountKey }, request);
-        }
-      }
+      const account = await openAccount(db, organizationId, eq(acmeAccount.id, issuedBy.acmeAccountId));
+      if (!account) throw new Error("the ACME account the Certificate was issued through is gone");
+      await acme.revoke(issuedBy.environment, account, request);
     },
-    async renewalInfo(issuedBy, certificate) {
-      switch (issuedBy.kind) {
-        case "acme":
-          return acme.renewalInfo(issuedBy.environment, certificate);
-      }
-    },
-    async roots(issuedBy) {
-      switch (issuedBy.kind) {
-        case "acme":
-          return acme.roots(issuedBy.environment);
-      }
-    },
+    renewalInfo: (issuedBy, certificate) => acme.renewalInfo(issuedBy.environment, certificate),
+    roots: (issuedBy) => acme.roots(issuedBy.environment),
+  };
+
+  /** The kind an issuer is of: the one place a new kind is told apart. */
+  function kindOf(issuer: Issuer | CertificateIssuer) {
+    switch (issuer.kind) {
+      case "acme":
+        return acmeKind;
+    }
+  }
+
+  return {
+    issue: (db, organizationId, issuer, request) => kindOf(issuer).issue(db, organizationId, issuer, request),
+    revoke: (db, organizationId, issuedBy, request) => kindOf(issuedBy).revoke(db, organizationId, issuedBy, request),
+    renewalInfo: (issuedBy, certificate) => kindOf(issuedBy).renewalInfo(issuedBy, certificate),
+    roots: (issuedBy) => kindOf(issuedBy).roots(issuedBy),
   };
 }

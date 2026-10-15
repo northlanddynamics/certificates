@@ -7,7 +7,7 @@ import type { ScriptInterpreter } from "../deployment-script-kinds";
 import type { DnsProviderType } from "../dns-provider-kinds";
 import type { IssuanceFailureCode } from "../issuance-failure";
 import type { IssuanceKind } from "../issuance-kinds";
-import type { IssuerKind } from "../issuer";
+import type { IssuerKind } from "../issuer-kinds";
 import type { KeyAlgorithm, KeyCustody } from "../csr";
 import type { AgentArch, AgentOs } from "../agent-kinds";
 import type { ApprovalStatus } from "../approval";
