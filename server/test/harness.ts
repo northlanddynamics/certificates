@@ -26,6 +26,8 @@ export const PASSWORD = "correct-horse-battery-staple";
 export const TEST_KMS_KEY = Buffer.alloc(32, 1).toString("base64");
 
 const BASE = "http://localhost";
+/** Where the platform says Private CAs publish: another host than the API's, as a deployment may have. */
+export const PKI_BASE_URL = "http://pki.platform.test";
 
 /** Pebble, Let's Encrypt's ACME test server (`docker compose up -d pebble`), and the root its certificate is signed by. */
 export const PEBBLE_DIRECTORY = process.env.PEBBLE_DIRECTORY ?? "https://localhost:14000/dir";
@@ -92,6 +94,10 @@ export interface Harness {
   revocations: { certificate: string; reason: RevocationReason }[];
   /** Has Pebble answer ARI for the Certificate (PEM, or its chain) with this window instead of its own; the CA's `Retry-After` is Pebble's six hours. */
   setPebbleWindow(certificate: string, window: { start: Date; end: Date }): Promise<void>;
+  /** One pass of the CRL scheduler at the harness's clock: reissues the Private CAs' CRLs that are due and returns how many. */
+  runCrlScheduler(): Promise<number>;
+  /** The KMS as the platform sees it: `failing` makes every signature it is asked for fail. */
+  kms: { failing: boolean };
   /** What the platform does when it starts: ends the Issuances an earlier run left running. */
   failInterruptedIssuances(): Promise<void>;
   /** The roots the CA's chains end in, as an export that includes the root finds them: Pebble's, unless a test sets `current` to something else. */
@@ -146,6 +152,8 @@ export async function createHarness(overrides: Partial<AppDeps> = {}, { database
   const caRoots = { current: pebbleRoots };
   const ari: Harness["ari"] = { enabled: false, asked: [], replaces: [], failing: false };
   const revocations: Harness["revocations"] = [];
+  const kmsState = { failing: false };
+  const localKms = createLocalKms(TEST_KMS_KEY);
   // The real ACME client against Pebble; it only notes the keys it generated.
   const letsEncrypt = createLetsEncrypt({
     directoryUrls: caDirectories,
@@ -161,7 +169,13 @@ export async function createHarness(overrides: Partial<AppDeps> = {}, { database
     webhooks,
     auditTransport,
     memberRemovalHooks,
-    kms: createLocalKms(TEST_KMS_KEY),
+    kms: {
+      ...localKms,
+      async sign(key, context, digest) {
+        if (kmsState.failing) throw new Error("the KMS is unavailable");
+        return localKms.sign(key, context, digest);
+      },
+    },
     certificateAuthority: {
       ...letsEncrypt,
       async createAccount(environment, input) {
@@ -187,16 +201,18 @@ export async function createHarness(overrides: Partial<AppDeps> = {}, { database
     dcv: { resolver: { lookupTxt: (name) => dcvResolver.current.lookupTxt(name), lookupCname: (name) => dcvResolver.current.lookupCname(name) }, visibilityTimeoutMs: 1500, pollIntervalMs: 50 },
     clock: () => now,
     baseURL: BASE,
+    pkiBaseURL: PKI_BASE_URL,
     secret: "test-secret-test-secret-test-secret-1234",
     ...overrides,
   };
-  const { app, auth, db, unitOfWork, issuances, renewals, notifications, auditForwarding } = createApp(deps);
+  const { app, auth, db, unitOfWork, issuances, renewals, notifications, auditForwarding, crls } = createApp(deps);
   if (migrate) await runMigrations(pool);
   const reset = async () => {
     await issuances.idle();
     dcvResolver.current = bindTxt;
     caRoots.current = pebbleRoots;
     Object.assign(ari, { enabled: false, failing: false, replacing: undefined });
+    kmsState.failing = false;
     ari.asked.length = ari.replaces.length = revocations.length = 0;
     // Cascades through every table that references an Organization or a user.
     await pool.query(`truncate organization, "user", apikey cascade`);
@@ -236,6 +252,8 @@ export async function createHarness(overrides: Partial<AppDeps> = {}, { database
     dcvResolver,
     settleIssuances: () => issuances.idle(),
     runRenewalScheduler: () => renewals.tick(),
+    runCrlScheduler: () => crls.tick(),
+    kms: kmsState,
     ari,
     revocations,
     async setPebbleWindow(certificate, window) {

@@ -2,7 +2,7 @@
 // is immutable, so that it was revoked is a record of its own. The route that revokes is in revocation-routes.ts.
 import { z } from "@hono/zod-openapi";
 import { inArray } from "drizzle-orm";
-import { REVOCATION_REASONS } from "./certificate-authority";
+import { REVOCATION_REASONS } from "./revocation-reasons";
 import type { Db, Tx } from "./db/client";
 import { certificateRevocation } from "./db/schema";
 

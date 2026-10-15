@@ -73,7 +73,7 @@ Soft deletion of a Managed Certificate by an Organization Administrator, not eve
 _Avoid_: delete, remove, decommission
 
 **Revocation**:
-Telling the Certificate Authority to distrust one Certificate, with an RFC 5280 reason, which an Owner of its Managed Certificate or an Organization Administrator may do, even once it is archived. The platform records it only once the CA has revoked the Certificate, and nothing else revokes: not Archive, not a name change, not removing a user. It issues no replacement.
+Telling the Certificate Authority to distrust one Certificate, with an RFC 5280 reason, which an Owner of its Managed Certificate or an Organization Administrator may do, even once it is archived. The platform records it only once the CA has revoked the Certificate, and nothing else revokes: not Archive, not a name change, not removing a user. It issues no replacement. A Private CA revokes by putting the Certificate on its Issuing CA's CRL in the same change, and offers two reasons an ACME CA does not take: `affiliationChanged` and `privilegeWithdrawn`.
 _Avoid_: cancel, kill, invalidate
 
 **Renewal**:
@@ -113,6 +113,10 @@ _Avoid_: lifetime policy, max age
 **Issuing CA**:
 The CA certificate and key that actually sign a Private CA's end-entity Certificates, under a root the platform made or the Organization's own; a Private CA has one or more, each with its own key, Permitted Name Rules, Validity Limits and status. A Managed Certificate is issued from one, and rolling it over means adding another under the same root. It may sign no CA beneath it.
 _Avoid_: intermediate, sub-CA
+
+**CRL**:
+An Issuing CA's list of the Certificates it signed that are revoked and not yet expired (a platform-made root's, of its Issuing CAs), signed by that CA's key and served to anyone, without credentials and over plain HTTP, from the URL each of its certificates names. It is reissued whenever one is revoked, and at least 3 days before it stops being current, 7 days after it was issued.
+_Avoid_: revocation list, blacklist
 
 **ACME Account**:
 An Organization's own account with a Certificate Authority, in its staging or production environment. Its key is a Secret.

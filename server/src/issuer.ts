@@ -9,7 +9,9 @@ import { acmeAccount } from "./db/schema";
 import { IssuanceFailure } from "./issuance-failure";
 import type { IssuerKind } from "./issuer-kinds";
 import type { PrivateCas } from "./private-ca";
+import { REVOCATION_REASONS_OF } from "./revocation-reasons";
 import type { Secrets } from "./secrets";
+import type { Change } from "./unit-of-work";
 
 /** A Managed Certificate's issuer, as it is stored: its kind and that kind's reference. */
 export type Issuer = { kind: "acme"; environment: AcmeEnvironment } | { kind: "private_ca"; issuingCaId: string };
@@ -91,8 +93,12 @@ export interface Issuers {
    * does not answer.
    */
   issue(db: Db | Tx, organizationId: string, issuer: Issuer, request: IssueRequest): Promise<Issued>;
-  /** Has the CA a Certificate came from revoke it (PEM, its chain or the leaf alone) for `reason`. Throws a CertificateAuthorityError when the CA says no or does not answer. */
-  revoke(db: Db | Tx, organizationId: string, issuedBy: CertificateIssuer, request: { certificate: string; reason: RevocationReason }): Promise<void>;
+  /**
+   * Has the CA a Certificate came from revoke it (PEM, its chain or the leaf alone) for `reason`, once its revocation is
+   * recorded on the change's transaction. Throws a CertificateAuthorityError when the CA says no (it does not take the
+   * reason from that kind of issuer, REVOCATION_REASONS_OF) or does not answer.
+   */
+  revoke(tx: Tx, change: Change, organizationId: string, issuedBy: CertificateIssuer, request: { certificate: string; reason: RevocationReason }): Promise<void>;
   /** What the CA a Certificate came from suggests about renewing it; null when it offers nothing. Throws a CertificateAuthorityError when it does not answer. */
   renewalInfo(issuedBy: CertificateIssuer, certificate: string): Promise<RenewalInfo | null>;
   /** The root certificates (PEM) the chains of the CA a Certificate came from end in, as far as the platform knows them. */
@@ -102,7 +108,7 @@ export interface Issuers {
 /** What one kind of issuer does for the issuers of its kind: `Issuers`, for a Managed Certificate's issuer and a Certificate's of that kind. */
 interface KindOfIssuer<M extends Issuer, C extends CertificateIssuer> {
   issue(db: Db | Tx, organizationId: string, issuer: M, request: IssueRequest): Promise<Issued>;
-  revoke(db: Db | Tx, organizationId: string, issuedBy: C, request: { certificate: string; reason: RevocationReason }): Promise<void>;
+  revoke(tx: Tx, change: Change, organizationId: string, issuedBy: C, request: { certificate: string; reason: RevocationReason }): Promise<void>;
   renewalInfo(issuedBy: C, certificate: string): Promise<RenewalInfo | null>;
   roots(db: Db | Tx, organizationId: string, issuedBy: C): Promise<string[]>;
 }
@@ -125,8 +131,8 @@ export function createIssuers({ acme, secrets, privateCas }: { acme: AcmeCertifi
       const chainPem = await acme.issue(issuer.environment, account, { csr, responder: dcv(), replaces });
       return { chainPem, ca: acme.name, issuedBy: { kind: "acme", environment: issuer.environment, acmeAccountId: account.id } };
     },
-    async revoke(db, organizationId, issuedBy, request) {
-      const account = await openAccount(db, organizationId, eq(acmeAccount.id, issuedBy.acmeAccountId));
+    async revoke(tx, _change, organizationId, issuedBy, request) {
+      const account = await openAccount(tx, organizationId, eq(acmeAccount.id, issuedBy.acmeAccountId));
       if (!account) throw new Error("the ACME account the Certificate was issued through is gone");
       await acme.revoke(issuedBy.environment, account, request);
     },
@@ -140,9 +146,8 @@ export function createIssuers({ acme, secrets, privateCas }: { acme: AcmeCertifi
       const { chainPem, name } = await privateCas.issueFrom(db, organizationId, issuer.issuingCaId, { csr, names, validityDays });
       return { chainPem, ca: name, issuedBy: { kind: "private_ca", issuingCaId: issuer.issuingCaId } };
     },
-    async revoke() {
-      throw new CertificateAuthorityError("rejected", "a Certificate from a Private CA cannot be revoked yet");
-    },
+    // The Private CA revokes by publishing the revocation recorded on the transaction in its CRL.
+    revoke: (tx, change, organizationId, issuedBy) => privateCas.publishRevocation(tx, change, organizationId, issuedBy.issuingCaId),
     renewalInfo: async () => null,
     roots: (db, organizationId, issuedBy) => privateCas.rootsOf(db, organizationId, issuedBy.issuingCaId),
   };
@@ -159,7 +164,12 @@ export function createIssuers({ acme, secrets, privateCas }: { acme: AcmeCertifi
 
   return {
     issue: (db, organizationId, issuer, request) => kindOf(issuer).issue(db, organizationId, issuer, request),
-    revoke: (db, organizationId, issuedBy, request) => kindOf(issuedBy).revoke(db, organizationId, issuedBy, request),
+    revoke(tx, change, organizationId, issuedBy, request) {
+      if (!REVOCATION_REASONS_OF[issuedBy.kind].includes(request.reason)) {
+        return Promise.reject(new CertificateAuthorityError("rejected", `a Certificate from ${issuedBy.kind === "acme" ? "an ACME CA" : "a Private CA"} cannot be revoked for ${request.reason}`));
+      }
+      return kindOf(issuedBy).revoke(tx, change, organizationId, issuedBy, request);
+    },
     renewalInfo: (issuedBy, certificate) => kindOf(issuedBy).renewalInfo(issuedBy, certificate),
     roots: (db, organizationId, issuedBy) => kindOf(issuedBy).roots(db, organizationId, issuedBy),
   };

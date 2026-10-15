@@ -12,12 +12,14 @@ const localKmsKey = process.env.LOCAL_KMS_KEY;
 if (!databaseUrl || !secret || !localKmsKey) throw new Error("DATABASE_URL, AUTH_SECRET and LOCAL_KMS_KEY are required");
 
 const pool = new Pool({ connectionString: databaseUrl });
-const { app, auth, db, issuances, renewals, notifications, auditForwarding } = createApp({
+const { app, auth, db, issuances, renewals, notifications, auditForwarding, crls } = createApp({
   pool,
   mailer: new ConsoleMailer(),
   clock: () => new Date(),
   baseURL: process.env.BASE_URL ?? "http://localhost:3000",
   webURL: process.env.WEB_URL,
+  // Where relying parties fetch Private CAs' CRLs and CA certificates; a plain-HTTP URL (see the README's Private CAs).
+  pkiBaseURL: process.env.PKI_BASE_URL,
   trustedOrigins: process.env.TRUSTED_ORIGINS?.split(",").map((o) => o.trim()).filter(Boolean),
   secret,
   kms: createLocalKms(localKmsKey),
@@ -52,6 +54,13 @@ const AUDIT_FORWARDING_PASS_MS = 30_000;
   setTimeout(forwardAudit, AUDIT_FORWARDING_PASS_MS);
 })();
 
+// Private CAs' CRLs that are due (3 days before their nextUpdate) are reissued once a minute; each pass waits for the one before it.
+const CRL_PASS_MS = 60_000;
+(async function reissueCrls() {
+  await crls.tick().catch((err) => console.error("CRL pass failed", err));
+  setTimeout(reissueCrls, CRL_PASS_MS);
+})();
+
 if (process.env.OPERATOR_EMAIL && process.env.OPERATOR_PASSWORD) {
   await bootstrapPlatformOperator(auth, db, {
     email: process.env.OPERATOR_EMAIL,
@@ -65,6 +74,17 @@ if (process.env.OPERATOR_EMAIL && process.env.OPERATOR_PASSWORD) {
 const tlsCertFile = process.env.TLS_CERT_FILE;
 const tlsKeyFile = process.env.TLS_KEY_FILE;
 if (!!tlsCertFile !== !!tlsKeyFile) throw new Error("TLS_CERT_FILE and TLS_KEY_FILE must be set together");
+
+// When the platform serves TLS itself, it also serves what Private CAs publish (/pki) over plain HTTP on PKI_HTTP_PORT,
+// answering nothing else there and never redirecting: relying parties fetch CRLs over plain HTTP. Without TLS the one
+// listener below is plain HTTP already.
+const pkiHttpPort = process.env.PKI_HTTP_PORT;
+if (pkiHttpPort && tlsCertFile) {
+  Bun.serve({
+    port: Number(pkiHttpPort),
+    fetch: (request) => (new URL(request.url).pathname.startsWith("/pki/") ? app.fetch(request) : new Response("not found", { status: 404 })),
+  });
+}
 
 // An idle connection is closed after `idleTimeout` seconds, which must outlast a long poll (Bun allows at most 255).
 export default {

@@ -30,6 +30,10 @@ export const ISSUING_CA_STATUSES = [
 ] as const;
 export type IssuingCaStatus = (typeof ISSUING_CA_STATUSES)[number];
 
+/** Which kind of a Private CA's CAs signs a CRL (crl.ts): one of its Issuing CAs, or its platform-made root. */
+export const CRL_SIGNERS = ["issuing", "root"] as const;
+export type CrlSigner = (typeof CRL_SIGNERS)[number];
+
 // How long an Issuing CA's TLS Certificates may be valid for, in days. The web imports these too, so that what it offers
 // is what the API accepts; this module imports nothing, so either side can.
 /** An Issuing CA's maximum and default validity unless it sets its own: what browsers accept of a public CA's TLS Certificates. */

@@ -4,12 +4,15 @@
 // self-signed root and a first Issuing CA under it, each with its own key in the KMS (ADR 0007), and later adds more
 // Issuing CAs under the same root, so that relying parties trust the root once. Everyone in the Organization may see them
 // and download the root and each Issuing CA's chain. Issuing from an Issuing CA is the Private CA kind of issuer
-// (issuer.ts), which signs through `issueFrom` here.
+// (issuer.ts), which signs through `issueFrom` here and has a revocation put on the Issuing CA's CRL (crl.ts) through
+// `publishRevocation`.
 import { OpenAPIHono, createRoute, z } from "@hono/zod-openapi";
 import * as x509 from "@peculiar/x509";
 import { and, asc, eq, inArray } from "drizzle-orm";
+import { randomUUID } from "node:crypto";
 import type { Authorizer } from "./authorization";
 import { makeIssuingCa, makeRoot, makeTlsServer, parseSubject, rootSubjectOf, type CaKey, type Signer } from "./ca-certificates";
+import { publicationOf, type Crls } from "./crl";
 import { KEY_ALGORITHMS } from "./csr";
 import type { Db, Tx } from "./db/client";
 import { issuingCa, privateCa } from "./db/schema";
@@ -19,7 +22,7 @@ import type { Issuer } from "./issuer";
 import type { Kms } from "./kms";
 import { constraintNamesOf, namesOutside, normalizePermittedNames, samePermittedNames, type PermittedNames } from "./permitted-names";
 import { DEFAULT_VALIDITY_DAYS, ISSUING_CA_STATUSES, MAX_LIFETIME_YEARS, MAX_VALIDITY_DAYS, PRIVATE_CA_KINDS, PRIVATE_CA_STATUSES } from "./private-ca-kinds";
-import type { Actor, UnitOfWork } from "./unit-of-work";
+import type { Actor, Change, UnitOfWork } from "./unit-of-work";
 
 const DAY_MS = 24 * 60 * 60 * 1000;
 
@@ -204,7 +207,7 @@ export async function issuerRefusal(db: Db | Tx, organizationId: string, issuer:
   return refusal ? refused(422, refusal) : undefined;
 }
 
-/** What the Private CA kind of issuer issues with: signing a CSR from an Issuing CA, and its root. */
+/** What the Private CA kind of issuer issues with: signing a CSR from an Issuing CA, revoking from it, and its root. */
 export interface PrivateCas {
   /**
    * Signs a TLS server Certificate for the CSR and its names from the Organization's Issuing CA, valid from now for
@@ -213,11 +216,17 @@ export interface PrivateCas {
    * the Issuing CA cannot issue, or not for one of the names.
    */
   issueFrom(db: Db | Tx, organizationId: string, issuingCaId: string, request: { csr: string; names: string[]; validityDays: number | null }): Promise<{ chainPem: string; name: string }>;
+  /**
+   * Has the Issuing CA distrust a Certificate it signed whose revocation is recorded on the transaction: its CRL is
+   * reissued there, so the revocation is published if and only if it commits. Throws a CertificateAuthorityError when
+   * the KMS does not sign it.
+   */
+  publishRevocation(tx: Tx, change: Change, organizationId: string, issuingCaId: string): Promise<void>;
   /** The root (PEM) of the Issuing CA's Private CA, when the platform has it. */
   rootsOf(db: Db | Tx, organizationId: string, issuingCaId: string): Promise<string[]>;
 }
 
-export function createPrivateCas({ kms, clock }: { kms: Kms; clock: () => Date }): PrivateCas {
+export function createPrivateCas({ kms, clock, crls, pkiBaseURL }: { kms: Kms; clock: () => Date; crls: Crls; pkiBaseURL: string }): PrivateCas {
   return {
     async issueFrom(db, organizationId, issuingCaId, { csr, names, validityDays }) {
       const of = await findIssuingCa(db, organizationId, issuingCaId);
@@ -235,9 +244,10 @@ export function createPrivateCas({ kms, clock }: { kms: Kms; clock: () => Date }
       const days = Math.min(validityDays ?? issuing.defaultValidityDays, issuing.maxValidityDays);
       const notAfter = new Date(Math.min(notBefore.getTime() + days * DAY_MS, certificate.notAfter.getTime()));
       const signer: Signer = { key: issuing.key, context: organizationId, algorithm: ca.keyAlgorithm, certificate };
-      const leaf = await makeTlsServer(kms, signer, { csr, names, notBefore, notAfter });
+      const leaf = await makeTlsServer(kms, signer, { csr, names, notBefore, notAfter, publication: publicationOf(pkiBaseURL, { signer: "issuing", id: issuing.id }) });
       return { chainPem: `${leaf.toString("pem")}\n${issuing.certificatePem}`, name: ca.name };
     },
+    publishRevocation: (tx, change, organizationId, issuingCaId) => crls.publish(tx, change, organizationId, { signer: "issuing", id: issuingCaId }),
     async rootsOf(db, organizationId, issuingCaId) {
       const of = await findIssuingCa(db, organizationId, issuingCaId);
       return of?.ca.rootCertificatePem ? [of.ca.rootCertificatePem] : [];
@@ -270,8 +280,11 @@ export function registerPrivateCas(ctx: {
   unitOfWork: UnitOfWork;
   kms: Kms;
   clock: () => Date;
+  crls: Crls;
+  /** Where what Private CAs publish is served, which the certificates they sign name (crl.ts). */
+  pkiBaseURL: string;
 }) {
-  const { app, db, requireUser, authorize, unitOfWork, kms, clock } = ctx;
+  const { app, db, requireUser, authorize, unitOfWork, kms, clock, crls, pkiBaseURL } = ctx;
 
   async function findReadable(actor: Actor, orgId: string, id: string) {
     await authorize(actor, orgId, { privateCa: ["read"] });
@@ -316,7 +329,7 @@ export function registerPrivateCas(ctx: {
         "The platform makes two keys in the KMS, of the algorithm given: a self-signed root's, and an Issuing CA's, which the root signs and which signs Certificates (pathLen 0). " +
         "`subject` is the Issuing CA's distinguished name and must have a common name; the root's is the same with \" Root\" added to the common name. Both are valid from now for `lifetimeYears`. " +
         "`permittedNames` and `validity` are the Issuing CA's: `validity` sets how long its TLS Certificates are valid for (397 days for both unless given); a default above the maximum is refused with 422. " +
-        "The Private CA is active at once. More Issuing CAs can be added under its root later. Only Organization Administrators may.",
+        "The Private CA is active at once, and its root and Issuing CA each publish a CRL at once. More Issuing CAs can be added under its root later. Only Organization Administrators may.",
       request: {
         params: OrgParam,
         body: {
@@ -353,18 +366,26 @@ export function registerPrivateCas(ctx: {
       if (named) throw taken();
 
       // The keys are made in the KMS first; a Private CA that is then not stored (one of the same name was made meanwhile) leaves only keys nothing refers to.
+      // Its id is chosen here: its Issuing CA names where the root publishes, under it.
+      const id = randomUUID();
       const notBefore = clock();
       const notAfter = yearsAfter(notBefore, body.lifetimeYears);
       const rootKey: CaKey = { key: await kms.createSigningKey(body.keyAlgorithm, orgId), context: orgId, algorithm: body.keyAlgorithm };
       const issuingKey: CaKey = { key: await kms.createSigningKey(body.keyAlgorithm, orgId), context: orgId, algorithm: body.keyAlgorithm };
       const root = await makeRoot(kms, rootKey, { subject: rootSubjectOf(subject), notBefore, notAfter });
-      const issuing = await makeIssuingCa(kms, { ...rootKey, certificate: root }, issuingKey, { subject, notBefore, notAfter, permittedDnsNames: constraintNamesOf(permittedNames) });
+      const issuing = await makeIssuingCa(kms, { ...rootKey, certificate: root }, issuingKey, {
+        subject,
+        notBefore,
+        notAfter,
+        permittedDnsNames: constraintNamesOf(permittedNames),
+        publication: publicationOf(pkiBaseURL, { signer: "root", id }),
+      });
 
       try {
         const row = await unitOfWork.run(actor, async (tx, change) => {
           const [row] = await tx
             .insert(privateCa)
-            .values({ organizationId: orgId, name: body.name, kind: "platform_root", status: "active", keyAlgorithm: body.keyAlgorithm, rootCertificatePem: root.toString("pem"), rootKey: rootKey.key })
+            .values({ id, organizationId: orgId, name: body.name, kind: "platform_root", status: "active", keyAlgorithm: body.keyAlgorithm, rootCertificatePem: root.toString("pem"), rootKey: rootKey.key })
             .returning();
           const [first] = await tx
             .insert(issuingCa)
@@ -381,6 +402,8 @@ export function registerPrivateCas(ctx: {
               defaultValidityDays: validity.defaultDays,
             })
             .returning({ id: issuingCa.id });
+          await crls.publish(tx, change, orgId, { signer: "root", id });
+          await crls.publish(tx, change, orgId, { signer: "issuing", id: first!.id });
           await change.audit({
             organizationId: orgId,
             action: "private_ca.created",
@@ -431,7 +454,7 @@ export function registerPrivateCas(ctx: {
         "The platform makes a new key in the KMS, of the Private CA's algorithm, and has the root sign it: pathLen 0, with `permittedNames` as critical dNSName name constraints. " +
         "It is valid from now for `lifetimeYears`, but never past the root's end, which is also what it gets when none is given. " +
         "`subject` must have a common name, and is refused with 422 when another Issuing CA of the Private CA has it. A default validity above the maximum is refused with 422. " +
-        "The Issuing CA is active at once; the others under the root are unaffected. Not yet for a Private CA under an Organization's own root. Only Organization Administrators may.",
+        "The Issuing CA is active at once, and publishes a CRL at once; the others under the root are unaffected. Not yet for a Private CA under an Organization's own root. Only Organization Administrators may.",
       request: {
         params: PrivateCaParams,
         body: {
@@ -477,7 +500,13 @@ export function registerPrivateCas(ctx: {
       const notAfter = new Date(Math.min(asked.getTime(), root.notAfter.getTime()));
       const rootKey: CaKey = { key: ca.rootKey, context: orgId, algorithm: ca.keyAlgorithm };
       const issuingKey: CaKey = { key: await kms.createSigningKey(ca.keyAlgorithm, orgId), context: orgId, algorithm: ca.keyAlgorithm };
-      const certificate = await makeIssuingCa(kms, { ...rootKey, certificate: root }, issuingKey, { subject, notBefore, notAfter, permittedDnsNames: constraintNamesOf(permittedNames) });
+      const certificate = await makeIssuingCa(kms, { ...rootKey, certificate: root }, issuingKey, {
+        subject,
+        notBefore,
+        notAfter,
+        permittedDnsNames: constraintNamesOf(permittedNames),
+        publication: publicationOf(pkiBaseURL, { signer: "root", id: ca.id }),
+      });
 
       try {
         const row = await unitOfWork.run(actor, async (tx, change) => {
@@ -496,6 +525,7 @@ export function registerPrivateCas(ctx: {
               defaultValidityDays: validity.defaultDays,
             })
             .returning();
+          await crls.publish(tx, change, orgId, { signer: "issuing", id: row!.id });
           await change.audit({
             organizationId: orgId,
             action: "private_ca.issuing_ca_added",

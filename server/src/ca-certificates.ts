@@ -1,6 +1,7 @@
 // The CA module: builds the X.509 certificates a Private CA signs, with @peculiar/x509, and has the KMS sign them with
 // the CA's key, which never leaves it (ADR 0007). It owns the certificate profiles (a self-signed root, an Issuing CA
-// under it, a TLS server certificate) and their serial numbers.
+// under it, a TLS server certificate), their serial numbers, the CRL Distribution Point and AIA they name, and the CRLs
+// a CA signs.
 import * as x509 from "@peculiar/x509";
 import { randomBytes, webcrypto } from "node:crypto";
 import type { KeyAlgorithm } from "./csr";
@@ -47,7 +48,19 @@ function kmsSigning(kms: Kms, { key, context, algorithm }: CaKey) {
   return { crypto, signingKey };
 }
 
+/**
+ * Where relying parties find what a certificate's issuer publishes (crl.ts): the issuer's CRL, named in the CRL
+ * Distribution Point, and the issuer's own certificate, named in the AIA caIssuers.
+ */
+export interface Publication {
+  crl: string;
+  caIssuers: string;
+}
+
+const publicationExtensions = ({ crl, caIssuers }: Publication) => [new x509.CRLDistributionPointsExtension([crl]), new x509.AuthorityInfoAccessExtension({ caIssuers })];
+
 const EXTENDED_KEY_USAGE = "2.5.29.37";
+const CRL_NUMBER = "2.5.29.20";
 const NAME_CONSTRAINTS = "2.5.29.30";
 /** RFC 5280's upper bound on a common name. */
 const MAX_COMMON_NAME = 64;
@@ -123,9 +136,9 @@ export async function makeRoot(kms: Kms, key: CaKey, input: { subject: x509.Name
 
 /**
  * An Issuing CA for `key`, signed by `by`: it may sign end-entity certificates only (pathLen 0), and only for the DNS
- * names `permittedDnsNames` and those beneath them, as critical name constraints.
+ * names `permittedDnsNames` and those beneath them, as critical name constraints. It names where `by` publishes.
  */
-export async function makeIssuingCa(kms: Kms, by: Signer, key: CaKey, input: { subject: x509.Name; notBefore: Date; notAfter: Date; permittedDnsNames: string[] }) {
+export async function makeIssuingCa(kms: Kms, by: Signer, key: CaKey, input: { subject: x509.Name; notBefore: Date; notAfter: Date; permittedDnsNames: string[]; publication: Publication }) {
   const publicKey = new x509.PublicKey(new Uint8Array(await kms.publicKey(key.key, key.context)).buffer);
   const { crypto, signingKey } = kmsSigning(kms, by);
   return x509.X509CertificateGenerator.create(
@@ -141,6 +154,7 @@ export async function makeIssuingCa(kms: Kms, by: Signer, key: CaKey, input: { s
         ...(await caExtensions(publicKey, 0)),
         await x509.AuthorityKeyIdentifierExtension.create(by.certificate.publicKey, false, webcrypto as unknown as Crypto),
         nameConstraints(input.permittedDnsNames),
+        ...publicationExtensions(input.publication),
       ],
     },
     crypto,
@@ -150,9 +164,9 @@ export async function makeIssuingCa(kms: Kms, by: Signer, key: CaKey, input: { s
 /**
  * A TLS server certificate for the CSR's key and `names`, signed by `by`: serverAuth, and clientAuth too when the CSR
  * asks for it. Its subject is the first name that fits a common name (64 characters), and empty when none does: the
- * names are in its subject alternative names either way.
+ * names are in its subject alternative names either way. It names where `by` publishes.
  */
-export async function makeTlsServer(kms: Kms, by: Signer, input: { csr: string; names: string[]; notBefore: Date; notAfter: Date }) {
+export async function makeTlsServer(kms: Kms, by: Signer, input: { csr: string; names: string[]; notBefore: Date; notAfter: Date; publication: Publication }) {
   const csr = new x509.Pkcs10CertificateRequest(input.csr);
   // By OID: looked up by class, an extension is not found when two copies of the library are loaded.
   const asked = (csr.getExtension(EXTENDED_KEY_USAGE) as x509.ExtendedKeyUsageExtension | null)?.usages ?? [];
@@ -177,6 +191,46 @@ export async function makeTlsServer(kms: Kms, by: Signer, input: { csr: string; 
         new x509.SubjectAlternativeNameExtension(input.names.map((value) => ({ type: "dns" as const, value })), !commonName),
         await x509.SubjectKeyIdentifierExtension.create(csr.publicKey, false, webcrypto as unknown as Crypto),
         await x509.AuthorityKeyIdentifierExtension.create(by.certificate.publicKey, false, webcrypto as unknown as Crypto),
+        ...publicationExtensions(input.publication),
+      ],
+    },
+    crypto,
+  );
+}
+
+/** A certificate on a CRL: its serial (hex), when it was revoked, and its RFC 5280 CRLReason code. */
+export interface CrlEntry {
+  serial: string;
+  revokedAt: Date;
+  reason: number;
+}
+
+/** A DER INTEGER of a non-negative number. */
+function derInteger(n: number) {
+  const hex = n.toString(16);
+  const bytes = Buffer.from(hex.length % 2 ? `0${hex}` : hex, "hex");
+  // A leading 1 bit would make it negative.
+  return der(0x02, bytes[0]! & 0x80 ? Buffer.concat([Uint8Array.of(0), bytes]) : bytes);
+}
+
+/**
+ * A full CRL (RFC 5280, 5) signed by `by`, numbered `number` (its CRL Number, which @peculiar/x509 has no class for),
+ * listing `entries`, each with its reason.
+ */
+export async function makeCrl(kms: Kms, by: Signer, input: { number: number; thisUpdate: Date; nextUpdate: Date; entries: CrlEntry[] }) {
+  const { crypto, signingKey } = kmsSigning(kms, by);
+  return x509.X509CrlGenerator.create(
+    {
+      issuer: by.certificate.subjectName,
+      thisUpdate: input.thisUpdate,
+      nextUpdate: input.nextUpdate,
+      signingAlgorithm: SIGNING_ALGORITHMS[by.algorithm],
+      signingKey,
+      // No reason code for `unspecified` (0), as RFC 5280 (5.3.1) asks.
+      entries: input.entries.map((entry) => ({ serialNumber: entry.serial, revocationDate: entry.revokedAt, ...(entry.reason !== 0 && { reason: entry.reason }) })),
+      extensions: [
+        await x509.AuthorityKeyIdentifierExtension.create(by.certificate.publicKey, false, webcrypto as unknown as Crypto),
+        new x509.Extension(CRL_NUMBER, false, derInteger(input.number)),
       ],
     },
     crypto,

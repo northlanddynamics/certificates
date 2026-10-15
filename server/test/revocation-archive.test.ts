@@ -239,7 +239,7 @@ describe("Revocation", () => {
     expect(h.revocations.map((r) => r.reason)).toEqual(["unspecified", "keyCompromise", "superseded", "cessationOfOperation"]);
   });
 
-  test("anyone else may not, nor may another Organization's administrator; and the reason must be a known one", async () => {
+  test("anyone else may not, nor may another Organization's administrator; and the reason must be one an ACME CA takes", async () => {
     const mc = await setup();
     const { id: certificateId } = await only(mc.id);
     const stranger = await join("stranger@acme.test", "member");
@@ -253,6 +253,9 @@ describe("Revocation", () => {
     expect((await revoke(mc.id, certificateId, undefined, otherOwner)).status).toBe(403);
     expect((await revoke(mc.id, certificateId, undefined, globex.cookie)).status).toBe(404);
     expect((await revoke(mc.id, certificateId, { reason: "certificateHold" })).status).toBe(400);
+    // A Private CA's reasons, which an ACME CA does not take from a subscriber.
+    expect((await revoke(mc.id, certificateId, { reason: "affiliationChanged" })).status).toBe(422);
+    expect((await revoke(mc.id, certificateId, { reason: "privilegeWithdrawn" })).status).toBe(422);
     expect((await revoke(mc.id, certificateId, { reason: "because" })).status).toBe(400);
     expect((await revoke(mc.id, certificateId, {})).status).toBe(400);
     expect((await revoke(mc.id, crypto.randomUUID())).status).toBe(404);

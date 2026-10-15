@@ -7,7 +7,7 @@ import { Dialog, DialogContent, DialogDescription, DialogFooter, DialogHeader, D
 import { DropdownMenu, DropdownMenuContent, DropdownMenuItem, DropdownMenuTrigger } from "@/components/ui/dropdown-menu";
 import { Field, FieldLabel } from "@/components/ui/field";
 import { Select, SelectContent, SelectItem, SelectTrigger, SelectValue } from "@/components/ui/select";
-import { REVOCATION_REASONS, api, can, revocationReasonLabel, type Certificate, type ManagedCertificate, type Me, type Revocation } from "@/lib/api";
+import { api, can, revocationReasonLabel, revocationReasonsFor, type Certificate, type ManagedCertificate, type Me, type Revocation } from "@/lib/api";
 import { isOwner } from "@/lib/managed-certificate";
 
 const when = (iso: string) => new Date(iso).toLocaleString();
@@ -108,7 +108,7 @@ export function RevokeDialog({ org, m, certificate, userId, onChanged }: { org: 
               <SelectValue placeholder="Choose a reason (RFC 5280)" />
             </SelectTrigger>
             <SelectContent>
-              {REVOCATION_REASONS.map(([value, text]) => (
+              {revocationReasonsFor(certificate).map(([value, text]) => (
                 <SelectItem key={value} value={value}>
                   {text}
                 </SelectItem>
