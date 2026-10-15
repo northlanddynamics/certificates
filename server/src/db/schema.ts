@@ -153,6 +153,8 @@ export const nameChange = pgTable(
     names: text("names").array().notNull(),
     /** The CSR for `names`, which replaces the Managed Certificate's when the change is approved. */
     csr: text("csr").notNull(),
+    /** The validity, in days, the Managed Certificate has once the change is approved (its `validityDays`): its own when the change asked for none. */
+    validityDays: integer("validity_days"),
     proposedById: text("proposed_by_id").notNull(),
     proposedByEmail: text("proposed_by_email").notNull(),
     /** Who ended it, when and why it ended: an Approver's decision, the proposer's withdrawal, or what made the platform discard it (none, then). */

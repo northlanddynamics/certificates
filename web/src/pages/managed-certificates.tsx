@@ -14,6 +14,7 @@ import { Table, TableBody, TableCell, TableHead, TableHeader, TableRow } from "@
 import { api, can, ownerLabel, type InventoryFilters, type ManagedCertificate, type Me } from "@/lib/api";
 import { KEY_ALGORITHMS, KEY_ALGORITHM_LABELS } from "@/lib/csr-generator";
 import { issuerLabel, keyAlgorithmLabel, status } from "@/lib/managed-certificate";
+import { chosenValidityLabel } from "@/lib/private-ca";
 
 type Org = Me["organizations"][number];
 
@@ -213,7 +214,7 @@ function ApprovalQueue({ org, onDecided: decided }: { org: Org; onDecided: () =>
       id: m.id,
       names: m.names.join(", "),
       request: "New",
-      detail: `${keyAlgorithmLabel(m.keyAlgorithm)}, ${issuerLabel(m.issuer)}`,
+      detail: `${keyAlgorithmLabel(m.keyAlgorithm)}, ${issuerLabel(m.issuer)}${m.issuer.kind === "private_ca" ? `, valid for ${chosenValidityLabel(m.validityDays)}` : ""}`,
       proposedBy: m.approval.proposedBy?.email,
       label: m.names.join(", "),
       approve: () => approve.mutate(m.id),
@@ -224,7 +225,7 @@ function ApprovalQueue({ org, onDecided: decided }: { org: Org; onDecided: () =>
       id: n.managedCertificateId,
       names: n.currentNames.join(", "),
       request: "Name change",
-      detail: `to ${n.names.join(", ")}`,
+      detail: `to ${n.names.join(", ")}${n.validityDays !== n.currentValidityDays ? `; validity from ${chosenValidityLabel(n.currentValidityDays)} to ${chosenValidityLabel(n.validityDays)}` : ""}`,
       proposedBy: n.proposedBy.email,
       label: `name change of ${n.currentNames.join(", ")}`,
       approve: () => approveNames.mutate(n.managedCertificateId),

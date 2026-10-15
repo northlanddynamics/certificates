@@ -256,6 +256,7 @@ export function createIssuances({ db, unitOfWork, issuers, dcv }: IssuancesDeps)
       issued = await issuers.issue(db, row.organizationId, issuerOf(mc), {
         csr: mc.csr,
         names: mc.names,
+        validityDays: mc.validityDays,
         replaces: replaced && sameNames(replaced.names, mc.names) ? replaced.chainPem : undefined,
         dcv: () => (responder ??= dcv.responderFor(db, row.organizationId)),
       });

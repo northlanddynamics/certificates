@@ -1,5 +1,5 @@
 {
-  "id": "33015e5f-3da3-4625-a75c-cfc12892c4d6",
+  "id": "cc04a32d-a7b0-4996-94af-28b86d742c72",
   "prevId": "d3df3301-dfaa-4e71-b6fb-b0d3e4a082a3",
   "version": "7",
   "dialect": "postgresql",
@@ -3574,6 +3574,12 @@
           "type": "text",
           "primaryKey": false,
           "notNull": true
+        },
+        "validity_days": {
+          "name": "validity_days",
+          "type": "integer",
+          "primaryKey": false,
+          "notNull": false
         },
         "proposed_by_id": {
           "name": "proposed_by_id",

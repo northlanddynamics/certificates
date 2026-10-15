@@ -102,7 +102,8 @@ function NewManagedCertificateForm({ org, direct, onCreated }: { org: Org; direc
         names: splitNames(names),
         keyAlgorithm,
         csr,
-        issuer: issuer.kind === "private_ca" && chosenValidity !== null ? { ...issuer, validityDays: chosenValidity } : issuer,
+        issuer,
+        ...(issuer.kind === "private_ca" && chosenValidity !== null && { validityDays: chosenValidity }),
         owners: owners.map(ownerFromKey),
       }),
     onSuccess: onCreated,
@@ -130,7 +131,7 @@ function NewManagedCertificateForm({ org, direct, onCreated }: { org: Org; direc
   };
   const registered = issuer.kind !== "acme" || accounts.data?.items.some((a) => a.environment === issuer.environment);
   const issuerTitle =
-    issuer.kind === "acme" ? ENVIRONMENTS.find((e) => e.value === issuer.environment)?.title : issuerLabel({ kind: "private_ca", privateCa: chosenCa ?? { id: issuer.privateCaId, name: "" }, validityDays: null });
+    issuer.kind === "acme" ? ENVIRONMENTS.find((e) => e.value === issuer.environment)?.title : issuerLabel({ kind: "private_ca", privateCa: chosenCa ?? { id: issuer.privateCaId, name: "" } });
 
   const dropGeneratedCsr = () => {
     if (generated !== null && csr === generated) setCsr("");
@@ -206,7 +207,7 @@ function NewManagedCertificateForm({ org, direct, onCreated }: { org: Org; direc
                   <FieldLabel key={ca.id} htmlFor={`new-mc-ca-${ca.id}`}>
                     <Field orientation="horizontal">
                       <FieldContent>
-                        <FieldTitle>{issuerLabel({ kind: "private_ca", privateCa: ca, validityDays: null })}</FieldTitle>
+                        <FieldTitle>{issuerLabel({ kind: "private_ca", privateCa: ca })}</FieldTitle>
                         <FieldDescription>
                           The Organization's own CA ({ca.subject}). Trusted only where its root is installed; no DCV.
                         </FieldDescription>

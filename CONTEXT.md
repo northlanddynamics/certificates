@@ -107,7 +107,7 @@ A Private CA's exact names and zones (a zone being a name and everything beneath
 _Avoid_: allowed domains, name policy
 
 **Validity Limits**:
-A Private CA's maximum and default validity for the TLS Certificates it issues, in days (397 for both unless set). A Managed Certificate on it may choose a validity at or below the maximum, and otherwise gets the default; what is issued is never valid past the maximum or past its Issuing CA's end.
+A Private CA's maximum and default validity for the TLS Certificates it issues, in days (397 for both unless set). A Managed Certificate on it may choose a validity at or below the maximum, when it is made or with a Name Change, and otherwise gets the default; what is issued is never valid past the maximum or past its Issuing CA's end.
 _Avoid_: lifetime policy, max age
 
 **Issuing CA**:

@@ -20,6 +20,7 @@ export type NameChangeStatus = "pending" | "approved" | "rejected" | "withdrawn"
 /** A name change waiting for Approval. */
 export const PendingNameChange = z.object({
   names: z.array(z.string()).openapi({ description: "The names asked for; the Managed Certificate keeps its own until this is approved." }),
+  validityDays: z.number().nullable().openapi({ description: "The validity the Managed Certificate is to have, as its `validityDays`: none for its Private CA's default." }),
   proposedBy: z.object({ id: z.string(), email: z.string() }),
   proposedAt: z.string(),
 });
@@ -28,6 +29,7 @@ type NameChangeRow = typeof nameChange.$inferSelect;
 
 export const toPendingNameChange = (row: NameChangeRow) => ({
   names: row.names,
+  validityDays: row.validityDays,
   proposedBy: { id: row.proposedById, email: row.proposedByEmail },
   proposedAt: row.createdAt.toISOString(),
 });
@@ -45,7 +47,7 @@ export async function pendingNameChanges(db: Db | Tx, managedCertificateIds: str
 /** Every name change in the Organization waiting for Approval, the oldest first; an archived Managed Certificate's cannot be approved, so is left out. */
 export const pendingNameChangesOf = (db: Db, organizationId: string) =>
   db
-    .select({ change: nameChange, currentNames: managedCertificate.names })
+    .select({ change: nameChange, currentNames: managedCertificate.names, currentValidityDays: managedCertificate.validityDays })
     .from(nameChange)
     .innerJoin(managedCertificate, and(eq(managedCertificate.id, nameChange.managedCertificateId), eq(managedCertificate.organizationId, nameChange.organizationId)))
     .where(and(eq(nameChange.organizationId, organizationId), eq(nameChange.status, "pending"), isNull(managedCertificate.archivedAt)))
@@ -72,13 +74,16 @@ export function refusalToChangeNames(mc: { approvalStatus: ApprovalStatus; archi
   return null;
 }
 
+/** What an Audit Event of a change says of the validity: `{ from, to }` when the change gives the Managed Certificate another, nothing when it keeps its own. */
+export const validityChangeDetail = (from: number | null, to: number | null) => (from === to ? {} : { validityDays: { from, to } });
+
 /**
- * Gives the locked Managed Certificate its new names and CSR, as a change that is approved or needs no Approval, and
+ * Gives the locked Managed Certificate its new names, CSR and validity, as a change that is approved or needs no Approval, and
  * has an Issuance for them begin. Refused (409) while an Issuance runs, which keeps what it started with: the new names
  * would get no Certificate until the next Renewal, so the change is made once that has ended.
  */
-export async function applyNames(tx: Tx, change: Change, actor: Actor, issuances: Issuances, mc: { id: string; organizationId: string }, to: { names: string[]; csr: string }) {
-  await tx.update(managedCertificate).set({ names: to.names, csr: to.csr }).where(and(eq(managedCertificate.id, mc.id), eq(managedCertificate.organizationId, mc.organizationId)));
+export async function applyNames(tx: Tx, change: Change, actor: Actor, issuances: Issuances, mc: { id: string; organizationId: string }, to: { names: string[]; csr: string; validityDays: number | null }) {
+  await tx.update(managedCertificate).set({ names: to.names, csr: to.csr, validityDays: to.validityDays }).where(and(eq(managedCertificate.id, mc.id), eq(managedCertificate.organizationId, mc.organizationId)));
   const begun = await issuances.begin(tx, change, actor, mc, "issue");
   if ("refused" in begun) {
     if (begun.refused === "already_running") throw new HttpError(409, "an Issuance of this Managed Certificate is running; its names can be changed once it has ended");

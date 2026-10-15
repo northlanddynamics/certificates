@@ -13,7 +13,11 @@ import { ManagedCertificate, ManagedCertificateParams, type ManagedCertificateRe
 import { PendingNameChange, pendingNameChangesOf, toPendingNameChange } from "./name-change";
 import type { Actor, UnitOfWork } from "./unit-of-work";
 
-const QueuedNameChange = PendingNameChange.extend({ managedCertificateId: z.string(), currentNames: z.array(z.string()) });
+const QueuedNameChange = PendingNameChange.extend({
+  managedCertificateId: z.string(),
+  currentNames: z.array(z.string()),
+  currentValidityDays: z.number().nullable().openapi({ description: "The validity the Managed Certificate has now, as its `validityDays`." }),
+});
 
 export function registerApprovals(ctx: {
   app: OpenAPIHono;
@@ -66,7 +70,7 @@ export function registerApprovals(ctx: {
       const changes = await pendingNameChangesOf(db, orgId);
       const nameChanges = changes
         .filter(({ change }) => change.proposedById !== actor.id)
-        .map(({ change, currentNames }) => ({ managedCertificateId: change.managedCertificateId, currentNames, ...toPendingNameChange(change) }));
+        .map(({ change, currentNames, currentValidityDays }) => ({ managedCertificateId: change.managedCertificateId, currentNames, currentValidityDays, ...toPendingNameChange(change) }));
       return c.json({ items: await withState(rows), nameChanges }, 200);
     },
   );

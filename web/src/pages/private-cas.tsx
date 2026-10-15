@@ -14,7 +14,7 @@ import { api, can, type PermittedNames, type PrivateCa, type PrivateCaValidity }
 import { KEY_ALGORITHMS, KEY_ALGORITHM_LABELS, type KeyAlgorithm } from "@/lib/csr-generator";
 import { splitNames } from "@/lib/csr-names";
 import { keyAlgorithmLabel } from "@/lib/managed-certificate";
-import { MAX_VALIDITY_DAYS, isValidityDays, permittedNamesLabel, validityLabel } from "@/lib/private-ca";
+import { DEFAULT_VALIDITY_DAYS, MAX_VALIDITY_DAYS, isValidityDays, permittedNamesLabel, validityLabel } from "@/lib/private-ca";
 import { useAction } from "@/lib/use-action";
 
 const ROUTE = "/app/organizations/$orgId/private-cas";
@@ -282,7 +282,7 @@ function CreatePrivateCaForm({ orgId, onDone }: { orgId: string; onDone: () => v
   const [keyAlgorithm, setKeyAlgorithm] = useState<KeyAlgorithm>("ecdsa-p256");
   const [lifetimeYears, setLifetimeYears] = useState("10");
   const [rules, setRules] = useState<RulesText>({ exact: "", zones: "" });
-  const [validity, setValidity] = useState<ValidityText>({ maximumDays: "397", defaultDays: "397" });
+  const [validity, setValidity] = useState<ValidityText>(validityTextOf({ maximumDays: DEFAULT_VALIDITY_DAYS, defaultDays: DEFAULT_VALIDITY_DAYS }));
   const create = useAction(
     () =>
       api.createPrivateCa(orgId, {

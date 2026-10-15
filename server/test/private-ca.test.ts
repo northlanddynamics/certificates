@@ -33,7 +33,7 @@ const NEW_CA = { name: "Internal TLS", subject: "CN=Acme Internal TLS, O=Acme", 
 async function createCa(body: Record<string, unknown> = NEW_CA, target = org) {
   const res = await h.api(cas(target.orgId), { cookie: target.cookie, body });
   expect(res.status).toBe(201);
-  return res.body as { id: string; name: string; status: string; kind: string; keyAlgorithm: string; subject: string; notAfter: string; permittedNames: { exact: string[]; zones: string[] } };
+  return res.body as { id: string; name: string; status: string; kind: string; keyAlgorithm: string; subject: string; notAfter: string; permittedNames: { exact: string[]; zones: string[] }; validity: { maximumDays: number; defaultDays: number } };
 }
 
 /** The certificates of a PEM bundle, in order. */
@@ -502,6 +502,16 @@ describe("a Private CA's validity limits", () => {
     expect((await h.api(cas(), { cookie: org.cookie })).body.items).toHaveLength(1);
   });
 
+  test("may be at most 3650 days (ten years), whatever the Issuing CA's lifetime", async () => {
+    const tenYears = await createCa({ ...NEW_CA, validity: { maximumDays: 3650, defaultDays: 3650 } });
+    expect(tenYears.validity).toEqual({ maximumDays: 3650, defaultDays: 3650 });
+
+    expect((await h.api(cas(), { cookie: org.cookie, body: { ...NEW_CA, name: "Longer", validity: { maximumDays: 3651, defaultDays: 397 } } })).status).toBe(400);
+    expect((await h.api(`${cas()}/${tenYears.id}`, { cookie: org.cookie, method: "PATCH", body: { validity: { maximumDays: 3651, defaultDays: 3651 } } })).status).toBe(400);
+    expect((await h.api(mcs(), { cookie: org.cookie, body: { ...(await request(["app.internal.acme"])), ...fromCa(tenYears.id), validityDays: 3651 } })).status).toBe(400);
+    expect((await h.api(mcs(), { cookie: org.cookie, body: { ...(await request(["app.internal.acme"])), ...fromCa(tenYears.id), validityDays: 3650 } })).status).toBe(201);
+  });
+
   test("an Organization Administrator changes them later, each field changed in the Audit Event, and a default above the maximum is refused", async () => {
     const ca = await createCa();
     const patch = (body: unknown, cookie = org.cookie) => h.api(`${cas()}/${ca.id}`, { cookie, method: "PATCH", body });
@@ -543,14 +553,14 @@ describe("the validity of a Certificate from a Private CA", () => {
     expect(mc.issuance.status).toBe("succeeded");
     return { mc, leaf: (await downloaded(mc.id, "leaf"))[0]! };
   };
-  const onCa = (privateCaId: string, validityDays?: number) => ({ issuer: { kind: "private_ca", privateCaId, ...(validityDays && { validityDays }) } });
+  const onCa = (privateCaId: string, validityDays?: number) => ({ issuer: { kind: "private_ca", privateCaId }, ...(validityDays && { validityDays }) });
 
   test("is the Private CA's default when the Managed Certificate chooses none", async () => {
     const ca = await createCa({ ...NEW_CA, validity: { maximumDays: 397, defaultDays: 90 } });
 
     const { mc, leaf } = await leafOf({ ...(await request(["app.internal.acme"])), ...onCa(ca.id) });
 
-    expect(mc.issuer).toMatchObject({ kind: "private_ca", validityDays: null });
+    expect(mc.validityDays).toBeNull();
     expect(leaf.notBefore.toISOString()).toBe(days(0));
     expect(leaf.notAfter.toISOString()).toBe(days(90));
   });
@@ -560,10 +570,18 @@ describe("the validity of a Certificate from a Private CA", () => {
 
     const { mc, leaf } = await leafOf({ ...(await request(["app.internal.acme"])), ...onCa(ca.id, 7) });
 
-    expect(mc.issuer).toMatchObject({ kind: "private_ca", privateCa: { id: ca.id }, validityDays: 7 });
+    expect(mc).toMatchObject({ issuer: { kind: "private_ca", privateCa: { id: ca.id } }, validityDays: 7 });
     expect(leaf.notAfter.toISOString()).toBe(days(7));
     expect((await auditOf()).find((e) => e.action === "managed_certificate.created")!.detail).toMatchObject({ validityDays: 7 });
     expect((await leafOf({ ...(await request(["max.internal.acme"])), ...onCa(ca.id, 397) })).leaf.notAfter.toISOString()).toBe(days(397));
+  });
+
+  test("can be chosen only for a Managed Certificate issued from a Private CA", async () => {
+    const res = await h.api(mcs(), { cookie: org.cookie, body: { ...(await request(["app.example.com"])), issuer: { kind: "acme", environment: "staging" }, validityDays: 30 } });
+
+    expect(res.status).toBe(400);
+    expect(res.body.error).toContain("Private CA");
+    expect((await h.api(mcs(), { cookie: org.cookie })).body.items).toEqual([]);
   });
 
   test("above the Private CA's maximum is refused when a Managed Certificate is created or proposed, and nothing is created", async () => {
@@ -617,3 +635,75 @@ describe("the validity of a Certificate from a Private CA", () => {
   });
 });
 
+
+describe("a Name Change's validity", () => {
+  const JAN_1 = Date.parse("2026-01-01T00:00:00Z");
+  const days = (n: number) => new Date(JAN_1 + n * 86_400_000).toISOString();
+
+  /** A Managed Certificate on the Private CA, issued, with the member as its Owner. */
+  async function owned(ca: { id: string }, member: string, validityDays?: number) {
+    const memberId = (await h.api("/api/me", { cookie: member })).body.user.id;
+    const created = await h.api(mcs(), { cookie: org.cookie, body: { ...(await request(["app.internal.acme"])), ...fromCa(ca.id), ...(validityDays && { validityDays }), owners: [{ type: "user", id: memberId }] } });
+    expect(created.status).toBe(201);
+    return ended(created.body.id);
+  }
+  const nameChange = async (id: string, cookie: string, extra: Record<string, unknown>) => {
+    const { names, csr } = await request(["app.internal.acme", "api.internal.acme"]);
+    return h.api(`${mcs()}/${id}/name-change`, { cookie, body: { names, csr, ...extra } });
+  };
+
+  test("an Owner proposes one with the names, an Approver sees it, and once approved it is the Managed Certificate's and the new Certificate's", async () => {
+    const ca = await createCa();
+    const member = await join("member@acme.test", "member");
+    const approver = await join("approver@acme.test", "approver");
+    const mc = await owned(ca, member);
+
+    const proposed = await nameChange(mc.id, member, { validityDays: 30 });
+    expect(proposed.status).toBe(201);
+    expect(proposed.body).toMatchObject({ validityDays: null, pendingNameChange: { names: ["app.internal.acme", "api.internal.acme"], validityDays: 30 } });
+    const queue = await h.api(`/api/organizations/${org.orgId}/approvals`, { cookie: approver });
+    expect(queue.body.nameChanges).toMatchObject([{ managedCertificateId: mc.id, validityDays: 30 }]);
+    expect((await auditOf()).find((e) => e.action === "name_change.proposed")!.detail).toMatchObject({ validityDays: { from: null, to: 30 } });
+
+    expect((await h.api(`${mcs()}/${mc.id}/name-change/approve`, { cookie: approver, body: {} })).status).toBe(200);
+
+    const after = await ended(mc.id);
+    expect(after).toMatchObject({ validityDays: 30, issuance: { status: "succeeded" }, currentCertificate: { notBefore: days(0), notAfter: days(30) } });
+    expect((await auditOf()).find((e) => e.action === "name_change.approved")!.detail).toMatchObject({ validityDays: { from: null, to: 30 } });
+  });
+
+  test("an Organization Administrator's applies at once; without one the validity stays as it was, and null goes back to the default", async () => {
+    const ca = await createCa({ ...NEW_CA, validity: { maximumDays: 397, defaultDays: 90 } });
+    const member = await join("member@acme.test", "member");
+    const mc = await owned(ca, member, 14);
+
+    expect((await nameChange(mc.id, org.cookie, {})).status).toBe(201);
+    expect(await ended(mc.id)).toMatchObject({ validityDays: 14, currentCertificate: { notAfter: days(14) } });
+    expect((await auditOf()).find((e) => e.action === "managed_certificate.names_changed")!.detail.validityDays).toBeUndefined();
+
+    const { names, csr } = await request(["app.internal.acme"]);
+    expect((await h.api(`${mcs()}/${mc.id}/name-change`, { cookie: org.cookie, body: { names, csr, validityDays: null } })).status).toBe(201);
+    expect(await ended(mc.id)).toMatchObject({ validityDays: null, currentCertificate: { notAfter: days(90) } });
+    expect((await auditOf()).find((e) => e.action === "managed_certificate.names_changed" && e.detail.validityDays)!.detail.validityDays).toEqual({ from: 14, to: null });
+  });
+
+  test("above the Private CA's maximum is refused, and so is one for a Managed Certificate from an ACME CA", async () => {
+    const ca = await createCa({ ...NEW_CA, validity: { maximumDays: 90, defaultDays: 90 } });
+    const member = await join("member@acme.test", "member");
+    const mc = await owned(ca, member);
+
+    for (const cookie of [org.cookie, member]) {
+      const res = await nameChange(mc.id, cookie, { validityDays: 91 });
+      expect(res.status).toBe(422);
+      expect(res.body.error).toContain("90 days");
+    }
+    expect((await h.api(`${mcs()}/${mc.id}`, { cookie: org.cookie })).body).toMatchObject({ names: ["app.internal.acme"], validityDays: null, pendingNameChange: null });
+
+    const acmeMc = await h.api(mcs(), { cookie: org.cookie, body: { ...(await request(["app.example.com"])), environment: "staging" } });
+    expect(acmeMc.status).toBe(201);
+    await h.settleIssuances();
+    const { names, csr } = await request(["app.example.com", "www.example.com"]);
+    const refused = await h.api(`${mcs()}/${acmeMc.body.id}/name-change`, { cookie: org.cookie, body: { names, csr, validityDays: 30 } });
+    expect(refused.status).toBe(400);
+  });
+});

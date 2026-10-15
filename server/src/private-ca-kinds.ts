@@ -19,3 +19,10 @@ export const PRIVATE_CA_STATUSES = [
   "revoked",
 ] as const;
 export type PrivateCaStatus = (typeof PRIVATE_CA_STATUSES)[number];
+
+// How long a Private CA's TLS Certificates may be valid for, in days. The web imports these too, so that what it offers
+// is what the API accepts; this module imports nothing, so either side can.
+/** A Private CA's maximum and default validity unless it sets its own: what browsers accept of a public CA's TLS Certificates. */
+export const DEFAULT_VALIDITY_DAYS = 397;
+/** The longest any Private CA may let its TLS Certificates be valid for: ten years. */
+export const MAX_VALIDITY_DAYS = 3650;

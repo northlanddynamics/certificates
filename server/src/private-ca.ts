@@ -16,13 +16,9 @@ import { IssuanceFailure } from "./issuance-failure";
 import type { Issuer } from "./issuer";
 import type { Kms } from "./kms";
 import { constraintNamesOf, namesOutside, normalizePermittedNames, samePermittedNames, type PermittedNames } from "./permitted-names";
-import { PRIVATE_CA_KINDS, PRIVATE_CA_STATUSES } from "./private-ca-kinds";
+import { DEFAULT_VALIDITY_DAYS, MAX_VALIDITY_DAYS, PRIVATE_CA_KINDS, PRIVATE_CA_STATUSES } from "./private-ca-kinds";
 import type { Actor, UnitOfWork } from "./unit-of-work";
 
-/** A Private CA's validity limits unless it sets its own: what browsers accept of a public CA's TLS Certificates. */
-const DEFAULT_VALIDITY_DAYS = 397;
-/** The longest any Private CA's TLS Certificates may be valid for. */
-export const MAX_VALIDITY_DAYS = 3650;
 const DAY_MS = 24 * 60 * 60 * 1000;
 
 type PrivateCaRow = typeof privateCa.$inferSelect;
@@ -129,11 +125,19 @@ export function namesRefusal(ca: PrivateCaRow, names: string[]) {
   return outside.length === 0 ? undefined : `${outside.join(", ")} ${outside.length === 1 ? "is" : "are"} outside the permitted names of the Private CA ${ca.name}`;
 }
 
-/** Why the issuer may not issue for the names (normalised): none for an ACME issuer, which checks control of them instead. */
-export async function issuerNamesRefusal(db: Db | Tx, organizationId: string, issuer: Issuer, names: string[]) {
-  if (issuer.kind !== "private_ca") return undefined;
+/**
+ * Why a Managed Certificate may not ask the issuer for the names (normalised) and the validity: a 422 when it is a
+ * Private CA that is not the Organization's or not active, or does not permit the names, or allows no such validity;
+ * a 400 for a validity asked of an ACME CA, which decides its own (and checks control of the names instead). None when
+ * it may.
+ */
+export async function issuerRefusal(db: Db | Tx, organizationId: string, issuer: Issuer, asked: { names: string[]; validityDays: number | null }) {
+  const refused = (status: 400 | 422, message: string) => ({ status, message });
+  if (issuer.kind !== "private_ca") return asked.validityDays === null ? undefined : refused(400, "a validity can be chosen only for a Managed Certificate issued from a Private CA");
   const ca = await findPrivateCa(db, organizationId, issuer.privateCaId);
-  return ca ? namesRefusal(ca, names) : "the Organization has no such Private CA";
+  if (!ca) return refused(422, "the Organization has no such Private CA");
+  const refusal = issuingRefusal(ca) ?? namesRefusal(ca, asked.names) ?? validityRefusal(ca, asked.validityDays);
+  return refusal ? refused(422, refusal) : undefined;
 }
 
 /** The chain of the Private CA, PEM: its Issuing CA, then the root when the platform has it. */

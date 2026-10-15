@@ -1,4 +1,8 @@
 import type { PermittedNames, PrivateCaValidity } from "@/lib/api";
+// The server's own limits, from a module that imports nothing, so what the forms offer is what the API accepts.
+import { DEFAULT_VALIDITY_DAYS, MAX_VALIDITY_DAYS } from "../../../server/src/private-ca-kinds";
+
+export { DEFAULT_VALIDITY_DAYS, MAX_VALIDITY_DAYS };
 
 /** A Private CA's permitted name rules in words, such as "app.example.com, or anything in internal.example". */
 export function permittedNamesLabel({ exact, zones }: PermittedNames): string {
@@ -14,8 +18,8 @@ export const daysLabel = (days: number) => `${days} ${days === 1 ? "day" : "days
 export const validityLabel = ({ maximumDays, defaultDays }: PrivateCaValidity) =>
   defaultDays === maximumDays ? `${daysLabel(maximumDays)}, at most` : `${daysLabel(defaultDays)} by default, at most ${daysLabel(maximumDays)}`;
 
-/** The longest validity a Private CA may allow, as the server has it. */
-export const MAX_VALIDITY_DAYS = 3650;
-
 /** Whether `text` is a whole number of days from 1 to `max`. */
 export const isValidityDays = (text: string, max = MAX_VALIDITY_DAYS) => /^\d+$/.test(text.trim()) && Number(text) >= 1 && Number(text) <= max;
+
+/** A Managed Certificate's validity in words: its days, or its Private CA's default. */
+export const chosenValidityLabel = (validityDays: number | null) => (validityDays === null ? "the Private CA's default" : daysLabel(validityDays));
