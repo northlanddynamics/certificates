@@ -14,6 +14,8 @@ export const ISSUANCE_FAILURE_CODES = [
   "record_not_visible",
   /** The CA answered and said no: refused the names, did not accept the challenge, refused the order. */
   "ca_rejected",
+  /** A Private CA's permitted name rules do not permit one of the names: they changed after the names were accepted. */
+  "name_not_permitted",
   /** The CA did not answer. */
   "ca_unreachable",
   /** The Agent that holds the key did not make a new one: it could not, was revoked first, or sent a CSR that could not be used. */

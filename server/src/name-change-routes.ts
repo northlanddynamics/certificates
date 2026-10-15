@@ -12,7 +12,9 @@ import { ManagedCertificate, ManagedCertificateParams, type ManagedCertificateRe
 import { sameNames } from "./names";
 import { checkNamesAndCsr, csrField, namesField } from "./names-and-csr";
 import { applyNames, endPendingNameChange, lockManagedCertificate, pendingNameChanges, refusalToChangeNames } from "./name-change";
+import { issuerOf } from "./issuer";
 import { roleCan } from "./permissions";
+import { issuerNamesRefusal } from "./private-ca";
 import type { Actor, UnitOfWork } from "./unit-of-work";
 
 export function registerNameChangeRoutes(ctx: {
@@ -34,6 +36,7 @@ export function registerNameChangeRoutes(ctx: {
       tags: ["Name changes"],
       summary: "Change the Managed Certificate's names, with a CSR for the new names",
       description:
+        "For a Managed Certificate issued from a Private CA, the new names must be within its permitted name rules. " +
         "An Organization Administrator's change applies at once and an Issuance of the new names begins. An Owner's waits for an Approver to approve it, " +
         "and until then Renewal continues with the last approved names and CSR; at most one is pending at a time. The CSR must be for the key algorithm of the Managed Certificate and ask for exactly the new names.",
       request: {
@@ -71,6 +74,8 @@ export function registerNameChangeRoutes(ctx: {
         if (sameNames(names, mc.names)) {
           throw new HttpError(422, "the Managed Certificate already has the same names; to replace only its CSR, upload a new one");
         }
+        const outside = await issuerNamesRefusal(tx, orgId, issuerOf(mc), names);
+        if (outside) throw new HttpError(422, outside);
         const detail = { from: mc.names, to: names, csrFingerprint: csr.fingerprint };
         if (needsApproval) {
           await tx.insert(nameChange).values({

@@ -28,12 +28,12 @@ const cas = (orgId = org.orgId) => `/api/organizations/${orgId}/private-cas`;
 const mcs = (orgId = org.orgId) => `/api/organizations/${orgId}/managed-certificates`;
 const auditOf = async (target = org) => (await h.api(`/api/organizations/${target.orgId}/audit-events`, { cookie: target.cookie })).body.items as { action: string; target: any; detail: any }[];
 
-const NEW_CA = { name: "Internal TLS", subject: "CN=Acme Internal TLS, O=Acme", keyAlgorithm: "ecdsa-p256", lifetimeYears: 5 };
+const NEW_CA = { name: "Internal TLS", subject: "CN=Acme Internal TLS, O=Acme", keyAlgorithm: "ecdsa-p256", lifetimeYears: 5, permittedNames: { exact: [], zones: ["internal.acme"] } };
 
 async function createCa(body: Record<string, unknown> = NEW_CA, target = org) {
   const res = await h.api(cas(target.orgId), { cookie: target.cookie, body });
   expect(res.status).toBe(201);
-  return res.body as { id: string; name: string; status: string; kind: string; keyAlgorithm: string; subject: string; notAfter: string };
+  return res.body as { id: string; name: string; status: string; kind: string; keyAlgorithm: string; subject: string; notAfter: string; permittedNames: { exact: string[]; zones: string[] } };
 }
 
 /** The certificates of a PEM bundle, in order. */
@@ -100,6 +100,61 @@ describe("creating a Private CA with a platform-made root", () => {
       const res = await h.api(cas(), { cookie: org.cookie, body: { ...NEW_CA, subject } });
       expect(res.status).toBe(400);
     }
+  });
+});
+
+/** The DER elements in `bytes`, one after another: each one's tag and content. */
+function derElements(bytes: Uint8Array) {
+  const elements: { tag: number; content: Uint8Array }[] = [];
+  for (let i = 0; i < bytes.length; ) {
+    const tag = bytes[i++]!;
+    let length = bytes[i++]!;
+    if (length & 0x80) {
+      const octets = length & 0x7f;
+      length = 0;
+      for (let k = 0; k < octets; k++) length = (length << 8) | bytes[i++]!;
+    }
+    elements.push({ tag, content: bytes.subarray(i, i + length) });
+    i += length;
+  }
+  return elements;
+}
+
+/** The Issuing CA's name constraints (RFC 5280, 4.2.1.10): whether critical, and each subtree's base as the dNSName or the iPAddress range it is. */
+function nameConstraintsOf(cert: x509.X509Certificate) {
+  const extension = cert.extensions.find((e) => e.type === "2.5.29.30");
+  if (!extension) return null;
+  const [sequence] = derElements(new Uint8Array(extension.value));
+  const subtrees = (tag: number) =>
+    derElements(derElements(sequence!.content).find((e) => e.tag === tag)?.content ?? new Uint8Array()).map((subtree) => {
+      const [base] = derElements(subtree.content);
+      return base!.tag === 0x82 ? `dns:${new TextDecoder().decode(base!.content)}` : base!.tag === 0x87 ? `ip:${Buffer.from(base!.content).toString("hex")}` : `tag ${base!.tag}`;
+    });
+  return { critical: extension.critical, permitted: subtrees(0xa0), excluded: subtrees(0xa1) };
+}
+
+describe("a platform-made Issuing CA's name constraints", () => {
+  test("are its permitted name rules, critical, as dNSName subtrees, with no IP address permitted", async () => {
+    const ca = await createCa({ ...NEW_CA, permittedNames: { exact: ["app.corp.example", "*.svc.corp.example"], zones: ["internal.acme"] } });
+
+    const [issuing, root] = (await chainOf(ca.id)).certificates;
+    expect(nameConstraintsOf(issuing!)).toEqual({
+      critical: true,
+      permitted: ["dns:app.corp.example", "dns:svc.corp.example", "dns:internal.acme"],
+      excluded: ["ip:0000000000000000", `ip:${"00".repeat(32)}`],
+    });
+    expect(nameConstraintsOf(root!)).toBeNull();
+    expect(await signedBy(issuing!, root!)).toBe(true);
+  });
+
+  test("stay as they were made when the rules change", async () => {
+    const ca = await createCa();
+    const before = (await chainOf(ca.id)).certificates[0]!;
+    await h.api(`${cas()}/${ca.id}`, { cookie: org.cookie, method: "PATCH", body: { permittedNames: { exact: [], zones: ["lab.acme"] } } });
+
+    const after = (await chainOf(ca.id)).certificates[0]!;
+    expect(after.equal(before)).toBe(true);
+    expect(nameConstraintsOf(after)!.permitted).toEqual(["dns:internal.acme"]);
   });
 });
 
@@ -299,5 +354,130 @@ describe("which Private CA a Managed Certificate may name", () => {
     expect((await h.api(mcs(), { cookie: org.cookie, body: { ...body, ...fromCa("00000000-0000-0000-0000-000000000000") } })).status).toBe(422);
     expect((await h.api(mcs(), { cookie: org.cookie, body: { ...body, ...fromCa("not-an-id") } })).status).toBe(422);
     expect((await h.api(mcs(), { cookie: org.cookie, body: { ...body, ...fromCa(ca.id), environment: "staging" } })).status).toBe(400);
+  });
+});
+
+describe("a Private CA's permitted name rules", () => {
+  test("are set when it is created, normalised and without repeats, and shown to everyone in the Organization", async () => {
+    const ca = await createCa({ ...NEW_CA, permittedNames: { exact: ["App.Corp.Example.", "*.svc.corp.example", "app.corp.example"], zones: ["Internal.Acme"] } });
+
+    const rules = { exact: ["app.corp.example", "*.svc.corp.example"], zones: ["internal.acme"] };
+    expect(ca.permittedNames).toEqual(rules);
+    const member = await join("member@acme.test", "member");
+    expect((await h.api(`${cas()}/${ca.id}`, { cookie: member })).body.permittedNames).toEqual(rules);
+    expect((await h.api(cas(), { cookie: member })).body.items[0].permittedNames).toEqual(rules);
+    expect((await auditOf()).find((e) => e.action === "private_ca.created")!.detail.permittedNames).toEqual(rules);
+  });
+
+  test("an Organization Administrator changes them later, for what is issued from then on, as an Audit Event", async () => {
+    const ca = await createCa();
+    const res = await h.api(`${cas()}/${ca.id}`, { cookie: org.cookie, method: "PATCH", body: { permittedNames: { exact: ["App.Corp.Example"], zones: ["internal.acme", "lab.acme"] } } });
+
+    expect(res.status).toBe(200);
+    const rules = { exact: ["app.corp.example"], zones: ["internal.acme", "lab.acme"] };
+    expect(res.body.permittedNames).toEqual(rules);
+    expect((await h.api(`${cas()}/${ca.id}`, { cookie: org.cookie })).body.permittedNames).toEqual(rules);
+    expect((await auditOf()).filter((e) => e.action === "private_ca.updated")).toMatchObject([
+      { target: { type: "private_ca", id: ca.id }, detail: { permittedNames: { from: { exact: [], zones: ["internal.acme"] }, to: rules } } },
+    ]);
+
+    expect((await h.api(mcs(), { cookie: org.cookie, body: { ...(await request(["app.corp.example", "x.lab.acme"])), ...fromCa(ca.id) } })).status).toBe(201);
+  });
+
+  test("only an Organization Administrator may change them, and only for the Organization's own Private CAs, and never to none", async () => {
+    const ca = await createCa();
+    const globex = await h.createOrgWithAdmin(operator, "globex", "admin@globex.test");
+    const change = { permittedNames: { exact: [], zones: ["other.acme"] } };
+
+    for (const role of ["member", "approver"]) {
+      const cookie = await join(`${role}@acme.test`, role);
+      expect((await h.api(`${cas()}/${ca.id}`, { cookie, method: "PATCH", body: change })).status).toBe(403);
+    }
+    expect((await h.api(`${cas(globex.orgId)}/${ca.id}`, { cookie: globex.cookie, method: "PATCH", body: change })).status).toBe(404);
+    expect((await h.api(`${cas()}/${ca.id}`, { cookie: org.cookie, method: "PATCH", body: { permittedNames: { exact: [], zones: [] } } })).status).toBe(400);
+
+    expect((await h.api(`${cas()}/${ca.id}`, { cookie: org.cookie })).body.permittedNames).toEqual(NEW_CA.permittedNames);
+    expect((await auditOf()).filter((e) => e.action === "private_ca.updated")).toEqual([]);
+  });
+
+  test("must have at least one rule, each a name that could be issued for, and a zone is never a wildcard", async () => {
+    for (const permittedNames of [{ exact: [], zones: [] }, { exact: ["10.0.0.1"], zones: [] }, { exact: ["not a name"], zones: [] }, { exact: [], zones: ["*.internal.acme"] }]) {
+      const res = await h.api(cas(), { cookie: org.cookie, body: { ...NEW_CA, permittedNames } });
+      expect(res.status).toBe(400);
+    }
+    expect((await h.api(cas(), { cookie: org.cookie })).body.items).toEqual([]);
+  });
+});
+
+describe("names outside a Private CA's permitted name rules", () => {
+  const RULES = { exact: ["app.corp.example", "*.svc.corp.example"], zones: ["internal.acme"] };
+
+  test("are refused when an Organization Administrator creates a Managed Certificate, naming them, and nothing is created", async () => {
+    const ca = await createCa({ ...NEW_CA, permittedNames: RULES });
+
+    const res = await h.api(mcs(), { cookie: org.cookie, body: { ...(await request(["app.internal.acme", "db.corp.example", "*.corp.example", "*.corp.acme"])), ...fromCa(ca.id) } });
+
+    expect(res.status).toBe(422);
+    expect(res.body.error).toContain("db.corp.example, *.corp.example, *.corp.acme");
+    expect(res.body.error).not.toContain("app.internal.acme");
+    expect((await h.api(mcs(), { cookie: org.cookie })).body.items).toEqual([]);
+  });
+
+  test("are refused when a Member proposes one, so no Approver sees it", async () => {
+    const ca = await createCa({ ...NEW_CA, permittedNames: RULES });
+    const member = await join("member@acme.test", "member");
+
+    const res = await h.api(mcs(), { cookie: member, body: { ...(await request(["other.example"])), ...fromCa(ca.id) } });
+
+    expect(res.status).toBe(422);
+    expect(res.body.error).toContain("other.example");
+    expect((await h.api(`/api/organizations/${org.orgId}/approvals`, { cookie: org.cookie })).body.items).toEqual([]);
+  });
+
+  test("are refused when an Organization Administrator changes a Managed Certificate's names, or an Owner proposes the change", async () => {
+    const ca = await createCa({ ...NEW_CA, permittedNames: RULES });
+    const member = await join("member@acme.test", "member");
+    const memberId = (await h.api("/api/me", { cookie: member })).body.user.id;
+    const created = await h.api(mcs(), { cookie: org.cookie, body: { ...(await request(["app.internal.acme"])), ...fromCa(ca.id), owners: [{ type: "user", id: memberId }] } });
+    await ended(created.body.id);
+    const { csr } = await request(["app.internal.acme", "other.example"]);
+
+    for (const cookie of [org.cookie, member]) {
+      const res = await h.api(`${mcs()}/${created.body.id}/name-change`, { cookie, body: { names: ["app.internal.acme", "other.example"], csr } });
+      expect(res.status).toBe(422);
+      expect(res.body.error).toContain("other.example");
+    }
+    const mc = await h.api(`${mcs()}/${created.body.id}`, { cookie: org.cookie });
+    expect(mc.body).toMatchObject({ names: ["app.internal.acme"], pendingNameChange: null });
+
+    const inside = await request(["app.internal.acme", "api.internal.acme"]);
+    expect((await h.api(`${mcs()}/${created.body.id}/name-change`, { cookie: org.cookie, body: { names: inside.names, csr: inside.csr } })).status).toBe(201);
+  });
+
+  test("fail the Issuance when the rules changed after they were proposed, and nothing is issued", async () => {
+    const ca = await createCa({ ...NEW_CA, permittedNames: { exact: [], zones: ["internal.acme", "lab.acme"] } });
+    const member = await join("member@acme.test", "member");
+    const approver = await join("approver@acme.test", "approver");
+    const proposed = await h.api(mcs(), { cookie: member, body: { ...(await request(["app.internal.acme", "app.lab.acme"])), ...fromCa(ca.id) } });
+    expect(proposed.status).toBe(201);
+    expect((await h.api(`${cas()}/${ca.id}`, { cookie: org.cookie, method: "PATCH", body: { permittedNames: { exact: [], zones: ["internal.acme"] } } })).status).toBe(200);
+
+    expect((await h.api(`${mcs()}/${proposed.body.id}/approve`, { cookie: approver, body: {} })).status).toBe(200);
+
+    const mc = await ended(proposed.body.id);
+    expect(mc.issuance).toMatchObject({ status: "failed", failure: { code: "name_not_permitted" } });
+    expect(mc.issuance.failure.message).toContain("app.lab.acme");
+    expect(mc.issuance.failure.message).not.toContain("app.internal.acme");
+    expect(mc.currentCertificate).toBeNull();
+  });
+
+  test("exact names and every name in a zone, wildcards included, are permitted", async () => {
+    const ca = await createCa({ ...NEW_CA, permittedNames: RULES });
+    const names = ["app.corp.example", "*.svc.corp.example", "internal.acme", "a.b.internal.acme", "*.internal.acme", "*.x.internal.acme"];
+
+    const created = await h.api(mcs(), { cookie: org.cookie, body: { ...(await request(names)), ...fromCa(ca.id) } });
+
+    expect(created.status).toBe(201);
+    expect((await ended(created.body.id)).issuance.status).toBe("succeeded");
   });
 });

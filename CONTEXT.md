@@ -102,6 +102,10 @@ _Avoid_: issuer, provider
 An Organization's own Certificate Authority, used for internal TLS and device enrollment, whose keys the platform holds only in a KMS and never sees. A Managed Certificate can be issued from one instead of from an ACME CA, with no DCV; whatever must trust its Certificates needs its root.
 _Avoid_: internal CA, enterprise CA
 
+**Permitted Name Rules**:
+A Private CA's exact names and zones (a zone being a name and everything beneath it): the only names it issues for, refused when asked for otherwise. A platform-made Issuing CA carries them as X.509 name constraints, which do not change when the rules later do.
+_Avoid_: allowed domains, name policy
+
 **Issuing CA**:
 The CA certificate and key that actually sign a Private CA's end-entity Certificates, under a root the platform made or the Organization's own. It may sign no CA beneath it.
 _Avoid_: intermediate, sub-CA

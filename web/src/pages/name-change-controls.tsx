@@ -1,10 +1,11 @@
-import { useMutation } from "@tanstack/react-query";
+import { useMutation, useQuery } from "@tanstack/react-query";
 import { useState, type FormEvent } from "react";
 import { Button } from "@/components/ui/button";
 import { Label } from "@/components/ui/label";
 import { Textarea } from "@/components/ui/textarea";
 import { api, can, type ManagedCertificate, type Me } from "@/lib/api";
 import { isOwner } from "@/lib/managed-certificate";
+import { permittedNamesLabel } from "@/lib/private-ca";
 
 /** A Managed Certificate's name change: the one waiting for Approval, and for those who may, the means to make one. */
 export function NameChange({ org, m, userId, onChanged }: { org: Me["organizations"][number]; m: ManagedCertificate; userId?: string; onChanged: () => void }) {
@@ -22,6 +23,15 @@ export function NameChange({ org, m, userId, onChanged }: { org: Me["organizatio
       onChanged();
     },
   });
+
+  // A Private CA issues only for its permitted names, which the new names must keep within.
+  const privateCaId = m.issuer.kind === "private_ca" ? m.issuer.privateCa.id : null;
+  const privateCa = useQuery({
+    queryKey: ["private-cas", org.id],
+    queryFn: () => api.privateCas(org.id),
+    enabled: privateCaId !== null && mayChange && can(org, "privateCa", "read"),
+    select: (cas) => cas.items.find((ca) => ca.id === privateCaId),
+  }).data;
 
   const withdraw = useMutation({ mutationFn: () => api.withdrawNameChange(org.id, m.id), onSuccess: onChanged });
 
@@ -55,6 +65,11 @@ export function NameChange({ org, m, userId, onChanged }: { org: Me["organizatio
               All the names it is to have (one per line)
             </Label>
             <Textarea id={`new-names-${m.id}`} value={names} onChange={(e) => setNames(e.target.value)} required />
+            {privateCa && (
+              <p className="text-muted-foreground">
+                {privateCa.name} permits only {permittedNamesLabel(privateCa.permittedNames)}; other names are refused.
+              </p>
+            )}
             <Label className="font-normal" htmlFor={`name-change-csr-${m.id}`}>
               CSR for the new names (same key algorithm)
             </Label>

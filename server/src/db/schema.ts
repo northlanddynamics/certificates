@@ -48,6 +48,12 @@ export const privateCa = pgTable(
     /** The Issuing CA: its certificate (PEM), once there is one, and the KMS's reference to its key. */
     issuingCertificatePem: text("issuing_certificate_pem"),
     issuingKey: text("issuing_key").notNull(),
+    /**
+     * Its permitted name rules: the exact names, and the zones (each the name and everything beneath it), it may issue
+     * for, normalised as Managed Certificates' names are. One made before there were rules has none, and issues for nothing.
+     */
+    permittedExactNames: text("permitted_exact_names").array().notNull().default(sql`'{}'`),
+    permittedZones: text("permitted_zones").array().notNull().default(sql`'{}'`),
     createdAt: timestamp("created_at", { withTimezone: true }).notNull().defaultNow(),
   },
   (t) => [
