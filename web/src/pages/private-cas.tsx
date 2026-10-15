@@ -12,11 +12,12 @@ import { DropdownMenu, DropdownMenuContent, DropdownMenuItem, DropdownMenuSepara
 import { Input } from "@/components/ui/input";
 import { Label } from "@/components/ui/label";
 import { Textarea } from "@/components/ui/textarea";
+import { Tooltip, TooltipContent, TooltipTrigger } from "@/components/ui/tooltip";
 import { api, can, type PermittedNames, type PrivateCa, type PrivateCaValidity } from "@/lib/api";
 import { KEY_ALGORITHMS, KEY_ALGORITHM_LABELS, type KeyAlgorithm } from "@/lib/csr-generator";
 import { splitNames } from "@/lib/csr-names";
 import { keyAlgorithmLabel } from "@/lib/managed-certificate";
-import { DEFAULT_VALIDITY_DAYS, MAX_VALIDITY_DAYS, isValidityDays, permittedNamesLabel, rootSubjectOf } from "@/lib/private-ca";
+import { DEFAULT_VALIDITY_DAYS, MAX_VALIDITY_DAYS, isValidityDays, rootSubjectOf } from "@/lib/private-ca";
 import { useAction } from "@/lib/use-action";
 
 const ROUTE = "/app/organizations/$orgId/private-cas";
@@ -75,7 +76,7 @@ const columns = columnHelper.columns([
   columnHelper.display({
     id: "permittedNames",
     header: "Permitted names",
-    cell: ({ row }) => (row.original.level === "intermediate" ? <span className="block max-w-56 whitespace-normal break-all text-xs">{permittedNamesLabel(row.original.ca.permittedNames)}</span> : null),
+    cell: ({ row }) => (row.original.level === "intermediate" ? <PermittedNamesChips names={row.original.ca.permittedNames} /> : null),
   }),
   columnHelper.display({
     id: "status",
@@ -123,6 +124,36 @@ export function PrivateCasPage() {
         </div>
       )}
     </div>
+  );
+}
+
+/** A Private CA's permitted name rules as chips: the first, then "+n" with the rest on hover. */
+function PermittedNamesChips({ names }: { names: PermittedNames }) {
+  const rules = [...names.zones.map((zone) => `${zone} (zone)`), ...names.exact];
+  if (rules.length === 0) return <span className="text-muted-foreground">Not set</span>;
+  const [first, ...rest] = rules;
+  return (
+    <span className="flex items-center gap-1">
+      <Badge variant="secondary" className="font-normal">
+        {first}
+      </Badge>
+      {rest.length > 0 && (
+        <Tooltip>
+          <TooltipTrigger asChild>
+            <Badge variant="outline" tabIndex={0} aria-label={`All permitted names: ${rules.join(", ")}`}>
+              +{rest.length}
+            </Badge>
+          </TooltipTrigger>
+          <TooltipContent>
+            <ul className="flex flex-col gap-0.5">
+              {rules.map((rule) => (
+                <li key={rule}>{rule}</li>
+              ))}
+            </ul>
+          </TooltipContent>
+        </Tooltip>
+      )}
+    </span>
   );
 }
 
