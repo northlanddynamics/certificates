@@ -15,6 +15,8 @@ export const SIGNATURE_HASH: Record<KeyAlgorithm, "SHA-256" | "SHA-384"> = {
   "rsa-4096": "SHA-256",
 };
 
+const HASH_BYTES = { "SHA-256": 32, "SHA-384": 48 };
+
 export interface Kms {
   /** Wraps `dataKey`, binding it to `context` (an Organization's id) so it unwraps only for the same context. */
   wrap(dataKey: Uint8Array, context: string): Promise<Uint8Array>;
@@ -54,7 +56,7 @@ export function createLocalKms(masterKeyBase64: string): Kms {
     wrap: async (dataKey, context) => seal(masterKey, dataKey, Buffer.from(context)),
     unwrap: async (wrapped, context) => open(masterKey, wrapped, Buffer.from(context)),
     async createSigningKey(algorithm, context) {
-      const { privateKey } = generate(algorithm);
+      const { privateKey } = generateKeyPair(algorithm);
       const pkcs8 = privateKey.export({ format: "der", type: "pkcs8" });
       return `${PREFIX}:${algorithm}:${seal(masterKey, pkcs8, signingAad(algorithm, context)).toString("base64url")}`;
     },
@@ -69,24 +71,23 @@ export function createLocalKms(masterKeyBase64: string): Kms {
   };
 }
 
-function generate(algorithm: KeyAlgorithm) {
-  switch (algorithm) {
-    case "ecdsa-p256":
-      return generateKeyPairSync("ec", { namedCurve: "P-256" });
-    case "ecdsa-p384":
-      return generateKeyPairSync("ec", { namedCurve: "P-384" });
-    case "rsa-2048":
-      return generateKeyPairSync("rsa", { modulusLength: 2048 });
-    case "rsa-3072":
-      return generateKeyPairSync("rsa", { modulusLength: 3072 });
-    case "rsa-4096":
-      return generateKeyPairSync("rsa", { modulusLength: 4096 });
-  }
+function generateKeyPair(algorithm: KeyAlgorithm) {
+  if (algorithm === "ecdsa-p256" || algorithm === "ecdsa-p384") return generateKeyPairSync("ec", { namedCurve: CURVES[algorithm].openssl });
+  return generateKeyPairSync("rsa", { modulusLength: RSA_BITS[algorithm] });
 }
+
+const RSA_BITS = { "rsa-2048": 2048, "rsa-3072": 3072, "rsa-4096": 4096 };
 
 // Node signs only messages, which it hashes itself, and a KMS signs digests (a CRL can outgrow what a KMS takes to
 // hash for you). So ECDSA is done here from its definition, with OpenSSL's scalar multiplication (ECDH) for k·G.
-const CURVES = {
+interface Curve {
+  openssl: string;
+  /** The length of the order n, and of r and s. */
+  bytes: number;
+  n: bigint;
+}
+
+const CURVES: Record<"ecdsa-p256" | "ecdsa-p384", Curve> = {
   "ecdsa-p256": { openssl: "prime256v1", bytes: 32, n: 0xffffffff00000000ffffffffffffffffbce6faada7179e84f3b9cac2fc632551n },
   "ecdsa-p384": {
     openssl: "secp384r1",
@@ -105,9 +106,7 @@ function signDigest(algorithm: KeyAlgorithm, privateKey: KeyObject, digest: Buff
 /** The DER DigestInfo for SHA-256, up to the digest itself (RFC 8017, section 9.2). */
 const SHA256_DIGEST_INFO = Buffer.from("3031300d060960864801650304020105000420", "hex");
 
-const HASH_BYTES = { "SHA-256": 32, "SHA-384": 48 };
-
-function ecdsaSign(curve: (typeof CURVES)["ecdsa-p256"], privateKey: KeyObject, digest: Buffer): Buffer {
+function ecdsaSign(curve: Curve, privateKey: KeyObject, digest: Buffer): Buffer {
   const { n, bytes, openssl } = curve;
   const d = toBigInt(Buffer.from(privateKey.export({ format: "jwk" }).d!, "base64url"));
   const e = toBigInt(digest) % n; // the digest is as long as n, so no bits need dropping
