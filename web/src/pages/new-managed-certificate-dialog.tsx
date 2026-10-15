@@ -17,7 +17,7 @@ import { api, can, ownerFromKey, ownerKey, type ManagedCertificate, type Me, typ
 import { issuerLabel } from "@/lib/managed-certificate";
 import { KEY_ALGORITHMS, KEY_ALGORITHM_LABELS, type KeyAlgorithm } from "@/lib/csr-generator";
 import { nameProblems, splitNames } from "@/lib/csr-names";
-import { daysLabel, isValidityDays, permittedNamesLabel, validityLabel } from "@/lib/private-ca";
+import { daysLabel, isValidityDays, permittedNamesLabel, permitsOnlyLabel, validityLabel } from "@/lib/private-ca";
 
 type Org = Me["organizations"][number];
 type Environment = "staging" | "production";
@@ -265,7 +265,7 @@ function NewManagedCertificateForm({ org, direct, onCreated }: { org: Org; direc
                   }}
                 />
                 <FieldDescription>One per line; wildcards as *.example.com. The certificate is issued for exactly these names.</FieldDescription>
-                {chosenCa && <FieldDescription>{chosenCa.name} permits only {permittedNamesLabel(chosenCa.permittedNames)}; other names are refused.</FieldDescription>}
+                {chosenCa && <FieldDescription>{permitsOnlyLabel(chosenCa)}</FieldDescription>}
                 {names.trim() !== "" && problems.map((problem) => <FieldError key={problem}>{problem}</FieldError>)}
               </Field>
               {parsedNames.length > 0 && problems.length === 0 && (

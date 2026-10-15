@@ -256,6 +256,8 @@ export interface PrivateCa {
   subject: string;
   /** When its Issuing CA ends. */
   notAfter: string | null;
+  /** The root that signs its Issuing CA; none when the platform does not hold it. */
+  root: { subject: string; notAfter: string } | null;
   permittedNames: PermittedNames;
   validity: PrivateCaValidity;
   createdAt: string;

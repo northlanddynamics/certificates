@@ -4,12 +4,21 @@ import { DEFAULT_VALIDITY_DAYS, MAX_VALIDITY_DAYS } from "../../../server/src/pr
 
 export { DEFAULT_VALIDITY_DAYS, MAX_VALIDITY_DAYS };
 
-/** A Private CA's permitted name rules in words, such as "app.example.com, or anything in internal.example". */
+/** A Private CA's permitted name rules in words, such as "app.example.com, or anything in internal.example", or "Not set". */
 export function permittedNamesLabel({ exact, zones }: PermittedNames): string {
-  if (exact.length === 0 && zones.length === 0) return "No names: it issues for nothing until an Organization Administrator sets them";
+  if (exact.length === 0 && zones.length === 0) return "Not set";
   const parts = [...(exact.length > 0 ? [exact.join(", ")] : []), ...(zones.length > 0 ? [`anything in ${zones.join(", ")}`] : [])];
   return parts.join(", or ");
 }
+
+/** What the Private CA issues for, as a sentence for a field that takes names. */
+export const permitsOnlyLabel = (ca: { name: string; permittedNames: PermittedNames }) =>
+  ca.permittedNames.exact.length + ca.permittedNames.zones.length === 0
+    ? `${ca.name} has no permitted names set, so every name is refused.`
+    : `${ca.name} permits only ${permittedNamesLabel(ca.permittedNames)}; other names are refused.`;
+
+/** The root's subject for an Issuing CA's `subject`: the same, with " Root" after the common name. */
+export const rootSubjectOf = (subject: string) => subject.replace(/(^|,\s*)(CN=)([^,]+)/i, (_, start: string, cn: string, value: string) => `${start}${cn}${value.trim()} Root`);
 
 /** A number of days in words, such as "1 day" or "397 days". */
 export const daysLabel = (days: number) => `${days} ${days === 1 ? "day" : "days"}`;

@@ -33,7 +33,7 @@ const NEW_CA = { name: "Internal TLS", subject: "CN=Acme Internal TLS, O=Acme", 
 async function createCa(body: Record<string, unknown> = NEW_CA, target = org) {
   const res = await h.api(cas(target.orgId), { cookie: target.cookie, body });
   expect(res.status).toBe(201);
-  return res.body as { id: string; name: string; status: string; kind: string; keyAlgorithm: string; subject: string; notAfter: string; permittedNames: { exact: string[]; zones: string[] }; validity: { maximumDays: number; defaultDays: number } };
+  return res.body as { id: string; name: string; status: string; kind: string; keyAlgorithm: string; subject: string; notAfter: string; root: { subject: string; notAfter: string } | null; permittedNames: { exact: string[]; zones: string[] }; validity: { maximumDays: number; defaultDays: number } };
 }
 
 /** The certificates of a PEM bundle, in order. */
@@ -71,6 +71,7 @@ describe("creating a Private CA with a platform-made root", () => {
     expect(Buffer.from(issuing!.publicKey.rawData).equals(Buffer.from(root!.publicKey.rawData))).toBe(false);
     expect(issuing!.subject).toBe("CN=Acme Internal TLS, O=Acme");
     expect(new Date(ca.notAfter).getTime()).toBe(issuing!.notAfter.getTime());
+    expect(ca.root).toEqual({ subject: "CN=Acme Internal TLS Root, O=Acme", notAfter: root!.notAfter.toISOString() });
 
     const issuingConstraints = issuing!.getExtension(x509.BasicConstraintsExtension)!;
     expect(issuingConstraints).toMatchObject({ ca: true, pathLength: 0, critical: true });

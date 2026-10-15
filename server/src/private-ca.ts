@@ -80,6 +80,10 @@ export const PrivateCa = z.object({
   keyAlgorithm: z.enum(KEY_ALGORITHMS),
   subject: z.string().openapi({ description: "The Issuing CA's subject, as a distinguished name." }),
   notAfter: z.string().nullable().openapi({ description: "When its Issuing CA ends; none until it has a certificate." }),
+  root: z
+    .object({ subject: z.string(), notAfter: z.string() })
+    .nullable()
+    .openapi({ description: "The root that signs its Issuing CA: its subject, as a distinguished name, and when it ends. None when the platform does not hold it." }),
   permittedNames: z
     .object({ exact: z.array(z.string()), zones: z.array(z.string()) })
     .openapi({ description: "Its permitted name rules: it issues for no other name. One made before there were rules has none, and issues for nothing until they are set." }),
@@ -89,6 +93,12 @@ export const PrivateCa = z.object({
 
 const certificateOf = (pem: string | null) => (pem ? new x509.X509Certificate(pem) : null);
 
+/** The Private CA's root, when the platform holds it. */
+function rootOf(row: PrivateCaRow) {
+  const root = certificateOf(row.rootCertificatePem);
+  return root ? { subject: root.subject, notAfter: root.notAfter.toISOString() } : null;
+}
+
 const toPrivateCa = (row: PrivateCaRow) => ({
   id: row.id,
   name: row.name,
@@ -97,6 +107,7 @@ const toPrivateCa = (row: PrivateCaRow) => ({
   keyAlgorithm: row.keyAlgorithm,
   subject: row.subject,
   notAfter: certificateOf(row.issuingCertificatePem)?.notAfter.toISOString() ?? null,
+  root: rootOf(row),
   permittedNames: permittedNamesOf(row),
   validity: validityOf(row),
   createdAt: row.createdAt.toISOString(),
