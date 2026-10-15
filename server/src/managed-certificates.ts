@@ -31,9 +31,9 @@ const MAX_OWNERS = 50;
 const IssuerField = z
   .discriminatedUnion("kind", [
     z.object({ kind: z.literal("acme"), environment: z.enum(ACME_ENVIRONMENTS).default("staging") }),
-    z.object({ kind: z.literal("private_ca"), privateCaId: z.string() }),
+    z.object({ kind: z.literal("private_ca"), issuingCaId: z.string() }),
   ])
-  .openapi({ description: "`acme`: through the Organization's ACME account in `environment`. `private_ca`: from one of the Organization's active Private CAs, with no DCV." });
+  .openapi({ description: "`acme`: through the Organization's ACME account in `environment`. `private_ca`: from an active Issuing CA of one of the Organization's Private CAs, with no DCV." });
 export function registerManagedCertificates(ctx: {
   app: OpenAPIHono;
   db: Db;
@@ -50,8 +50,9 @@ export function registerManagedCertificates(ctx: {
   const { findManagedCertificate, findReadable, visibleTo, certificatesOf, withState } = reader;
 
   /**
-   * The issuer asked for: `issuer`, or the ACME kind in `environment`. A Private CA must be one of the Organization's,
-   * active, permit the names (normalised), and allow the validity chosen, which only a Private CA lets be chosen.
+   * The issuer asked for: `issuer`, or the ACME kind in `environment`. An Issuing CA must be one of the Organization's,
+   * active under an active root, permit the names (normalised), and allow the validity chosen, which only a Private CA
+   * lets be chosen.
    */
   async function issuerAsked(orgId: string, body: { environment?: AcmeEnvironment; issuer?: z.infer<typeof IssuerField>; validityDays?: number }, names: string[]): Promise<Issuer> {
     if (body.issuer && body.environment) throw new HttpError(400, "give either `issuer` or `environment`, not both");
@@ -106,8 +107,8 @@ export function registerManagedCertificates(ctx: {
         "The Owner keeps the private key and submits a CSR for it. The CSR must be for the key algorithm given and ask for exactly the names given. " +
         "An Organization Administrator creates it outright and Issuance starts at once; anyone else proposes it, and it waits for an Approver to approve it, which starts Issuance. " +
         "Issuance runs in the background: the response shows it running, and the Managed Certificate shows the Certificate or the cause of the failure when it ends. " +
-        "Its issuer is an ACME CA (staging unless `environment` says otherwise) or, given `issuer`, one of the Organization's active Private CAs, which issues with no DCV. " +
-          "Names outside a Private CA's permitted name rules are refused with 422, which names them, as is a `validityDays` above its maximum; `validityDays` with an ACME CA is refused with 400.",
+        "Its issuer is an ACME CA (staging unless `environment` says otherwise) or, given `issuer`, an active Issuing CA of one of the Organization's Private CAs, which issues with no DCV. " +
+          "Names outside the Issuing CA's permitted name rules are refused with 422, which names them, as is a `validityDays` above its maximum; `validityDays` with an ACME CA is refused with 400.",
       request: {
         params: OrgParam,
         body: {
@@ -121,7 +122,7 @@ export function registerManagedCertificates(ctx: {
                 issuer: IssuerField.optional(),
                 validityDays: validityDaysField
                   .optional()
-                  .openapi({ description: "For a Private CA issuer only: how many days its Certificates are valid for, at most the Private CA's maximum; its default when not given." }),
+                  .openapi({ description: "For a Private CA issuer only: how many days its Certificates are valid for, at most the Issuing CA's maximum; its default when not given." }),
                 owners: z.array(OwnerRef).max(MAX_OWNERS).default([]).openapi({ description: "Users and Teams of the Organization accountable for it; none is allowed." }),
               }),
             },

@@ -9,7 +9,7 @@ import type { Authorizer } from "./authorization";
 import { ACME_ENVIRONMENTS } from "./certificate-authority";
 import { KEY_ALGORITHMS, KEY_CUSTODIES } from "./csr";
 import type { Db } from "./db/client";
-import { agent, certificate, deployment, issuance, managedCertificate, privateCa } from "./db/schema";
+import { agent, certificate, deployment, issuance, issuingCa, managedCertificate, privateCa } from "./db/schema";
 import { HttpError, OrgParam } from "./http";
 import { issuerOf, type Issuer as IssuerOfRow } from "./issuer";
 import { ISSUANCE_FAILURE_CODES } from "./issuance-failure";
@@ -51,7 +51,7 @@ export const Certificate = z.object({
   ca: z.string(),
   environment: z.enum(ACME_ENVIRONMENTS).nullable().openapi({ description: "The ACME environment it was issued through; none for a Certificate from a Private CA." }),
   acmeAccountId: z.string().nullable().openapi({ description: "The ACME account it was issued through; none for a Certificate from a Private CA." }),
-  privateCaId: z.string().nullable().openapi({ description: "The Private CA that issued it; none for a Certificate from an ACME CA." }),
+  issuingCaId: z.string().nullable().openapi({ description: "The Issuing CA, of a Private CA, that signed it; none for a Certificate from an ACME CA." }),
   issuedAt: z.string(),
   revocation: Revocation.nullable().openapi({ description: "Set once the CA has been told to revoke it, by whom and why." }),
 });
@@ -106,9 +106,9 @@ export const Renewal = z.object({
 const Issuer = z
   .discriminatedUnion("kind", [
     z.object({ kind: z.literal("acme"), environment: z.enum(ACME_ENVIRONMENTS) }),
-    z.object({ kind: z.literal("private_ca"), privateCa: z.object({ id: z.string(), name: z.string() }) }),
+    z.object({ kind: z.literal("private_ca"), issuingCa: z.object({ id: z.string(), subject: z.string() }), privateCa: z.object({ id: z.string(), name: z.string() }) }),
   ])
-  .openapi({ description: "Where its Certificates come from: `acme`, through the Organization's ACME account in `environment`; `private_ca`, from one of the Organization's Private CAs, with no DCV." });
+  .openapi({ description: "Where its Certificates come from: `acme`, through the Organization's ACME account in `environment`; `private_ca`, from `issuingCa`, an Issuing CA of the Organization's Private CA `privateCa`, with no DCV." });
 
 export const Approval = z.object({
   status: z.enum(APPROVAL_STATUSES).openapi({ description: "`not_required` for one an Organization Administrator created." }),
@@ -133,7 +133,7 @@ export const ManagedCertificate = z.object({
   validityDays: z
     .number()
     .nullable()
-    .openapi({ description: "For one issued from a Private CA, how many days its Certificates are valid for, never past the Private CA's maximum or its Issuing CA's end; none for the Private CA's default, and always none for an ACME CA, which decides." }),
+    .openapi({ description: "For one issued from a Private CA, how many days its Certificates are valid for, never past its Issuing CA's maximum or end; none for the Issuing CA's default, and always none for an ACME CA, which decides." }),
   createdAt: z.string(),
   archivedAt: z.string().nullable().openapi({ description: "When it was archived: it then neither issues, renews nor deploys, and is listed only when archived ones are asked for." }),
   owners: z.array(Owner).openapi({ description: "Users and Teams accountable for it, in the order they were added; none is allowed." }),
@@ -150,9 +150,11 @@ export const ManagedCertificate = z.object({
 
 type ManagedCertificateRow = typeof managedCertificate.$inferSelect;
 
-/** The issuer as the API shows it: a Private CA by its id and name, so that whoever decides on it sees which CA it is. */
-const issuerShown = (issuer: IssuerOfRow, privateCaNames: Map<string, string>): z.infer<typeof Issuer> =>
-  issuer.kind === "acme" ? issuer : { kind: "private_ca", privateCa: { id: issuer.privateCaId, name: privateCaNames.get(issuer.privateCaId) ?? "" } };
+type IssuingCaShown = { issuingCa: { id: string; subject: string }; privateCa: { id: string; name: string } };
+
+/** The issuer as the API shows it: an Issuing CA by its id and subject, with its Private CA's id and name, so that whoever decides on it sees which CA it is. */
+const issuerShown = (issuer: IssuerOfRow, issuingCas: Map<string, IssuingCaShown>): z.infer<typeof Issuer> =>
+  issuer.kind === "acme" ? issuer : { kind: "private_ca", ...(issuingCas.get(issuer.issuingCaId) ?? { issuingCa: { id: issuer.issuingCaId, subject: "" }, privateCa: { id: "", name: "" } }) };
 export const toIssuance = (row: typeof issuance.$inferSelect) => ({
   id: row.id,
   kind: row.kind,
@@ -174,7 +176,7 @@ export const toCertificate = (row: typeof certificate.$inferSelect, revocation: 
   ca: row.ca,
   environment: row.environment,
   acmeAccountId: row.acmeAccountId,
-  privateCaId: row.privateCaId,
+  issuingCaId: row.issuingCaId,
   issuedAt: row.issuedAt.toISOString(),
   revocation: revocation ? toRevocation(revocation) : null,
 });
@@ -249,9 +251,17 @@ export function createManagedCertificateReader({ db, authorize, clock, agentOffl
       .where(inArray(certificate.managedCertificateId, ids))
       .orderBy(certificate.managedCertificateId, desc(certificate.createdAt), desc(certificate.id));
     const owners = await ownersOf(db, ids);
-    const privateCaIds = [...new Set(rows.flatMap((r) => (r.privateCaId ? [r.privateCaId] : [])))];
-    const privateCaNames = new Map(
-      privateCaIds.length === 0 ? [] : (await db.select({ id: privateCa.id, name: privateCa.name }).from(privateCa).where(inArray(privateCa.id, privateCaIds))).map((ca) => [ca.id, ca.name]),
+    const issuingCaIds = [...new Set(rows.flatMap((r) => (r.issuingCaId ? [r.issuingCaId] : [])))];
+    const issuingCas = new Map<string, IssuingCaShown>(
+      issuingCaIds.length === 0
+        ? []
+        : (
+            await db
+              .select({ issuingCa: { id: issuingCa.id, subject: issuingCa.subject }, privateCa: { id: privateCa.id, name: privateCa.name } })
+              .from(issuingCa)
+              .innerJoin(privateCa, eq(privateCa.id, issuingCa.privateCaId))
+              .where(inArray(issuingCa.id, issuingCaIds))
+          ).map((shown) => [shown.issuingCa.id, shown]),
     );
     const failures = await failuresOf(db, ids);
     const nameChanges = await pendingNameChanges(db, ids);
@@ -283,7 +293,7 @@ export function createManagedCertificateReader({ db, authorize, clock, agentOffl
         keyAlgorithm: row.keyAlgorithm,
         keyCustody: row.keyCustody,
         environment: row.environment,
-        issuer: issuerShown(issuerOf(row), privateCaNames),
+        issuer: issuerShown(issuerOf(row), issuingCas),
         validityDays: row.validityDays,
         createdAt: row.createdAt.toISOString(),
         archivedAt: row.archivedAt?.toISOString() ?? null,

@@ -6,7 +6,7 @@ import { Label } from "@/components/ui/label";
 import { Textarea } from "@/components/ui/textarea";
 import { api, can, type ManagedCertificate, type Me } from "@/lib/api";
 import { isOwner } from "@/lib/managed-certificate";
-import { chosenValidityLabel, daysLabel, isValidityDays, permitsOnlyLabel } from "@/lib/private-ca";
+import { chosenValidityLabel, daysLabel, isValidityDays, issuingCaTitle, permitsOnlyLabel } from "@/lib/private-ca";
 
 /** A Managed Certificate's name change: the one waiting for Approval, and for those who may, the means to make one. */
 export function NameChange({ org, m, userId, onChanged }: { org: Me["organizations"][number]; m: ManagedCertificate; userId?: string; onChanged: () => void }) {
@@ -35,13 +35,19 @@ export function NameChange({ org, m, userId, onChanged }: { org: Me["organizatio
     },
   });
 
-  // A Private CA issues only for its permitted names, which the new names must keep within.
-  const privateCaId = m.issuer.kind === "private_ca" ? m.issuer.privateCa.id : null;
-  const privateCa = useQuery({
+  // An Issuing CA issues only for its permitted names, which the new names must keep within.
+  const issuingCaId = m.issuer.kind === "private_ca" ? m.issuer.issuingCa.id : null;
+  const issuingCa = useQuery({
     queryKey: ["private-cas", org.id],
     queryFn: () => api.privateCas(org.id),
-    enabled: privateCaId !== null && mayChange && can(org, "privateCa", "read"),
-    select: (cas) => cas.items.find((ca) => ca.id === privateCaId),
+    enabled: issuingCaId !== null && mayChange && can(org, "privateCa", "read"),
+    select: (cas) => {
+      for (const ca of cas.items) {
+        const issuing = ca.issuingCas.find((i) => i.id === issuingCaId);
+        if (issuing) return { ...issuing, name: issuingCaTitle(ca.name, issuing.subject) };
+      }
+      return undefined;
+    },
   }).data;
 
   const withdraw = useMutation({ mutationFn: () => api.withdrawNameChange(org.id, m.id), onSuccess: onChanged });
@@ -77,11 +83,7 @@ export function NameChange({ org, m, userId, onChanged }: { org: Me["organizatio
               All the names it is to have (one per line)
             </Label>
             <Textarea id={`new-names-${m.id}`} value={names} onChange={(e) => setNames(e.target.value)} required />
-            {privateCa && (
-              <p className="text-muted-foreground">
-                {permitsOnlyLabel(privateCa)}
-              </p>
-            )}
+            {issuingCa && <p className="text-muted-foreground">{permitsOnlyLabel(issuingCa)}</p>}
             {m.issuer.kind === "private_ca" && (
               <>
                 <Label className="font-normal" htmlFor={`name-change-validity-${m.id}`}>
@@ -91,16 +93,16 @@ export function NameChange({ org, m, userId, onChanged }: { org: Me["organizatio
                   id={`name-change-validity-${m.id}`}
                   type="number"
                   min={1}
-                  max={privateCa?.validity.maximumDays}
+                  max={issuingCa?.validity.maximumDays}
                   className="w-32"
                   value={validity}
-                  placeholder={privateCa ? String(privateCa.validity.defaultDays) : undefined}
+                  placeholder={issuingCa ? String(issuingCa.validity.defaultDays) : undefined}
                   onChange={(e) => setValidity(e.target.value)}
                 />
                 <p className="text-muted-foreground">
-                  {privateCa
-                    ? `Leave empty for ${privateCa.name}'s default of ${daysLabel(privateCa.validity.defaultDays)}; at most ${daysLabel(privateCa.validity.maximumDays)}.`
-                    : "Leave empty for the Private CA's default."}
+                  {issuingCa
+                    ? `Leave empty for ${issuingCa.name}'s default of ${daysLabel(issuingCa.validity.defaultDays)}; at most ${daysLabel(issuingCa.validity.maximumDays)}.`
+                    : "Leave empty for the Issuing CA's default."}
                 </p>
               </>
             )}
@@ -109,7 +111,7 @@ export function NameChange({ org, m, userId, onChanged }: { org: Me["organizatio
             </Label>
             <Textarea id={`name-change-csr-${m.id}`} className="font-mono text-xs" rows={5} value={csr} onChange={(e) => setCsr(e.target.value)} required />
             <span>
-              <Button type="submit" size="sm" variant="outline" disabled={change.isPending || (validityDays !== null && !isValidityDays(validity, privateCa?.validity.maximumDays))}>
+              <Button type="submit" size="sm" variant="outline" disabled={change.isPending || (validityDays !== null && !isValidityDays(validity, issuingCa?.validity.maximumDays))}>
                 {direct ? "Change names" : "Propose"}
               </Button>
             </span>

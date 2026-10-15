@@ -1,39 +1,45 @@
 // An Organization's Private CAs: its own CAs, from which a Managed Certificate can be issued instead of from an ACME CA,
-// with no DCV. An Organization Administrator creates one; with a platform-made root, the platform makes a self-signed
-// root and an Issuing CA under it, each with its own key in the KMS (ADR 0007), and the Private CA is active at once.
-// Everyone in the Organization may see them and download their chains. Issuing from one is the Private CA kind of
-// issuer (issuer.ts), which signs through `issueFrom` here.
+// with no DCV. A Private CA is a root and the Issuing CAs under it, each Issuing CA with its own key, permitted name rules
+// and validity limits. An Organization Administrator creates one; with a platform-made root, the platform makes a
+// self-signed root and a first Issuing CA under it, each with its own key in the KMS (ADR 0007), and later adds more
+// Issuing CAs under the same root, so that relying parties trust the root once. Everyone in the Organization may see them
+// and download the root and each Issuing CA's chain. Issuing from an Issuing CA is the Private CA kind of issuer
+// (issuer.ts), which signs through `issueFrom` here.
 import { OpenAPIHono, createRoute, z } from "@hono/zod-openapi";
 import * as x509 from "@peculiar/x509";
-import { and, asc, eq } from "drizzle-orm";
+import { and, asc, eq, inArray } from "drizzle-orm";
 import type { Authorizer } from "./authorization";
-import { makeIssuingCa, makeRoot, makeTlsServer, parseSubject, rootSubjectOf, type Signer } from "./ca-certificates";
+import { makeIssuingCa, makeRoot, makeTlsServer, parseSubject, rootSubjectOf, type CaKey, type Signer } from "./ca-certificates";
 import { KEY_ALGORITHMS } from "./csr";
 import type { Db, Tx } from "./db/client";
-import { privateCa } from "./db/schema";
+import { issuingCa, privateCa } from "./db/schema";
 import { HttpError, OrgParam, errors, isUniqueViolation, json } from "./http";
 import { IssuanceFailure } from "./issuance-failure";
 import type { Issuer } from "./issuer";
 import type { Kms } from "./kms";
 import { constraintNamesOf, namesOutside, normalizePermittedNames, samePermittedNames, type PermittedNames } from "./permitted-names";
-import { DEFAULT_VALIDITY_DAYS, MAX_VALIDITY_DAYS, PRIVATE_CA_KINDS, PRIVATE_CA_STATUSES } from "./private-ca-kinds";
+import { DEFAULT_VALIDITY_DAYS, ISSUING_CA_STATUSES, MAX_VALIDITY_DAYS, PRIVATE_CA_KINDS, PRIVATE_CA_STATUSES } from "./private-ca-kinds";
 import type { Actor, UnitOfWork } from "./unit-of-work";
 
 const DAY_MS = 24 * 60 * 60 * 1000;
 
 type PrivateCaRow = typeof privateCa.$inferSelect;
+type IssuingCaRow = typeof issuingCa.$inferSelect;
+/** An Issuing CA with the Private CA it is under. */
+type IssuingCaOf = { issuing: IssuingCaRow; ca: PrivateCaRow };
 
 export const PrivateCaParams = OrgParam.extend({ id: z.string().openapi({ param: { name: "id", in: "path" } }) });
+const IssuingCaParams = PrivateCaParams.extend({ issuingCaId: z.string().openapi({ param: { name: "issuingCaId", in: "path" } }) });
 
 const MAX_RULES = 100;
 
-/** A Private CA's permitted name rules, as they are given and shown. */
+/** An Issuing CA's permitted name rules, as they are given and shown. */
 const PermittedNamesField = z
   .object({
     exact: z.array(z.string().max(255)).max(MAX_RULES).default([]).openapi({ description: "Names permitted exactly: a DNS name, or a wildcard (`*.` then a DNS name), which permits that wildcard alone." }),
     zones: z.array(z.string().max(255)).max(MAX_RULES).default([]).openapi({ description: "Zones: each permits the name and every name beneath it, wildcards included. Never a wildcard." }),
   })
-  .openapi({ description: "The names the Private CA may issue for, normalised as names are (lower case, no trailing dot). No IP addresses." });
+  .openapi({ description: "The names the Issuing CA may issue for, normalised as names are (lower case, no trailing dot). No IP addresses." });
 
 /** The rules given, normalised; a 400 when they cannot be rules. */
 function permittedNamesAsked(rules: PermittedNames): PermittedNames {
@@ -45,14 +51,15 @@ function permittedNamesAsked(rules: PermittedNames): PermittedNames {
 /** A number of days a TLS Certificate is valid for. */
 export const validityDaysField = z.number().int().min(1).max(MAX_VALIDITY_DAYS);
 
-/** A Private CA's validity limits, as they are given and shown. */
+/** An Issuing CA's validity limits, as they are given and shown. */
 const ValidityField = z
   .object({
     maximumDays: validityDaysField.openapi({ description: "The longest a Managed Certificate on it may choose." }),
     defaultDays: validityDaysField.openapi({ description: "What one that chooses none gets; at most `maximumDays`." }),
   })
-  .openapi({ description: "How long the TLS Certificates it issues are valid for, in days. Never past its Issuing CA's end, whatever these say." });
+  .openapi({ description: "How long the TLS Certificates it issues are valid for, in days. Never past the Issuing CA's end, whatever these say." });
 type Validity = z.infer<typeof ValidityField>;
+const DEFAULT_VALIDITY: Validity = { maximumDays: DEFAULT_VALIDITY_DAYS, defaultDays: DEFAULT_VALIDITY_DAYS };
 
 /** The limits given; a 422 when the default is above the maximum. */
 function validityAsked(validity: Validity): Validity {
@@ -66,28 +73,41 @@ function validityChanges(from: Validity, to: Validity) {
   return changed.length === 0 ? undefined : Object.fromEntries(changed.map((field) => [field, { from: from[field], to: to[field] }]));
 }
 
-/** A Private CA's validity limits, from its row. */
-const validityOf = (row: PrivateCaRow): Validity => ({ maximumDays: row.maxValidityDays, defaultDays: row.defaultValidityDays });
+/** An Issuing CA's validity limits, from its row. */
+const validityOf = (row: IssuingCaRow): Validity => ({ maximumDays: row.maxValidityDays, defaultDays: row.defaultValidityDays });
 
-/** A Private CA's rules, from its row. */
-export const permittedNamesOf = (row: PrivateCaRow): PermittedNames => ({ exact: row.permittedExactNames, zones: row.permittedZones });
+/** An Issuing CA's rules, from its row. */
+const permittedNamesOf = (row: IssuingCaRow): PermittedNames => ({ exact: row.permittedExactNames, zones: row.permittedZones });
 
-export const PrivateCa = z.object({
+/** The subject given, as a distinguished name; a 400 when it is not one with a common name. */
+function subjectAsked(subject: string): x509.Name {
+  const name = parseSubject(subject);
+  if (!name) throw new HttpError(400, "the subject must be a distinguished name with a common name, such as CN=Acme Internal TLS, O=Acme");
+  return name;
+}
+
+export const IssuingCa = z.object({
   id: z.string(),
-  name: z.string(),
-  kind: z.enum(PRIVATE_CA_KINDS).openapi({ description: "`platform_root`: the platform made its root and its Issuing CA. `organization_root`: the Organization's own root signs its Issuing CA." }),
-  status: z.enum(PRIVATE_CA_STATUSES).openapi({ description: "Only an `active` one issues." }),
-  keyAlgorithm: z.enum(KEY_ALGORITHMS),
-  subject: z.string().openapi({ description: "The Issuing CA's subject, as a distinguished name." }),
-  notAfter: z.string().nullable().openapi({ description: "When its Issuing CA ends; none until it has a certificate." }),
-  root: z
-    .object({ subject: z.string(), notAfter: z.string() })
-    .nullable()
-    .openapi({ description: "The root that signs its Issuing CA: its subject, as a distinguished name, and when it ends. None when the platform does not hold it." }),
+  subject: z.string().openapi({ description: "Its subject, as a distinguished name; no other Issuing CA of its Private CA has it." }),
+  status: z.enum(ISSUING_CA_STATUSES).openapi({ description: "Only an `active` one, under an `active` root, issues." }),
+  notAfter: z.string().nullable().openapi({ description: "When it ends; none until it has a certificate." }),
   permittedNames: z
     .object({ exact: z.array(z.string()), zones: z.array(z.string()) })
     .openapi({ description: "Its permitted name rules: it issues for no other name. One made before there were rules has none, and issues for nothing until they are set." }),
   validity: ValidityField,
+});
+
+export const PrivateCa = z.object({
+  id: z.string(),
+  name: z.string(),
+  kind: z.enum(PRIVATE_CA_KINDS).openapi({ description: "`platform_root`: the platform made its root, which signs its Issuing CAs. `organization_root`: the Organization's own root signs them." }),
+  status: z.enum(PRIVATE_CA_STATUSES).openapi({ description: "Its root's: a `revoked` root's Issuing CAs issue nothing." }),
+  keyAlgorithm: z.enum(KEY_ALGORITHMS).openapi({ description: "The algorithm of its keys, the root's and its Issuing CAs'." }),
+  root: z
+    .object({ subject: z.string(), notAfter: z.string() })
+    .nullable()
+    .openapi({ description: "The root that signs its Issuing CAs: its subject, as a distinguished name, and when it ends. None when the platform does not hold it." }),
+  issuingCas: z.array(IssuingCa).openapi({ description: "Its Issuing CAs, oldest first: a Managed Certificate is issued from one of them." }),
   createdAt: z.string(),
 });
 
@@ -99,23 +119,38 @@ function rootOf(row: PrivateCaRow) {
   return root ? { subject: root.subject, notAfter: root.notAfter.toISOString() } : null;
 }
 
-const toPrivateCa = (row: PrivateCaRow) => ({
+const toIssuingCa = (row: IssuingCaRow): z.infer<typeof IssuingCa> => ({
+  id: row.id,
+  subject: row.subject,
+  status: row.status,
+  notAfter: certificateOf(row.certificatePem)?.notAfter.toISOString() ?? null,
+  permittedNames: permittedNamesOf(row),
+  validity: validityOf(row),
+});
+
+const toPrivateCa = (row: PrivateCaRow, issuingCas: IssuingCaRow[]): z.infer<typeof PrivateCa> => ({
   id: row.id,
   name: row.name,
   kind: row.kind,
   status: row.status,
   keyAlgorithm: row.keyAlgorithm,
-  subject: row.subject,
-  notAfter: certificateOf(row.issuingCertificatePem)?.notAfter.toISOString() ?? null,
   root: rootOf(row),
-  permittedNames: permittedNamesOf(row),
-  validity: validityOf(row),
+  issuingCas: issuingCas.filter((i) => i.privateCaId === row.id).map(toIssuingCa),
   createdAt: row.createdAt.toISOString(),
 });
 
+/** The Issuing CAs of the Private CAs, oldest first. */
+const issuingCasOf = (db: Db | Tx, privateCaIds: string[]) =>
+  privateCaIds.length === 0 ? Promise.resolve([]) : db.select().from(issuingCa).where(inArray(issuingCa.privateCaId, privateCaIds)).orderBy(asc(issuingCa.createdAt), asc(issuingCa.id));
+
+/** The Private CA as the API shows it, with its Issuing CAs. */
+const shown = async (db: Db | Tx, row: PrivateCaRow) => toPrivateCa(row, await issuingCasOf(db, [row.id]));
+
+const isId = (id: string) => z.uuid().safeParse(id).success;
+
 /** The Organization's Private CA, or none (also for what cannot be an id). */
-export async function findPrivateCa(db: Db | Tx, organizationId: string, id: string): Promise<PrivateCaRow | undefined> {
-  if (!z.uuid().safeParse(id).success) return undefined;
+async function findPrivateCa(db: Db | Tx, organizationId: string, id: string): Promise<PrivateCaRow | undefined> {
+  if (!isId(id)) return undefined;
   const [row] = await db
     .select()
     .from(privateCa)
@@ -123,78 +158,111 @@ export async function findPrivateCa(db: Db | Tx, organizationId: string, id: str
   return row;
 }
 
-/** Why the Private CA issues nothing now, or none when it issues. */
-export const issuingRefusal = (ca: PrivateCaRow) => (ca.status === "active" && ca.issuingCertificatePem ? undefined : `the Private CA ${ca.name} is ${ca.status}, so it issues nothing`);
+/** The Organization's Issuing CA with its Private CA, or none (also for what cannot be an id). */
+export async function findIssuingCa(db: Db | Tx, organizationId: string, issuingCaId: string): Promise<IssuingCaOf | undefined> {
+  if (!isId(issuingCaId)) return undefined;
+  const [row] = await db
+    .select({ issuing: issuingCa, ca: privateCa })
+    .from(issuingCa)
+    .innerJoin(privateCa, eq(privateCa.id, issuingCa.privateCaId))
+    .where(and(eq(issuingCa.organizationId, organizationId), eq(issuingCa.id, issuingCaId)));
+  return row;
+}
 
-/** Why a Managed Certificate on the Private CA may not choose `validityDays`: it is above the maximum. None when it may, or chooses none. */
-export const validityRefusal = (ca: PrivateCaRow, validityDays: number | null) =>
-  validityDays !== null && validityDays > ca.maxValidityDays ? `a validity of ${validityDays} days is above the Private CA ${ca.name}'s maximum of ${ca.maxValidityDays} days` : undefined;
+/** The Issuing CA in words, by its common name and its Private CA's name. */
+const issuingCaLabel = ({ issuing, ca }: IssuingCaOf) => `the Issuing CA ${new x509.Name(issuing.subject).getField("CN")[0] ?? issuing.subject} of the Private CA ${ca.name}`;
 
-/** Why the Private CA may not issue for the names (normalised): those its permitted name rules do not permit. None when it may. */
-export function namesRefusal(ca: PrivateCaRow, names: string[]) {
-  const outside = namesOutside(permittedNamesOf(ca), names);
-  return outside.length === 0 ? undefined : `${outside.join(", ")} ${outside.length === 1 ? "is" : "are"} outside the permitted names of the Private CA ${ca.name}`;
+/** Why the Issuing CA issues nothing now: its root is revoked, or it is not active. None when it issues. */
+export function issuingRefusal(of: IssuingCaOf) {
+  if (of.ca.status !== "active") return `the root of the Private CA ${of.ca.name} is ${of.ca.status}, so its Issuing CAs issue nothing`;
+  if (of.issuing.status !== "active" || !of.issuing.certificatePem) return `${issuingCaLabel(of)} is ${of.issuing.status}, so it issues nothing`;
+  return undefined;
+}
+
+/** Why a Managed Certificate on the Issuing CA may not choose `validityDays`: it is above the maximum. None when it may, or chooses none. */
+export const validityRefusal = (of: IssuingCaOf, validityDays: number | null) =>
+  validityDays !== null && validityDays > of.issuing.maxValidityDays ? `a validity of ${validityDays} days is above the maximum of ${of.issuing.maxValidityDays} days of ${issuingCaLabel(of)}` : undefined;
+
+/** Why the Issuing CA may not issue for the names (normalised): those its permitted name rules do not permit. None when it may. */
+export function namesRefusal(of: IssuingCaOf, names: string[]) {
+  const outside = namesOutside(permittedNamesOf(of.issuing), names);
+  return outside.length === 0 ? undefined : `${outside.join(", ")} ${outside.length === 1 ? "is" : "are"} outside the permitted names of ${issuingCaLabel(of)}`;
 }
 
 /**
- * Why a Managed Certificate may not ask the issuer for the names (normalised) and the validity: a 422 when it is a
- * Private CA that is not the Organization's or not active, or does not permit the names, or allows no such validity;
- * a 400 for a validity asked of an ACME CA, which decides its own (and checks control of the names instead). None when
- * it may.
+ * Why a Managed Certificate may not ask the issuer for the names (normalised) and the validity: a 422 when it is an
+ * Issuing CA that is not the Organization's, or does not issue (it or its root), or does not permit the names, or allows
+ * no such validity; a 400 for a validity asked of an ACME CA, which decides its own (and checks control of the names
+ * instead). None when it may.
  */
 export async function issuerRefusal(db: Db | Tx, organizationId: string, issuer: Issuer, asked: { names: string[]; validityDays: number | null }) {
   const refused = (status: 400 | 422, message: string) => ({ status, message });
   if (issuer.kind !== "private_ca") return asked.validityDays === null ? undefined : refused(400, "a validity can be chosen only for a Managed Certificate issued from a Private CA");
-  const ca = await findPrivateCa(db, organizationId, issuer.privateCaId);
-  if (!ca) return refused(422, "the Organization has no such Private CA");
-  const refusal = issuingRefusal(ca) ?? namesRefusal(ca, asked.names) ?? validityRefusal(ca, asked.validityDays);
+  const of = await findIssuingCa(db, organizationId, issuer.issuingCaId);
+  if (!of) return refused(422, "the Organization has no such Issuing CA");
+  const refusal = issuingRefusal(of) ?? namesRefusal(of, asked.names) ?? validityRefusal(of, asked.validityDays);
   return refusal ? refused(422, refusal) : undefined;
 }
 
-/** The chain of the Private CA, PEM: its Issuing CA, then the root when the platform has it. */
-const chainOf = (row: PrivateCaRow) => [row.issuingCertificatePem, row.rootCertificatePem].filter((pem): pem is string => pem !== null).join("");
-
-/** What the Private CA kind of issuer issues with: signing a CSR from a Private CA, and its root. */
+/** What the Private CA kind of issuer issues with: signing a CSR from an Issuing CA, and its root. */
 export interface PrivateCas {
   /**
-   * Signs a TLS server Certificate for the CSR and its names from the Organization's Private CA, valid from now for
-   * `validityDays` (its default when none), but never longer than its maximum nor past its Issuing CA. Resolves with the chain (PEM, the Certificate then the
-   * Issuing CA) and the Private CA's name. Throws an IssuanceFailure when the Private CA cannot issue, or not for one of
-   * the names.
+   * Signs a TLS server Certificate for the CSR and its names from the Organization's Issuing CA, valid from now for
+   * `validityDays` (its default when none), but never longer than its maximum nor past the Issuing CA's end. Resolves
+   * with the chain (PEM, the Certificate then the Issuing CA) and its Private CA's name. Throws an IssuanceFailure when
+   * the Issuing CA cannot issue, or not for one of the names.
    */
-  issueFrom(db: Db | Tx, organizationId: string, privateCaId: string, request: { csr: string; names: string[]; validityDays: number | null }): Promise<{ chainPem: string; name: string }>;
-  /** The Private CA's root (PEM), when the platform has it. */
-  rootsOf(db: Db | Tx, organizationId: string, privateCaId: string): Promise<string[]>;
+  issueFrom(db: Db | Tx, organizationId: string, issuingCaId: string, request: { csr: string; names: string[]; validityDays: number | null }): Promise<{ chainPem: string; name: string }>;
+  /** The root (PEM) of the Issuing CA's Private CA, when the platform has it. */
+  rootsOf(db: Db | Tx, organizationId: string, issuingCaId: string): Promise<string[]>;
 }
 
 export function createPrivateCas({ kms, clock }: { kms: Kms; clock: () => Date }): PrivateCas {
   return {
-    async issueFrom(db, organizationId, privateCaId, { csr, names, validityDays }) {
-      const ca = await findPrivateCa(db, organizationId, privateCaId);
-      if (!ca) throw new IssuanceFailure("internal", "the Private CA is gone");
-      const refusal = issuingRefusal(ca);
+    async issueFrom(db, organizationId, issuingCaId, { csr, names, validityDays }) {
+      const of = await findIssuingCa(db, organizationId, issuingCaId);
+      if (!of) throw new IssuanceFailure("internal", "the Issuing CA is gone");
+      const refusal = issuingRefusal(of);
       if (refusal) throw new IssuanceFailure("ca_rejected", refusal);
       // A backstop: names outside the rules are refused when they are asked for, but the rules may have changed since.
-      const outside = namesRefusal(ca, names);
+      const outside = namesRefusal(of, names);
       if (outside) throw new IssuanceFailure("name_not_permitted", outside);
-      const issuing = new x509.X509Certificate(ca.issuingCertificatePem!);
+      const { issuing, ca } = of;
+      const certificate = new x509.X509Certificate(issuing.certificatePem!);
       const notBefore = clock();
-      if (issuing.notAfter <= notBefore) throw new IssuanceFailure("ca_rejected", `the Issuing CA of the Private CA ${ca.name} has ended`);
+      if (certificate.notAfter <= notBefore) throw new IssuanceFailure("ca_rejected", `${issuingCaLabel(of)} has ended`);
       // The maximum may have been lowered since the Managed Certificate chose its validity.
-      const days = Math.min(validityDays ?? ca.defaultValidityDays, ca.maxValidityDays);
-      const notAfter = new Date(Math.min(notBefore.getTime() + days * DAY_MS, issuing.notAfter.getTime()));
-      const signer: Signer = { key: ca.issuingKey, context: organizationId, algorithm: ca.keyAlgorithm, certificate: issuing };
+      const days = Math.min(validityDays ?? issuing.defaultValidityDays, issuing.maxValidityDays);
+      const notAfter = new Date(Math.min(notBefore.getTime() + days * DAY_MS, certificate.notAfter.getTime()));
+      const signer: Signer = { key: issuing.key, context: organizationId, algorithm: ca.keyAlgorithm, certificate };
       const leaf = await makeTlsServer(kms, signer, { csr, names, notBefore, notAfter });
-      return { chainPem: `${leaf.toString("pem")}\n${ca.issuingCertificatePem}`, name: ca.name };
+      return { chainPem: `${leaf.toString("pem")}\n${issuing.certificatePem}`, name: ca.name };
     },
-    async rootsOf(db, organizationId, privateCaId) {
-      const ca = await findPrivateCa(db, organizationId, privateCaId);
-      return ca?.rootCertificatePem ? [ca.rootCertificatePem] : [];
+    async rootsOf(db, organizationId, issuingCaId) {
+      const of = await findIssuingCa(db, organizationId, issuingCaId);
+      return of?.ca.rootCertificatePem ? [of.ca.rootCertificatePem] : [];
     },
   };
 }
 
 const MAX_LIFETIME_YEARS = 30;
+
+/** `from` plus `years` years. */
+function yearsAfter(from: Date, years: number) {
+  const to = new Date(from);
+  to.setUTCFullYear(to.getUTCFullYear() + years);
+  return to;
+}
+
+/** The SHA-256 fingerprint of a CA certificate, lower-case hex, and its serial, as Audit Events name it. */
+const identityOf = async (certificate: x509.X509Certificate) => ({ serial: certificate.serialNumber, fingerprint: Buffer.from(await certificate.getThumbprint("SHA-256")).toString("hex") });
+
+/** A name fit for a downloaded file. */
+const fileNameOf = (name: string, fallback: string) => name.replace(/[^A-Za-z0-9._-]+/g, "-").toLowerCase() || fallback;
+
+const pemFile = (c: any, pem: string, fileName: string) => c.body(pem, 200, { "content-type": "application/x-pem-file", "content-disposition": `attachment; filename="${fileName}"` });
+
+const PemResponse = (description: string) => ({ 200: { description, content: { "application/x-pem-file": { schema: z.string() } } }, ...errors(401, 403, 404) });
 
 export function registerPrivateCas(ctx: {
   app: OpenAPIHono;
@@ -214,13 +282,20 @@ export function registerPrivateCas(ctx: {
     return row;
   }
 
+  async function findReadableIssuingCa(actor: Actor, orgId: string, id: string, issuingCaId: string) {
+    await authorize(actor, orgId, { privateCa: ["read"] });
+    const of = await findIssuingCa(db, orgId, issuingCaId);
+    if (!of || of.ca.id !== id) throw new HttpError(404, "Issuing CA not found");
+    return of;
+  }
+
   app.openapi(
     createRoute({
       method: "get",
       path: "/api/organizations/{orgId}/private-cas",
       tags: ["Private CAs"],
-      summary: "The Organization's Private CAs, oldest first",
-      description: "Everyone in the Organization may ask, so as to propose a Managed Certificate against the right one.",
+      summary: "The Organization's Private CAs, oldest first, each with its Issuing CAs",
+      description: "Everyone in the Organization may ask, so as to propose a Managed Certificate against the right Issuing CA.",
       request: { params: OrgParam },
       responses: { 200: json(z.object({ items: z.array(PrivateCa) })), ...errors(401, 403, 404) },
     }),
@@ -228,7 +303,8 @@ export function registerPrivateCas(ctx: {
       const { orgId } = c.req.valid("param");
       await authorize(await requireUser(c), orgId, { privateCa: ["read"] });
       const rows = await db.select().from(privateCa).where(eq(privateCa.organizationId, orgId)).orderBy(asc(privateCa.createdAt), asc(privateCa.id));
-      return c.json({ items: rows.map(toPrivateCa) }, 200);
+      const issuingCas = await issuingCasOf(db, rows.map((r) => r.id));
+      return c.json({ items: rows.map((row) => toPrivateCa(row, issuingCas)) }, 200);
     },
   );
 
@@ -237,12 +313,12 @@ export function registerPrivateCas(ctx: {
       method: "post",
       path: "/api/organizations/{orgId}/private-cas",
       tags: ["Private CAs"],
-      summary: "Create a Private CA with a platform-made root and Issuing CA",
+      summary: "Create a Private CA with a platform-made root and its first Issuing CA",
       description:
         "The platform makes two keys in the KMS, of the algorithm given: a self-signed root's, and an Issuing CA's, which the root signs and which signs Certificates (pathLen 0). " +
         "`subject` is the Issuing CA's distinguished name and must have a common name; the root's is the same with \" Root\" added to the common name. Both are valid from now for `lifetimeYears`. " +
-        "`validity` sets how long its TLS Certificates are valid for (397 days for both unless given); a default above the maximum is refused with 422. " +
-        "The Private CA is active at once. Only Organization Administrators may.",
+        "`permittedNames` and `validity` are the Issuing CA's: `validity` sets how long its TLS Certificates are valid for (397 days for both unless given); a default above the maximum is refused with 422. " +
+        "The Private CA is active at once. More Issuing CAs can be added under its root later. Only Organization Administrators may.",
       request: {
         params: OrgParam,
         body: {
@@ -254,7 +330,7 @@ export function registerPrivateCas(ctx: {
                 keyAlgorithm: z.enum(KEY_ALGORITHMS).default("ecdsa-p256"),
                 lifetimeYears: z.number().int().min(1).max(MAX_LIFETIME_YEARS).default(10),
                 permittedNames: PermittedNamesField,
-                validity: ValidityField.default({ maximumDays: DEFAULT_VALIDITY_DAYS, defaultDays: DEFAULT_VALIDITY_DAYS }),
+                validity: ValidityField.default(DEFAULT_VALIDITY),
               }),
             },
           },
@@ -267,8 +343,7 @@ export function registerPrivateCas(ctx: {
       const body = c.req.valid("json");
       const actor = await requireUser(c);
       await authorize(actor, orgId, { privateCa: ["create"] });
-      const subject = parseSubject(body.subject);
-      if (!subject) throw new HttpError(400, "the subject must be a distinguished name with a common name, such as CN=Acme Internal TLS, O=Acme");
+      const subject = subjectAsked(body.subject);
       const permittedNames = permittedNamesAsked(body.permittedNames);
       const validity = validityAsked(body.validity);
 
@@ -281,10 +356,9 @@ export function registerPrivateCas(ctx: {
 
       // The keys are made in the KMS first; a Private CA that is then not stored (one of the same name was made meanwhile) leaves only keys nothing refers to.
       const notBefore = clock();
-      const notAfter = new Date(notBefore);
-      notAfter.setUTCFullYear(notAfter.getUTCFullYear() + body.lifetimeYears);
-      const rootKey = { key: await kms.createSigningKey(body.keyAlgorithm, orgId), context: orgId, algorithm: body.keyAlgorithm };
-      const issuingKey = { key: await kms.createSigningKey(body.keyAlgorithm, orgId), context: orgId, algorithm: body.keyAlgorithm };
+      const notAfter = yearsAfter(notBefore, body.lifetimeYears);
+      const rootKey: CaKey = { key: await kms.createSigningKey(body.keyAlgorithm, orgId), context: orgId, algorithm: body.keyAlgorithm };
+      const issuingKey: CaKey = { key: await kms.createSigningKey(body.keyAlgorithm, orgId), context: orgId, algorithm: body.keyAlgorithm };
       const root = await makeRoot(kms, rootKey, { subject: rootSubjectOf(subject), notBefore, notAfter });
       const issuing = await makeIssuingCa(kms, { ...rootKey, certificate: root }, issuingKey, { subject, notBefore, notAfter, permittedDnsNames: constraintNamesOf(permittedNames) });
 
@@ -292,23 +366,23 @@ export function registerPrivateCas(ctx: {
         const row = await unitOfWork.run(actor, async (tx, change) => {
           const [row] = await tx
             .insert(privateCa)
+            .values({ organizationId: orgId, name: body.name, kind: "platform_root", status: "active", keyAlgorithm: body.keyAlgorithm, rootCertificatePem: root.toString("pem"), rootKey: rootKey.key })
+            .returning();
+          const [first] = await tx
+            .insert(issuingCa)
             .values({
               organizationId: orgId,
-              name: body.name,
-              kind: "platform_root",
-              status: "active",
-              keyAlgorithm: body.keyAlgorithm,
+              privateCaId: row!.id,
               subject: subject.toString(),
-              rootCertificatePem: root.toString("pem"),
-              rootKey: rootKey.key,
-              issuingCertificatePem: issuing.toString("pem"),
-              issuingKey: issuingKey.key,
+              certificatePem: issuing.toString("pem"),
+              key: issuingKey.key,
+              status: "active",
               permittedExactNames: permittedNames.exact,
               permittedZones: permittedNames.zones,
               maxValidityDays: validity.maximumDays,
               defaultValidityDays: validity.defaultDays,
             })
-            .returning();
+            .returning({ id: issuingCa.id });
           await change.audit({
             organizationId: orgId,
             action: "private_ca.created",
@@ -321,13 +395,13 @@ export function registerPrivateCas(ctx: {
               notAfter: notAfter.toISOString(),
               permittedNames,
               validity,
-              root: { serial: root.serialNumber, fingerprint: Buffer.from(await root.getThumbprint("SHA-256")).toString("hex") },
-              issuingCa: { serial: issuing.serialNumber, fingerprint: Buffer.from(await issuing.getThumbprint("SHA-256")).toString("hex") },
+              root: await identityOf(root),
+              issuingCa: { id: first!.id, ...(await identityOf(issuing)) },
             },
           });
           return row!;
         });
-        return c.json(toPrivateCa(row), 201);
+        return c.json(await shown(db, row), 201);
       } catch (err) {
         if (isUniqueViolation(err)) throw taken();
         throw err;
@@ -345,63 +419,160 @@ export function registerPrivateCas(ctx: {
     }),
     async (c) => {
       const { orgId, id } = c.req.valid("param");
-      return c.json(toPrivateCa(await findReadable(await requireUser(c), orgId, id)), 200);
+      return c.json(await shown(db, await findReadable(await requireUser(c), orgId, id)), 200);
     },
   );
 
   app.openapi(
     createRoute({
-      method: "patch",
-      path: "/api/organizations/{orgId}/private-cas/{id}",
+      method: "post",
+      path: "/api/organizations/{orgId}/private-cas/{id}/issuing-cas",
       tags: ["Private CAs"],
-      summary: "Change a Private CA's permitted name rules or validity limits",
+      summary: "Add an Issuing CA under a Private CA's platform-made root",
       description:
-        "What is given replaces what it had, and decides what it issues from then on: what it has already issued is unaffected. " +
-        "A platform-made Issuing CA keeps the name constraints it was made with, which relying parties enforce; going beyond them needs a new Issuing CA. " +
-        "A default validity above the maximum is refused with 422. A Managed Certificate that chose a validity above a lowered maximum gets the maximum. " +
-        "Only Organization Administrators may.",
+        "The platform makes a new key in the KMS, of the Private CA's algorithm, and has the root sign it: pathLen 0, with `permittedNames` as critical dNSName name constraints. " +
+        "It is valid from now for `lifetimeYears`, but never past the root's end, which is also what it gets when none is given. " +
+        "`subject` must have a common name, and is refused with 422 when another Issuing CA of the Private CA has it. A default validity above the maximum is refused with 422. " +
+        "The Issuing CA is active at once; the others under the root are unaffected. Not yet for a Private CA under an Organization's own root. Only Organization Administrators may.",
       request: {
         params: PrivateCaParams,
-        body: { content: { "application/json": { schema: z.object({ permittedNames: PermittedNamesField.optional(), validity: ValidityField.optional() }) } } },
+        body: {
+          content: {
+            "application/json": {
+              schema: z.object({
+                subject: z.string().min(1).max(1000).openapi({ example: "CN=Acme Devices, O=Acme" }),
+                lifetimeYears: z.number().int().min(1).max(MAX_LIFETIME_YEARS).optional(),
+                permittedNames: PermittedNamesField,
+                validity: ValidityField.default(DEFAULT_VALIDITY),
+              }),
+            },
+          },
+        },
       },
-      responses: { 200: json(PrivateCa, "Changed"), ...errors(400, 401, 403, 404, 422) },
+      responses: { 201: json(IssuingCa, "Added, active"), ...errors(400, 401, 403, 404, 422) },
     }),
     async (c) => {
       const { orgId, id } = c.req.valid("param");
       const body = c.req.valid("json");
       const actor = await requireUser(c);
       await authorize(actor, orgId, { privateCa: ["update"] });
+      const subject = subjectAsked(body.subject);
+      const permittedNames = permittedNamesAsked(body.permittedNames);
+      const validity = validityAsked(body.validity);
+      const ca = await findPrivateCa(db, orgId, id);
+      if (!ca) throw new HttpError(404, "Private CA not found");
+      if (ca.kind !== "platform_root" || !ca.rootCertificatePem || !ca.rootKey) throw new HttpError(422, `the platform does not hold the root of the Private CA ${ca.name}, so it cannot sign an Issuing CA`);
+      if (ca.status !== "active") throw new HttpError(422, `the root of the Private CA ${ca.name} is ${ca.status}`);
+      const root = new x509.X509Certificate(ca.rootCertificatePem);
+      const notBefore = clock();
+      if (root.notAfter <= notBefore) throw new HttpError(422, `the root of the Private CA ${ca.name} has ended`);
+
+      const repeated = () => new HttpError(422, `the Private CA ${ca.name} already has an Issuing CA with the subject ${subject.toString()}`);
+      const [same] = await db
+        .select({ id: issuingCa.id })
+        .from(issuingCa)
+        .where(and(eq(issuingCa.privateCaId, ca.id), eq(issuingCa.subject, subject.toString())));
+      if (same) throw repeated();
+
+      // As when a Private CA is created, the key is made first; one not stored then leaves only a key nothing refers to.
+      const asked = body.lifetimeYears ? yearsAfter(notBefore, body.lifetimeYears) : root.notAfter;
+      const notAfter = new Date(Math.min(asked.getTime(), root.notAfter.getTime()));
+      const rootKey: CaKey = { key: ca.rootKey, context: orgId, algorithm: ca.keyAlgorithm };
+      const issuingKey: CaKey = { key: await kms.createSigningKey(ca.keyAlgorithm, orgId), context: orgId, algorithm: ca.keyAlgorithm };
+      const certificate = await makeIssuingCa(kms, { ...rootKey, certificate: root }, issuingKey, { subject, notBefore, notAfter, permittedDnsNames: constraintNamesOf(permittedNames) });
+
+      try {
+        const row = await unitOfWork.run(actor, async (tx, change) => {
+          const [row] = await tx
+            .insert(issuingCa)
+            .values({
+              organizationId: orgId,
+              privateCaId: ca.id,
+              subject: subject.toString(),
+              certificatePem: certificate.toString("pem"),
+              key: issuingKey.key,
+              status: "active",
+              permittedExactNames: permittedNames.exact,
+              permittedZones: permittedNames.zones,
+              maxValidityDays: validity.maximumDays,
+              defaultValidityDays: validity.defaultDays,
+            })
+            .returning();
+          await change.audit({
+            organizationId: orgId,
+            action: "private_ca.issuing_ca_added",
+            target: { type: "private_ca", id: ca.id },
+            detail: {
+              name: ca.name,
+              issuingCa: { id: row!.id, subject: row!.subject, notAfter: notAfter.toISOString(), permittedNames, validity, ...(await identityOf(certificate)) },
+            },
+          });
+          return row!;
+        });
+        return c.json(toIssuingCa(row), 201);
+      } catch (err) {
+        if (isUniqueViolation(err)) throw repeated();
+        throw err;
+      }
+    },
+  );
+
+  app.openapi(
+    createRoute({
+      method: "patch",
+      path: "/api/organizations/{orgId}/private-cas/{id}/issuing-cas/{issuingCaId}",
+      tags: ["Private CAs"],
+      summary: "Change an Issuing CA's permitted name rules or validity limits",
+      description:
+        "What is given replaces what it had, and decides what it issues from then on: what it has already issued is unaffected. " +
+        "A platform-made Issuing CA keeps the name constraints it was made with, which relying parties enforce; going beyond them needs a new Issuing CA. " +
+        "A default validity above the maximum is refused with 422. A Managed Certificate that chose a validity above a lowered maximum gets the maximum. " +
+        "Only Organization Administrators may.",
+      request: {
+        params: IssuingCaParams,
+        body: { content: { "application/json": { schema: z.object({ permittedNames: PermittedNamesField.optional(), validity: ValidityField.optional() }) } } },
+      },
+      responses: { 200: json(IssuingCa, "Changed"), ...errors(400, 401, 403, 404, 422) },
+    }),
+    async (c) => {
+      const { orgId, id, issuingCaId } = c.req.valid("param");
+      const body = c.req.valid("json");
+      const actor = await requireUser(c);
+      await authorize(actor, orgId, { privateCa: ["update"] });
       const permittedNames = body.permittedNames && permittedNamesAsked(body.permittedNames);
       const validity = body.validity && validityAsked(body.validity);
-      if (!z.uuid().safeParse(id).success) throw new HttpError(404, "Private CA not found");
+      const notFound = () => new HttpError(404, "Issuing CA not found");
+      if (!isId(id) || !isId(issuingCaId)) throw notFound();
       const row = await unitOfWork.run(actor, async (tx, change) => {
         // Under the row's lock, so what the Audit Event says it changed from is what it replaced.
-        const [ca] = await tx
-          .select()
-          .from(privateCa)
-          .where(and(eq(privateCa.organizationId, orgId), eq(privateCa.id, id)))
-          .for("update");
-        if (!ca) throw new HttpError(404, "Private CA not found");
-        const namesChanged = permittedNames && !samePermittedNames(permittedNamesOf(ca), permittedNames) ? { from: permittedNamesOf(ca), to: permittedNames } : undefined;
-        const validityChanged = validity && validityChanges(validityOf(ca), validity);
-        if (!namesChanged && !validityChanged) return ca;
+        const [found] = await tx
+          .select({ issuing: issuingCa, name: privateCa.name })
+          .from(issuingCa)
+          .innerJoin(privateCa, eq(privateCa.id, issuingCa.privateCaId))
+          .where(and(eq(issuingCa.organizationId, orgId), eq(issuingCa.privateCaId, id), eq(issuingCa.id, issuingCaId)))
+          .for("update", { of: issuingCa });
+        if (!found) throw notFound();
+        const { issuing, name } = found;
+        const namesChanged = permittedNames && !samePermittedNames(permittedNamesOf(issuing), permittedNames) ? { from: permittedNamesOf(issuing), to: permittedNames } : undefined;
+        const validityChanged = validity && validityChanges(validityOf(issuing), validity);
+        if (!namesChanged && !validityChanged) return issuing;
         const [updated] = await tx
-          .update(privateCa)
+          .update(issuingCa)
           .set({
             ...(namesChanged && { permittedExactNames: namesChanged.to.exact, permittedZones: namesChanged.to.zones }),
             ...(validityChanged && { maxValidityDays: validity.maximumDays, defaultValidityDays: validity.defaultDays }),
           })
-          .where(eq(privateCa.id, ca.id))
+          .where(eq(issuingCa.id, issuing.id))
           .returning();
         await change.audit({
           organizationId: orgId,
           action: "private_ca.updated",
-          target: { type: "private_ca", id: ca.id },
-          detail: { name: ca.name, ...(namesChanged && { permittedNames: namesChanged }), ...(validityChanged && { validity: validityChanged }) },
+          target: { type: "private_ca", id },
+          detail: { name, issuingCa: { id: issuing.id, subject: issuing.subject }, ...(namesChanged && { permittedNames: namesChanged }), ...(validityChanged && { validity: validityChanged }) },
         });
         return updated!;
       });
-      return c.json(toPrivateCa(row), 200);
+      return c.json(toIssuingCa(row), 200);
     },
   );
 
@@ -410,16 +581,34 @@ export function registerPrivateCas(ctx: {
       method: "get",
       path: "/api/organizations/{orgId}/private-cas/{id}/chain",
       tags: ["Private CAs"],
-      summary: "Download the Private CA's chain: its Issuing CA, then its root",
-      description: "PEM. Distribute the root to whatever must trust the Certificates the Private CA issues.",
+      summary: "Download the Private CA's root",
+      description: "PEM. Distribute it to whatever must trust the Certificates its Issuing CAs issue.",
       request: { params: PrivateCaParams },
-      responses: { 200: { description: "The chain, PEM", content: { "application/x-pem-file": { schema: z.string() } } }, ...errors(401, 403, 404) },
+      responses: PemResponse("The root, PEM"),
     }),
     async (c) => {
       const { orgId, id } = c.req.valid("param");
       const row = await findReadable(await requireUser(c), orgId, id);
-      const fileName = row.name.replace(/[^A-Za-z0-9._-]+/g, "-").toLowerCase() || "private-ca";
-      return c.body(chainOf(row), 200, { "content-type": "application/x-pem-file", "content-disposition": `attachment; filename="${fileName}.chain.pem"` });
+      return pemFile(c, row.rootCertificatePem ?? "", `${fileNameOf(row.name, "private-ca")}.root.pem`);
+    },
+  );
+
+  app.openapi(
+    createRoute({
+      method: "get",
+      path: "/api/organizations/{orgId}/private-cas/{id}/issuing-cas/{issuingCaId}/chain",
+      tags: ["Private CAs"],
+      summary: "Download an Issuing CA's chain: the Issuing CA, then its root",
+      description: "PEM.",
+      request: { params: IssuingCaParams },
+      responses: PemResponse("The chain, PEM"),
+    }),
+    async (c) => {
+      const { orgId, id, issuingCaId } = c.req.valid("param");
+      const { issuing, ca } = await findReadableIssuingCa(await requireUser(c), orgId, id, issuingCaId);
+      const chain = [issuing.certificatePem, ca.rootCertificatePem].filter((pem): pem is string => pem !== null).join("");
+      const commonName = new x509.Name(issuing.subject).getField("CN")[0] ?? "";
+      return pemFile(c, chain, `${fileNameOf(`${ca.name} ${commonName}`, "issuing-ca")}.chain.pem`);
     },
   );
 }

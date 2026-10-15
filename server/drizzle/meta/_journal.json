@@ -246,6 +246,13 @@
       "when": 1792089400076,
       "tag": "0034_private_ca_validity",
       "breakpoints": true
+    },
+    {
+      "idx": 35,
+      "version": "7",
+      "when": 1792097272135,
+      "tag": "0035_issuing_ca",
+      "breakpoints": true
     }
   ]
 }

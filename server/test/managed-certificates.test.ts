@@ -133,7 +133,7 @@ describe("issuing the first Certificate", () => {
       ca: "lets-encrypt",
       environment: "staging",
       acmeAccountId: account.id,
-      privateCaId: null,
+      issuingCaId: null,
       issuedAt: expect.any(String),
       revocation: null,
     });

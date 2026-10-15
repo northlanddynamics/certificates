@@ -219,8 +219,8 @@ export interface Certificate {
   /** The ACME environment and account it was issued through; none for a Certificate from a Private CA. */
   environment: "staging" | "production" | null;
   acmeAccountId: string | null;
-  /** The Private CA that issued it; none for a Certificate from an ACME CA. */
-  privateCaId: string | null;
+  /** The Issuing CA, of a Private CA, that signed it; none for a Certificate from an ACME CA. */
+  issuingCaId: string | null;
   issuedAt: string;
   revocation: Revocation | null;
 }
@@ -243,26 +243,36 @@ export interface CertificateFacts extends Certificate {
   chain: ChainCertificate[];
   acmeAccount: { id: string; environment: AcmeAccount["environment"] } | null;
 }
-export type Issuer = { kind: "acme"; environment: "staging" | "production" } | { kind: "private_ca"; privateCa: { id: string; name: string } };
-/** An Organization's own CA, whose keys are in the KMS. */
+export type Issuer =
+  | { kind: "acme"; environment: "staging" | "production" }
+  | { kind: "private_ca"; issuingCa: { id: string; subject: string }; privateCa: { id: string; name: string } };
+/** An Organization's own CA, whose keys are in the KMS: a root and the Issuing CAs under it. */
 export interface PrivateCa {
   id: string;
   name: string;
   kind: "platform_root" | "organization_root";
-  /** Only an active one issues. */
-  status: "awaiting_signature" | "active" | "retired" | "revoked";
+  /** Its root's: a revoked root's Issuing CAs issue nothing. */
+  status: "active" | "revoked";
+  /** The algorithm of its keys, the root's and its Issuing CAs'. */
   keyAlgorithm: string;
-  /** The Issuing CA's subject. */
-  subject: string;
-  /** When its Issuing CA ends. */
-  notAfter: string | null;
-  /** The root that signs its Issuing CA; none when the platform does not hold it. */
+  /** The root that signs its Issuing CAs; none when the platform does not hold it. */
   root: { subject: string; notAfter: string } | null;
-  permittedNames: PermittedNames;
-  validity: PrivateCaValidity;
+  /** Its Issuing CAs, oldest first. */
+  issuingCas: IssuingCa[];
   createdAt: string;
 }
-/** How long a Private CA's TLS Certificates are valid for, in days: at most the maximum, and the default when a Managed Certificate chooses none. */
+/** A CA of a Private CA that signs Certificates, with its own key, permitted names and validity. */
+export interface IssuingCa {
+  id: string;
+  subject: string;
+  /** Only an active one, under an active root, issues. */
+  status: "awaiting_signature" | "active" | "retired" | "revoked";
+  /** When it ends; none until it has a certificate. */
+  notAfter: string | null;
+  permittedNames: PermittedNames;
+  validity: PrivateCaValidity;
+}
+/** How long an Issuing CA's TLS Certificates are valid for, in days: at most the maximum, and the default when a Managed Certificate chooses none. */
 export interface PrivateCaValidity {
   maximumDays: number;
   defaultDays: number;
@@ -271,6 +281,13 @@ export interface PrivateCaValidity {
 export interface PermittedNames {
   exact: string[];
   zones: string[];
+}
+export interface NewIssuingCa {
+  subject: string;
+  /** Until the root ends when not given, and never past it. */
+  lifetimeYears?: number;
+  permittedNames: PermittedNames;
+  validity: PrivateCaValidity;
 }
 export interface NewPrivateCa {
   name: string;
@@ -394,8 +411,8 @@ export interface NewManagedCertificate {
   names: string[];
   keyAlgorithm: string;
   csr: string;
-  issuer: { kind: "acme"; environment: "staging" | "production" } | { kind: "private_ca"; privateCaId: string };
-  /** For a Private CA issuer only; its default when not given. */
+  issuer: { kind: "acme"; environment: "staging" | "production" } | { kind: "private_ca"; issuingCaId: string };
+  /** For a Private CA issuer only; its Issuing CA's default when not given. */
   validityDays?: number;
   owners?: OwnerRef[];
 }
@@ -624,9 +641,13 @@ export const api = {
   runDeploymentAgain: (orgId: string, id: string) => call<Deployment>(`/api/organizations/${orgId}/deployments/${id}/runs`, { method: "POST", body: {} }),
   privateCas: (orgId: string) => call<{ items: PrivateCa[] }>(`/api/organizations/${orgId}/private-cas`),
   createPrivateCa: (orgId: string, body: NewPrivateCa) => call<PrivateCa>(`/api/organizations/${orgId}/private-cas`, { body }),
-  updatePrivateCa: (orgId: string, id: string, body: { permittedNames?: PermittedNames; validity?: PrivateCaValidity }) => call<PrivateCa>(`/api/organizations/${orgId}/private-cas/${id}`, { method: "PATCH", body }),
-  /** Where a Private CA's chain (its Issuing CA, then its root) downloads from. */
-  privateCaChainUrl: (orgId: string, id: string) => `/api/organizations/${orgId}/private-cas/${id}/chain`,
+  addIssuingCa: (orgId: string, id: string, body: NewIssuingCa) => call<IssuingCa>(`/api/organizations/${orgId}/private-cas/${id}/issuing-cas`, { body }),
+  updateIssuingCa: (orgId: string, id: string, issuingCaId: string, body: { permittedNames?: PermittedNames; validity?: PrivateCaValidity }) =>
+    call<IssuingCa>(`/api/organizations/${orgId}/private-cas/${id}/issuing-cas/${issuingCaId}`, { method: "PATCH", body }),
+  /** Where a Private CA's root downloads from. */
+  privateCaRootUrl: (orgId: string, id: string) => `/api/organizations/${orgId}/private-cas/${id}/chain`,
+  /** Where an Issuing CA's chain (the Issuing CA, then its root) downloads from. */
+  issuingCaChainUrl: (orgId: string, id: string, issuingCaId: string) => `/api/organizations/${orgId}/private-cas/${id}/issuing-cas/${issuingCaId}/chain`,
   acmeAccounts: (orgId: string) => call<{ items: AcmeAccount[] }>(`/api/organizations/${orgId}/acme-accounts`),
   registerAcmeAccount: (orgId: string, body: { environment: AcmeAccount["environment"]; contactEmail?: string }) =>
     call<AcmeAccount>(`/api/organizations/${orgId}/acme-accounts`, { body: { ...body, termsOfServiceAgreed: true } }),
