@@ -21,6 +21,7 @@ import type { Db, Tx } from "./db/client";
 import { agent, certificate, deployment, deploymentRun, deploymentScript, deploymentScriptVersion, issuance, managedCertificate, workItem } from "./db/schema";
 import { SCRIPT_INTERPRETERS } from "./deployment-script-kinds";
 import { HttpError, OrgParam, PageQuery, anyOf, errors, json, pageOf } from "./http";
+import { issuerColumns } from "./issuer";
 import type { Issuances } from "./issuance";
 import type { Notifications } from "./notifications";
 import { RenewalPolicy } from "./managed-certificate-reader";
@@ -425,7 +426,7 @@ export function registerDeployments(ctx: {
             names: normalized.names,
             keyAlgorithm: body.keyAlgorithm,
             keyCustody: "agent",
-            environment: body.environment,
+            ...issuerColumns({ kind: "acme", environment: body.environment }),
             csr: null,
             renewalMode: body.renewalPolicy.mode,
             renewalDaysBeforeExpiry: body.renewalPolicy.daysBeforeExpiry,

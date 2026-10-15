@@ -218,6 +218,13 @@
       "when": 1792013498131,
       "tag": "0030_issuance_kind",
       "breakpoints": true
+    },
+    {
+      "idx": 31,
+      "version": "7",
+      "when": 1792033857662,
+      "tag": "0031_issuer_kind",
+      "breakpoints": true
     }
   ]
 }

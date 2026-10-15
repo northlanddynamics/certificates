@@ -1,6 +1,6 @@
-// The Certificate Authority interface Issuance uses, with Let's Encrypt (production and staging) as its only
-// implementation. It holds no state: callers pass in the account they act as. It knows about accounts and about
-// obtaining a Certificate for a CSR and revoking one.
+// The ACME CA, the ACME kind of issuer (issuer.ts), with Let's Encrypt (production and staging) as its only
+// implementation. It holds no state: callers pass in the account they act as. It knows about accounts, about obtaining a
+// Certificate for a CSR by answering DNS challenges (DCV), revoking one, and ACME Renewal Information (ARI).
 import { AuthorityKeyIdentifierExtension, X509Certificate } from "@peculiar/x509";
 import acme from "acme-client";
 import { Agent } from "node:https";
@@ -49,7 +49,7 @@ export interface RenewalInfo {
   retryAfterMs: number | null;
 }
 
-export interface CertificateAuthority {
+export interface AcmeCertificateAuthority {
   /** What the CA calls itself in a Certificate's record of where it came from. */
   readonly name: string;
   /** Registers a new account under a new key, with the Organization's agreement to the CA's terms of service. */
@@ -129,7 +129,7 @@ function retryAfterMs(header: string | null): number | null {
   return Number.isNaN(at) ? null : Math.max(0, at - Date.now());
 }
 
-export function createLetsEncrypt({ directoryUrls = {}, trustedCa, roots = {}, pollMs }: LetsEncryptConfig = {}): CertificateAuthority {
+export function createLetsEncrypt({ directoryUrls = {}, trustedCa, roots = {}, pollMs }: LetsEncryptConfig = {}): AcmeCertificateAuthority {
   // acme-client makes its requests through one shared axios instance, so this is process-wide.
   if (trustedCa) acme.axios.defaults.httpsAgent = new Agent({ ca: [...rootCertificates, trustedCa] });
   const directoryUrl = (environment: AcmeEnvironment) => directoryUrls[environment] ?? LETS_ENCRYPT_DIRECTORIES[environment];

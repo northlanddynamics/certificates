@@ -125,7 +125,9 @@ export const currentCertificates = (db: Db) =>
       fingerprint: certificate.fingerprint,
       notBefore: certificate.notBefore,
       notAfter: certificate.notAfter,
+      issuerKind: certificate.issuerKind,
       environment: certificate.environment,
+      acmeAccountId: certificate.acmeAccountId,
       chainPem: certificate.chainPem,
     })
     .from(certificate)
