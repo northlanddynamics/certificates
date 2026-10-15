@@ -32,13 +32,13 @@ Today a `private_ca` row holds the root and its one Issuing CA together, so:
 
 ## Acceptance
 
-- [ ] `POST /api/organizations/{orgId}/private-cas/{id}/issuing-cas` adds an Issuing CA to a platform-root Private CA: separate key, signed by the root, pathLen 0, critical dNSName name constraints from its rules, validity clipped to the root's `notAfter`; a duplicate subject is refused with 422 (`private_ca.issuing_ca_added` Audit Event).
-- [ ] The Private CA response lists its Issuing CAs (id, subject, status, `notAfter`, `permittedNames`, `validity`); `PATCH` of names and validity moves to the Issuing CA (`private_ca.updated` detail names the Issuing CA).
-- [ ] Managed Certificate create, propose and Name Change take `issuer: { kind: "private_ca", issuingCaId }`; names and validity are checked against that Issuing CA; an Issuing CA of another Organization is refused with 422.
-- [ ] Issuance signs with the Managed Certificate's Issuing CA and the chain is that Issuing CA then the root; the stored Certificate records the Issuing CA.
-- [ ] The migration moves each existing Private CA's issuing certificate, key, rules and limits to one Issuing CA row, and repoints its Managed Certificates and Certificates; existing tests pass against the migrated shape.
-- [ ] Chain download is per Issuing CA; the root alone can be downloaded from the Private CA.
-- [ ] Web: the Private CAs table lists each root with its Issuing CAs as sub-rows (already laid out that way); "Add Issuing CA…" in the root's menu; Permitted names… and Validity… move to each Issuing CA row's menu; the sub-row column header reads "Issuing CA", not "Intermediate". The Managed Certificate forms pick an Issuing CA, grouped by Private CA.
+- [x] `POST /api/organizations/{orgId}/private-cas/{id}/issuing-cas` adds an Issuing CA to a platform-root Private CA: separate key, signed by the root, pathLen 0, critical dNSName name constraints from its rules, validity clipped to the root's `notAfter`; a duplicate subject is refused with 422 (`private_ca.issuing_ca_added` Audit Event).
+- [x] The Private CA response lists its Issuing CAs (id, subject, status, `notAfter`, `permittedNames`, `validity`); `PATCH` of names and validity moves to the Issuing CA (`private_ca.updated` detail names the Issuing CA).
+- [x] Managed Certificate create, propose and Name Change take `issuer: { kind: "private_ca", issuingCaId }`; names and validity are checked against that Issuing CA; an Issuing CA of another Organization is refused with 422.
+- [x] Issuance signs with the Managed Certificate's Issuing CA and the chain is that Issuing CA then the root; the stored Certificate records the Issuing CA.
+- [x] The migration moves each existing Private CA's issuing certificate, key, rules and limits to one Issuing CA row, and repoints its Managed Certificates and Certificates; existing tests pass against the migrated shape.
+- [x] Chain download is per Issuing CA; the root alone can be downloaded from the Private CA.
+- [x] Web: the Private CAs table lists each root with its Issuing CAs as sub-rows (already laid out that way); "Add Issuing CA…" in the root's menu; Permitted names… and Validity… move to each Issuing CA row's menu; the sub-row column header reads "Issuing CA", not "Intermediate". The Managed Certificate forms pick an Issuing CA, grouped by Private CA.
 - [x] `spec.md` and `CONTEXT.md` updated; 06, 07 and 09 reworded and blocked by this ticket (done in triage).
 
 ## Comments
@@ -72,16 +72,16 @@ See `.scratch/private-ca/spec.md` (Solution; Schema; Adding an Issuing CA; Rollo
 - `docs/audit-events.md` documents `private_ca.issuing_ca_added`.
 
 **Acceptance criteria:**
-- [ ] Adding an Issuing CA via the API returns it in the Private CA response. Its certificate, parsed with `@peculiar/x509`, verifies against the root, has a key distinct from the root's and from the other Issuing CAs', has pathLen 0 and critical dNSName name constraints matching its rules, and has `notAfter` no later than the root's.
-- [ ] A second Issuing CA with the same subject under the same Private CA is refused with 422, and adding one to another Organization's Private CA is refused.
-- [ ] Only holders of `privateCa.update` can add an Issuing CA or change one's names or validity; Approvers and Members are refused.
-- [ ] Each change writes its Audit Event (`private_ca.issuing_ca_added`; `private_ca.updated` naming the Issuing CA).
-- [ ] With two Issuing CAs under one root that have different rules, a Managed Certificate created on each is checked against its own Issuing CA's names and validity at create, propose and Name Change. Issuance from each signs with that Issuing CA's key, and the chain is that Issuing CA, then the root.
-- [ ] A Managed Certificate naming an Issuing CA of another Organization is refused with 422.
-- [ ] The migration, run on a database holding a Private CA, a Managed Certificate and an issued Certificate in the old shape, leaves one Issuing CA with that data. The Managed Certificate still issues and renews from it.
-- [ ] The Private CA chain route downloads the root, and the Issuing CA chain route downloads that Issuing CA then the root.
-- [ ] Web: each root's Issuing CAs are sub-rows under a column headed "Issuing CA". A root's menu has "Add Issuing CA…". Permitted names… and Validity… are on each Issuing CA row. The Managed Certificate create, propose and Name Change forms pick an Issuing CA grouped by Private CA, and the forms' permitted-names hint and validity ceiling follow the chosen Issuing CA.
-- [ ] Tests drive the HTTP API on the existing in-process harness (real Postgres, Better Auth, local KMS), in the style of the existing Private CA tests.
+- [x] Adding an Issuing CA via the API returns it in the Private CA response. Its certificate, parsed with `@peculiar/x509`, verifies against the root, has a key distinct from the root's and from the other Issuing CAs', has pathLen 0 and critical dNSName name constraints matching its rules, and has `notAfter` no later than the root's.
+- [x] A second Issuing CA with the same subject under the same Private CA is refused with 422, and adding one to another Organization's Private CA is refused.
+- [x] Only holders of `privateCa.update` can add an Issuing CA or change one's names or validity; Approvers and Members are refused.
+- [x] Each change writes its Audit Event (`private_ca.issuing_ca_added`; `private_ca.updated` naming the Issuing CA).
+- [x] With two Issuing CAs under one root that have different rules, a Managed Certificate created on each is checked against its own Issuing CA's names and validity at create, propose and Name Change. Issuance from each signs with that Issuing CA's key, and the chain is that Issuing CA, then the root.
+- [x] A Managed Certificate naming an Issuing CA of another Organization is refused with 422.
+- [x] The migration, run on a database holding a Private CA, a Managed Certificate and an issued Certificate in the old shape, leaves one Issuing CA with that data. The Managed Certificate still issues and renews from it.
+- [x] The Private CA chain route downloads the root, and the Issuing CA chain route downloads that Issuing CA then the root.
+- [x] Web: each root's Issuing CAs are sub-rows under a column headed "Issuing CA". A root's menu has "Add Issuing CA…". Permitted names… and Validity… are on each Issuing CA row. The Managed Certificate create, propose and Name Change forms pick an Issuing CA grouped by Private CA, and the forms' permitted-names hint and validity ceiling follow the chosen Issuing CA.
+- [x] Tests drive the HTTP API on the existing in-process harness (real Postgres, Better Auth, local KMS), in the style of the existing Private CA tests.
 
 **Out of scope:**
 - The Organization-root kind (CSR, upload, shared chain): that is 07.
@@ -89,3 +89,13 @@ See `.scratch/private-ca/spec.md` (Solution; Schema; Adding an Issuing CA; Rollo
 - Retiring and revoking an Issuing CA, repointing a Managed Certificate, and Issuing CA expiry in the UI: 09.
 - Any route that sets a root to `revoked`, and root rollover.
 - A separate permission for adding an Issuing CA.
+
+> *Implemented by AI (`claude/private-ca-10`).*
+
+Notes from the implementation:
+- Migration 0035 gives each existing Private CA's Issuing CA the Private CA's own id, so Managed Certificates' and Certificates' `private_ca_id` is only renamed to `issuing_ca_id`, and no immutable Certificate row is updated. Every root is migrated as `active`: the old status was the Issuing CA's, which keeps it.
+- Adding an Issuing CA also takes an optional `lifetimeYears` (it runs until the root ends when none is given, and is clipped to the root either way). It is refused with 422 under a revoked or ended root.
+- The Private CA's `/chain` route now serves only the root (`*.root.pem`), as the ticket asks; the Issuing CA's `/issuing-cas/{id}/chain` serves the Issuing CA, then the root.
+- The Managed Certificate's `issuer` in responses now carries `issuingCa { id, subject }` beside `privateCa { id, name }`; a Certificate's `privateCaId` became `issuingCaId`.
+- The CRL bookkeeping columns (CRL number, `nextUpdate`) on `private_ca` and `issuing_ca` are left for 06, which uses them.
+- The stored Certificate chain is still the leaf and its Issuing CA; the root is added by the downloads (`roots`), as before.

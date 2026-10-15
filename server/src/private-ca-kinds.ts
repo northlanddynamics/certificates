@@ -34,5 +34,7 @@ export type IssuingCaStatus = (typeof ISSUING_CA_STATUSES)[number];
 // is what the API accepts; this module imports nothing, so either side can.
 /** An Issuing CA's maximum and default validity unless it sets its own: what browsers accept of a public CA's TLS Certificates. */
 export const DEFAULT_VALIDITY_DAYS = 397;
+/** The longest a Private CA's root and Issuing CAs may be made to last, in years. */
+export const MAX_LIFETIME_YEARS = 30;
 /** The longest any Issuing CA may let its TLS Certificates be valid for: ten years. */
 export const MAX_VALIDITY_DAYS = 3650;

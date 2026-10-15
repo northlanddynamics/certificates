@@ -6,7 +6,7 @@ import { Label } from "@/components/ui/label";
 import { Textarea } from "@/components/ui/textarea";
 import { api, can, type ManagedCertificate, type Me } from "@/lib/api";
 import { isOwner } from "@/lib/managed-certificate";
-import { chosenValidityLabel, daysLabel, isValidityDays, issuingCaTitle, permitsOnlyLabel } from "@/lib/private-ca";
+import { chosenValidityLabel, daysLabel, findIssuingCa, isValidityDays, permitsOnlyLabel } from "@/lib/private-ca";
 
 /** A Managed Certificate's name change: the one waiting for Approval, and for those who may, the means to make one. */
 export function NameChange({ org, m, userId, onChanged }: { org: Me["organizations"][number]; m: ManagedCertificate; userId?: string; onChanged: () => void }) {
@@ -41,13 +41,7 @@ export function NameChange({ org, m, userId, onChanged }: { org: Me["organizatio
     queryKey: ["private-cas", org.id],
     queryFn: () => api.privateCas(org.id),
     enabled: issuingCaId !== null && mayChange && can(org, "privateCa", "read"),
-    select: (cas) => {
-      for (const ca of cas.items) {
-        const issuing = ca.issuingCas.find((i) => i.id === issuingCaId);
-        if (issuing) return { ...issuing, name: issuingCaTitle(ca.name, issuing.subject) };
-      }
-      return undefined;
-    },
+    select: (cas) => findIssuingCa(cas.items, issuingCaId!),
   }).data;
 
   const withdraw = useMutation({ mutationFn: () => api.withdrawNameChange(org.id, m.id), onSuccess: onChanged });

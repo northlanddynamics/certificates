@@ -18,7 +18,7 @@ import { IssuanceFailure } from "./issuance-failure";
 import type { Issuer } from "./issuer";
 import type { Kms } from "./kms";
 import { constraintNamesOf, namesOutside, normalizePermittedNames, samePermittedNames, type PermittedNames } from "./permitted-names";
-import { DEFAULT_VALIDITY_DAYS, ISSUING_CA_STATUSES, MAX_VALIDITY_DAYS, PRIVATE_CA_KINDS, PRIVATE_CA_STATUSES } from "./private-ca-kinds";
+import { DEFAULT_VALIDITY_DAYS, ISSUING_CA_STATUSES, MAX_LIFETIME_YEARS, MAX_VALIDITY_DAYS, PRIVATE_CA_KINDS, PRIVATE_CA_STATUSES } from "./private-ca-kinds";
 import type { Actor, UnitOfWork } from "./unit-of-work";
 
 const DAY_MS = 24 * 60 * 60 * 1000;
@@ -244,8 +244,6 @@ export function createPrivateCas({ kms, clock }: { kms: Kms; clock: () => Date }
     },
   };
 }
-
-const MAX_LIFETIME_YEARS = 30;
 
 /** `from` plus `years` years. */
 function yearsAfter(from: Date, years: number) {

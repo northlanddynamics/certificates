@@ -1,8 +1,8 @@
-import type { PermittedNames, PrivateCaValidity } from "@/lib/api";
+import type { IssuingCa, PermittedNames, PrivateCa, PrivateCaValidity } from "@/lib/api";
 // The server's own limits, from a module that imports nothing, so what the forms offer is what the API accepts.
-import { DEFAULT_VALIDITY_DAYS, MAX_VALIDITY_DAYS } from "../../../server/src/private-ca-kinds";
+import { DEFAULT_VALIDITY_DAYS, MAX_LIFETIME_YEARS, MAX_VALIDITY_DAYS } from "../../../server/src/private-ca-kinds";
 
-export { DEFAULT_VALIDITY_DAYS, MAX_VALIDITY_DAYS };
+export { DEFAULT_VALIDITY_DAYS, MAX_LIFETIME_YEARS, MAX_VALIDITY_DAYS };
 
 /** An Issuing CA's permitted name rules in words, such as "app.example.com, or anything in internal.example", or "Not set". */
 export function permittedNamesLabel({ exact, zones }: PermittedNames): string {
@@ -16,6 +16,15 @@ export const commonNameOf = (subject: string) => /(?:^|,\s*)CN=([^,]+)/i.exec(su
 
 /** An Issuing CA as it is named to someone choosing it: its common name, and its Private CA's name. */
 export const issuingCaTitle = (privateCaName: string, issuingCaSubject: string) => `${commonNameOf(issuingCaSubject)} (Private CA ${privateCaName})`;
+
+/** The Issuing CA among the Private CAs' with that id, its `name` the title it is chosen by; none when there is none. */
+export function findIssuingCa(cas: Pick<PrivateCa, "name" | "issuingCas">[], issuingCaId: string): (IssuingCa & { name: string }) | undefined {
+  for (const ca of cas) {
+    const issuing = ca.issuingCas.find((i) => i.id === issuingCaId);
+    if (issuing) return { ...issuing, name: issuingCaTitle(ca.name, issuing.subject) };
+  }
+  return undefined;
+}
 
 /** What the Issuing CA, named `name`, issues for, as a sentence for a field that takes names. */
 export const permitsOnlyLabel = (ca: { name: string; permittedNames: PermittedNames }) =>

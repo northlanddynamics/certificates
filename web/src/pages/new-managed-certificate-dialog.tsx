@@ -13,10 +13,10 @@ import { RadioGroup, RadioGroupItem } from "@/components/ui/radio-group";
 import { Select, SelectContent, SelectItem, SelectTrigger, SelectValue } from "@/components/ui/select";
 import { Sidebar, SidebarContent, SidebarGroup, SidebarGroupContent, SidebarMenu, SidebarMenuButton, SidebarMenuItem, SidebarProvider } from "@/components/ui/sidebar";
 import { Textarea } from "@/components/ui/textarea";
-import { api, can, ownerFromKey, ownerKey, type IssuingCa, type ManagedCertificate, type Me, type NewManagedCertificate } from "@/lib/api";
+import { api, can, ownerFromKey, ownerKey, type ManagedCertificate, type Me, type NewManagedCertificate } from "@/lib/api";
 import { KEY_ALGORITHMS, KEY_ALGORITHM_LABELS, type KeyAlgorithm } from "@/lib/csr-generator";
 import { nameProblems, splitNames } from "@/lib/csr-names";
-import { commonNameOf, daysLabel, isValidityDays, issuingCaTitle, permittedNamesLabel, permitsOnlyLabel, validityLabel } from "@/lib/private-ca";
+import { commonNameOf, daysLabel, findIssuingCa, isValidityDays, permittedNamesLabel, permitsOnlyLabel, validityLabel } from "@/lib/private-ca";
 
 type Org = Me["organizations"][number];
 type Environment = "staging" | "production";
@@ -28,15 +28,6 @@ const issuerOfValue = (value: string): IssuerChoice => {
   const [kind, ref] = value.split(":") as [string, string];
   return kind === "acme" ? { kind: "acme", environment: ref as Environment } : { kind: "private_ca", issuingCaId: ref };
 };
-
-/** The Issuing CA chosen, named with its Private CA, among those offered; none when it is not one of them. */
-function chosenIssuingCa(cas: { name: string; issuingCas: IssuingCa[] }[], issuingCaId: string) {
-  for (const ca of cas) {
-    const issuing = ca.issuingCas.find((i) => i.id === issuingCaId);
-    if (issuing) return { ...issuing, name: issuingCaTitle(ca.name, issuing.subject) };
-  }
-  return undefined;
-}
 
 const STEPS = [
   { id: "authority", title: "Certificate Authority", icon: LandmarkIcon },
@@ -128,7 +119,7 @@ function NewManagedCertificateForm({ org, direct, onCreated }: { org: Org; direc
   const parsedNames = splitNames(names);
   const problems = nameProblems(parsedNames);
   // Whether each step holds what it needs. The Authority step does unless its validity is out of range (one CA is always chosen); the Ownership and Review steps always do: Owners are optional, and Review only shows what was entered.
-  const chosenCa = issuer.kind === "private_ca" ? chosenIssuingCa(activeCas, issuer.issuingCaId) : undefined;
+  const chosenCa = issuer.kind === "private_ca" ? findIssuingCa(activeCas, issuer.issuingCaId) : undefined;
   // The validity chosen, in days; none for the Issuing CA's default.
   const chosenValidity = validityDays.trim() === "" ? null : Number(validityDays);
   const validityOk = !chosenCa || chosenValidity === null || isValidityDays(validityDays, chosenCa.validity.maximumDays);

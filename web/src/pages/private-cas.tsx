@@ -17,7 +17,7 @@ import { api, can, type IssuingCa, type PermittedNames, type PrivateCa, type Pri
 import { KEY_ALGORITHMS, KEY_ALGORITHM_LABELS, type KeyAlgorithm } from "@/lib/csr-generator";
 import { splitNames } from "@/lib/csr-names";
 import { keyAlgorithmLabel } from "@/lib/managed-certificate";
-import { DEFAULT_VALIDITY_DAYS, MAX_VALIDITY_DAYS, commonNameOf, isValidityDays, rootSubjectOf } from "@/lib/private-ca";
+import { DEFAULT_VALIDITY_DAYS, MAX_LIFETIME_YEARS, MAX_VALIDITY_DAYS, commonNameOf, isValidityDays, rootSubjectOf } from "@/lib/private-ca";
 import { useAction } from "@/lib/use-action";
 
 const ROUTE = "/app/organizations/$orgId/private-cas";
@@ -413,7 +413,7 @@ function AddIssuingCaForm({ orgId, ca, onDone }: { orgId: string; ca: PrivateCa;
     ["private-cas"],
     onDone,
   );
-  const lifetimeOk = lifetimeYears.trim() === "" || (/^\d+$/.test(lifetimeYears.trim()) && Number(lifetimeYears) >= 1 && Number(lifetimeYears) <= 30);
+  const lifetimeOk = lifetimeYears.trim() === "" || (/^\d+$/.test(lifetimeYears.trim()) && Number(lifetimeYears) >= 1 && Number(lifetimeYears) <= MAX_LIFETIME_YEARS);
   const ready = subject.trim() !== "" && hasRules(rules) && validityProblem(validity) === undefined && lifetimeOk;
   return (
     <form
@@ -434,7 +434,7 @@ function AddIssuingCaForm({ orgId, ca, onDone }: { orgId: string; ca: PrivateCa;
           id={`add-issuing-${ca.id}-lifetime`}
           type="number"
           min={1}
-          max={30}
+          max={MAX_LIFETIME_YEARS}
           className="w-32"
           value={lifetimeYears}
           placeholder="Root's"
@@ -508,7 +508,7 @@ function CreatePrivateCaForm({ orgId, onDone }: { orgId: string; onDone: () => v
     ["private-cas"],
     onDone,
   );
-  const ready = name.trim() !== "" && subject.trim() !== "" && hasRules(rules) && validityProblem(validity) === undefined && Number.isInteger(Number(lifetimeYears)) && Number(lifetimeYears) >= 1 && Number(lifetimeYears) <= 30;
+  const ready = name.trim() !== "" && subject.trim() !== "" && hasRules(rules) && validityProblem(validity) === undefined && Number.isInteger(Number(lifetimeYears)) && Number(lifetimeYears) >= 1 && Number(lifetimeYears) <= MAX_LIFETIME_YEARS;
   return (
     <form
       className="flex flex-col gap-4"
@@ -539,7 +539,7 @@ function CreatePrivateCaForm({ orgId, onDone }: { orgId: string; onDone: () => v
         </div>
         <div className="flex flex-col gap-2">
           <Label htmlFor="private-ca-lifetime">Lifetime (years)</Label>
-          <Input id="private-ca-lifetime" type="number" min={1} max={30} className="w-32" value={lifetimeYears} onChange={(e) => setLifetimeYears(e.target.value)} />
+          <Input id="private-ca-lifetime" type="number" min={1} max={MAX_LIFETIME_YEARS} className="w-32" value={lifetimeYears} onChange={(e) => setLifetimeYears(e.target.value)} />
         </div>
       </div>
       <p className="-mt-2 text-xs text-muted-foreground">For both the root and the Issuing CA, each with its own key. No Certificate outlives them.</p>
