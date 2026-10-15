@@ -30,19 +30,33 @@ const auditOf = async (target = org) => (await h.api(`/api/organizations/${targe
 
 const NEW_CA = { name: "Internal TLS", subject: "CN=Acme Internal TLS, O=Acme", keyAlgorithm: "ecdsa-p256", lifetimeYears: 5, permittedNames: { exact: [], zones: ["internal.acme"] } };
 
+type IssuingCa = { id: string; subject: string; status: string; notAfter: string; permittedNames: { exact: string[]; zones: string[] }; validity: { maximumDays: number; defaultDays: number } };
+type PrivateCa = { id: string; name: string; status: string; kind: string; keyAlgorithm: string; root: { subject: string; notAfter: string } | null; issuingCas: IssuingCa[] };
+
+/** A new Private CA, and its first Issuing CA as `issuing`. */
 async function createCa(body: Record<string, unknown> = NEW_CA, target = org) {
   const res = await h.api(cas(target.orgId), { cookie: target.cookie, body });
   expect(res.status).toBe(201);
-  return res.body as { id: string; name: string; status: string; kind: string; keyAlgorithm: string; subject: string; notAfter: string; root: { subject: string; notAfter: string } | null; permittedNames: { exact: string[]; zones: string[] }; validity: { maximumDays: number; defaultDays: number } };
+  const ca = res.body as PrivateCa;
+  return { ...ca, issuing: ca.issuingCas[0]! };
 }
+
+/** Where an Issuing CA of the Private CA is. */
+const issuingCaPath = (ca: { id: string; issuing: { id: string } }, orgId = org.orgId) => `${cas(orgId)}/${ca.id}/issuing-cas/${ca.issuing.id}`;
 
 /** The certificates of a PEM bundle, in order. */
 const certificatesIn = (pem: string) => (pem.match(/-----BEGIN CERTIFICATE-----[^-]+-----END CERTIFICATE-----/g) ?? []).map((one) => new x509.X509Certificate(one));
 
-async function chainOf(id: string, cookie = org.cookie, orgId = org.orgId) {
-  const res = await h.app.request(`http://localhost${cas(orgId)}/${id}/chain`, { headers: { cookie } });
+async function download(path: string, cookie: string) {
+  const res = await h.app.request(`http://localhost${path}`, { headers: { cookie } });
   return { status: res.status, certificates: res.status === 200 ? certificatesIn(await res.text()) : [] };
 }
+
+/** The chain of the Private CA's first Issuing CA (or of `ca.issuing`): the Issuing CA, then the root. */
+const chainOf = (ca: { id: string; issuing: { id: string } }, cookie = org.cookie, orgId = org.orgId) => download(`${issuingCaPath(ca, orgId)}/chain`, cookie);
+
+/** The Private CA's own download: its root. */
+const rootOf = (id: string, cookie = org.cookie, orgId = org.orgId) => download(`${cas(orgId)}/${id}/chain`, cookie);
 
 /** Whether `cert` is signed by `by`'s key. */
 const signedBy = (cert: x509.X509Certificate, by: x509.X509Certificate) => cert.verify({ publicKey: by.publicKey, signatureOnly: true });
@@ -59,7 +73,7 @@ describe("creating a Private CA with a platform-made root", () => {
     const ca = await createCa();
 
     expect(ca).toMatchObject({ name: "Internal TLS", kind: "platform_root", status: "active", keyAlgorithm: "ecdsa-p256" });
-    const { status, certificates } = await chainOf(ca.id);
+    const { status, certificates } = await chainOf(ca);
     expect(status).toBe(200);
     const [issuing, root] = certificates;
     expect(certificates).toHaveLength(2);
@@ -70,7 +84,7 @@ describe("creating a Private CA with a platform-made root", () => {
     expect(issuing!.issuer).toBe(root!.subject);
     expect(Buffer.from(issuing!.publicKey.rawData).equals(Buffer.from(root!.publicKey.rawData))).toBe(false);
     expect(issuing!.subject).toBe("CN=Acme Internal TLS, O=Acme");
-    expect(new Date(ca.notAfter).getTime()).toBe(issuing!.notAfter.getTime());
+    expect(new Date(ca.issuing.notAfter).getTime()).toBe(issuing!.notAfter.getTime());
     expect(ca.root).toEqual({ subject: "CN=Acme Internal TLS Root, O=Acme", notAfter: root!.notAfter.toISOString() });
 
     const issuingConstraints = issuing!.getExtension(x509.BasicConstraintsExtension)!;
@@ -82,7 +96,7 @@ describe("creating a Private CA with a platform-made root", () => {
   test.each(["ecdsa-p384", "rsa-2048"])("makes the CA keys of the algorithm asked for: %s", async (keyAlgorithm) => {
     const ca = await createCa({ ...NEW_CA, keyAlgorithm });
 
-    const [issuing, root] = (await chainOf(ca.id)).certificates;
+    const [issuing, root] = (await chainOf(ca)).certificates;
     expect(await signedBy(issuing!, root!)).toBe(true);
     const name = keyAlgorithm.startsWith("rsa") ? "RSASSA-PKCS1-v1_5" : "ECDSA";
     expect(issuing!.publicKey.algorithm.name).toBe(name);
@@ -138,7 +152,7 @@ describe("a platform-made Issuing CA's name constraints", () => {
   test("are its permitted name rules, critical, as dNSName subtrees, with no IP address permitted", async () => {
     const ca = await createCa({ ...NEW_CA, permittedNames: { exact: ["app.corp.example", "*.svc.corp.example"], zones: ["internal.acme"] } });
 
-    const [issuing, root] = (await chainOf(ca.id)).certificates;
+    const [issuing, root] = (await chainOf(ca)).certificates;
     expect(nameConstraintsOf(issuing!)).toEqual({
       critical: true,
       permitted: ["dns:app.corp.example", "dns:svc.corp.example", "dns:internal.acme"],
@@ -150,12 +164,126 @@ describe("a platform-made Issuing CA's name constraints", () => {
 
   test("stay as they were made when the rules change", async () => {
     const ca = await createCa();
-    const before = (await chainOf(ca.id)).certificates[0]!;
-    await h.api(`${cas()}/${ca.id}`, { cookie: org.cookie, method: "PATCH", body: { permittedNames: { exact: [], zones: ["lab.acme"] } } });
+    const before = (await chainOf(ca)).certificates[0]!;
+    await h.api(issuingCaPath(ca), { cookie: org.cookie, method: "PATCH", body: { permittedNames: { exact: [], zones: ["lab.acme"] } } });
 
-    const after = (await chainOf(ca.id)).certificates[0]!;
+    const after = (await chainOf(ca)).certificates[0]!;
     expect(after.equal(before)).toBe(true);
     expect(nameConstraintsOf(after)!.permitted).toEqual(["dns:internal.acme"]);
+  });
+});
+
+/** Adds an Issuing CA under the Private CA's root; the answer as it came. */
+const addIssuingCa = (ca: { id: string }, body: Record<string, unknown>, cookie = org.cookie, orgId = org.orgId) => h.api(`${cas(orgId)}/${ca.id}/issuing-cas`, { cookie, body });
+
+const DEVICES = { subject: "CN=Acme Devices, O=Acme", permittedNames: { exact: ["vpn.corp.example"], zones: ["devices.acme"] }, validity: { maximumDays: 90, defaultDays: 30 } };
+
+/** The key of a certificate, as bytes to compare. */
+const keyOf = (cert: x509.X509Certificate) => Buffer.from(cert.publicKey.rawData).toString("hex");
+
+describe("adding an Issuing CA under a platform-made root", () => {
+  test("makes one with its own key, signed by the root with pathLen 0 and its rules as name constraints, listed with the Private CA", async () => {
+    const ca = await createCa();
+
+    const added = await addIssuingCa(ca, DEVICES);
+
+    expect(added.status).toBe(201);
+    expect(added.body).toMatchObject({ subject: "CN=Acme Devices, O=Acme", status: "active", permittedNames: DEVICES.permittedNames, validity: DEVICES.validity });
+    const listed = (await h.api(`${cas()}/${ca.id}`, { cookie: org.cookie })).body as PrivateCa;
+    expect(listed.issuingCas.map((i) => i.subject)).toEqual(["CN=Acme Internal TLS, O=Acme", "CN=Acme Devices, O=Acme"]);
+    expect(listed.issuingCas[1]).toEqual(added.body);
+
+    const [devices, root, ...rest] = (await chainOf({ id: ca.id, issuing: added.body })).certificates;
+    expect(rest).toEqual([]);
+    const [first] = (await chainOf(ca)).certificates;
+    const [onlyRoot, ...more] = (await rootOf(ca.id)).certificates;
+    expect(more).toEqual([]);
+    expect(root!.equal(onlyRoot!)).toBe(true);
+    expect(await signedBy(devices!, root!)).toBe(true);
+    expect(devices!.issuer).toBe(root!.subject);
+    expect(devices!.subject).toBe("CN=Acme Devices, O=Acme");
+    expect(new Set([keyOf(devices!), keyOf(root!), keyOf(first!)]).size).toBe(3);
+    expect(devices!.getExtension(x509.BasicConstraintsExtension)).toMatchObject({ ca: true, pathLength: 0, critical: true });
+    expect(nameConstraintsOf(devices!)).toEqual({ critical: true, permitted: ["dns:vpn.corp.example", "dns:devices.acme"], excluded: ["ip:0000000000000000", `ip:${"00".repeat(32)}`] });
+    expect(devices!.notBefore.toISOString()).toBe("2026-01-01T00:00:00.000Z");
+    expect(added.body.notAfter).toBe(devices!.notAfter.toISOString());
+  });
+
+  test("is valid until the root ends unless a shorter lifetime is asked, and never past the root", async () => {
+    const ca = await createCa({ ...NEW_CA, lifetimeYears: 5 });
+
+    const until = async (subject: string, lifetimeYears?: number) => (await addIssuingCa(ca, { ...DEVICES, subject, ...(lifetimeYears && { lifetimeYears }) })).body.notAfter;
+
+    expect(await until("CN=Until the root")).toBe(ca.root!.notAfter);
+    expect(await until("CN=Two years", 2)).toBe("2028-01-01T00:00:00.000Z");
+    expect(await until("CN=Longer than the root", 20)).toBe(ca.root!.notAfter);
+  });
+
+  test("is an Audit Event naming the Issuing CA", async () => {
+    const ca = await createCa();
+
+    const added = await addIssuingCa(ca, DEVICES);
+
+    const [devices] = (await chainOf({ id: ca.id, issuing: added.body })).certificates;
+    expect((await auditOf()).filter((e) => e.action === "private_ca.issuing_ca_added")).toMatchObject([
+      {
+        target: { type: "private_ca", id: ca.id },
+        detail: {
+          name: "Internal TLS",
+          issuingCa: { id: added.body.id, subject: "CN=Acme Devices, O=Acme", notAfter: added.body.notAfter, permittedNames: DEVICES.permittedNames, validity: DEVICES.validity, serial: devices!.serialNumber },
+        },
+      },
+    ]);
+  });
+
+  test("refuses a subject another Issuing CA of the Private CA has, but not one under another Private CA", async () => {
+    const ca = await createCa();
+    const other = await createCa({ ...NEW_CA, name: "Other" });
+
+    for (const subject of ["CN=Acme Internal TLS, O=Acme", "CN=Acme Internal TLS,O=Acme"]) {
+      const res = await addIssuingCa(ca, { ...DEVICES, subject });
+      expect(res.status).toBe(422);
+      expect(res.body.error).toContain("CN=Acme Internal TLS");
+    }
+    expect((await addIssuingCa(ca, DEVICES)).status).toBe(201);
+    expect((await addIssuingCa(ca, DEVICES)).status).toBe(422);
+    expect((await addIssuingCa(other, DEVICES)).status).toBe(201);
+
+    expect(((await h.api(`${cas()}/${ca.id}`, { cookie: org.cookie })).body as PrivateCa).issuingCas).toHaveLength(2);
+    expect((await auditOf()).filter((e) => e.action === "private_ca.issuing_ca_added")).toHaveLength(2);
+  });
+
+  test("refuses what could not be one: no common name, no rules, a default above the maximum", async () => {
+    const ca = await createCa();
+
+    expect((await addIssuingCa(ca, { ...DEVICES, subject: "O=Acme" })).status).toBe(400);
+    expect((await addIssuingCa(ca, { ...DEVICES, permittedNames: { exact: [], zones: [] } })).status).toBe(400);
+    expect((await addIssuingCa(ca, { ...DEVICES, validity: { maximumDays: 30, defaultDays: 90 } })).status).toBe(422);
+    expect(((await h.api(`${cas()}/${ca.id}`, { cookie: org.cookie })).body as PrivateCa).issuingCas).toHaveLength(1);
+  });
+
+  test("only an Organization Administrator may, and only under the Organization's own Private CAs", async () => {
+    const ca = await createCa();
+    const globex = await h.createOrgWithAdmin(operator, "globex", "admin@globex.test");
+
+    for (const role of ["member", "approver"]) {
+      const cookie = await join(`${role}@acme.test`, role);
+      expect((await addIssuingCa(ca, DEVICES, cookie)).status).toBe(403);
+    }
+    expect((await addIssuingCa(ca, DEVICES, globex.cookie, globex.orgId)).status).toBe(404);
+    expect((await addIssuingCa({ id: "not-an-id" }, DEVICES)).status).toBe(404);
+
+    expect(((await h.api(`${cas()}/${ca.id}`, { cookie: org.cookie })).body as PrivateCa).issuingCas).toHaveLength(1);
+    expect((await auditOf()).filter((e) => e.action === "private_ca.issuing_ca_added")).toEqual([]);
+  });
+
+  test("an Issuing CA is found only under its own Private CA", async () => {
+    const ca = await createCa();
+    const other = await createCa({ ...NEW_CA, name: "Other" });
+    const misplaced = { id: other.id, issuing: ca.issuing };
+
+    expect((await chainOf(misplaced)).status).toBe(404);
+    expect((await h.api(issuingCaPath(misplaced), { cookie: org.cookie, method: "PATCH", body: { validity: { maximumDays: 30, defaultDays: 30 } } })).status).toBe(404);
   });
 });
 
@@ -167,7 +295,7 @@ describe("who may see and create Private CAs", () => {
     const listed = await h.api(cas(), { cookie });
     expect(listed.status).toBe(200);
     expect(listed.body.items.map((i: { id: string }) => i.id)).toEqual([ca.id]);
-    expect((await chainOf(ca.id, cookie)).certificates).toHaveLength(2);
+    expect((await chainOf(ca, cookie)).certificates).toHaveLength(2);
 
     expect((await h.api(cas(), { cookie, body: { ...NEW_CA, name: "Mine" } })).status).toBe(403);
     expect((await h.api(cas(), { cookie })).body.items).toHaveLength(1);
@@ -186,7 +314,7 @@ describe("who may see and create Private CAs", () => {
     const theirs = await createCa(NEW_CA, globex);
 
     expect((await h.api(`${cas()}/${theirs.id}`, { cookie: org.cookie })).status).toBe(404);
-    expect((await chainOf(theirs.id)).status).toBe(404);
+    expect((await chainOf(theirs)).status).toBe(404);
     expect((await h.api(cas(), { cookie: org.cookie })).body.items).toEqual([]);
   });
 
@@ -220,7 +348,7 @@ async function requestWithUsages(names: string[], usages: string[]) {
   return { names, keyAlgorithm: "ecdsa-p256", csr: csr.toString("pem") };
 }
 
-const fromCa = (privateCaId: string) => ({ issuer: { kind: "private_ca", privateCaId } });
+const fromCa = (issuingCaId: string) => ({ issuer: { kind: "private_ca", issuingCaId } });
 
 /** The Managed Certificate once its latest Issuance has ended. */
 async function ended(id: string, cookie = org.cookie) {
@@ -241,17 +369,17 @@ describe("issuing a Managed Certificate from a Private CA", () => {
   test("an Organization Administrator creates one and it is issued at once with no DCV, and its chain verifies to the root", async () => {
     const ca = await createCa();
     // No ACME account and no DNS Provider: nothing of ACME could issue it.
-    const created = await h.api(mcs(), { cookie: org.cookie, body: { ...(await request(["app.internal.acme", "*.svc.internal.acme"])), ...fromCa(ca.id) } });
+    const created = await h.api(mcs(), { cookie: org.cookie, body: { ...(await request(["app.internal.acme", "*.svc.internal.acme"])), ...fromCa(ca.issuing.id) } });
     expect(created.status).toBe(201);
-    expect(created.body).toMatchObject({ issuer: { kind: "private_ca", privateCa: { id: ca.id, name: "Internal TLS" } }, environment: null, approval: { status: "not_required" } });
+    expect(created.body).toMatchObject({ issuer: { kind: "private_ca", issuingCa: { id: ca.issuing.id, subject: "CN=Acme Internal TLS, O=Acme" }, privateCa: { id: ca.id, name: "Internal TLS" } }, environment: null, approval: { status: "not_required" } });
 
     const mc = await ended(created.body.id);
     expect(mc.issuance).toMatchObject({ status: "succeeded", failure: null });
-    expect(mc.currentCertificate).toMatchObject({ ca: "Internal TLS", privateCaId: ca.id, environment: null, acmeAccountId: null, names: ["app.internal.acme", "*.svc.internal.acme"] });
+    expect(mc.currentCertificate).toMatchObject({ ca: "Internal TLS", issuingCaId: ca.issuing.id, environment: null, acmeAccountId: null, names: ["app.internal.acme", "*.svc.internal.acme"] });
 
     const [leaf, issuing, root, ...rest] = await downloaded(mc.id);
     expect(rest).toEqual([]);
-    const [caIssuing, caRoot] = (await chainOf(ca.id)).certificates;
+    const [caIssuing, caRoot] = (await chainOf(ca)).certificates;
     expect(issuing!.equal(caIssuing!)).toBe(true);
     expect(root!.equal(caRoot!)).toBe(true);
     expect(await signedBy(leaf!, issuing!)).toBe(true);
@@ -262,7 +390,7 @@ describe("issuing a Managed Certificate from a Private CA", () => {
 
   test("the Certificate is a TLS server certificate for the approved names, with a 20-byte random serial", async () => {
     const ca = await createCa();
-    const created = await h.api(mcs(), { cookie: org.cookie, body: { ...(await request(["app.internal.acme", "api.internal.acme"])), ...fromCa(ca.id) } });
+    const created = await h.api(mcs(), { cookie: org.cookie, body: { ...(await request(["app.internal.acme", "api.internal.acme"])), ...fromCa(ca.issuing.id) } });
     const mc = await ended(created.body.id);
 
     const [leaf] = await downloaded(mc.id, "leaf");
@@ -275,26 +403,26 @@ describe("issuing a Managed Certificate from a Private CA", () => {
     expect(leaf!.notBefore.toISOString()).toBe("2026-01-01T00:00:00.000Z");
     expect(leaf!.notAfter.toISOString()).toBe(new Date(Date.parse("2026-01-01T00:00:00Z") + 397 * 86_400_000).toISOString());
 
-    const other = await h.api(mcs(), { cookie: org.cookie, body: { ...(await request(["other.internal.acme"])), ...fromCa(ca.id) } });
+    const other = await h.api(mcs(), { cookie: org.cookie, body: { ...(await request(["other.internal.acme"])), ...fromCa(ca.issuing.id) } });
     expect((await ended(other.body.id)).currentCertificate.serial).not.toBe(leaf!.serialNumber.toUpperCase());
   });
 
   test("a name too long for a common name is left out of the subject, and only in the subject alternative names, then critical", async () => {
     const ca = await createCa();
     const long = `${"a".repeat(60)}.internal.acme`;
-    const created = await h.api(mcs(), { cookie: org.cookie, body: { ...(await request([long, "app.internal.acme"])), ...fromCa(ca.id) } });
+    const created = await h.api(mcs(), { cookie: org.cookie, body: { ...(await request([long, "app.internal.acme"])), ...fromCa(ca.issuing.id) } });
     const mc = await ended(created.body.id);
 
     const [leaf] = await downloaded(mc.id, "leaf");
     expect(leaf!.subject).toBe("CN=app.internal.acme");
-    const [onlyLong] = await downloaded((await ended((await h.api(mcs(), { cookie: org.cookie, body: { ...(await request([long])), ...fromCa(ca.id) } })).body.id)).id, "leaf");
+    const [onlyLong] = await downloaded((await ended((await h.api(mcs(), { cookie: org.cookie, body: { ...(await request([long])), ...fromCa(ca.issuing.id) } })).body.id)).id, "leaf");
     expect(onlyLong!.subject).toBe("");
     expect(onlyLong!.getExtension(x509.SubjectAlternativeNameExtension)).toMatchObject({ critical: true });
   });
 
   test("a CSR that asks for clientAuth gets it besides serverAuth", async () => {
     const ca = await createCa();
-    const created = await h.api(mcs(), { cookie: org.cookie, body: { ...(await requestWithUsages(["app.internal.acme"], [x509.ExtendedKeyUsage.serverAuth, x509.ExtendedKeyUsage.clientAuth])), ...fromCa(ca.id) } });
+    const created = await h.api(mcs(), { cookie: org.cookie, body: { ...(await requestWithUsages(["app.internal.acme"], [x509.ExtendedKeyUsage.serverAuth, x509.ExtendedKeyUsage.clientAuth])), ...fromCa(ca.issuing.id) } });
     const mc = await ended(created.body.id);
 
     const [leaf] = await downloaded(mc.id, "leaf");
@@ -303,14 +431,89 @@ describe("issuing a Managed Certificate from a Private CA", () => {
 
   test("its Issuance is audited with the existing actions, the issuer in their detail", async () => {
     const ca = await createCa();
-    const created = await h.api(mcs(), { cookie: org.cookie, body: { ...(await request(["app.internal.acme"])), ...fromCa(ca.id) } });
+    const created = await h.api(mcs(), { cookie: org.cookie, body: { ...(await request(["app.internal.acme"])), ...fromCa(ca.issuing.id) } });
     await ended(created.body.id);
 
     const events = (await auditOf()).filter((e) => e.target?.id === created.body.id);
-    const issuer = { kind: "private_ca", privateCaId: ca.id };
+    const issuer = { kind: "private_ca", issuingCaId: ca.issuing.id };
     expect(events.find((e) => e.action === "managed_certificate.created")!.detail).toMatchObject({ issuer });
     expect(events.find((e) => e.action === "issuance.started")!.detail).toMatchObject({ issuer });
     expect(events.find((e) => e.action === "issuance.succeeded")!.detail).toMatchObject({ issuer });
+  });
+});
+
+describe("two Issuing CAs under one root with different rules", () => {
+  /** The Private CA with its first Issuing CA for internal.acme (397 days at most) and a second for devices.acme (90 days at most). */
+  async function twoUnderOneRoot() {
+    const ca = await createCa();
+    const added = await addIssuingCa(ca, DEVICES);
+    expect(added.status).toBe(201);
+    return { ca, tls: ca.issuing, devices: added.body as IssuingCa };
+  }
+
+  test("each issues for its own names, signed with its own key, and the chain is that Issuing CA then the root", async () => {
+    const { ca, tls, devices } = await twoUnderOneRoot();
+    const [tlsCert, root] = (await chainOf({ id: ca.id, issuing: tls })).certificates;
+    const [devicesCert] = (await chainOf({ id: ca.id, issuing: devices })).certificates;
+
+    for (const [issuing, issuingCert, name] of [[tls, tlsCert, "app.internal.acme"], [devices, devicesCert, "laptop-1.devices.acme"]] as const) {
+      const created = await h.api(mcs(), { cookie: org.cookie, body: { ...(await request([name])), ...fromCa(issuing.id) } });
+      expect(created.status).toBe(201);
+      expect(created.body.issuer).toEqual({ kind: "private_ca", issuingCa: { id: issuing.id, subject: issuing.subject }, privateCa: { id: ca.id, name: "Internal TLS" } });
+      const mc = await ended(created.body.id);
+      expect(mc.issuance.status).toBe("succeeded");
+      expect(mc.currentCertificate.issuingCaId).toBe(issuing.id);
+
+      const [leaf, chainIssuing, chainRoot, ...rest] = await downloaded(mc.id);
+      expect(rest).toEqual([]);
+      expect(chainIssuing!.equal(issuingCert!)).toBe(true);
+      expect(chainRoot!.equal(root!)).toBe(true);
+      expect(await signedBy(leaf!, issuingCert!)).toBe(true);
+      expect(leaf!.issuer).toBe(issuing.subject);
+    }
+  });
+
+  test("a Managed Certificate's names and validity are checked against its own Issuing CA when it is created or proposed", async () => {
+    const { tls, devices } = await twoUnderOneRoot();
+    const member = await join("member@acme.test", "member");
+
+    for (const cookie of [org.cookie, member]) {
+      const wrongNames = await h.api(mcs(), { cookie, body: { ...(await request(["app.internal.acme"])), ...fromCa(devices.id) } });
+      expect(wrongNames.status).toBe(422);
+      expect(wrongNames.body.error).toContain("Acme Devices");
+      const tooLong = await h.api(mcs(), { cookie, body: { ...(await request(["laptop-1.devices.acme"])), ...fromCa(devices.id), validityDays: 200 } });
+      expect(tooLong.status).toBe(422);
+      expect(tooLong.body.error).toContain("90 days");
+      expect((await h.api(mcs(), { cookie, body: { ...(await request(["app.internal.acme"])), ...fromCa(tls.id), validityDays: 200 } })).status).toBe(201);
+    }
+  });
+
+  test("a Name Change is checked against the Managed Certificate's own Issuing CA", async () => {
+    const { devices } = await twoUnderOneRoot();
+    const created = await h.api(mcs(), { cookie: org.cookie, body: { ...(await request(["laptop-1.devices.acme"])), ...fromCa(devices.id) } });
+    await ended(created.body.id);
+
+    const outside = await request(["laptop-1.devices.acme", "app.internal.acme"]);
+    const refused = await h.api(`${mcs()}/${created.body.id}/name-change`, { cookie: org.cookie, body: { names: outside.names, csr: outside.csr } });
+    expect(refused.status).toBe(422);
+    expect(refused.body.error).toContain("app.internal.acme");
+    const inside = await request(["laptop-1.devices.acme", "laptop-2.devices.acme"]);
+    expect((await h.api(`${mcs()}/${created.body.id}/name-change`, { cookie: org.cookie, body: { names: inside.names, csr: inside.csr, validityDays: 91 } })).status).toBe(422);
+    expect((await h.api(`${mcs()}/${created.body.id}/name-change`, { cookie: org.cookie, body: { names: inside.names, csr: inside.csr, validityDays: 90 } })).status).toBe(201);
+  });
+
+  test("changing one's rules or validity leaves the other's as it was", async () => {
+    const { ca, tls, devices } = await twoUnderOneRoot();
+
+    const res = await h.api(issuingCaPath({ id: ca.id, issuing: devices }), { cookie: org.cookie, method: "PATCH", body: { permittedNames: { exact: [], zones: ["lab.acme"] }, validity: { maximumDays: 30, defaultDays: 7 } } });
+
+    expect(res.status).toBe(200);
+    const listed = ((await h.api(`${cas()}/${ca.id}`, { cookie: org.cookie })).body as PrivateCa).issuingCas;
+    expect(listed.map((i) => [i.id, i.permittedNames, i.validity])).toEqual([
+      [tls.id, NEW_CA.permittedNames, { maximumDays: 397, defaultDays: 397 }],
+      [devices.id, { exact: [], zones: ["lab.acme"] }, { maximumDays: 30, defaultDays: 7 }],
+    ]);
+    expect((await auditOf()).find((e) => e.action === "private_ca.updated")!.detail.issuingCa).toEqual({ id: devices.id, subject: "CN=Acme Devices, O=Acme" });
   });
 });
 
@@ -320,13 +523,13 @@ describe("proposing a Managed Certificate from a Private CA", () => {
     const member = await join("member@acme.test", "member");
     const approver = await join("approver@acme.test", "approver");
 
-    const proposed = await h.api(mcs(), { cookie: member, body: { ...(await request(["app.internal.acme"])), ...fromCa(ca.id) } });
+    const proposed = await h.api(mcs(), { cookie: member, body: { ...(await request(["app.internal.acme"])), ...fromCa(ca.issuing.id) } });
     expect(proposed.status).toBe(201);
     expect(proposed.body).toMatchObject({ approval: { status: "pending" }, issuance: null });
 
     const queue = await h.api(`/api/organizations/${org.orgId}/approvals`, { cookie: approver });
-    expect(queue.body.items).toMatchObject([{ id: proposed.body.id, issuer: { kind: "private_ca", privateCa: { id: ca.id, name: "Internal TLS" } } }]);
-    expect((await auditOf()).find((e) => e.action === "managed_certificate.proposed")!.detail).toMatchObject({ issuer: { kind: "private_ca", privateCaId: ca.id } });
+    expect(queue.body.items).toMatchObject([{ id: proposed.body.id, issuer: { kind: "private_ca", issuingCa: { id: ca.issuing.id, subject: "CN=Acme Internal TLS, O=Acme" }, privateCa: { id: ca.id, name: "Internal TLS" } } }]);
+    expect((await auditOf()).find((e) => e.action === "managed_certificate.proposed")!.detail).toMatchObject({ issuer: { kind: "private_ca", issuingCaId: ca.issuing.id } });
 
     expect((await h.api(`${mcs()}/${proposed.body.id}/approve`, { cookie: approver, body: {} })).status).toBe(200);
     const mc = await ended(proposed.body.id, member);
@@ -341,7 +544,7 @@ describe("which Private CA a Managed Certificate may name", () => {
     const globex = await h.createOrgWithAdmin(operator, "globex", "admin@globex.test");
     const theirs = await createCa(NEW_CA, globex);
 
-    const res = await h.api(mcs(), { cookie: org.cookie, body: { ...(await request(["app.internal.acme"])), ...fromCa(theirs.id) } });
+    const res = await h.api(mcs(), { cookie: org.cookie, body: { ...(await request(["app.internal.acme"])), ...fromCa(theirs.issuing.id) } });
 
     expect(res.status).toBe(422);
     expect((await h.api(mcs(), { cookie: org.cookie })).body.items).toEqual([]);
@@ -354,7 +557,7 @@ describe("which Private CA a Managed Certificate may name", () => {
 
     expect((await h.api(mcs(), { cookie: org.cookie, body: { ...body, ...fromCa("00000000-0000-0000-0000-000000000000") } })).status).toBe(422);
     expect((await h.api(mcs(), { cookie: org.cookie, body: { ...body, ...fromCa("not-an-id") } })).status).toBe(422);
-    expect((await h.api(mcs(), { cookie: org.cookie, body: { ...body, ...fromCa(ca.id), environment: "staging" } })).status).toBe(400);
+    expect((await h.api(mcs(), { cookie: org.cookie, body: { ...body, ...fromCa(ca.issuing.id), environment: "staging" } })).status).toBe(400);
   });
 });
 
@@ -363,26 +566,26 @@ describe("a Private CA's permitted name rules", () => {
     const ca = await createCa({ ...NEW_CA, permittedNames: { exact: ["App.Corp.Example.", "*.svc.corp.example", "app.corp.example"], zones: ["Internal.Acme"] } });
 
     const rules = { exact: ["app.corp.example", "*.svc.corp.example"], zones: ["internal.acme"] };
-    expect(ca.permittedNames).toEqual(rules);
+    expect(ca.issuing.permittedNames).toEqual(rules);
     const member = await join("member@acme.test", "member");
-    expect((await h.api(`${cas()}/${ca.id}`, { cookie: member })).body.permittedNames).toEqual(rules);
-    expect((await h.api(cas(), { cookie: member })).body.items[0].permittedNames).toEqual(rules);
+    expect((await h.api(`${cas()}/${ca.id}`, { cookie: member })).body.issuingCas[0].permittedNames).toEqual(rules);
+    expect((await h.api(cas(), { cookie: member })).body.items[0].issuingCas[0].permittedNames).toEqual(rules);
     expect((await auditOf()).find((e) => e.action === "private_ca.created")!.detail.permittedNames).toEqual(rules);
   });
 
   test("an Organization Administrator changes them later, for what is issued from then on, as an Audit Event", async () => {
     const ca = await createCa();
-    const res = await h.api(`${cas()}/${ca.id}`, { cookie: org.cookie, method: "PATCH", body: { permittedNames: { exact: ["App.Corp.Example"], zones: ["internal.acme", "lab.acme"] } } });
+    const res = await h.api(issuingCaPath(ca), { cookie: org.cookie, method: "PATCH", body: { permittedNames: { exact: ["App.Corp.Example"], zones: ["internal.acme", "lab.acme"] } } });
 
     expect(res.status).toBe(200);
     const rules = { exact: ["app.corp.example"], zones: ["internal.acme", "lab.acme"] };
     expect(res.body.permittedNames).toEqual(rules);
-    expect((await h.api(`${cas()}/${ca.id}`, { cookie: org.cookie })).body.permittedNames).toEqual(rules);
+    expect((await h.api(`${cas()}/${ca.id}`, { cookie: org.cookie })).body.issuingCas[0].permittedNames).toEqual(rules);
     expect((await auditOf()).filter((e) => e.action === "private_ca.updated")).toMatchObject([
       { target: { type: "private_ca", id: ca.id }, detail: { permittedNames: { from: { exact: [], zones: ["internal.acme"] }, to: rules } } },
     ]);
 
-    expect((await h.api(mcs(), { cookie: org.cookie, body: { ...(await request(["app.corp.example", "x.lab.acme"])), ...fromCa(ca.id) } })).status).toBe(201);
+    expect((await h.api(mcs(), { cookie: org.cookie, body: { ...(await request(["app.corp.example", "x.lab.acme"])), ...fromCa(ca.issuing.id) } })).status).toBe(201);
   });
 
   test("only an Organization Administrator may change them, and only for the Organization's own Private CAs, and never to none", async () => {
@@ -392,12 +595,12 @@ describe("a Private CA's permitted name rules", () => {
 
     for (const role of ["member", "approver"]) {
       const cookie = await join(`${role}@acme.test`, role);
-      expect((await h.api(`${cas()}/${ca.id}`, { cookie, method: "PATCH", body: change })).status).toBe(403);
+      expect((await h.api(issuingCaPath(ca), { cookie, method: "PATCH", body: change })).status).toBe(403);
     }
-    expect((await h.api(`${cas(globex.orgId)}/${ca.id}`, { cookie: globex.cookie, method: "PATCH", body: change })).status).toBe(404);
-    expect((await h.api(`${cas()}/${ca.id}`, { cookie: org.cookie, method: "PATCH", body: { permittedNames: { exact: [], zones: [] } } })).status).toBe(400);
+    expect((await h.api(issuingCaPath(ca, globex.orgId), { cookie: globex.cookie, method: "PATCH", body: change })).status).toBe(404);
+    expect((await h.api(issuingCaPath(ca), { cookie: org.cookie, method: "PATCH", body: { permittedNames: { exact: [], zones: [] } } })).status).toBe(400);
 
-    expect((await h.api(`${cas()}/${ca.id}`, { cookie: org.cookie })).body.permittedNames).toEqual(NEW_CA.permittedNames);
+    expect((await h.api(`${cas()}/${ca.id}`, { cookie: org.cookie })).body.issuingCas[0].permittedNames).toEqual(NEW_CA.permittedNames);
     expect((await auditOf()).filter((e) => e.action === "private_ca.updated")).toEqual([]);
   });
 
@@ -416,7 +619,7 @@ describe("names outside a Private CA's permitted name rules", () => {
   test("are refused when an Organization Administrator creates a Managed Certificate, naming them, and nothing is created", async () => {
     const ca = await createCa({ ...NEW_CA, permittedNames: RULES });
 
-    const res = await h.api(mcs(), { cookie: org.cookie, body: { ...(await request(["app.internal.acme", "db.corp.example", "*.corp.example", "*.corp.acme"])), ...fromCa(ca.id) } });
+    const res = await h.api(mcs(), { cookie: org.cookie, body: { ...(await request(["app.internal.acme", "db.corp.example", "*.corp.example", "*.corp.acme"])), ...fromCa(ca.issuing.id) } });
 
     expect(res.status).toBe(422);
     expect(res.body.error).toContain("db.corp.example, *.corp.example, *.corp.acme");
@@ -428,7 +631,7 @@ describe("names outside a Private CA's permitted name rules", () => {
     const ca = await createCa({ ...NEW_CA, permittedNames: RULES });
     const member = await join("member@acme.test", "member");
 
-    const res = await h.api(mcs(), { cookie: member, body: { ...(await request(["other.example"])), ...fromCa(ca.id) } });
+    const res = await h.api(mcs(), { cookie: member, body: { ...(await request(["other.example"])), ...fromCa(ca.issuing.id) } });
 
     expect(res.status).toBe(422);
     expect(res.body.error).toContain("other.example");
@@ -439,7 +642,7 @@ describe("names outside a Private CA's permitted name rules", () => {
     const ca = await createCa({ ...NEW_CA, permittedNames: RULES });
     const member = await join("member@acme.test", "member");
     const memberId = (await h.api("/api/me", { cookie: member })).body.user.id;
-    const created = await h.api(mcs(), { cookie: org.cookie, body: { ...(await request(["app.internal.acme"])), ...fromCa(ca.id), owners: [{ type: "user", id: memberId }] } });
+    const created = await h.api(mcs(), { cookie: org.cookie, body: { ...(await request(["app.internal.acme"])), ...fromCa(ca.issuing.id), owners: [{ type: "user", id: memberId }] } });
     await ended(created.body.id);
     const { csr } = await request(["app.internal.acme", "other.example"]);
 
@@ -459,9 +662,9 @@ describe("names outside a Private CA's permitted name rules", () => {
     const ca = await createCa({ ...NEW_CA, permittedNames: { exact: [], zones: ["internal.acme", "lab.acme"] } });
     const member = await join("member@acme.test", "member");
     const approver = await join("approver@acme.test", "approver");
-    const proposed = await h.api(mcs(), { cookie: member, body: { ...(await request(["app.internal.acme", "app.lab.acme"])), ...fromCa(ca.id) } });
+    const proposed = await h.api(mcs(), { cookie: member, body: { ...(await request(["app.internal.acme", "app.lab.acme"])), ...fromCa(ca.issuing.id) } });
     expect(proposed.status).toBe(201);
-    expect((await h.api(`${cas()}/${ca.id}`, { cookie: org.cookie, method: "PATCH", body: { permittedNames: { exact: [], zones: ["internal.acme"] } } })).status).toBe(200);
+    expect((await h.api(issuingCaPath(ca), { cookie: org.cookie, method: "PATCH", body: { permittedNames: { exact: [], zones: ["internal.acme"] } } })).status).toBe(200);
 
     expect((await h.api(`${mcs()}/${proposed.body.id}/approve`, { cookie: approver, body: {} })).status).toBe(200);
 
@@ -476,7 +679,7 @@ describe("names outside a Private CA's permitted name rules", () => {
     const ca = await createCa({ ...NEW_CA, permittedNames: RULES });
     const names = ["app.corp.example", "*.svc.corp.example", "internal.acme", "a.b.internal.acme", "*.internal.acme", "*.x.internal.acme"];
 
-    const created = await h.api(mcs(), { cookie: org.cookie, body: { ...(await request(names)), ...fromCa(ca.id) } });
+    const created = await h.api(mcs(), { cookie: org.cookie, body: { ...(await request(names)), ...fromCa(ca.issuing.id) } });
 
     expect(created.status).toBe(201);
     expect((await ended(created.body.id)).issuance.status).toBe("succeeded");
@@ -487,15 +690,15 @@ describe("a Private CA's validity limits", () => {
   test("are 397 days for both its maximum and its default unless set, and shown to everyone in the Organization", async () => {
     const ca = await createCa();
 
-    expect(ca).toMatchObject({ validity: { maximumDays: 397, defaultDays: 397 } });
+    expect(ca.issuing).toMatchObject({ validity: { maximumDays: 397, defaultDays: 397 } });
     const member = await join("member@acme.test", "member");
-    expect((await h.api(`${cas()}/${ca.id}`, { cookie: member })).body.validity).toEqual({ maximumDays: 397, defaultDays: 397 });
+    expect((await h.api(`${cas()}/${ca.id}`, { cookie: member })).body.issuingCas[0].validity).toEqual({ maximumDays: 397, defaultDays: 397 });
   });
 
   test("are set when it is created, as an Audit Event, and a default above the maximum is refused", async () => {
     const ca = await createCa({ ...NEW_CA, validity: { maximumDays: 825, defaultDays: 90 } });
 
-    expect(ca).toMatchObject({ validity: { maximumDays: 825, defaultDays: 90 } });
+    expect(ca.issuing).toMatchObject({ validity: { maximumDays: 825, defaultDays: 90 } });
     expect((await auditOf()).find((e) => e.action === "private_ca.created")!.detail.validity).toEqual({ maximumDays: 825, defaultDays: 90 });
 
     const refused = await h.api(cas(), { cookie: org.cookie, body: { ...NEW_CA, name: "Too long", validity: { maximumDays: 30, defaultDays: 90 } } });
@@ -505,22 +708,24 @@ describe("a Private CA's validity limits", () => {
 
   test("may be at most 3650 days (ten years), whatever the Issuing CA's lifetime", async () => {
     const tenYears = await createCa({ ...NEW_CA, validity: { maximumDays: 3650, defaultDays: 3650 } });
-    expect(tenYears.validity).toEqual({ maximumDays: 3650, defaultDays: 3650 });
+    expect(tenYears.issuing.validity).toEqual({ maximumDays: 3650, defaultDays: 3650 });
 
     expect((await h.api(cas(), { cookie: org.cookie, body: { ...NEW_CA, name: "Longer", validity: { maximumDays: 3651, defaultDays: 397 } } })).status).toBe(400);
-    expect((await h.api(`${cas()}/${tenYears.id}`, { cookie: org.cookie, method: "PATCH", body: { validity: { maximumDays: 3651, defaultDays: 3651 } } })).status).toBe(400);
-    expect((await h.api(mcs(), { cookie: org.cookie, body: { ...(await request(["app.internal.acme"])), ...fromCa(tenYears.id), validityDays: 3651 } })).status).toBe(400);
-    expect((await h.api(mcs(), { cookie: org.cookie, body: { ...(await request(["app.internal.acme"])), ...fromCa(tenYears.id), validityDays: 3650 } })).status).toBe(201);
+    expect((await h.api(issuingCaPath(tenYears), { cookie: org.cookie, method: "PATCH", body: { validity: { maximumDays: 3651, defaultDays: 3651 } } })).status).toBe(400);
+    expect((await h.api(mcs(), { cookie: org.cookie, body: { ...(await request(["app.internal.acme"])), ...fromCa(tenYears.issuing.id), validityDays: 3651 } })).status).toBe(400);
+    expect((await h.api(mcs(), { cookie: org.cookie, body: { ...(await request(["app.internal.acme"])), ...fromCa(tenYears.issuing.id), validityDays: 3650 } })).status).toBe(201);
   });
 
   test("an Organization Administrator changes them later, each field changed in the Audit Event, and a default above the maximum is refused", async () => {
     const ca = await createCa();
-    const patch = (body: unknown, cookie = org.cookie) => h.api(`${cas()}/${ca.id}`, { cookie, method: "PATCH", body });
+    const patch = (body: unknown, cookie = org.cookie) => h.api(issuingCaPath(ca), { cookie, method: "PATCH", body });
 
     const res = await patch({ validity: { maximumDays: 825, defaultDays: 397 } });
     expect(res.status).toBe(200);
     expect(res.body.validity).toEqual({ maximumDays: 825, defaultDays: 397 });
-    expect((await auditOf()).filter((e) => e.action === "private_ca.updated").map((e) => e.detail)).toEqual([{ name: "Internal TLS", validity: { maximumDays: { from: 397, to: 825 } } }]);
+    expect((await auditOf()).filter((e) => e.action === "private_ca.updated").map((e) => e.detail)).toEqual([
+      { name: "Internal TLS", issuingCa: { id: ca.issuing.id, subject: "CN=Acme Internal TLS, O=Acme" }, validity: { maximumDays: { from: 397, to: 825 } } },
+    ]);
 
     expect((await patch({ validity: { maximumDays: 30, defaultDays: 90 } })).status).toBe(422);
     expect((await patch({ validity: { maximumDays: 825, defaultDays: 397 } })).status).toBe(200);
@@ -528,18 +733,18 @@ describe("a Private CA's validity limits", () => {
     const member = await join("member@acme.test", "member");
     expect((await patch({ validity: { maximumDays: 90, defaultDays: 90 } }, member)).status).toBe(403);
 
-    expect((await h.api(`${cas()}/${ca.id}`, { cookie: org.cookie })).body.validity).toEqual({ maximumDays: 825, defaultDays: 397 });
+    expect((await h.api(`${cas()}/${ca.id}`, { cookie: org.cookie })).body.issuingCas[0].validity).toEqual({ maximumDays: 825, defaultDays: 397 });
     expect((await auditOf()).filter((e) => e.action === "private_ca.updated")).toHaveLength(1);
   });
 
   test("change with the permitted name rules in one Audit Event", async () => {
     const ca = await createCa();
 
-    const res = await h.api(`${cas()}/${ca.id}`, { cookie: org.cookie, method: "PATCH", body: { permittedNames: { exact: [], zones: ["lab.acme"] }, validity: { maximumDays: 397, defaultDays: 30 } } });
+    const res = await h.api(issuingCaPath(ca), { cookie: org.cookie, method: "PATCH", body: { permittedNames: { exact: [], zones: ["lab.acme"] }, validity: { maximumDays: 397, defaultDays: 30 } } });
 
     expect(res.status).toBe(200);
     expect((await auditOf()).filter((e) => e.action === "private_ca.updated").map((e) => e.detail)).toEqual([
-      { name: "Internal TLS", permittedNames: { from: NEW_CA.permittedNames, to: { exact: [], zones: ["lab.acme"] } }, validity: { defaultDays: { from: 397, to: 30 } } },
+      { name: "Internal TLS", issuingCa: { id: ca.issuing.id, subject: "CN=Acme Internal TLS, O=Acme" }, permittedNames: { from: NEW_CA.permittedNames, to: { exact: [], zones: ["lab.acme"] } }, validity: { defaultDays: { from: 397, to: 30 } } },
     ]);
   });
 });
@@ -554,12 +759,12 @@ describe("the validity of a Certificate from a Private CA", () => {
     expect(mc.issuance.status).toBe("succeeded");
     return { mc, leaf: (await downloaded(mc.id, "leaf"))[0]! };
   };
-  const onCa = (privateCaId: string, validityDays?: number) => ({ issuer: { kind: "private_ca", privateCaId }, ...(validityDays && { validityDays }) });
+  const onCa = (issuingCaId: string, validityDays?: number) => ({ issuer: { kind: "private_ca", issuingCaId }, ...(validityDays && { validityDays }) });
 
   test("is the Private CA's default when the Managed Certificate chooses none", async () => {
     const ca = await createCa({ ...NEW_CA, validity: { maximumDays: 397, defaultDays: 90 } });
 
-    const { mc, leaf } = await leafOf({ ...(await request(["app.internal.acme"])), ...onCa(ca.id) });
+    const { mc, leaf } = await leafOf({ ...(await request(["app.internal.acme"])), ...onCa(ca.issuing.id) });
 
     expect(mc.validityDays).toBeNull();
     expect(leaf.notBefore.toISOString()).toBe(days(0));
@@ -569,12 +774,12 @@ describe("the validity of a Certificate from a Private CA", () => {
   test("is what the Managed Certificate chooses, at or below the maximum, which is shown and audited", async () => {
     const ca = await createCa();
 
-    const { mc, leaf } = await leafOf({ ...(await request(["app.internal.acme"])), ...onCa(ca.id, 7) });
+    const { mc, leaf } = await leafOf({ ...(await request(["app.internal.acme"])), ...onCa(ca.issuing.id, 7) });
 
-    expect(mc).toMatchObject({ issuer: { kind: "private_ca", privateCa: { id: ca.id } }, validityDays: 7 });
+    expect(mc).toMatchObject({ issuer: { kind: "private_ca", issuingCa: { id: ca.issuing.id }, privateCa: { id: ca.id } }, validityDays: 7 });
     expect(leaf.notAfter.toISOString()).toBe(days(7));
     expect((await auditOf()).find((e) => e.action === "managed_certificate.created")!.detail).toMatchObject({ validityDays: 7 });
-    expect((await leafOf({ ...(await request(["max.internal.acme"])), ...onCa(ca.id, 397) })).leaf.notAfter.toISOString()).toBe(days(397));
+    expect((await leafOf({ ...(await request(["max.internal.acme"])), ...onCa(ca.issuing.id, 397) })).leaf.notAfter.toISOString()).toBe(days(397));
   });
 
   test("can be chosen only for a Managed Certificate issued from a Private CA", async () => {
@@ -590,7 +795,7 @@ describe("the validity of a Certificate from a Private CA", () => {
     const member = await join("member@acme.test", "member");
 
     for (const cookie of [org.cookie, member]) {
-      const res = await h.api(mcs(), { cookie, body: { ...(await request(["app.internal.acme"])), ...onCa(ca.id, 91) } });
+      const res = await h.api(mcs(), { cookie, body: { ...(await request(["app.internal.acme"])), ...onCa(ca.issuing.id, 91) } });
       expect(res.status).toBe(422);
       expect(res.body.error).toContain("90 days");
     }
@@ -600,9 +805,9 @@ describe("the validity of a Certificate from a Private CA", () => {
   test("is the maximum when the maximum was lowered below what the Managed Certificate chose", async () => {
     const ca = await createCa();
     const member = await join("member@acme.test", "member");
-    const proposed = await h.api(mcs(), { cookie: member, body: { ...(await request(["app.internal.acme"])), ...onCa(ca.id, 200) } });
+    const proposed = await h.api(mcs(), { cookie: member, body: { ...(await request(["app.internal.acme"])), ...onCa(ca.issuing.id, 200) } });
     expect(proposed.status).toBe(201);
-    expect((await h.api(`${cas()}/${ca.id}`, { cookie: org.cookie, method: "PATCH", body: { validity: { maximumDays: 100, defaultDays: 30 } } })).status).toBe(200);
+    expect((await h.api(issuingCaPath(ca), { cookie: org.cookie, method: "PATCH", body: { validity: { maximumDays: 100, defaultDays: 30 } } })).status).toBe(200);
 
     expect((await h.api(`${mcs()}/${proposed.body.id}/approve`, { cookie: org.cookie, body: {} })).status).toBe(200);
 
@@ -614,15 +819,15 @@ describe("the validity of a Certificate from a Private CA", () => {
   test("never outlives the Issuing CA: it ends when the Issuing CA ends", async () => {
     const ca = await createCa({ ...NEW_CA, lifetimeYears: 1, validity: { maximumDays: 825, defaultDays: 825 } });
 
-    const { leaf } = await leafOf({ ...(await request(["app.internal.acme"])), ...onCa(ca.id, 500) });
+    const { leaf } = await leafOf({ ...(await request(["app.internal.acme"])), ...onCa(ca.issuing.id, 500) });
 
     expect(leaf.notAfter.toISOString()).toBe("2027-01-01T00:00:00.000Z");
-    expect(leaf.notAfter.toISOString()).toBe(ca.notAfter);
+    expect(leaf.notAfter.toISOString()).toBe(ca.issuing.notAfter);
   });
 
   test("is renewed under the Renewal Policy as any Certificate is: its days before the end, but not in the first tenth of its life", async () => {
     const ca = await createCa();
-    const { mc } = await leafOf({ ...(await request(["app.internal.acme"])), ...onCa(ca.id, 10) });
+    const { mc } = await leafOf({ ...(await request(["app.internal.acme"])), ...onCa(ca.issuing.id, 10) });
     expect(mc.renewal).toMatchObject({ policy: { mode: "automatic", daysBeforeExpiry: 30 }, dueAt: days(1), dueBecause: "policy" });
 
     h.setNow(new Date(JAN_1 + 86_400_000 - 60_000));
@@ -642,9 +847,9 @@ describe("a Name Change's validity", () => {
   const days = (n: number) => new Date(JAN_1 + n * 86_400_000).toISOString();
 
   /** A Managed Certificate on the Private CA, issued, with the member as its Owner. */
-  async function owned(ca: { id: string }, member: string, validityDays?: number) {
+  async function owned(ca: { issuing: { id: string } }, member: string, validityDays?: number) {
     const memberId = (await h.api("/api/me", { cookie: member })).body.user.id;
-    const created = await h.api(mcs(), { cookie: org.cookie, body: { ...(await request(["app.internal.acme"])), ...fromCa(ca.id), ...(validityDays && { validityDays }), owners: [{ type: "user", id: memberId }] } });
+    const created = await h.api(mcs(), { cookie: org.cookie, body: { ...(await request(["app.internal.acme"])), ...fromCa(ca.issuing.id), ...(validityDays && { validityDays }), owners: [{ type: "user", id: memberId }] } });
     expect(created.status).toBe(201);
     return ended(created.body.id);
   }

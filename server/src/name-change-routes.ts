@@ -36,8 +36,8 @@ export function registerNameChangeRoutes(ctx: {
       tags: ["Name changes"],
       summary: "Change the Managed Certificate's names, with a CSR for the new names",
       description:
-        "For a Managed Certificate issued from a Private CA, the new names must be within its permitted name rules, and the change may give it another `validityDays` " +
-        "(null for the Private CA's default; when not given, it keeps its own), at most the Private CA's maximum (422 above it, and 400 for one from an ACME CA). " +
+        "For a Managed Certificate issued from a Private CA, the new names must be within its Issuing CA's permitted name rules, and the change may give it another `validityDays` " +
+        "(null for the Issuing CA's default; when not given, it keeps its own), at most the Issuing CA's maximum (422 above it, and 400 for one from an ACME CA). " +
         "An Organization Administrator's change applies at once and an Issuance of the new names begins. An Owner's waits for an Approver to approve it, " +
         "and until then Renewal continues with the last approved names and CSR; at most one is pending at a time. The CSR must be for the key algorithm of the Managed Certificate and ask for exactly the new names.",
       request: {

@@ -20,7 +20,7 @@ export type NameChangeStatus = "pending" | "approved" | "rejected" | "withdrawn"
 /** A name change waiting for Approval. */
 export const PendingNameChange = z.object({
   names: z.array(z.string()).openapi({ description: "The names asked for; the Managed Certificate keeps its own until this is approved." }),
-  validityDays: z.number().nullable().openapi({ description: "The validity the Managed Certificate is to have, as its `validityDays`: none for its Private CA's default." }),
+  validityDays: z.number().nullable().openapi({ description: "The validity the Managed Certificate is to have, as its `validityDays`: none for its Issuing CA's default." }),
   proposedBy: z.object({ id: z.string(), email: z.string() }),
   proposedAt: z.string(),
 });

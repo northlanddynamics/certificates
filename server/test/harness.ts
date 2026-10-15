@@ -22,6 +22,9 @@ export const TEST_DATABASE_URL =
 
 export const PASSWORD = "correct-horse-battery-staple";
 
+/** The local KMS's master key in tests: a CA key made with it is one the harness's platform can sign with. */
+export const TEST_KMS_KEY = Buffer.alloc(32, 1).toString("base64");
+
 const BASE = "http://localhost";
 
 /** Pebble, Let's Encrypt's ACME test server (`docker compose up -d pebble`), and the root its certificate is signed by. */
@@ -127,8 +130,12 @@ export function cookieFrom(res: Response): string {
   return [...jar].map(([name, value]) => `${name}=${value}`).join("; ");
 }
 
-export async function createHarness(overrides: Partial<AppDeps> = {}): Promise<Harness> {
-  const pool = new Pool({ connectionString: TEST_DATABASE_URL });
+/**
+ * `databaseUrl` points the harness at another database than the test one, and `migrate: false` leaves its schema as it
+ * is, for a test that migrates it itself.
+ */
+export async function createHarness(overrides: Partial<AppDeps> = {}, { databaseUrl = TEST_DATABASE_URL, migrate = true }: { databaseUrl?: string; migrate?: boolean } = {}): Promise<Harness> {
+  const pool = new Pool({ connectionString: databaseUrl });
   const mailer = new CapturingMailer();
   const webhooks = new CapturingWebhooks();
   const auditTransport = new CapturingAuditTransport();
@@ -154,7 +161,7 @@ export async function createHarness(overrides: Partial<AppDeps> = {}): Promise<H
     webhooks,
     auditTransport,
     memberRemovalHooks,
-    kms: createLocalKms(Buffer.alloc(32, 1).toString("base64")),
+    kms: createLocalKms(TEST_KMS_KEY),
     certificateAuthority: {
       ...letsEncrypt,
       async createAccount(environment, input) {
@@ -184,7 +191,7 @@ export async function createHarness(overrides: Partial<AppDeps> = {}): Promise<H
     ...overrides,
   };
   const { app, auth, db, unitOfWork, issuances, renewals, notifications, auditForwarding } = createApp(deps);
-  await runMigrations(pool);
+  if (migrate) await runMigrations(pool);
   const reset = async () => {
     await issuances.idle();
     dcvResolver.current = bindTxt;

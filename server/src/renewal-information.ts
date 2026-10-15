@@ -49,7 +49,7 @@ export async function informationOf(db: Db, certificateIds: string[]): Promise<M
 export async function refreshRenewalInfo({ db, issuers, now }: { db: Db; issuers: Issuers; now: Date }): Promise<void> {
   const current = currentCertificates(db);
   const due = await db
-    .select({ id: current.id, organizationId: current.organizationId, issuerKind: current.issuerKind, environment: current.environment, acmeAccountId: current.acmeAccountId, privateCaId: current.privateCaId, chainPem: current.chainPem })
+    .select({ id: current.id, organizationId: current.organizationId, issuerKind: current.issuerKind, environment: current.environment, acmeAccountId: current.acmeAccountId, issuingCaId: current.issuingCaId, chainPem: current.chainPem })
     .from(managedCertificate)
     .innerJoin(current, eq(current.managedCertificateId, managedCertificate.id))
     .leftJoin(renewalInfo, eq(renewalInfo.certificateId, current.id))
