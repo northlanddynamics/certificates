@@ -5,6 +5,7 @@ import { Toaster } from "./components/ui/sonner";
 import { AcceptInvitationPage } from "./pages/accept-invitation";
 import { AccountSecurityPage } from "./pages/account-security";
 import { AcmeAccountsPage } from "./pages/acme-accounts";
+import { PrivateCasPage } from "./pages/private-cas";
 import { AgentsPage } from "./pages/agents";
 import { ApiKeysPage } from "./pages/api-keys";
 import { CertificatesPage } from "./pages/certificates";
@@ -127,6 +128,12 @@ const acmeAccountsRoute = createRoute({
   component: AcmeAccountsPage,
 });
 
+const privateCasRoute = createRoute({
+  getParentRoute: () => appRoute,
+  path: "/organizations/$orgId/private-cas",
+  component: PrivateCasPage,
+});
+
 const dnsProvidersRoute = createRoute({
   getParentRoute: () => appRoute,
   path: "/organizations/$orgId/dns-providers",
@@ -194,7 +201,7 @@ const routeTree = rootRoute.addChildren([
       certificateNotificationsRoute,
       certificateUnknownTabRoute,
     ]),
-    membersRoute, teamsRoute, apiKeysRoute, agentsRoute, deploymentsRoute, deploymentScriptsRoute, acmeAccountsRoute, dnsProvidersRoute, notificationChannelsRoute, auditLogRoute, auditForwardingRoute, loginPolicyRoute,
+    membersRoute, teamsRoute, apiKeysRoute, agentsRoute, deploymentsRoute, deploymentScriptsRoute, acmeAccountsRoute, privateCasRoute, dnsProvidersRoute, notificationChannelsRoute, auditLogRoute, auditForwardingRoute, loginPolicyRoute,
     ssoConnectionsRoute, csrToolsRoute,
     accountSecurityRoute,
     platformOrganizationsRoute,

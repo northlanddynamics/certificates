@@ -9,9 +9,9 @@ import type { Authorizer } from "./authorization";
 import { ACME_ENVIRONMENTS } from "./certificate-authority";
 import { KEY_ALGORITHMS, KEY_CUSTODIES } from "./csr";
 import type { Db } from "./db/client";
-import { agent, certificate, deployment, issuance, managedCertificate } from "./db/schema";
+import { agent, certificate, deployment, issuance, managedCertificate, privateCa } from "./db/schema";
 import { HttpError, OrgParam } from "./http";
-import { issuerOf } from "./issuer";
+import { issuerOf, type Issuer as IssuerOfRow } from "./issuer";
 import { ISSUANCE_FAILURE_CODES } from "./issuance-failure";
 import { ISSUANCE_KINDS } from "./issuance-kinds";
 import { PendingNameChange, pendingNameChanges, toPendingNameChange } from "./name-change";
@@ -49,8 +49,9 @@ export const Certificate = z.object({
   notAfter: z.string(),
   names: z.array(z.string()),
   ca: z.string(),
-  environment: z.enum(ACME_ENVIRONMENTS),
-  acmeAccountId: z.string(),
+  environment: z.enum(ACME_ENVIRONMENTS).nullable().openapi({ description: "The ACME environment it was issued through; none for a Certificate from a Private CA." }),
+  acmeAccountId: z.string().nullable().openapi({ description: "The ACME account it was issued through; none for a Certificate from a Private CA." }),
+  privateCaId: z.string().nullable().openapi({ description: "The Private CA that issued it; none for a Certificate from an ACME CA." }),
   issuedAt: z.string(),
   revocation: Revocation.nullable().openapi({ description: "Set once the CA has been told to revoke it, by whom and why." }),
 });
@@ -69,7 +70,10 @@ export const CertificateFacts = Certificate.extend({
   issuer: z.string().openapi({ description: "The distinguished name of the CA certificate that signed it." }),
   signatureAlgorithm: z.string().openapi({ description: "How the CA signed it, such as `ECDSA with SHA-256`." }),
   chain: z.array(ChainCertificate).openapi({ description: "The leaf and the intermediates the CA served, leaf first." }),
-  acmeAccount: z.object({ id: z.string(), environment: z.enum(ACME_ENVIRONMENTS) }).openapi({ description: "The Organization's ACME account it was issued through." }),
+  acmeAccount: z
+    .object({ id: z.string(), environment: z.enum(ACME_ENVIRONMENTS) })
+    .nullable()
+    .openapi({ description: "The Organization's ACME account it was issued through; none for a Certificate from a Private CA." }),
 });
 
 export const RenewalPolicy = z.object({
@@ -100,8 +104,11 @@ export const Renewal = z.object({
 });
 
 const Issuer = z
-  .discriminatedUnion("kind", [z.object({ kind: z.literal("acme"), environment: z.enum(ACME_ENVIRONMENTS) })])
-  .openapi({ description: "Where its Certificates come from: `acme`, through the Organization's ACME account in `environment`." });
+  .discriminatedUnion("kind", [
+    z.object({ kind: z.literal("acme"), environment: z.enum(ACME_ENVIRONMENTS) }),
+    z.object({ kind: z.literal("private_ca"), privateCa: z.object({ id: z.string(), name: z.string() }) }),
+  ])
+  .openapi({ description: "Where its Certificates come from: `acme`, through the Organization's ACME account in `environment`; `private_ca`, from one of the Organization's Private CAs, with no DCV." });
 
 export const Approval = z.object({
   status: z.enum(APPROVAL_STATUSES).openapi({ description: "`not_required` for one an Organization Administrator created." }),
@@ -121,7 +128,7 @@ export const ManagedCertificate = z.object({
   names: z.array(z.string()),
   keyAlgorithm: z.enum(KEY_ALGORITHMS),
   keyCustody: z.enum(KEY_CUSTODIES).openapi({ description: "`owner`: the Owner holds the private key and submitted a CSR. `agent`: one Agent made the key and holds it, through its one Deployment." }),
-  environment: z.enum(ACME_ENVIRONMENTS),
+  environment: z.enum(ACME_ENVIRONMENTS).nullable().openapi({ description: "The ACME environment, as in `issuer`; none for one issued from a Private CA." }),
   issuer: Issuer,
   createdAt: z.string(),
   archivedAt: z.string().nullable().openapi({ description: "When it was archived: it then neither issues, renews nor deploys, and is listed only when archived ones are asked for." }),
@@ -138,6 +145,10 @@ export const ManagedCertificate = z.object({
 });
 
 type ManagedCertificateRow = typeof managedCertificate.$inferSelect;
+
+/** The issuer as the API shows it: a Private CA by its id and name, so that whoever decides on it sees which CA it is. */
+const issuerShown = (issuer: IssuerOfRow, privateCaNames: Map<string, string>): z.infer<typeof Issuer> =>
+  issuer.kind === "acme" ? issuer : { kind: "private_ca", privateCa: { id: issuer.privateCaId, name: privateCaNames.get(issuer.privateCaId) ?? "" } };
 export const toIssuance = (row: typeof issuance.$inferSelect) => ({
   id: row.id,
   kind: row.kind,
@@ -159,6 +170,7 @@ export const toCertificate = (row: typeof certificate.$inferSelect, revocation: 
   ca: row.ca,
   environment: row.environment,
   acmeAccountId: row.acmeAccountId,
+  privateCaId: row.privateCaId,
   issuedAt: row.issuedAt.toISOString(),
   revocation: revocation ? toRevocation(revocation) : null,
 });
@@ -233,6 +245,10 @@ export function createManagedCertificateReader({ db, authorize, clock, agentOffl
       .where(inArray(certificate.managedCertificateId, ids))
       .orderBy(certificate.managedCertificateId, desc(certificate.createdAt), desc(certificate.id));
     const owners = await ownersOf(db, ids);
+    const privateCaIds = [...new Set(rows.flatMap((r) => (r.privateCaId ? [r.privateCaId] : [])))];
+    const privateCaNames = new Map(
+      privateCaIds.length === 0 ? [] : (await db.select({ id: privateCa.id, name: privateCa.name }).from(privateCa).where(inArray(privateCa.id, privateCaIds))).map((ca) => [ca.id, ca.name]),
+    );
     const failures = await failuresOf(db, ids);
     const nameChanges = await pendingNameChanges(db, ids);
     const information = await informationOf(db, currentCertificates.map((c) => c.id));
@@ -263,7 +279,7 @@ export function createManagedCertificateReader({ db, authorize, clock, agentOffl
         keyAlgorithm: row.keyAlgorithm,
         keyCustody: row.keyCustody,
         environment: row.environment,
-        issuer: issuerOf(row),
+        issuer: issuerShown(issuerOf(row), privateCaNames),
         createdAt: row.createdAt.toISOString(),
         archivedAt: row.archivedAt?.toISOString() ?? null,
         owners: owners.get(row.id) ?? [],

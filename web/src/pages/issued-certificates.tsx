@@ -200,9 +200,11 @@ function CertificateSheet({ org, m, certificateId, isCurrent, onClose }: { org: 
               </Fact>
               <Fact label="Signature algorithm">{c.signatureAlgorithm}</Fact>
               <Fact label="CA">{caLabel(c.ca)}</Fact>
-              <Fact label="ACME Account">
-                <span className="capitalize">{c.acmeAccount.environment}</span> <span className="font-mono text-xs text-muted-foreground">{c.acmeAccount.id}</span>
-              </Fact>
+              {c.acmeAccount && (
+                <Fact label="ACME Account">
+                  <span className="capitalize">{c.acmeAccount.environment}</span> <span className="font-mono text-xs text-muted-foreground">{c.acmeAccount.id}</span>
+                </Fact>
+              )}
               <Fact label="Chain">
                 <ol className="flex flex-col gap-2">
                   {c.chain.map((cert, i) => (

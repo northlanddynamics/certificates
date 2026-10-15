@@ -6,7 +6,7 @@ import { Alert, AlertDescription, AlertTitle } from "@/components/ui/alert";
 import { Badge } from "@/components/ui/badge";
 import { Skeleton } from "@/components/ui/skeleton";
 import { ApiError, can } from "@/lib/api";
-import { keyAlgorithmLabel, status } from "@/lib/managed-certificate";
+import { issuerLabel, keyAlgorithmLabel, status } from "@/lib/managed-certificate";
 import { useManagedCertificatePage } from "@/lib/use-managed-certificate";
 import { AlertStrip } from "./certificate-alerts";
 import { RenewNowButton } from "./renewal-controls";
@@ -44,9 +44,7 @@ export function ManagedCertificateDetailsPage() {
           <h1 className="text-xl font-semibold break-words">{m.names.join(", ")}</h1>
           <div className="flex flex-wrap items-center gap-2">
             <Badge variant={state.variant}>{state.label}</Badge>
-            <Badge variant="outline" className="capitalize">
-              {m.environment}
-            </Badge>
+            <Badge variant="outline">{issuerLabel(m.issuer)}</Badge>
             <Badge variant="outline">{keyAlgorithmLabel(m.keyAlgorithm)}</Badge>
           </div>
         </div>

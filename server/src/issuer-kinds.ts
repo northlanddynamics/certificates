@@ -3,5 +3,7 @@
 export const ISSUER_KINDS = [
   /** An ACME CA, through the Organization's ACME account in an environment. */
   "acme",
+  /** One of the Organization's Private CAs, with no DCV. */
+  "private_ca",
 ] as const;
 export type IssuerKind = (typeof ISSUER_KINDS)[number];

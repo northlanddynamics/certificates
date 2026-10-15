@@ -55,6 +55,7 @@ Each resource's verbs, as of this writing. New ones may be added within version 
 | `dcv_rule` | `created`, `changed`, `deleted` |
 | `managed_certificate` | `created`, `proposed`, `approved`, `rejected`, `owner_added`, `owner_removed`, `subscriber_added`, `subscriber_removed`, `renewal_policy_changed`, `csr_uploaded`, `names_changed`, `archived` |
 | `certificate` | `revoked` |
+| `private_ca` | `created` |
 | `name_change` | `proposed`, `approved`, `rejected`, `withdrawn`, `discarded` |
 | `issuance` | `started`, `succeeded`, `failed` |
 | `api_key` | `created`, `revoked`, `used` |
@@ -69,3 +70,9 @@ Each resource's verbs, as of this writing. New ones may be added within version 
 | `passkey` | `registered`, `renamed`, `deleted` |
 | `login_policy` | `changed` |
 | `sso_connection` | `created`, `changed`, `deleted`, `domain_verified`, `tested` |
+
+### Private CAs
+
+`private_ca.created` targets the Private CA (`private_ca`, its id). Its `detail` has the `name`, `kind` (`platform_root`), `keyAlgorithm`, the Issuing CA's `subject`, its `notAfter`, and the `serial` and SHA-256 `fingerprint` of the `root` and the `issuingCa` certificates. No key material is in it: the keys never leave the KMS.
+
+A Managed Certificate issued from a Private CA is audited with the same actions as one from an ACME CA. Its `managed_certificate.created` or `managed_certificate.proposed`, `issuance.started`, `issuance.succeeded` and `issuance.failed` (once the Managed Certificate was read) have `detail.issuer`, `{ "kind": "private_ca", "privateCaId": "..." }`, and no `environment`.

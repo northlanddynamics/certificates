@@ -91,12 +91,20 @@ _Avoid_: enrollment setting, renewal config
 ### Issuance
 
 **Issuance**:
-One attempt to obtain a Certificate for a Managed Certificate: it runs DCV, has the Certificate Authority finalize the order with the CSR, and ends in a stored Certificate or the recorded cause of its failure. A Managed Certificate may have many over time, one running at most. Each is of one kind, decided when it begins: its first Issuance (it has no Certificate yet), a Renewal (it has one for its names), or the Issuance of a Name Change (it has one, for other names than it now has).
+One attempt to obtain a Certificate for a Managed Certificate: from an ACME CA it runs DCV and has the CA finalize the order with the CSR, and from a Private CA, with no DCV, the platform has the Issuing CA sign a Certificate for the CSR; either way it ends in a stored Certificate or the recorded cause of its failure. A Managed Certificate may have many over time, one running at most. Each is of one kind, decided when it begins: its first Issuance (it has no Certificate yet), a Renewal (it has one for its names), or the Issuance of a Name Change (it has one, for other names than it now has).
 _Avoid_: order (the ACME protocol's word for part of it), request, job
 
 **Certificate Authority (CA)**:
-A pluggable issuer from which the platform obtains Certificates, such as an ACME CA.
+A pluggable issuer from which the platform obtains Certificates: an ACME CA, which demands DCV, or one of the Organization's Private CAs, which does not.
 _Avoid_: issuer, provider
+
+**Private CA**:
+An Organization's own Certificate Authority, used for internal TLS and device enrollment, whose keys the platform holds only in a KMS and never sees. A Managed Certificate can be issued from one instead of from an ACME CA, with no DCV; whatever must trust its Certificates needs its root.
+_Avoid_: internal CA, enterprise CA
+
+**Issuing CA**:
+The CA certificate and key that actually sign a Private CA's end-entity Certificates, under a root the platform made or the Organization's own. It may sign no CA beneath it.
+_Avoid_: intermediate, sub-CA
 
 **ACME Account**:
 An Organization's own account with a Certificate Authority, in its staging or production environment. Its key is a Secret.
@@ -169,10 +177,6 @@ One record in an Organization's append-only audit log: who did what to which tar
 _Avoid_: audit entry, audit record, log line
 
 ### Device certificates (future)
-
-**Private CA**:
-A Certificate Authority operated for an Organization's internal use rather than public trust.
-_Avoid_: internal CA, enterprise CA
 
 **Enrollment Profile**:
 A template under which devices obtain client Certificates in bulk from a Private CA, without per-certificate Approval or Owners.

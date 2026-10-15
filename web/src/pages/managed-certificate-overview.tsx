@@ -2,7 +2,7 @@ import { useParams } from "@tanstack/react-router";
 import type { ReactNode } from "react";
 import { Card, CardContent, CardHeader, CardTitle } from "@/components/ui/card";
 import type { Certificate, ManagedCertificate } from "@/lib/api";
-import { caLabel, keyAlgorithmLabel } from "@/lib/managed-certificate";
+import { caLabel, issuerLabel, keyAlgorithmLabel } from "@/lib/managed-certificate";
 import { useCertificateFacts, useManagedCertificatePage } from "@/lib/use-managed-certificate";
 import { NameChange } from "./name-change-controls";
 import { Owners } from "./owner-controls";
@@ -55,9 +55,7 @@ export function ManagedCertificateOverview() {
                 ))}
               </ul>
             </Fact>
-            <Fact label="Environment">
-              <span className="capitalize">{m.environment}</span>
-            </Fact>
+            <Fact label="Issued from">{issuerLabel(m.issuer)}</Fact>
             <Fact label="Key algorithm">{keyAlgorithmLabel(m.keyAlgorithm)}</Fact>
             <Fact label="Key Custody">{KEY_CUSTODY_LABELS[m.keyCustody]}</Fact>
             <ProposalStatus m={m} />
@@ -86,9 +84,11 @@ export function ManagedCertificateOverview() {
                 {date(current.notBefore)} to {date(current.notAfter)} ({daysLeft(current)})
               </Fact>
               <Fact label="CA">{caLabel(current.ca)}</Fact>
-              <Fact label="ACME Account">
-                <span className="capitalize">{current.environment}</span> <span className="font-mono text-xs text-muted-foreground">{current.acmeAccountId}</span>
-              </Fact>
+              {current.environment && (
+                <Fact label="ACME Account">
+                  <span className="capitalize">{current.environment}</span> <span className="font-mono text-xs text-muted-foreground">{current.acmeAccountId}</span>
+                </Fact>
+              )}
               {current.revocation && (
                 <Fact label="Revoked">
                   <span className="text-destructive">{revokedLine(current.revocation)}</span>

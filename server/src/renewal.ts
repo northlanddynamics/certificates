@@ -128,6 +128,7 @@ export const currentCertificates = (db: Db) =>
       issuerKind: certificate.issuerKind,
       environment: certificate.environment,
       acmeAccountId: certificate.acmeAccountId,
+      privateCaId: certificate.privateCaId,
       chainPem: certificate.chainPem,
     })
     .from(certificate)
