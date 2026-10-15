@@ -512,7 +512,7 @@ function UploadCertificateForm({ orgId, ca, issuing, onDone }: EditFormProps) {
           />
           <PemField
             id={`upload-${issuing.id}-chain`}
-            label="Intermediates (optional)"
+            label="Chain (optional)"
             value={chain}
             onChange={setChain}
             placeholder={PEM_PLACEHOLDER}

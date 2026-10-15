@@ -61,7 +61,10 @@ export interface Publication {
 
 const publicationExtensions = ({ crl, caIssuers }: Publication) => [new x509.CRLDistributionPointsExtension([crl]), new x509.AuthorityInfoAccessExtension({ caIssuers })];
 
+// By OID: looked up by class, an extension is not found when two copies of the library are loaded.
 const EXTENDED_KEY_USAGE = "2.5.29.37";
+const BASIC_CONSTRAINTS = "2.5.29.19";
+const KEY_USAGE = "2.5.29.15";
 const CRL_NUMBER = "2.5.29.20";
 const NAME_CONSTRAINTS = "2.5.29.30";
 /** RFC 5280's upper bound on a common name. */
@@ -283,6 +286,40 @@ export function nameConstraintsOf(certificate: x509.X509Certificate): { permitte
   } catch {
     return null;
   }
+}
+
+
+/** Whether the certificate is a CA's: basic constraints say so, and its key usage, if any, lets it sign certificates. */
+function isCaCertificate(certificate: x509.X509Certificate) {
+  const constraints = certificate.getExtension(BASIC_CONSTRAINTS) as x509.BasicConstraintsExtension | null;
+  const usage = certificate.getExtension(KEY_USAGE) as x509.KeyUsagesExtension | null;
+  return constraints?.ca === true && (!usage || (usage.usages & x509.KeyUsageFlags.keyCertSign) !== 0);
+}
+
+/** Whether `cert` names `issuer` as its issuer and is signed by its key. */
+const isSignedBy = (cert: x509.X509Certificate, issuer: x509.X509Certificate) => cert.issuer === issuer.subject && cert.verify({ publicKey: issuer.publicKey, signatureOnly: true }).catch(() => false);
+
+/**
+ * Why the certificate uploaded for the Issuing CA, whose key's public key is `publicKey` (DER) and whose subject is
+ * `subject`, may not make it a CA under `root` through `chain` (the one that signs it first) at `now`: it is not for
+ * that key or subject, not a CA certificate, not valid now, or does not verify up to the root, a self-signed CA. None
+ * when it may. Only signatures, CA flags and validity are checked along the path, not its path lengths or name constraints.
+ */
+export async function signedCertificateRefusal(certificate: x509.X509Certificate, { publicKey, subject, root, chain, now }: { publicKey: Uint8Array; subject: string; root: x509.X509Certificate; chain: x509.X509Certificate[]; now: Date }) {
+  if (!Buffer.from(certificate.publicKey.rawData).equals(Buffer.from(publicKey))) return "the certificate is not for the Issuing CA's key, the one its CSR is for";
+  if (!isCaCertificate(certificate)) return "the certificate is not a CA certificate: its basic constraints must make it a CA, and its key usage, if any, must let it sign certificates";
+  if (new x509.Name(certificate.subject).toString() !== subject) return `the certificate's subject is ${certificate.subject}, not the Issuing CA's ${subject}`;
+  if (certificate.notBefore > now) return "the certificate is not valid yet";
+  if (certificate.notAfter <= now) return "the certificate has ended";
+  const above = [...chain, root];
+  if (!above.every(isCaCertificate)) return "the root and chain must be CA certificates";
+  if (above.some((cert) => cert.notAfter <= now)) return "a certificate of the root and chain has ended";
+  if (!(await isSignedBy(root, root))) return "the root is not self-signed";
+  const path = [certificate, ...above];
+  for (let i = 0; i < path.length - 1; i++) {
+    if (!(await isSignedBy(path[i]!, path[i + 1]!))) return `the certificate does not verify against the root and chain: ${path[i]!.subject} is not signed by ${path[i + 1]!.subject}`;
+  }
+  return undefined;
 }
 
 /** A certificate on a CRL: its serial (hex), when it was revoked, and its RFC 5280 CRLReason code. */

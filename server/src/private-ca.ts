@@ -11,7 +11,7 @@ import * as x509 from "@peculiar/x509";
 import { and, asc, eq, inArray } from "drizzle-orm";
 import { randomUUID } from "node:crypto";
 import type { Authorizer } from "./authorization";
-import { makeCaCsr, makeIssuingCa, makeRoot, makeTlsServer, nameConstraintsOf, parseSubject, rootSubjectOf, type CaKey, type Signer } from "./ca-certificates";
+import { makeCaCsr, makeIssuingCa, makeRoot, makeTlsServer, nameConstraintsOf, parseSubject, rootSubjectOf, signedCertificateRefusal, type CaKey, type Signer } from "./ca-certificates";
 import { publicationOf, type Crls } from "./crl";
 import { KEY_ALGORITHMS } from "./csr";
 import type { Db, Tx } from "./db/client";
@@ -21,7 +21,7 @@ import { IssuanceFailure } from "./issuance-failure";
 import type { Issuer } from "./issuer";
 import type { Kms } from "./kms";
 import { constraintNamesOf, namesOutside, normalizePermittedNames, samePermittedNames, type PermittedNames } from "./permitted-names";
-import { DEFAULT_VALIDITY_DAYS, ISSUING_CA_STATUSES, MAX_LIFETIME_YEARS, MAX_VALIDITY_DAYS, PRIVATE_CA_KINDS, PRIVATE_CA_STATUSES } from "./private-ca-kinds";
+import { DEFAULT_LIFETIME_YEARS, DEFAULT_VALIDITY_DAYS, ISSUING_CA_STATUSES, MAX_LIFETIME_YEARS, MAX_VALIDITY_DAYS, PRIVATE_CA_KINDS, PRIVATE_CA_STATUSES } from "./private-ca-kinds";
 import type { Actor, Change, UnitOfWork } from "./unit-of-work";
 
 const DAY_MS = 24 * 60 * 60 * 1000;
@@ -251,10 +251,13 @@ export function createPrivateCas({ kms, clock, crls, pkiBaseURL }: { kms: Kms; c
       const { issuing, ca } = of;
       const certificate = new x509.X509Certificate(issuing.certificatePem!);
       const notBefore = clock();
-      if (certificate.notAfter <= notBefore) throw new IssuanceFailure("ca_rejected", `${issuingCaLabel(of)} has ended`);
+      // Nothing it issues outlives it, nor anything above it: an Organization's own root may have signed it for longer than itself.
+      const above = certificatesAsked([ca.chainPem, ca.rootCertificatePem].filter(Boolean).join("\n"), "the chain", { none: true });
+      const end = Math.min(certificate.notAfter.getTime(), ...above.map((cert) => cert.notAfter.getTime()));
+      if (end <= notBefore.getTime()) throw new IssuanceFailure("ca_rejected", `${issuingCaLabel(of)} has ended, or its root has`);
       // The maximum may have been lowered since the Managed Certificate chose its validity.
       const days = Math.min(validityDays ?? issuing.defaultValidityDays, issuing.maxValidityDays);
-      const notAfter = new Date(Math.min(notBefore.getTime() + days * DAY_MS, certificate.notAfter.getTime()));
+      const notAfter = new Date(Math.min(notBefore.getTime() + days * DAY_MS, end));
       const signer: Signer = { key: issuing.key, context: organizationId, algorithm: ca.keyAlgorithm, certificate };
       const leaf = await makeTlsServer(kms, signer, { csr, names, notBefore, notAfter, publication: publicationOf(pkiBaseURL, { signer: "issuing", id: issuing.id }) });
       // The root is not in it: whoever downloads the chain is given it (`rootsOf`) when they ask for it.
@@ -275,6 +278,11 @@ function yearsAfter(from: Date, years: number) {
   return to;
 }
 
+const sameCertificates = (a: x509.X509Certificate[], b: x509.X509Certificate[]) => a.length === b.length && a.every((cert, i) => cert.equal(b[i]!));
+
+/** A lifetime asked of an Issuing CA under the Organization's own root, which decides it. */
+const noLifetimeUnderOwnRoot = () => new HttpError(422, "the Organization's own root decides how long an Issuing CA under it lasts, so no lifetime can be given");
+
 const PEM_CERTIFICATE = /-----BEGIN CERTIFICATE-----[^-]+-----END CERTIFICATE-----/g;
 
 /** The certificates of a PEM bundle, in order; a 400 naming `what` when one cannot be read or there is none (unless `none` may be). */
@@ -286,42 +294,6 @@ function certificatesAsked(pem: string, what: string, { none = false } = {}): x5
   } catch {
     throw new HttpError(400, `${what} is not a PEM-encoded certificate`);
   }
-}
-
-// By OID: looked up by class, an extension is not found when two copies of the library are loaded.
-const BASIC_CONSTRAINTS = "2.5.29.19";
-const KEY_USAGE = "2.5.29.15";
-
-/** Whether the certificate is a CA's: basic constraints say so, and its key usage, if any, lets it sign certificates. */
-function isCaCertificate(certificate: x509.X509Certificate) {
-  const constraints = certificate.getExtension(BASIC_CONSTRAINTS) as x509.BasicConstraintsExtension | null;
-  const usage = certificate.getExtension(KEY_USAGE) as x509.KeyUsagesExtension | null;
-  return constraints?.ca === true && (!usage || (usage.usages & x509.KeyUsageFlags.keyCertSign) !== 0);
-}
-
-const sameCertificates = (a: x509.X509Certificate[], b: x509.X509Certificate[]) => a.length === b.length && a.every((cert, i) => cert.equal(b[i]!));
-
-const signs = (by: x509.X509Certificate, cert: x509.X509Certificate) => cert.issuer === by.subject && cert.verify({ publicKey: by.publicKey, signatureOnly: true }).catch(() => false);
-
-/**
- * Why the certificate uploaded for the Issuing CA, whose key's public key is `publicKey` (DER) and whose subject is
- * `subject`, may not make it a CA under `root` through `chain` (the one that signs it first) at `now`: it is not for
- * that key or subject, not a CA certificate, ended, or does not verify up to the root, a self-signed CA. None when it may.
- */
-async function signedCertificateRefusal(certificate: x509.X509Certificate, { publicKey, subject, root, chain, now }: { publicKey: Uint8Array; subject: string; root: x509.X509Certificate; chain: x509.X509Certificate[]; now: Date }) {
-  if (!Buffer.from(certificate.publicKey.rawData).equals(Buffer.from(publicKey))) return "the certificate is not for the Issuing CA's key, the one its CSR is for";
-  if (!isCaCertificate(certificate)) return "the certificate is not a CA certificate: its basic constraints must make it a CA, and its key usage, if any, must let it sign certificates";
-  if (new x509.Name(certificate.subject).toString() !== subject) return `the certificate's subject is ${certificate.subject}, not the Issuing CA's ${subject}`;
-  if (certificate.notAfter <= now) return "the certificate has ended";
-  const above = [...chain, root];
-  if (!above.every(isCaCertificate)) return "the root and chain must be CA certificates";
-  if (above.some((cert) => cert.notAfter <= now)) return "a certificate of the root and chain has ended";
-  if (!(await signs(root, root))) return "the root is not self-signed";
-  const path = [certificate, ...above];
-  for (let i = 0; i < path.length - 1; i++) {
-    if (!(await signs(path[i + 1]!, path[i]!))) return `the certificate does not verify against the root and chain: ${path[i]!.subject} is not signed by ${path[i + 1]!.subject}`;
-  }
-  return undefined;
 }
 
 /** A new Issuing CA under an Organization's own root, as it is stored until that root has signed it: its key, and no certificate. */
@@ -435,7 +407,7 @@ export function registerPrivateCas(ctx: {
       const subject = subjectAsked(body.subject);
       const permittedNames = permittedNamesAsked(body.permittedNames);
       const validity = validityAsked(body.validity);
-      if (body.kind === "organization_root" && body.lifetimeYears !== undefined) throw new HttpError(422, "the Organization's own root decides how long an Issuing CA under it lasts, so no lifetime can be given");
+      if (body.kind === "organization_root" && body.lifetimeYears !== undefined) throw noLifetimeUnderOwnRoot();
 
       const taken = () => new HttpError(409, `the Organization already has a Private CA named ${body.name}`);
       const [named] = await db
@@ -473,7 +445,7 @@ export function registerPrivateCas(ctx: {
       // Its id is chosen here: its Issuing CA names where the root publishes, under it.
       const id = randomUUID();
       const notBefore = clock();
-      const notAfter = yearsAfter(notBefore, body.lifetimeYears ?? 10);
+      const notAfter = yearsAfter(notBefore, body.lifetimeYears ?? DEFAULT_LIFETIME_YEARS);
       const rootKey: CaKey = { key: await kms.createSigningKey(body.keyAlgorithm, orgId), context: orgId, algorithm: body.keyAlgorithm };
       const issuingKey: CaKey = { key: await kms.createSigningKey(body.keyAlgorithm, orgId), context: orgId, algorithm: body.keyAlgorithm };
       const root = await makeRoot(kms, rootKey, { subject: rootSubjectOf(subject), notBefore, notAfter });
@@ -597,7 +569,7 @@ export function registerPrivateCas(ctx: {
       if (same) throw repeated();
 
       if (ca.kind === "organization_root") {
-        if (body.lifetimeYears !== undefined) throw new HttpError(422, "the Organization's own root decides how long an Issuing CA under it lasts, so no lifetime can be given");
+        if (body.lifetimeYears !== undefined) throw noLifetimeUnderOwnRoot();
         const key = await kms.createSigningKey(ca.keyAlgorithm, orgId);
         try {
           const row = await unitOfWork.run(actor, async (tx, change) => {
@@ -790,8 +762,8 @@ export function registerPrivateCas(ctx: {
       const body = c.req.valid("json");
       const actor = await requireUser(c);
       await authorize(actor, orgId, { privateCa: ["update"] });
-      const [certificate] = certificatesAsked(body.certificate, "certificate");
-      if (certificatesAsked(body.certificate, "certificate").length > 1) throw new HttpError(400, "certificate must be the Issuing CA's certificate alone; give what is above it as `chain` and `root`");
+      const [certificate, ...more] = certificatesAsked(body.certificate, "certificate");
+      if (more.length > 0) throw new HttpError(400, "certificate must be the Issuing CA's certificate alone; give what is above it as `chain` and `root`");
       const rootGiven = body.root === undefined ? undefined : certificatesAsked(body.root, "root");
       if (rootGiven && rootGiven.length > 1) throw new HttpError(400, "root must be one certificate; give what is between it and the Issuing CA as `chain`");
       const chainGiven = body.chain === undefined ? undefined : certificatesAsked(body.chain, "chain", { none: true });
@@ -807,9 +779,9 @@ export function registerPrivateCas(ctx: {
           .for("update");
         const [issuing] = ca ? await tx.select().from(issuingCa).where(and(eq(issuingCa.privateCaId, ca.id), eq(issuingCa.id, issuingCaId))).for("update") : [];
         if (!ca || !issuing) throw notFound();
-        const of = { ca, issuing };
         if (ca.kind !== "organization_root") throw new HttpError(422, `the platform's own root signs the Issuing CAs of the Private CA ${ca.name}, so none can be uploaded`);
-        if (issuing.status !== "awaiting_signature") throw new HttpError(422, `${issuingCaLabel(of)} is ${issuing.status}, not awaiting signature`);
+        if (ca.status !== "active") throw new HttpError(422, `the root of the Private CA ${ca.name} is ${ca.status}`);
+        if (issuing.status !== "awaiting_signature") throw new HttpError(422, `${issuingCaLabel({ ca, issuing })} is ${issuing.status}, not awaiting signature`);
 
         const kept = ca.rootCertificatePem ? { root: new x509.X509Certificate(ca.rootCertificatePem), chain: certificatesAsked(ca.chainPem ?? "", "the chain", { none: true }) } : undefined;
         // Compared by bytes: `equal` is a type guard, which would leave nothing to name in the refusal.

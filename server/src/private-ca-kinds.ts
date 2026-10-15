@@ -38,6 +38,8 @@ export type CrlSigner = (typeof CRL_SIGNERS)[number];
 // is what the API accepts; this module imports nothing, so either side can.
 /** An Issuing CA's maximum and default validity unless it sets its own: what browsers accept of a public CA's TLS Certificates. */
 export const DEFAULT_VALIDITY_DAYS = 397;
+/** How long a platform-made root and its first Issuing CA last unless asked otherwise, in years. */
+export const DEFAULT_LIFETIME_YEARS = 10;
 /** The longest a Private CA's root and Issuing CAs may be made to last, in years. */
 export const MAX_LIFETIME_YEARS = 30;
 /** The longest any Issuing CA may let its TLS Certificates be valid for: ten years. */

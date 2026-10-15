@@ -9,6 +9,8 @@ import { webcrypto } from "node:crypto";
 import { PASSWORD, createHarness, type Harness } from "./harness";
 
 let h: Harness;
+/** The harness's clock, which the Organization's own certificates here are dated by. */
+const NOW = new Date("2026-01-01T00:00:00Z");
 let operator: string;
 let org: { orgId: string; cookie: string };
 
@@ -17,6 +19,7 @@ beforeAll(async () => {
 });
 beforeEach(async () => {
   await h.reset();
+  h.setNow(NOW);
   operator = await h.createOperator("op@platform.test", PASSWORD);
   org = await h.createOrgWithAdmin(operator, "acme", "admin@acme.test");
 });
@@ -80,14 +83,14 @@ interface OwnCa {
 }
 
 /** The Organization's own self-signed root. */
-async function ownRoot(subject = "CN=Acme Offline Root, O=Acme"): Promise<OwnCa> {
+async function ownRoot(subject = "CN=Acme Offline Root, O=Acme", notAfter = new Date(NOW.getTime() + 20 * YEAR_MS)): Promise<OwnCa> {
   const keys = (await webcrypto.subtle.generateKey(ALGORITHM, false, ["sign", "verify"])) as CryptoKeyPair;
   const certificate = await x509.X509CertificateGenerator.createSelfSigned(
     {
       serialNumber: "01",
       name: subject,
-      notBefore: new Date(Date.now() - 60_000),
-      notAfter: new Date(Date.now() + 20 * YEAR_MS),
+      notBefore: new Date(NOW.getTime() - 60_000),
+      notAfter,
       keys,
       signingAlgorithm: ALGORITHM,
       extensions: [new x509.BasicConstraintsExtension(true, undefined, true), new x509.KeyUsagesExtension(x509.KeyUsageFlags.keyCertSign | x509.KeyUsageFlags.cRLSign, true)],
@@ -98,13 +101,13 @@ async function ownRoot(subject = "CN=Acme Offline Root, O=Acme"): Promise<OwnCa>
 }
 
 /** A certificate `by` signs for `publicKey` and `subject`: a CA one unless `ca` is false, with whatever `extensions` are added. */
-async function sign(by: OwnCa, publicKey: x509.PublicKey, subject: string, { ca = true, extensions = [] as x509.Extension[], notAfter = new Date(Date.now() + 5 * YEAR_MS) } = {}) {
+async function sign(by: OwnCa, publicKey: x509.PublicKey, subject: string, { ca = true, extensions = [] as x509.Extension[], notBefore = new Date(NOW.getTime() - 60_000), notAfter = new Date(NOW.getTime() + 5 * YEAR_MS) } = {}) {
   return x509.X509CertificateGenerator.create(
     {
       serialNumber: Buffer.from(webcrypto.getRandomValues(new Uint8Array(8))).toString("hex").replace(/^./, "1"),
       subject,
       issuer: by.certificate.subject,
-      notBefore: new Date(Date.now() - 60_000),
+      notBefore,
       notAfter,
       publicKey,
       signingKey: by.keys.privateKey,
@@ -128,8 +131,8 @@ async function ownIntermediate(by: OwnCa, subject = "CN=Acme Policy CA, O=Acme")
       serialNumber: "02",
       subject,
       issuer: by.certificate.subject,
-      notBefore: new Date(Date.now() - 60_000),
-      notAfter: new Date(Date.now() + 10 * YEAR_MS),
+      notBefore: new Date(NOW.getTime() - 60_000),
+      notAfter: new Date(NOW.getTime() + 10 * YEAR_MS),
       publicKey,
       signingKey: by.keys.privateKey,
       signingAlgorithm: ALGORITHM,
@@ -266,6 +269,14 @@ describe("an upload that would leave a broken CA is refused", () => {
     const policy = await ownIntermediate(root);
     const viaPolicy = await sign(policy, csr!.publicKey, csr!.subject);
     await refused(ca, ca.issuing, { certificate: viaPolicy.toString("pem"), root: root.certificate.toString("pem") }, /does not verify against the root and chain/);
+  });
+
+  test("a certificate not valid yet", async () => {
+    const ca = await createCa();
+    const root = await ownRoot();
+    const { csr } = await csrOf(ca, ca.issuing);
+    const certificate = await sign(root, csr!.publicKey, csr!.subject, { notBefore: new Date(NOW.getTime() + YEAR_MS) });
+    await refused(ca, ca.issuing, { certificate: certificate.toString("pem"), root: root.certificate.toString("pem") }, /not valid yet/);
   });
 
   test("the first one without its root", async () => {
@@ -424,5 +435,23 @@ describe("an Organization-root Issuing CA's CRL", () => {
     const issuing = new x509.X509Certificate((await download(`${issuingCaPath(ca, uploaded.body)}/chain`)).certificates[0]!.rawData);
     expect(list.issuer).toBe(issuing.subject);
     expect(await list.verify({ publicKey: issuing.publicKey })).toBe(true);
+  });
+});
+
+describe("what an Organization-root Issuing CA issues", () => {
+  test("never outlives the root, even when the root signed the Issuing CA for longer than itself", async () => {
+    const DAY_MS = 24 * 60 * 60 * 1000;
+    const rootEnd = new Date(NOW.getTime() + 30 * DAY_MS);
+    const root = await ownRoot("CN=Acme Short Root, O=Acme", rootEnd);
+    const ca = await createCa();
+    const { csr } = await csrOf(ca, ca.issuing);
+    const certificate = await sign(root, csr!.publicKey, csr!.subject, { notAfter: new Date(NOW.getTime() + YEAR_MS) });
+    expect((await upload(ca, ca.issuing, { certificate: certificate.toString("pem"), root: root.certificate.toString("pem") })).status).toBe(200);
+
+    const created = await h.api(mcs(), { cookie: org.cookie, body: { ...(await request(["app.internal.acme"])), ...fromCa(ca.issuing.id) } });
+    await h.settleIssuances();
+    const res = await h.app.request(`http://localhost${mcs()}/${created.body.id}/certificate?chain=leaf`, { headers: { cookie: org.cookie } });
+    const [leaf] = certificatesIn(await res.text());
+    expect(leaf!.notAfter.getTime()).toBeLessThanOrEqual(root.certificate.notAfter.getTime());
   });
 });

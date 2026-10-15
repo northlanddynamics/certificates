@@ -55,7 +55,7 @@ Each resource's verbs, as of this writing. New ones may be added within version 
 | `dcv_rule` | `created`, `changed`, `deleted` |
 | `managed_certificate` | `created`, `proposed`, `approved`, `rejected`, `owner_added`, `owner_removed`, `subscriber_added`, `subscriber_removed`, `renewal_policy_changed`, `csr_uploaded`, `names_changed`, `archived` |
 | `certificate` | `revoked` |
-| `private_ca` | `created`, `issuing_ca_added`, `updated`, `crl_published` |
+| `private_ca` | `created`, `issuing_ca_added`, `csr_signed`, `updated`, `crl_published` |
 | `name_change` | `proposed`, `approved`, `rejected`, `withdrawn`, `discarded` |
 | `issuance` | `started`, `succeeded`, `failed` |
 | `api_key` | `created`, `revoked`, `used` |
