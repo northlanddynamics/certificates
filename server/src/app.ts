@@ -32,6 +32,7 @@ import type { Kms } from "./kms";
 import { registerApprovals } from "./approvals";
 import { registerArchiveRoutes } from "./archive-routes";
 import { registerHistory } from "./history";
+import { registerIssuerRoutes } from "./issuer-routes";
 import { createManagedCertificateReader } from "./managed-certificate-reader";
 import { registerManagedCertificates } from "./managed-certificates";
 import { discardNameChangesOfRemoved } from "./name-change";
@@ -334,6 +335,7 @@ export function createApp(deps: AppDeps) {
   registerNameChangeRoutes({ app, requireUser, authorize, unitOfWork, issuances, reader, notifications });
   registerApprovals({ app, db, requireUser, authorize, unitOfWork, issuances, reader, notifications });
   registerArchiveRoutes({ app, requireUser, authorize, unitOfWork, issuances, reader });
+  registerIssuerRoutes({ app, requireUser, authorize, unitOfWork, reader });
   registerRevocationRoutes({ app, db, requireUser, unitOfWork, reader, issuers });
   registerHistory({ app, db, requireUser, reader });
   registerDeploymentScripts({ app, db, requireUser, authorize, unitOfWork });

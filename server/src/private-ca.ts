@@ -12,7 +12,7 @@ import { and, asc, eq, inArray } from "drizzle-orm";
 import { randomUUID } from "node:crypto";
 import type { Authorizer } from "./authorization";
 import { makeCaCsr, makeIssuingCa, makeRoot, makeTlsServer, nameConstraintsOf, parseSubject, rootSubjectOf, signedCertificateRefusal, type CaKey, type Signer } from "./ca-certificates";
-import { ACME_ENVIRONMENTS, type AcmeEnvironment } from "./certificate-authority";
+import { ACME_ENVIRONMENTS, CertificateAuthorityError, type AcmeEnvironment } from "./certificate-authority";
 import { publicationOf, type Crls } from "./crl";
 import { KEY_ALGORITHMS } from "./csr";
 import type { Db, Tx } from "./db/client";
@@ -23,6 +23,7 @@ import type { Issuer } from "./issuer";
 import type { Kms } from "./kms";
 import { constraintNamesOf, namesOutside, normalizePermittedNames, samePermittedNames, type PermittedNames } from "./permitted-names";
 import { DEFAULT_LIFETIME_YEARS, DEFAULT_VALIDITY_DAYS, ISSUING_CA_STATUSES, MAX_LIFETIME_YEARS, MAX_VALIDITY_DAYS, PRIVATE_CA_KINDS, PRIVATE_CA_STATUSES } from "./private-ca-kinds";
+import { ISSUING_CA_REVOCATION_REASONS } from "./revocation-reasons";
 import type { Actor, Change, UnitOfWork } from "./unit-of-work";
 
 const DAY_MS = 24 * 60 * 60 * 1000;
@@ -719,6 +720,97 @@ export function registerPrivateCas(ctx: {
           action: "private_ca.updated",
           target: { type: "private_ca", id },
           detail: { name, issuingCa: { id: issuing.id, subject: issuing.subject }, ...(namesChanged && { permittedNames: namesChanged }), ...(validityChanged && { validity: validityChanged }) },
+        });
+        return updated!;
+      });
+      return c.json(toIssuingCa(row), 200);
+    },
+  );
+
+  /** The Issuing CA, locked, with its Private CA's name; a 404 when the Organization's Private CA has none such. */
+  async function lockIssuingCa(tx: Tx, orgId: string, id: string, issuingCaId: string) {
+    const notFound = () => new HttpError(404, "Issuing CA not found");
+    if (!isId(id) || !isId(issuingCaId)) throw notFound();
+    const [found] = await tx
+      .select({ issuing: issuingCa, ca: privateCa })
+      .from(issuingCa)
+      .innerJoin(privateCa, eq(privateCa.id, issuingCa.privateCaId))
+      .where(and(eq(issuingCa.organizationId, orgId), eq(issuingCa.privateCaId, id), eq(issuingCa.id, issuingCaId)))
+      .for("update", { of: issuingCa });
+    if (!found) throw notFound();
+    return found;
+  }
+
+  app.openapi(
+    createRoute({
+      method: "post",
+      path: "/api/organizations/{orgId}/private-cas/{id}/issuing-cas/{issuingCaId}/retire",
+      tags: ["Private CAs"],
+      summary: "Retire an Issuing CA: it issues nothing more, and keeps publishing its CRL until its last Certificate expires",
+      description:
+        "Only an `active` Issuing CA may be retired (422 otherwise), and it cannot be made active again. Its Certificates stay valid until they end or are revoked, " +
+        "and revoking one still puts it on its CRL. A Managed Certificate on it can no longer be issued or renewed until it is repointed to another Issuing CA. " +
+        "The other Issuing CAs under its root are unaffected. Only Organization Administrators may.",
+      request: { params: IssuingCaParams },
+      responses: { 200: json(IssuingCa, "Retired"), ...errors(401, 403, 404, 422) },
+    }),
+    async (c) => {
+      const { orgId, id, issuingCaId } = c.req.valid("param");
+      const actor = await requireUser(c);
+      await authorize(actor, orgId, { privateCa: ["retire"] });
+      const row = await unitOfWork.run(actor, async (tx, change) => {
+        const of = await lockIssuingCa(tx, orgId, id, issuingCaId);
+        if (of.issuing.status !== "active") throw new HttpError(422, `${issuingCaLabel(of)} is ${of.issuing.status}, so it cannot be retired`);
+        const [updated] = await tx.update(issuingCa).set({ status: "retired" }).where(eq(issuingCa.id, of.issuing.id)).returning();
+        await change.audit({
+          organizationId: orgId,
+          action: "private_ca.retired",
+          target: { type: "private_ca", id },
+          detail: { name: of.ca.name, issuingCa: { id: of.issuing.id, subject: of.issuing.subject } },
+        });
+        return updated!;
+      });
+      return c.json(toIssuingCa(row), 200);
+    },
+  );
+
+  app.openapi(
+    createRoute({
+      method: "post",
+      path: "/api/organizations/{orgId}/private-cas/{id}/issuing-cas/{issuingCaId}/revocation",
+      tags: ["Private CAs"],
+      summary: "Revoke a platform-made Issuing CA: its root's CRL lists it at once, and it issues nothing more",
+      description:
+        "Only for an Issuing CA under a platform-made root (422 under the Organization's own root, which revokes it itself), and one that is `active` or `retired` (422 otherwise). " +
+        "`reason` is the RFC 5280 reason its root's CRL gives. The root's CRL is reissued in the same change, so it is revoked if and only if the KMS signs that CRL (502 when it does not). " +
+        "A Managed Certificate on it can no longer be issued or renewed until it is repointed to another Issuing CA. The other Issuing CAs under its root are unaffected. Only Organization Administrators may.",
+      request: {
+        params: IssuingCaParams,
+        body: { content: { "application/json": { schema: z.object({ reason: z.enum(ISSUING_CA_REVOCATION_REASONS) }) } } },
+      },
+      responses: { 200: json(IssuingCa, "Revoked"), ...errors(400, 401, 403, 404, 422, 502) },
+    }),
+    async (c) => {
+      const { orgId, id, issuingCaId } = c.req.valid("param");
+      const { reason } = c.req.valid("json");
+      const actor = await requireUser(c);
+      await authorize(actor, orgId, { privateCa: ["revoke"] });
+      const row = await unitOfWork.run(actor, async (tx, change) => {
+        const of = await lockIssuingCa(tx, orgId, id, issuingCaId);
+        if (of.ca.kind !== "platform_root") throw new HttpError(422, `the Organization's own root signed ${issuingCaLabel(of)}, so it is that root that revokes it`);
+        if (of.issuing.status !== "active" && of.issuing.status !== "retired") throw new HttpError(422, `${issuingCaLabel(of)} is ${of.issuing.status}, so it cannot be revoked`);
+        const [updated] = await tx.update(issuingCa).set({ status: "revoked", revokedAt: change.occurredAt, revocationReason: reason }).where(eq(issuingCa.id, of.issuing.id)).returning();
+        try {
+          await crls.publish(tx, change, orgId, { signer: "root", id: of.ca.id });
+        } catch (err) {
+          if (err instanceof CertificateAuthorityError) throw new HttpError(err.kind === "unreachable" ? 502 : 422, err.message);
+          throw err;
+        }
+        await change.audit({
+          organizationId: orgId,
+          action: "private_ca.revoked",
+          target: { type: "private_ca", id },
+          detail: { name: of.ca.name, issuingCa: { id: of.issuing.id, subject: of.issuing.subject, ...(await identityOf(new x509.X509Certificate(of.issuing.certificatePem!))) }, reason },
         });
         return updated!;
       });

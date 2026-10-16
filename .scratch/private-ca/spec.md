@@ -138,7 +138,7 @@ There is no ACME order, and the Issuance states and failure codes stay the same.
 - Repointing a Managed Certificate to another Issuing CA, under the same root or another, is an Organization Administrator change with no Approval. It must not move the Managed Certificate across issuer kinds, and the names must fall within the new Issuing CA's rules.
 - There is no automatic rollover.
 
-**Permissions.** A new `privateCa` resource in `permissions.ts`, held only by Organization Administrators: `create`, `update`, `retire`, `revoke`. Adding an Issuing CA, and changing an Issuing CA's names or validity, need `privateCa.update`; there is no separate permission for it. A `privateCa.read` permission is held by every role, so anyone can see the CAs and download their chains. Choosing an Issuing CA when creating or proposing a Managed Certificate needs no extra permission beyond today's.
+**Permissions.** A new `privateCa` resource in `permissions.ts`, held only by Organization Administrators: `create`, `update`, `retire`, `revoke`. Adding an Issuing CA, and changing an Issuing CA's names or validity, need `privateCa.update`; there is no separate permission for it. A `privateCa.read` permission is held by every role, so anyone can see the CAs and download their chains. Choosing an Issuing CA when creating or proposing a Managed Certificate needs no extra permission beyond today's. Repointing a Managed Certificate to another Issuing CA needs `managedCertificate.changeIssuer`, which only Organization Administrators hold.
 
 **Audit Events.** New actions, documented in `docs/audit-events.md`:
 - `private_ca.created`

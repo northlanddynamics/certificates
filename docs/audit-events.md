@@ -53,9 +53,9 @@ Each resource's verbs, as of this writing. New ones may be added within version 
 | `dns_provider` | `created`, `changed`, `secret_replaced`, `tested`, `relay_changed` |
 | `validation_zone` | `created`, `deleted` |
 | `dcv_rule` | `created`, `changed`, `deleted` |
-| `managed_certificate` | `created`, `proposed`, `approved`, `rejected`, `owner_added`, `owner_removed`, `subscriber_added`, `subscriber_removed`, `renewal_policy_changed`, `csr_uploaded`, `names_changed`, `archived` |
+| `managed_certificate` | `created`, `proposed`, `approved`, `rejected`, `owner_added`, `owner_removed`, `subscriber_added`, `subscriber_removed`, `renewal_policy_changed`, `csr_uploaded`, `names_changed`, `archived`, `issuer_changed` |
 | `certificate` | `revoked` |
-| `private_ca` | `created`, `issuing_ca_added`, `csr_signed`, `updated`, `crl_published` |
+| `private_ca` | `created`, `issuing_ca_added`, `csr_signed`, `updated`, `retired`, `revoked`, `crl_published` |
 | `name_change` | `proposed`, `approved`, `rejected`, `withdrawn`, `discarded` |
 | `issuance` | `started`, `succeeded`, `failed` |
 | `api_key` | `created`, `revoked`, `used` |
@@ -81,6 +81,12 @@ Each resource's verbs, as of this writing. New ones may be added within version 
 
 `private_ca.updated` targets the Private CA too, when an Organization Administrator changes one of its Issuing CAs. Its `detail` has the Private CA's `name`, the Issuing CA in `issuingCa` (`{ "id": ..., "subject": ... }`), and for each thing changed, what it was and what it is: `permittedNames: { "from": ..., "to": ... }`, and in `validity`, each of `maximumDays` and `defaultDays` changed, as `{ "from": ..., "to": ... }`. Changing both in one request is one event. A change that leaves everything as it was is not an event.
 
+`private_ca.retired` targets the Private CA too, when an Organization Administrator retires one of its Issuing CAs: it issues nothing more, and keeps publishing its CRL until its last Certificate expires. Its `detail` has the Private CA's `name` and the Issuing CA in `issuingCa` (`{ "id": ..., "subject": ... }`).
+
+`private_ca.revoked` targets the Private CA too, when an Organization Administrator revokes one of its platform-made Issuing CAs, which its root's CRL then lists. Its `detail` has the Private CA's `name`, in `issuingCa` the Issuing CA's `id`, `subject`, and its certificate's `serial` and SHA-256 `fingerprint`, and the RFC 5280 `reason` (`unspecified`, `keyCompromise`, `cACompromise`, `affiliationChanged`, `superseded` or `cessationOfOperation`).
+
 `private_ca.crl_published` targets the Private CA when one of its CRLs is published again after its scheduled reissue had failed (the KMS did not sign it): by the platform (no actor) on a later pass, or with a change that publishes it, such as a revocation. A routine reissue is no event. Its `detail` has which `crl` (`issuing`, an Issuing CA's, with its `issuingCaId`, or `root`, the platform-made root's), its CRL `number`, and `failingSince`, when the reissue first failed.
 
 A Managed Certificate issued from a Private CA is audited with the same actions as one from an ACME CA. Its `managed_certificate.created` (also when a Deployment creates it) or `managed_certificate.proposed`, `issuance.started`, `issuance.succeeded` and `issuance.failed` (once the Managed Certificate was read) have `detail.issuer`, `{ "kind": "private_ca", "issuingCaId": "..." }`, the Issuing CA it is issued from, and no `environment`. Its `managed_certificate.created` or `managed_certificate.proposed` also has `validityDays` when it chose a validity, and none when it gets the Issuing CA's default. A name change that gives it another validity says so in its `managed_certificate.names_changed`, `name_change.proposed` and `name_change.approved`, as `validityDays: { "from": ..., "to": ... }` (null for the Issuing CA's default); one that keeps its validity has no `validityDays`. Its `certificate.revoked` has `detail.issuer` too, and its `reason` may also be `affiliationChanged` or `privilegeWithdrawn`.
+
+`managed_certificate.issuer_changed` targets the Managed Certificate when an Organization Administrator repoints it from one Issuing CA to another, as in rolling an Issuing CA over. Its `detail` has its `names`, and `from` and `to`, each `{ "kind": "private_ca", "issuingCaId": "..." }`. Repointing it to the Issuing CA it is on already is not an event.

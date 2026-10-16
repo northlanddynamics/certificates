@@ -5,6 +5,7 @@ import type { Certificate, ManagedCertificate } from "@/lib/api";
 import { caLabel, issuerLabel, keyAlgorithmLabel } from "@/lib/managed-certificate";
 import { chosenValidityLabel } from "@/lib/private-ca";
 import { useCertificateFacts, useManagedCertificatePage } from "@/lib/use-managed-certificate";
+import { IssuerControls } from "./issuer-controls";
 import { NameChange } from "./name-change-controls";
 import { Owners } from "./owner-controls";
 import { Renewal } from "./renewal-controls";
@@ -62,6 +63,7 @@ export function ManagedCertificateOverview() {
             <Fact label="Key Custody">{KEY_CUSTODY_LABELS[m.keyCustody]}</Fact>
             <ProposalStatus m={m} />
           </dl>
+          <IssuerControls org={org} m={m} onChanged={refresh} />
           {!m.archivedAt && m.keyCustody === "owner" && <NameChange org={org} m={m} userId={userId} onChanged={refresh} />}
         </CardContent>
       </Card>
