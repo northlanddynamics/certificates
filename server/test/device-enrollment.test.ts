@@ -410,6 +410,107 @@ describe("a profile's Device Certificates", () => {
     expect(listed).toMatchObject({ serial: cert.serialNumber.toUpperCase(), status: "revoked", revocation: { reason: "cessationOfOperation", revokedAt: new Date(START + DAY_MS).toISOString() } });
   });
 
+  /** The CRL a certificate's CRL Distribution Point names, fetched from there as a relying party would. */
+  async function crlFor(cert: x509.X509Certificate) {
+    const cdp = cert.getExtension(x509.CRLDistributionPointsExtension)!;
+    const res = await h.app.request(cdp.distributionPoints[0]!.distributionPoint!.fullName![0]!.uniformResourceIdentifier!);
+    expect(res.status).toBe(200);
+    return new x509.X509Crl(new Uint8Array(await res.arrayBuffer()));
+  }
+  const revoke = (profileId: string, certificateId: string, body: unknown, cookie = org.cookie) =>
+    h.api(`${profiles()}/${profileId}/device-certificates/${certificateId}/revocation`, { cookie, body });
+
+  test("an Organization Administrator revokes one: on its Issuing CA's CRL at once, shown as revoked, and audited with the administrator", async () => {
+    const ca = await createCa();
+    const profile = await createProfile(ca.issuing.id);
+    const device = scepDevice(h, profile.scepUrl);
+    const lost = read((await device.enroll({ subject: "CN=lost-laptop" })).certificate);
+    h.setNow(new Date(START + 1000));
+    const kept = read((await device.enroll({ subject: "CN=kept-laptop" })).certificate);
+    const [, listed] = (await certificatesOf(profile.id)).body.items;
+    expect(listed.serial).toBe(lost.serialNumber.toUpperCase());
+    expect((await crlFor(lost)).entries).toEqual([]);
+
+    h.setNow(new Date(START + DAY_MS));
+    const res = await revoke(profile.id, listed.id, { reason: "keyCompromise" });
+    expect(res.status).toBe(200);
+    expect(res.body).toEqual({ ...listed, status: "revoked", revocation: { reason: "keyCompromise", revokedAt: new Date(START + DAY_MS).toISOString() } });
+
+    const crl = await crlFor(lost);
+    expect(crl.entries.map((e) => [e.serialNumber.toUpperCase(), e.reason, e.revocationDate.getTime()])).toEqual([
+      [lost.serialNumber.toUpperCase(), x509.X509CrlReason.keyCompromise, START + DAY_MS],
+    ]);
+    expect(crl.entries.some((e) => e.serialNumber.toUpperCase() === kept.serialNumber.toUpperCase())).toBe(false);
+
+    const revoked = (await auditOf()).filter((e) => e.action === "device_certificate.revoked");
+    expect(revoked).toHaveLength(1);
+    expect(revoked[0]!.actor).toMatchObject({ email: "admin@acme.test" });
+    expect(revoked[0]!.target).toEqual({ type: "device_certificate", id: listed.id });
+    expect(revoked[0]!.detail).toEqual({ enrollmentProfile: { id: profile.id, name: "Wi-Fi" }, serial: listed.serial, subject: "CN=lost-laptop", reason: "keyCompromise" });
+  });
+
+  test("takes only the reasons a Private CA offers, and a revoked one cannot be revoked again", async () => {
+    const ca = await createCa();
+    const profile = await createProfile(ca.issuing.id);
+    const device = scepDevice(h, profile.scepUrl);
+    // `unspecified` has no reason code on the CRL.
+    const reasons = { unspecified: undefined, affiliationChanged: 3, superseded: 4, cessationOfOperation: 5, privilegeWithdrawn: 9 } as const;
+    const serialOf: Record<string, string> = {};
+    for (const reason of Object.keys(reasons)) serialOf[reason] = read((await device.enroll({ subject: `CN=${reason}` })).certificate).serialNumber.toUpperCase();
+    const listed = (await certificatesOf(profile.id)).body.items as { id: string; serial: string; subject: string }[];
+    const first = listed[0]!;
+
+    for (const reason of ["cACompromise", "certificateHold", "removeFromCRL", undefined]) expect((await revoke(profile.id, first.id, { reason })).status).toBe(400);
+    expect((await certificatesOf(profile.id, "?status=revoked")).body.total).toBe(0);
+
+    for (const one of listed) expect((await revoke(profile.id, one.id, { reason: one.subject.slice(3) })).status).toBe(200);
+    expect((await revoke(profile.id, first.id, { reason: "keyCompromise" })).status).toBe(409);
+
+    const cert = read((await device.enroll({ subject: "CN=after" })).certificate);
+    const crl = await crlFor(cert);
+    expect(Object.fromEntries(crl.entries.map((e) => [e.serialNumber.toUpperCase(), e.reason]))).toEqual(
+      Object.fromEntries(Object.entries(reasons).map(([reason, code]) => [serialOf[reason], code])),
+    );
+    expect((await auditOf()).filter((e) => e.action === "device_certificate.revoked")).toHaveLength(listed.length);
+
+    expect((await revoke(profile.id, crypto.randomUUID(), { reason: "unspecified" })).status).toBe(404);
+    expect((await revoke(profile.id, "not-an-id", { reason: "unspecified" })).status).toBe(404);
+  });
+
+  test("stay unrevoked, unaudited and off the CRL when the CRL cannot be signed, and can be revoked again later", async () => {
+    const ca = await createCa();
+    const profile = await createProfile(ca.issuing.id);
+    const cert = read((await scepDevice(h, profile.scepUrl).enroll({ subject: "CN=device-kms" })).certificate);
+    const [listed] = (await certificatesOf(profile.id)).body.items;
+
+    h.kms.failing = true;
+    expect((await revoke(profile.id, listed.id, { reason: "keyCompromise" })).status).toBe(502);
+    h.kms.failing = false;
+    expect((await certificatesOf(profile.id)).body.items[0].status).toBe("active");
+    expect((await auditOf()).some((e) => e.action === "device_certificate.revoked")).toBe(false);
+    expect((await crlFor(cert)).entries).toEqual([]);
+
+    expect((await revoke(profile.id, listed.id, { reason: "keyCompromise" })).status).toBe(200);
+    expect((await crlFor(cert)).entries).toHaveLength(1);
+  });
+
+  test("revoked by an Organization Administrator are already revoked to the validator's feed, which keeps the administrator's reason", async () => {
+    const ca = await createCa();
+    const profile = await createProfile(ca.issuing.id, { validator: { kind: "test_double", settings: { tenant: "contoso" }, secret: DOUBLE_SECRET } });
+    const cert = read((await scepDevice(h, profile.scepUrl).enroll({ subject: "CN=stolen" })).certificate);
+    const [listed] = (await certificatesOf(profile.id)).body.items;
+    expect((await revoke(profile.id, listed.id, { reason: "keyCompromise" })).status).toBe(200);
+
+    h.validatorDouble.queueRevocation("contoso", cert.serialNumber);
+    h.setNow(new Date(START + DAY_MS));
+    await h.pollRevocationFeeds();
+    await h.deliverEnrollmentNotifications();
+
+    expect(h.validatorDouble.reports.flatMap((r) => r.outcomes.map((o) => o.outcome))).toEqual(["already_revoked"]);
+    expect((await crlFor(cert)).entries.map((e) => [e.serialNumber.toUpperCase(), e.reason])).toEqual([[listed.serial, x509.X509CrlReason.keyCompromise]]);
+    expect((await auditOf()).filter((e) => e.action === "device_certificate.revoked")).toHaveLength(1);
+  });
+
   test("can each be looked at and downloaded", async () => {
     const ca = await createCa();
     const profile = await createProfile(ca.issuing.id);
@@ -443,7 +544,7 @@ describe("a profile's Device Certificates", () => {
       return h.signIn(email, PASSWORD);
     };
     const permissionsOf = async (cookie: string) => (await h.api("/api/me", { cookie })).body.organizations[0].permissions;
-    expect((await permissionsOf(org.cookie)).deviceCertificate).toEqual(["read"]);
+    expect((await permissionsOf(org.cookie)).deviceCertificate).toEqual(["read", "revoke"]);
 
     for (const role of ["approver", "member"]) {
       const cookie = await join(`${role}@acme.test`, role);
@@ -451,7 +552,9 @@ describe("a profile's Device Certificates", () => {
       expect((await certificatesOf(profile.id, "", cookie)).status).toBe(403);
       expect((await h.api(`${profiles()}/${profile.id}/device-certificates/${listed.id}`, { cookie })).status).toBe(403);
       expect((await h.app.request(`http://localhost${profiles()}/${profile.id}/device-certificates/${listed.id}/certificate`, { headers: { cookie } })).status).toBe(403);
+      expect((await revoke(profile.id, listed.id, { reason: "keyCompromise" }, cookie)).status).toBe(403);
     }
+    expect((await certificatesOf(profile.id)).body.items[0].status).toBe("active");
   });
 
   test("are kept apart per Organization", async () => {
@@ -466,5 +569,8 @@ describe("a profile's Device Certificates", () => {
     expect((await certificatesOf(profile.id, "", other.cookie)).status).toBe(404);
     expect((await h.api(`${profiles(other.orgId)}/${theirs.id}/device-certificates/${listed.id}`, { cookie: other.cookie })).status).toBe(404);
     expect((await h.api(`${profiles(other.orgId)}/${theirs.id}/device-certificates`, { cookie: other.cookie })).body.total).toBe(0);
+    expect((await h.api(`${profiles(other.orgId)}/${theirs.id}/device-certificates/${listed.id}/revocation`, { cookie: other.cookie, body: { reason: "keyCompromise" } })).status).toBe(404);
+    expect((await revoke(profile.id, listed.id, { reason: "keyCompromise" }, other.cookie)).status).toBe(404);
+    expect((await certificatesOf(profile.id)).body.items[0].status).toBe("active");
   });
 });

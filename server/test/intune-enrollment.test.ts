@@ -160,3 +160,93 @@ describe("an Enrollment Profile connected to Intune", () => {
     expect(h.intune.failures).toHaveLength(1);
   });
 });
+
+describe("Intune's revocation queue", () => {
+  const MINUTE_MS = 60_000;
+  const START = Date.parse("2026-01-01T00:00:00Z");
+  /** The CRL a certificate's CRL Distribution Point names, fetched from there as a relying party would. */
+  async function crlFor(cert: x509.X509Certificate) {
+    const cdp = cert.getExtension(x509.CRLDistributionPointsExtension)!;
+    const res = await h.app.request(cdp.distributionPoints[0]!.distributionPoint!.fullName![0]!.uniformResourceIdentifier!);
+    expect(res.status).toBe(200);
+    return new x509.X509Crl(new Uint8Array(await res.arrayBuffer()));
+  }
+  const enrolled = async (scepUrl: string, subject: string) => {
+    const { certificate } = (await enroll(scepUrl, { subject, challengePassword: "intune-signed-challenge" })) as { certificate: { raw: Buffer } };
+    return new x509.X509Certificate(new Uint8Array(certificate.raw));
+  };
+
+  test("revokes the certificate of a device Intune retired: on the CRL once polled, audited with Intune, and the result uploaded once committed", async () => {
+    const profile = (await createIntuneProfile()).body;
+    const retired = await enrolled(profile.scepUrl, "CN=retired-laptop");
+    const kept = await enrolled(profile.scepUrl, "CN=kept-laptop");
+    const context = h.intune.queueRevocation(retired.serialNumber.toUpperCase(), retired.issuer);
+    const unknown = h.intune.queueRevocation("0123456789ABCDEF");
+
+    h.setNow(new Date(START + 5 * MINUTE_MS));
+    expect(await h.pollRevocationFeeds()).toBe(1);
+    expect(h.intune.downloads).toEqual([{ maxRequests: 500, issuerName: null }]);
+    const crl = await crlFor(retired);
+    expect(crl.entries.map((e) => [e.serialNumber.toUpperCase(), e.reason, e.revocationDate.getTime()])).toEqual([
+      [retired.serialNumber.toUpperCase(), x509.X509CrlReason.cessationOfOperation, START + 5 * MINUTE_MS],
+    ]);
+    expect(crl.entries.some((e) => e.serialNumber.toUpperCase() === kept.serialNumber.toUpperCase())).toBe(false);
+    const revoked = (await auditOf()).filter((e) => e.action === "device_certificate.revoked");
+    expect(revoked.map((e) => e.detail)).toEqual([expect.objectContaining({ serial: retired.serialNumber.toUpperCase(), reason: "cessationOfOperation", by: { enrollmentValidator: { kind: "intune" } } })]);
+
+    expect(h.intune.revocationResults).toEqual([]);
+    await h.deliverEnrollmentNotifications();
+    expect(h.intune.revocationResults).toEqual([
+      { requestContext: context, succeeded: true, errorCode: "0", errorMessage: null },
+      { requestContext: unknown, succeeded: false, errorCode: "4004", errorMessage: "No such certificate" },
+    ]);
+  });
+
+  test("is downloaded at most hourly per tenant, once for every profile in it, whichever Entra app each uses", async () => {
+    const first = (await createIntuneProfile()).body;
+    const second = (await createIntuneProfile({ kind: "intune", settings: { tenantId: INTUNE.tenantId, appId: INTUNE.otherApp.appId }, secret: INTUNE.otherApp.secret })).body;
+    const a = await enrolled(first.scepUrl, "CN=device-a");
+    const b = await enrolled(second.scepUrl, "CN=device-b");
+    h.intune.queueRevocation(a.serialNumber, a.issuer);
+    expect(await h.pollRevocationFeeds()).toBe(1);
+
+    h.intune.queueRevocation(b.serialNumber, b.issuer);
+    h.setNow(new Date(START + 59 * MINUTE_MS));
+    expect(await h.pollRevocationFeeds()).toBe(0);
+    expect((await crlFor(b)).entries).toEqual([]);
+
+    h.setNow(new Date(START + 60 * MINUTE_MS));
+    expect(await h.pollRevocationFeeds()).toBe(1);
+    expect(h.intune.downloads).toHaveLength(2);
+    expect((await crlFor(a)).entries.map((e) => e.serialNumber.toUpperCase())).toEqual([a.serialNumber.toUpperCase()]);
+    expect((await crlFor(b)).entries.map((e) => e.serialNumber.toUpperCase())).toEqual([b.serialNumber.toUpperCase()]);
+  });
+
+  test("answers a request for a certificate an Organization Administrator already revoked as a success, keeping the administrator's reason", async () => {
+    const profile = (await createIntuneProfile()).body;
+    const cert = await enrolled(profile.scepUrl, "CN=stolen-phone");
+    const [listed] = (await h.api(`${profiles()}/${profile.id}/device-certificates`, { cookie: org.cookie })).body.items;
+    expect((await h.api(`${profiles()}/${profile.id}/device-certificates/${listed.id}/revocation`, { cookie: org.cookie, body: { reason: "keyCompromise" } })).status).toBe(200);
+
+    h.intune.queueRevocation(cert.serialNumber, cert.issuer);
+    await h.pollRevocationFeeds();
+    await h.deliverEnrollmentNotifications();
+    expect(h.intune.revocationResults.map((r) => r.succeeded)).toEqual([true]);
+    expect((await crlFor(cert)).entries.map((e) => e.reason)).toEqual([x509.X509CrlReason.keyCompromise]);
+  });
+
+  test("uploads the results again while Intune does not record them", async () => {
+    const profile = (await createIntuneProfile()).body;
+    const cert = await enrolled(profile.scepUrl, "CN=wiped-tablet");
+    h.intune.queueRevocation(cert.serialNumber, cert.issuer);
+    h.intune.recordsResults = false;
+    await h.pollRevocationFeeds();
+    await h.deliverEnrollmentNotifications();
+    expect(h.intune.revocationResults).toEqual([]);
+
+    h.intune.recordsResults = true;
+    h.setNow(new Date(START + 10 * MINUTE_MS));
+    await h.deliverEnrollmentNotifications();
+    expect(h.intune.revocationResults.map((r) => r.succeeded)).toEqual([true]);
+  });
+});
