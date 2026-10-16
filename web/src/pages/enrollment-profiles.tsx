@@ -1,8 +1,9 @@
-import { useQuery } from "@tanstack/react-query";
+import { useMutation, useQuery } from "@tanstack/react-query";
 import { Link, useParams } from "@tanstack/react-router";
 import { createColumnHelper, tableFeatures, useTable } from "@tanstack/react-table";
 import { CheckIcon, ClipboardCheckIcon, KeyRoundIcon, LandmarkIcon, MoreHorizontalIcon, PlusIcon, ScrollTextIcon, ShieldCheckIcon, type LucideIcon } from "lucide-react";
 import { useState, type FormEvent } from "react";
+import { toast } from "sonner";
 import {
   DEFAULT_DEVICE_EXTENDED_KEY_USAGES,
   DEFAULT_DEVICE_KEY_USAGES,
@@ -53,6 +54,12 @@ const STEPS = [
   { id: "review", title: "Review", icon: ClipboardCheckIcon },
 ] as const satisfies readonly { id: string; title: string; icon: LucideIcon }[];
 type StepId = (typeof STEPS)[number]["id"];
+
+/** What an Intune Enrollment Validator is configured with: the Entra app that signs in to Graph and Intune. */
+const GUID = /^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/i;
+const TENANT = /^([0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}|([a-z0-9]([a-z0-9-]{0,61}[a-z0-9])?\.)+[a-z]{2,63})$/i;
+const VALIDATOR_LABEL: Record<string, string> = { intune: "Microsoft Intune" };
+const validatorLabel = (kind: string) => VALIDATOR_LABEL[kind] ?? kind;
 
 const KEY_TYPE_LABEL: Record<DeviceKeyType, string> = { "rsa-2048": "RSA 2048", "rsa-3072": "RSA 3072", "rsa-4096": "RSA 4096" };
 
@@ -126,36 +133,56 @@ function DeviceCertificatesLink({ profile }: { profile: EnrollmentProfile }) {
   );
 }
 
-/** A profile's menu: its Device Certificates, copy its SCEP URL, and download the certificates devices must trust. */
+/**
+ * A profile's actions: test its Enrollment Validator's connection, and a menu of its Device Certificates, its SCEP URL
+ * and the certificates devices must trust. A test that works is a toast, with what it could not prove; one that fails
+ * stays by the buttons, where its reason can be read.
+ */
 function ProfileActions({ profile }: { profile: EnrollmentProfile }) {
   const { orgId } = useParams({ from: ROUTE });
+  const org = useQuery({ queryKey: ["me"], queryFn: api.me, select: (me) => me.organizations.find((o) => o.id === orgId) }).data;
+  const test = useMutation({
+    mutationFn: () => api.testEnrollmentValidator(orgId, profile.id),
+    onSuccess: (result) => {
+      if (result.ok) toast.success(`${profile.name}: ${validatorLabel(profile.validator.kind)} can be reached`, { description: result.note });
+    },
+  });
   return (
-    <div className="flex justify-end">
-      <DropdownMenu>
-        <DropdownMenuTrigger asChild>
-          <Button variant="ghost" size="icon-sm" aria-label={`Actions for ${profile.name}`}>
-            <MoreHorizontalIcon />
+    <div className="flex flex-col items-end gap-2">
+      <div className="flex items-center justify-end gap-2">
+        {org && can(org, "enrollmentProfile", "update") && (
+          <Button variant="outline" size="sm" disabled={test.isPending} aria-label={`Test the Enrollment Validator of ${profile.name}`} onClick={() => test.mutate()}>
+            {test.isPending ? "Testing…" : "Test"}
           </Button>
-        </DropdownMenuTrigger>
-        <DropdownMenuContent align="end" className="w-56">
-          <DropdownMenuItem asChild>
-            <Link to="/organizations/$orgId/enrollment-profiles/$id/device-certificates" params={{ orgId, id: profile.id }}>
-              Device Certificates
-            </Link>
-          </DropdownMenuItem>
-          <DropdownMenuItem onSelect={() => void navigator.clipboard.writeText(profile.scepUrl)}>Copy SCEP URL</DropdownMenuItem>
-          <DropdownMenuItem asChild>
-            <a href={api.enrollmentProfileCaCertificateUrl(orgId, profile.id, "root")} download>
-              Download root certificate
-            </a>
-          </DropdownMenuItem>
-          <DropdownMenuItem asChild>
-            <a href={api.enrollmentProfileCaCertificateUrl(orgId, profile.id, "issuing")} download>
-              Download Issuing CA certificate
-            </a>
-          </DropdownMenuItem>
-        </DropdownMenuContent>
-      </DropdownMenu>
+        )}
+        <DropdownMenu>
+          <DropdownMenuTrigger asChild>
+            <Button variant="ghost" size="icon-sm" aria-label={`Actions for ${profile.name}`}>
+              <MoreHorizontalIcon />
+            </Button>
+          </DropdownMenuTrigger>
+          <DropdownMenuContent align="end" className="w-56">
+            <DropdownMenuItem asChild>
+              <Link to="/organizations/$orgId/enrollment-profiles/$id/device-certificates" params={{ orgId, id: profile.id }}>
+                Device Certificates
+              </Link>
+            </DropdownMenuItem>
+            <DropdownMenuItem onSelect={() => void navigator.clipboard.writeText(profile.scepUrl)}>Copy SCEP URL</DropdownMenuItem>
+            <DropdownMenuItem asChild>
+              <a href={api.enrollmentProfileCaCertificateUrl(orgId, profile.id, "root")} download>
+                Download root certificate
+              </a>
+            </DropdownMenuItem>
+            <DropdownMenuItem asChild>
+              <a href={api.enrollmentProfileCaCertificateUrl(orgId, profile.id, "issuing")} download>
+                Download Issuing CA certificate
+              </a>
+            </DropdownMenuItem>
+          </DropdownMenuContent>
+        </DropdownMenu>
+      </div>
+      {test.data && !test.data.ok && <span role="alert" className="max-w-72 whitespace-normal break-words text-right text-sm text-destructive">{test.data.error}</span>}
+      {test.error && <span role="alert" className="max-w-72 whitespace-normal break-words text-right text-sm text-destructive">{test.error.message}</span>}
     </div>
   );
 }
@@ -219,8 +246,14 @@ function NewProfileForm({ orgId, onDone }: { orgId: string; onDone: () => void }
   const [allowedKeyTypes, setAllowedKeyTypes] = useState<DeviceKeyType[]>([...DEVICE_KEY_TYPES]);
   const [validatorKind, setValidatorKind] = useState("");
   const kind = validatorKind || kinds.data?.items[0]?.kind || "";
+  const [tenantId, setTenantId] = useState("");
+  const [appId, setAppId] = useState("");
+  const [appSecret, setAppSecret] = useState("");
+  const intune = kind === "intune";
+  const intuneOk = TENANT.test(tenantId.trim()) && GUID.test(appId.trim()) && appSecret !== "";
+  const validator = intune ? { kind, settings: { tenantId: tenantId.trim(), appId: appId.trim() }, secret: appSecret } : { kind };
   const create = useAction(
-    () => api.createEnrollmentProfile(orgId, { name: name.trim(), issuingCaId, validityDays: Number(validityDays), keyUsage, extendedKeyUsage, allowedKeyTypes, validator: { kind } }),
+    () => api.createEnrollmentProfile(orgId, { name: name.trim(), issuingCaId, validityDays: Number(validityDays), keyUsage, extendedKeyUsage, allowedKeyTypes, validator }),
     ["enrollment-profiles"],
     onDone,
   );
@@ -231,7 +264,7 @@ function NewProfileForm({ orgId, onDone }: { orgId: string; onDone: () => void }
     issuer: name.trim() !== "" && issuingCaId !== "",
     certificate: validityOk && extendedKeyUsage.length > 0 && keyUsage.length > 0,
     keys: allowedKeyTypes.length > 0,
-    validator: kind !== "",
+    validator: kind !== "" && (!intune || intuneOk),
     review: true,
   };
   const index = STEPS.findIndex((s) => s.id === step);
@@ -351,13 +384,38 @@ function NewProfileForm({ orgId, onDone }: { orgId: string; onDone: () => void }
                     <SelectContent>
                       {(kinds.data?.items ?? []).map((k) => (
                         <SelectItem key={k.kind} value={k.kind}>
-                          {k.kind}
+                          {validatorLabel(k.kind)}
                         </SelectItem>
                       ))}
                     </SelectContent>
                   </Select>
                 )}
               </Field>
+              {intune && (
+                <FieldSet>
+                  <FieldLegend variant="label">Entra app</FieldLegend>
+                  <FieldDescription>
+                    Register an app in Microsoft Entra ID with a client secret, give it the application permissions Intune → scep_challenge_provider and Microsoft Graph →
+                    Application.Read.All, and grant admin consent. Intune then validates each device's request, and is told what became of it.
+                  </FieldDescription>
+                  <FieldGroup>
+                    <Field data-invalid={tenantId.trim() !== "" && !TENANT.test(tenantId.trim())}>
+                      <FieldLabel htmlFor="intune-tenant">Tenant ID</FieldLabel>
+                      <Input id="intune-tenant" autoFocus value={tenantId} onChange={(e) => setTenantId(e.target.value)} placeholder="00000000-0000-0000-0000-000000000000" />
+                      <FieldDescription>The directory (tenant) ID, or a domain of it such as contoso.onmicrosoft.com.</FieldDescription>
+                    </Field>
+                    <Field data-invalid={appId.trim() !== "" && !GUID.test(appId.trim())}>
+                      <FieldLabel htmlFor="intune-app">Application (client) ID</FieldLabel>
+                      <Input id="intune-app" value={appId} onChange={(e) => setAppId(e.target.value)} placeholder="00000000-0000-0000-0000-000000000000" />
+                    </Field>
+                    <Field>
+                      <FieldLabel htmlFor="intune-secret">Client secret</FieldLabel>
+                      <Input id="intune-secret" type="password" autoComplete="off" value={appSecret} onChange={(e) => setAppSecret(e.target.value)} />
+                      <FieldDescription>Its value, not its ID. It is stored encrypted and never shown again. Test the connection from the list once the profile is created.</FieldDescription>
+                    </Field>
+                  </FieldGroup>
+                </FieldSet>
+              )}
             </FieldGroup>
           )}
 
@@ -374,7 +432,8 @@ function NewProfileForm({ orgId, onDone }: { orgId: string; onDone: () => void }
                     { label: "Extended key usage", value: extendedKeyUsage.map((u) => EXTENDED_KEY_USAGE_LABEL[u]).join(", ") },
                     { label: "Key usage", value: keyUsage.map((u) => KEY_USAGE_LABEL[u]).join(", ") },
                     { label: "Device keys", value: allowedKeyTypes.map((t) => KEY_TYPE_LABEL[t]).join(", ") },
-                    { label: "Validator", value: kind },
+                    { label: "Validator", value: validatorLabel(kind) },
+                    ...(intune ? [{ label: "Entra tenant", value: tenantId.trim() }, { label: "Entra app", value: appId.trim() }] : []),
                   ]}
                 />
               </FieldSet>

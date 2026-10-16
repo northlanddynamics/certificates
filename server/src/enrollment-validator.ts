@@ -73,8 +73,11 @@ export interface EnrollmentValidator {
   issued(request: DecidedRequest, certificate: IssuedDeviceCertificate): Promise<void>;
   /** Tells it a request it was asked about was refused after all (by it, or after it allowed it). At least once, like `issued`. */
   failed(request: DecidedRequest, reason: string): Promise<void>;
-  /** Resolves when the service can be reached with these settings and secret, without validating or revoking anything. */
-  test(): Promise<void>;
+  /**
+   * Resolves when the service can be reached with these settings and secret, without validating or revoking anything;
+   * with a note for the administrator when the test could not prove everything (shown, so it must hold no secret).
+   */
+  test(): Promise<void | { note?: string }>;
   /** Its revocation feed, when its kind has one. */
   revocations?: {
     /** The Revocations it asks for now. What is pulled is not asked for again, so each is answered by `report`. */

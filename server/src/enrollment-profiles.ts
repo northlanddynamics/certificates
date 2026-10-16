@@ -328,10 +328,10 @@ export function registerEnrollmentProfiles(ctx: {
       tags: ["Enrollment Profiles"],
       summary: "Test the Enrollment Validator's connection",
       description:
-        "Asks the profile's validator whether its service can be reached with its settings and secret, without validating or revoking anything. Always 200; `ok` says whether it worked and `error` why not. " +
+        "Asks the profile's validator whether its service can be reached with its settings and secret, without validating or revoking anything. Always 200; `ok` says whether it worked and `error` why not, and `note` what the test could not prove (an Intune test cannot prove the scep_challenge_provider permission without validating a request). " +
         "Only Organization Administrators may.",
       request: { params: ProfileParams },
-      responses: { 200: json(z.object({ ok: z.boolean(), error: z.string().optional() }), "Whether the validator's service could be reached"), ...errors(401, 403, 404) },
+      responses: { 200: json(z.object({ ok: z.boolean(), error: z.string().optional(), note: z.string().optional() }), "Whether the validator's service could be reached"), ...errors(401, 403, 404) },
     }),
     async (c) => {
       const { orgId, id } = c.req.valid("param");
@@ -339,11 +339,11 @@ export function registerEnrollmentProfiles(ctx: {
       await authorize(actor, orgId, { enrollmentProfile: ["update"] });
       const { row } = await findProfile(orgId, id);
       // The service is asked outside any transaction: only the record of the test is written in one.
-      const outcome: { ok: true } | { ok: false; error: string } = await validators
+      const outcome: { ok: true; note?: string } | { ok: false; error: string } = await validators
         .open(db, row)
         .then((validator) => validator.test())
         .then(
-          () => ({ ok: true as const }),
+          (tested) => ({ ok: true as const, ...(tested?.note ? { note: tested.note.slice(0, 1000) } : {}) }),
           (err: unknown) => ({ ok: false as const, error: describeValidatorError(err) }),
         );
       await unitOfWork.run(actor, (_tx, change) =>

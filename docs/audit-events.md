@@ -103,6 +103,6 @@ A Managed Certificate issued from a Private CA is audited with the same actions 
 
 `enrollment.refused` targets the Enrollment Profile (`enrollment_profile`, its id) under which a device's request was refused, with no actor. Its `detail` has the `enrollmentProfile` (`id`, `name`), the `reason` the device was given (such as a key the profile does not allow, a name its name rules do not, or the Enrollment Validator's own refusal), the `validator` (`{ "kind": ... }`), and the SCEP `transactionId`. Nothing is issued.
 
-`enrollment_validator.tested` targets the Enrollment Profile whose Enrollment Validator an Organization Administrator tested. Its `detail` has the `validator` (`{ "kind": ... }`), `ok`, and the `error` when it failed.
+`enrollment_validator.tested` targets the Enrollment Profile whose Enrollment Validator an Organization Administrator tested. Its `detail` has the `validator` (`{ "kind": ... }`), `ok`, the `error` when it failed, and, when it worked, the `note` of what the test could not prove (an Intune test cannot prove the `scep_challenge_provider` permission).
 
 `device_certificate.revoked` targets the Device Certificate revoked. When its Enrollment Validator's revocation feed asked for it, there is no actor, and `detail.by` is `{ "enrollmentValidator": { "kind": ... } }`. Its `detail` also has the `enrollmentProfile` (`id`, `name`), the `serial`, `subject`, and the RFC 5280 `reason` (such as `cessationOfOperation`). Its Issuing CA's CRL is reissued in the same change.

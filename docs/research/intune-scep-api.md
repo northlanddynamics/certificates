@@ -283,6 +283,12 @@ Updated in the same change:
 
 ## Open questions for ticket 04 / 05
 
+Ticket 04 (2026-10-16), from search excerpts, `learn.microsoft.com` still being unreachable here:
+- **Permissions: confirmed.** Microsoft's [Use third-party CAs with SCEP](https://learn.microsoft.com/en-us/intune/fundamentals/certificates/third-party-ca-scep) has the app given Intune → `scep_challenge_provider` and Microsoft Graph → `Application.Read.All` application permissions, with admin consent; vendor guides ([SecureW2](https://securew2.com/documentation/microsoft-intune/scep-ca-integration-with-microsoft-intune), [Keyfactor](https://docs.keyfactor.com/ejbca/latest/configure-intune), [AWS Private CA](https://docs.aws.amazon.com/privateca/latest/userguide/connector-for-scep-intune.html), which also asks for `User.Read`) agree.
+- **`IntuneDeviceId://` URI SAN: confirmed as the convention**, though not Intune's own doing: the administrator's SCEP profile adds the URI `IntuneDeviceId://{{DeviceId}}`, which Microsoft recommends for NAC solutions to identify devices ([SCEPman](https://docs.scepman.com/certificate-management/microsoft-intune/android), [ClearPass](https://arubanetworking.hpe.com/techdocs/NAC/clearpass/integrations/unified-endpoint-management/intune/)). Some NAC vendors use other forms (Portnox: `https://intunedeviceid/{{DeviceId}}`); only `IntuneDeviceId://` (any case) is read.
+- The 60-minute cool-down and any revocation permission are still ticket 05's.
+
+
 - Confirm the [MS-API] excerpts against the live page: the permission names and the 60-minute cool-down (ticket 04), and whether revocation needs another permission (ticket 05).
 - Confirm the `IntuneDeviceId://` URI SAN convention (ticket 04).
 - iOS/macOS padding is inferred, not observed. Both paddings are accepted, so this too is informational.
