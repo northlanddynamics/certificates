@@ -58,7 +58,7 @@ describe("the Intune Enrollment Validator", () => {
     double.refusing = "ScepProfileNoLongerTargetedToTheClient";
     const decision = await validator().validate({ csr: csr(), challengePassword: "c", transactionId: "tx-2" });
     expect(decision.allowed).toBe(false);
-    expect(decision.allowed ? "" : decision.reason).toStartWith("ScepProfileNoLongerTargetedToTheClient");
+    expect(decision.allowed ? "" : decision.reason).toBe("ScepProfileNoLongerTargetedToTheClient");
   });
 
   test("fails rather than allows when Intune answers with an error", async () => {

@@ -55,7 +55,8 @@ const STEPS = [
 ] as const satisfies readonly { id: string; title: string; icon: LucideIcon }[];
 type StepId = (typeof STEPS)[number]["id"];
 
-/** What an Intune Enrollment Validator is configured with: the Entra app that signs in to Graph and Intune. */
+// An Intune Enrollment Validator is configured with the Entra app that signs in to Graph and Intune: a tenant (its ID
+// or a domain of it) and an app ID. The server checks them too (server/src/intune.ts).
 const GUID = /^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/i;
 const TENANT = /^([0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}|([a-z0-9]([a-z0-9-]{0,61}[a-z0-9])?\.)+[a-z]{2,63})$/i;
 const VALIDATOR_LABEL: Record<string, string> = { intune: "Microsoft Intune" };

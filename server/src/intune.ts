@@ -8,7 +8,7 @@
 //
 // Tokens and the discovered services are kept a while per app, and the services forgotten whenever Intune cannot be
 // reached at the HTTP level, since they may have moved (as the libraries do). No error says what the secret or a token
-// is; what Entra and Intune say is wrong is kept short.
+// is (should Entra quote the secret, it is taken out); what Entra and Intune say is wrong is kept short.
 import { z } from "@hono/zod-openapi";
 import { createHash, randomUUID } from "node:crypto";
 import * as x509 from "@peculiar/x509";
@@ -24,6 +24,8 @@ const INTUNE_APP_ID = "0000000a-0000-0000-c000-000000000000";
 const GRAPH_SCOPE = `${GRAPH}/.default`;
 // The libraries append "/.default" to a resource with a trailing slash, and that double slash is what Entra is sent.
 const INTUNE_SCOPE = "https://api.manage.microsoft.com//.default";
+/** Where Intune's services are, which Graph's answer must keep to. */
+const INTUNE_HOSTS = ".manage.microsoft.com";
 const VALIDATION_SERVICE = "scepRequestValidationFEService";
 const PKI_CONNECTOR_SERVICE = "pkiConnectorFEService";
 const VALIDATION_API_VERSION = "2018-02-20";
@@ -39,6 +41,7 @@ const TOKEN_MARGIN_MS = 5 * 60_000;
 const guid = z.string().regex(/^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/i, "must be a GUID");
 const domain = z.string().regex(/^(?=.{1,253}$)([a-z0-9]([a-z0-9-]{0,61}[a-z0-9])?\.)+[a-z]{2,63}$/i, "must be a GUID or a domain name");
 
+/** What an Intune Enrollment Validator is configured with, besides its secret: the Entra app. */
 export const IntuneSettings = z
   .object({
     tenantId: z.union([guid, domain]).openapi({ description: "The Entra tenant: its ID, or a domain of it such as contoso.onmicrosoft.com." }),
@@ -68,6 +71,7 @@ function intuneDeviceIdOf(names: { type: string; value: string }[]) {
   return undefined;
 }
 
+/** The Intune kind, reaching Microsoft through `options.fetch`. */
 export function createIntuneKind(options: IntuneOptions = {}): EnrollmentValidatorKind<IntuneSettings> {
   const { fetch: send = fetch, timeoutMs = 15_000, clock = Date.now } = options;
   const tokens = new Map<string, { token: string; until: number }>();
@@ -88,7 +92,10 @@ export function createIntuneKind(options: IntuneOptions = {}): EnrollmentValidat
     try {
       for (let next = await reader?.read(); next && !next.done; next = await reader!.read()) {
         size += next.value.length;
-        if (size > MAX_ANSWER_BYTES) throw fail(`${where} sent an answer larger than any it should`);
+        if (size > MAX_ANSWER_BYTES) {
+          await reader!.cancel().catch(() => {});
+          throw fail(`${where} sent an answer larger than any it should`);
+        }
         chunks.push(next.value);
       }
     } catch (err) {
@@ -113,7 +120,10 @@ export function createIntuneKind(options: IntuneOptions = {}): EnrollmentValidat
 
     create({ tenantId, appId }, secret): EnrollmentValidator {
       const app = `${tenantId.toLowerCase()} ${appId.toLowerCase()}`;
-      const tokenKey = (scope: string) => `${app} ${createHash("sha256").update(secret).digest("hex")} ${scope}`;
+      const secretHash = createHash("sha256").update(secret).digest("hex");
+      const tokenKey = (scope: string) => `${app} ${secretHash} ${scope}`;
+      /** What Entra said, with the secret taken out should it ever be quoted. */
+      const said = (text: unknown, max?: number) => short(text, max).split(secret).join("[secret]");
 
       /** A token for the scope, from Entra with the client credentials flow; a kept one unless `fresh`. */
       async function token(scope: string, fresh = false) {
@@ -126,10 +136,12 @@ export function createIntuneKind(options: IntuneOptions = {}): EnrollmentValidat
         });
         const answer = (body ?? {}) as { access_token?: unknown; expires_in?: unknown; error?: unknown; error_description?: unknown };
         if (!ok || typeof answer.access_token !== "string") {
-          const said = [short(answer.error, 60), short(answer.error_description)].filter(Boolean).join(": ");
-          throw fail(`Entra ID would not sign the app in for ${scope === GRAPH_SCOPE ? "Microsoft Graph" : "Intune"} (${status})${said ? `: ${said}` : ""}; check the tenant ID, app ID and secret`);
+          const why = [said(answer.error, 60), said(answer.error_description)].filter(Boolean).join(": ");
+          throw fail(`Entra ID would not sign the app in for ${scope === GRAPH_SCOPE ? "Microsoft Graph" : "Intune"} (${status})${why ? `: ${why}` : ""}; check the tenant ID, app ID and secret`);
         }
         const seconds = typeof answer.expires_in === "number" ? answer.expires_in : Number(answer.expires_in) || 0;
+        // Spent tokens go, so that the secrets of old ones are not kept by their keys.
+        for (const [key, kept] of tokens) if (kept.until <= clock()) tokens.delete(key);
         tokens.set(tokenKey(scope), { token: answer.access_token, until: clock() + seconds * 1000 - TOKEN_MARGIN_MS });
         return answer.access_token;
       }
@@ -142,15 +154,18 @@ export function createIntuneKind(options: IntuneOptions = {}): EnrollmentValidat
           method: "GET",
           headers: { authorization: `Bearer ${await token(GRAPH_SCOPE, fresh)}`, accept: "application/json", "client-request-id": randomUUID() },
         });
+        if (status === 401) tokens.delete(tokenKey(GRAPH_SCOPE));
         if (status === 403) throw fail("Microsoft Graph would not list Intune's services (403): grant the app the Graph Application.Read.All application permission, with admin consent");
-        if (!ok) throw fail(`Microsoft Graph would not list Intune's services (${status})${short((body as { error?: { code?: unknown } })?.error?.code) ? `: ${short((body as { error: { code: unknown } }).error.code)}` : ""}`);
+        const code = said((body as { error?: { code?: unknown } } | null)?.error?.code, 80);
+        if (!ok) throw fail(`Microsoft Graph would not list Intune's services (${status})${code ? `: ${code}` : ""}`);
         const value = (body as { value?: unknown })?.value;
         const map = new Map<string, string>();
         if (Array.isArray(value)) for (const e of value) if (typeof e?.providerName === "string" && typeof e?.uri === "string") map.set(e.providerName.toLowerCase(), e.uri);
         const https = (name: string) => {
           const uri = map.get(name.toLowerCase());
           if (!uri) throw fail(`Microsoft Graph lists no ${name} for the tenant: is Intune licensed in it?`);
-          if (!URL.canParse(uri) || new URL(uri).protocol !== "https:") throw fail(`Microsoft Graph gave a ${name} that is not an https URL`);
+          // The Intune token is sent there, so only to Intune's own hosts.
+          if (!URL.canParse(uri) || new URL(uri).protocol !== "https:" || !new URL(uri).hostname.endsWith(INTUNE_HOSTS)) throw fail(`Microsoft Graph gave a ${name} that is not an https URL under ${INTUNE_HOSTS.slice(1)}`);
           return uri.replace(/\/+$/, "");
         };
         const found = { validation: https(VALIDATION_SERVICE), pkiConnector: https(PKI_CONNECTOR_SERVICE), until: clock() + SERVICES_TTL_MS };
@@ -184,7 +199,7 @@ export function createIntuneKind(options: IntuneOptions = {}): EnrollmentValidat
         }
         const { code, errorDescription } = (body ?? {}) as { code?: unknown; errorDescription?: unknown };
         if (typeof code !== "string" || code === "") throw fail("Intune answered without a code, as it never should");
-        return { code: short(code, 80), description: short(errorDescription) };
+        return { code: said(code, 80), description: said(errorDescription) };
       }
 
       const csrOf = (csr: Uint8Array) => Buffer.from(csr).toString("base64");
@@ -197,7 +212,8 @@ export function createIntuneKind(options: IntuneOptions = {}): EnrollmentValidat
       return {
         async validate(request) {
           const { code, description } = await scepAction("validateRequest", { request: { transactionId: request.transactionId, certificateRequest: csrOf(request.csr), callerInfo: INTUNE_CALLER_INFO } });
-          return code === "Success" ? { allowed: true } : { allowed: false, reason: description ? `${code}: ${description}` : code };
+          // Intune's code is the reason: it is what Intune's reports and its documentation name.
+          return code === "Success" ? { allowed: true } : { allowed: false, reason: code };
         },
         async issued(request, certificate) {
           const cert = new x509.X509Certificate(certificate.pem);
