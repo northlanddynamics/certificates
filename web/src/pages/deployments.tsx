@@ -149,7 +149,7 @@ export function DeploymentsPage() {
     <div className="flex flex-col gap-6">
       <div className="flex items-center justify-between gap-4">
         <h1 className="text-xl font-semibold">Deployments</h1>
-        {org && can(org, "deployment", "create") && <NewDeploymentDialog orgId={orgId} />}
+        {org && can(org, "deployment", "create") && <NewDeploymentDialog org={org} />}
       </div>
       <p className="text-sm text-muted-foreground">
         A Deployment has one Agent make the private key for a Managed Certificate on its own host, so the key never reaches the platform, and run a Deployment Script with the

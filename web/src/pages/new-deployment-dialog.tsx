@@ -1,6 +1,7 @@
 import { useMutation, useQuery, useQueryClient } from "@tanstack/react-query";
 import { BotIcon, CheckIcon, ClipboardCheckIcon, FileTerminalIcon, GlobeIcon, PlusIcon, RefreshCwIcon, type LucideIcon } from "lucide-react";
 import { useState, type FormEvent, type ReactNode } from "react";
+import { IssuerChoiceFields, useIssuerChoice } from "@/components/issuer-choice";
 import { Button } from "@/components/ui/button";
 import { Dialog, DialogContent, DialogDescription, DialogHeader, DialogTitle, DialogTrigger } from "@/components/ui/dialog";
 import { Field, FieldContent, FieldDescription, FieldError, FieldGroup, FieldLabel, FieldLegend, FieldSet, FieldTitle } from "@/components/ui/field";
@@ -8,11 +9,10 @@ import { Input } from "@/components/ui/input";
 import { RadioGroup, RadioGroupItem } from "@/components/ui/radio-group";
 import { Select, SelectContent, SelectItem, SelectTrigger, SelectValue } from "@/components/ui/select";
 import { Textarea } from "@/components/ui/textarea";
-import { api, type RenewalPolicy } from "@/lib/api";
+import { api, can, type Me, type RenewalPolicy } from "@/lib/api";
 import { KEY_ALGORITHMS, KEY_ALGORITHM_LABELS, type KeyAlgorithm } from "@/lib/csr-generator";
 import { nameProblems, splitNames } from "@/lib/csr-names";
-
-type Environment = "staging" | "production";
+import { permitsOnlyLabel } from "@/lib/private-ca";
 
 const STEPS = [
   { id: "agent", title: "Agent", icon: BotIcon },
@@ -23,14 +23,10 @@ const STEPS = [
 ] as const satisfies readonly { id: string; title: string; icon: LucideIcon }[];
 type StepId = (typeof STEPS)[number]["id"];
 
-const ENVIRONMENTS: { value: Environment; title: string; description: string }[] = [
-  { value: "staging", title: "Staging", description: "The CA's test service. Certificates are not trusted by browsers; use it to try a Deployment first." },
-  { value: "production", title: "Production", description: "The CA's live service. Certificates are publicly trusted, and the CA's rate limits apply." },
-];
 const LATEST = "latest";
 
 /** The button that sets up a Deployment in one guided flow, and the dialog it opens. */
-export function NewDeploymentDialog({ orgId }: { orgId: string }) {
+export function NewDeploymentDialog({ org }: { org: Me["organizations"][number] }) {
   const [open, setOpen] = useState(false);
   return (
     <Dialog open={open} onOpenChange={setOpen}>
@@ -49,19 +45,20 @@ export function NewDeploymentDialog({ orgId }: { orgId: string }) {
           </DialogDescription>
         </DialogHeader>
         {/* Only mounted while open, so each opening starts from a clean form and the lists are fetched only when wanted. */}
-        {open && <NewDeploymentForm orgId={orgId} onDone={() => setOpen(false)} />}
+        {open && <NewDeploymentForm org={org} onDone={() => setOpen(false)} />}
       </DialogContent>
     </Dialog>
   );
 }
 
-function NewDeploymentForm({ orgId, onDone }: { orgId: string; onDone: () => void }) {
+function NewDeploymentForm({ org, onDone }: { org: Me["organizations"][number]; onDone: () => void }) {
+  const orgId = org.id;
   const queryClient = useQueryClient();
   const [step, setStep] = useState<StepId>("agent");
   const [agentId, setAgentId] = useState("");
   const [names, setNames] = useState("");
   const [keyAlgorithm, setKeyAlgorithm] = useState<KeyAlgorithm>("ecdsa-p256");
-  const [environment, setEnvironment] = useState<Environment>("staging");
+  const choice = useIssuerChoice(orgId, { canReadAccounts: can(org, "acmeAccount", "read"), canReadPrivateCas: can(org, "privateCa", "read") });
   const [scriptId, setScriptId] = useState("");
   const [version, setVersion] = useState(LATEST);
   const [mode, setMode] = useState<RenewalPolicy["mode"]>("automatic");
@@ -70,7 +67,6 @@ function NewDeploymentForm({ orgId, onDone }: { orgId: string; onDone: () => voi
   const agents = useQuery({ queryKey: ["agents", orgId, "choices"], queryFn: () => api.agents(orgId, { status: [], os: [], outdated: false }, { page: 1, pageSize: 100 }) });
   const scripts = useQuery({ queryKey: ["deployment-scripts", orgId, "choices"], queryFn: () => api.deploymentScripts(orgId, { page: 1, pageSize: 100 }) });
   const script = useQuery({ queryKey: ["deployment-scripts", orgId, scriptId], queryFn: () => api.deploymentScript(orgId, scriptId), enabled: scriptId !== "" });
-  const accounts = useQuery({ queryKey: ["acme-accounts", orgId], queryFn: () => api.acmeAccounts(orgId) });
   const usable = agents.data?.items.filter((a) => a.status !== "revoked") ?? [];
   const chosenAgent = usable.find((a) => a.id === agentId);
   const chosenScript = scripts.data?.items.find((s) => s.id === scriptId);
@@ -81,7 +77,7 @@ function NewDeploymentForm({ orgId, onDone }: { orgId: string; onDone: () => voi
   const daysValid = Number.isInteger(daysNumber) && daysNumber >= 1 && daysNumber <= 365;
   const complete: Record<StepId, boolean> = {
     agent: chosenAgent !== undefined,
-    certificate: problems.length === 0,
+    certificate: problems.length === 0 && choice.validityOk,
     script: chosenScript !== undefined,
     renewal: mode === "manual" || daysValid,
     review: true,
@@ -102,7 +98,7 @@ function NewDeploymentForm({ orgId, onDone }: { orgId: string; onDone: () => voi
         ...(version !== LATEST && { scriptVersion: Number(version) }),
         names: parsedNames,
         keyAlgorithm,
-        environment,
+        ...choice.request,
         renewalPolicy: { mode, daysBeforeExpiry: daysValid ? daysNumber : 30 },
       }),
     onSuccess: async () => {
@@ -110,7 +106,6 @@ function NewDeploymentForm({ orgId, onDone }: { orgId: string; onDone: () => voi
       onDone();
     },
   });
-  const registered = accounts.data?.items.some((a) => a.environment === environment);
   const versions = script.data?.versions ?? [];
 
   return (
@@ -170,6 +165,7 @@ function NewDeploymentForm({ orgId, onDone }: { orgId: string; onDone: () => voi
               <FieldLabel htmlFor="new-deployment-names">Domain names</FieldLabel>
               <Textarea id="new-deployment-names" rows={5} autoFocus value={names} aria-invalid={names.trim() !== "" && problems.length > 0} onChange={(e) => setNames(e.target.value)} />
               <FieldDescription>One per line; wildcards as *.example.com. The Certificate is issued for exactly these names.</FieldDescription>
+              {choice.chosenCa && <FieldDescription>{permitsOnlyLabel(choice.chosenCa)}</FieldDescription>}
               {names.trim() !== "" && problems.map((problem) => <FieldError key={problem}>{problem}</FieldError>)}
             </Field>
             <Field>
@@ -190,20 +186,8 @@ function NewDeploymentForm({ orgId, onDone }: { orgId: string; onDone: () => voi
             </Field>
             <FieldSet>
               <FieldLegend variant="label">Issued from</FieldLegend>
-              <RadioGroup value={environment} onValueChange={(value) => setEnvironment(value as Environment)}>
-                {ENVIRONMENTS.map((env) => (
-                  <FieldLabel key={env.value} htmlFor={`new-deployment-env-${env.value}`}>
-                    <Field orientation="horizontal">
-                      <FieldContent>
-                        <FieldTitle>{env.title}</FieldTitle>
-                        <FieldDescription>{env.description}</FieldDescription>
-                      </FieldContent>
-                      <RadioGroupItem value={env.value} id={`new-deployment-env-${env.value}`} />
-                    </Field>
-                  </FieldLabel>
-                ))}
-              </RadioGroup>
-              {accounts.data && !registered && <FieldError>The Organization has no {environment} ACME account yet, so Issuance would fail. Register one under ACME accounts.</FieldError>}
+              <FieldDescription>An ACME CA issues it after checking control of the names (DCV); an Issuing CA of one of the Organization's Private CAs issues it with no DCV.</FieldDescription>
+              <IssuerChoiceFields choice={choice} idPrefix="new-deployment" trying="a Deployment" />
             </FieldSet>
           </FieldGroup>
         )}
@@ -303,7 +287,8 @@ function NewDeploymentForm({ orgId, onDone }: { orgId: string; onDone: () => voi
                   { label: "Agent", value: chosenAgent?.hostName },
                   { label: "Domain names", value: <ul className="flex flex-col gap-0.5 font-mono text-xs">{parsedNames.map((name) => <li key={name}>{name}</li>)}</ul> },
                   { label: "Key algorithm", value: KEY_ALGORITHM_LABELS[keyAlgorithm] },
-                  { label: "Issued from", value: ENVIRONMENTS.find((e) => e.value === environment)?.title },
+                  { label: "Issued from", value: choice.title },
+                  ...(choice.validityText ? [{ label: "Validity", value: choice.validityText }] : []),
                   {
                     label: "Script",
                     value: chosenScript && `${chosenScript.name}, version ${version === LATEST ? chosenScript.latestVersion.version : version}`,

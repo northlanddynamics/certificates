@@ -393,7 +393,10 @@ export interface NewDeployment {
   scriptVersion?: number;
   names: string[];
   keyAlgorithm: string;
-  environment: "staging" | "production";
+  /** An ACME CA in an environment, or an Issuing CA of one of the Organization's Private CAs. */
+  issuer: NewManagedCertificate["issuer"];
+  /** For an Issuing CA only: how many days its Certificates are valid for; its default when not given. */
+  validityDays?: number;
   renewalPolicy: RenewalPolicy;
 }
 /** An Agent as the Agents list shows it. */

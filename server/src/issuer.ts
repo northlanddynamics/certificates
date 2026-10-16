@@ -7,7 +7,7 @@ import { CertificateAuthorityError, type AcmeCertificateAuthority, type AcmeEnvi
 import type { Db, Tx } from "./db/client";
 import { acmeAccount } from "./db/schema";
 import { IssuanceFailure } from "./issuance-failure";
-import type { IssuerKind } from "./issuer-kinds";
+import { ISSUER_KINDS, type IssuerKind } from "./issuer-kinds";
 import type { PrivateCas } from "./private-ca";
 import { REVOCATION_REASONS_OF } from "./revocation-reasons";
 import type { Secrets } from "./secrets";
@@ -64,6 +64,13 @@ export const certificateIssuerColumns = (issuedBy: CertificateIssuer) =>
 /** What an Audit Event of an Issuance says of its issuer: nothing for ACME, as before there were other kinds; which Issuing CA for a Private CA. */
 export const issuerDetail = (issuer: Issuer | CertificateIssuer) => (issuer.kind === "private_ca" ? { issuer: { kind: issuer.kind, issuingCaId: issuer.issuingCaId } } : {});
 
+/** What the Audit Event of a Managed Certificate created or proposed says of its issuer: the ACME environment, or which Issuing CA, and the validity it chose (`validityDays` given). */
+export const issuerAuditDetail = (issuer: Issuer, validityDays: number | undefined) => ({
+  ...(issuer.kind === "acme" && { environment: issuer.environment }),
+  ...issuerDetail(issuer),
+  ...(validityDays !== undefined && { validityDays }),
+});
+
 /** What an issuer's CA served for a CSR: the chain (PEM, the Certificate first), what the CA calls itself, and the issuer to record on the Certificate. */
 export interface Issued {
   chainPem: string;
@@ -101,6 +108,8 @@ export interface Issuers {
   revoke(tx: Tx, change: Change, organizationId: string, issuedBy: CertificateIssuer, request: { certificate: string; reason: RevocationReason }): Promise<void>;
   /** What the CA a Certificate came from suggests about renewing it; null when it offers nothing. Throws a CertificateAuthorityError when it does not answer. */
   renewalInfo(issuedBy: CertificateIssuer, certificate: string): Promise<RenewalInfo | null>;
+  /** The kinds of issuer whose CAs may suggest when to renew (ARI); a Certificate from any other kind is never asked about, and renews by its Renewal Policy alone. */
+  readonly renewalInfoKinds: readonly IssuerKind[];
   /** The root certificates (PEM) the chains of the CA a Certificate came from end in, as far as the platform knows them. */
   roots(db: Db | Tx, organizationId: string, issuedBy: CertificateIssuer): Promise<string[]>;
 }
@@ -109,6 +118,8 @@ export interface Issuers {
 interface KindOfIssuer<M extends Issuer, C extends CertificateIssuer> {
   issue(db: Db | Tx, organizationId: string, issuer: M, request: IssueRequest): Promise<Issued>;
   revoke(tx: Tx, change: Change, organizationId: string, issuedBy: C, request: { certificate: string; reason: RevocationReason }): Promise<void>;
+  /** Whether its CAs may suggest when to renew; `renewalInfo` is never asked of a kind whose do not. */
+  offersRenewalInfo: boolean;
   renewalInfo(issuedBy: C, certificate: string): Promise<RenewalInfo | null>;
   roots(db: Db | Tx, organizationId: string, issuedBy: C): Promise<string[]>;
 }
@@ -136,11 +147,12 @@ export function createIssuers({ acme, secrets, privateCas }: { acme: AcmeCertifi
       if (!account) throw new Error("the ACME account the Certificate was issued through is gone");
       await acme.revoke(issuedBy.environment, account, request);
     },
+    offersRenewalInfo: true,
     renewalInfo: (issuedBy, certificate) => acme.renewalInfo(issuedBy.environment, certificate),
     roots: (_db, _organizationId, issuedBy) => acme.roots(issuedBy.environment),
   };
 
-  // No DCV: the names a Private CA may issue for are the Organization's to decide. No ARI either.
+  // No DCV: the names a Private CA may issue for are the Organization's to decide. No ARI either: its Certificates renew by the Renewal Policy alone.
   const privateCaKind: KindOfIssuer<Issuer & { kind: "private_ca" }, CertificateIssuer & { kind: "private_ca" }> = {
     async issue(db, organizationId, issuer, { csr, names, validityDays }) {
       const { chainPem, name } = await privateCas.issueFrom(db, organizationId, issuer.issuingCaId, { csr, names, validityDays });
@@ -148,12 +160,13 @@ export function createIssuers({ acme, secrets, privateCas }: { acme: AcmeCertifi
     },
     // The Private CA revokes by publishing the revocation recorded on the transaction in its CRL.
     revoke: (tx, change, organizationId, issuedBy) => privateCas.publishRevocation(tx, change, organizationId, issuedBy.issuingCaId),
+    offersRenewalInfo: false,
     renewalInfo: async () => null,
     roots: (db, organizationId, issuedBy) => privateCas.rootsOf(db, organizationId, issuedBy.issuingCaId),
   };
 
   /** The kind an issuer is of: the one place a new kind is told apart. Each kind is only ever given issuers of its own. */
-  function kindOf(issuer: Issuer | CertificateIssuer): KindOfIssuer<Issuer, CertificateIssuer> {
+  function kindOf(issuer: { kind: IssuerKind }): KindOfIssuer<Issuer, CertificateIssuer> {
     switch (issuer.kind) {
       case "acme":
         return acmeKind;
@@ -171,6 +184,7 @@ export function createIssuers({ acme, secrets, privateCas }: { acme: AcmeCertifi
       return kindOf(issuedBy).revoke(tx, change, organizationId, issuedBy, request);
     },
     renewalInfo: (issuedBy, certificate) => kindOf(issuedBy).renewalInfo(issuedBy, certificate),
+    renewalInfoKinds: ISSUER_KINDS.filter((kind) => kindOf({ kind }).offersRenewalInfo),
     roots: (db, organizationId, issuedBy) => kindOf(issuedBy).roots(db, organizationId, issuedBy),
   };
 }

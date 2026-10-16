@@ -1,7 +1,8 @@
 // Deployments: an Organization Administrator's arrangement for one Agent to make the key for a Managed Certificate, obtain
 // its Certificates and put them into use by running a Deployment Script. It is set up in one call: the Agent, the Managed
-// Certificate's names and key algorithm, the script version and the Renewal Policy. The rest is done through work items
-// (work-items.ts) and what follows from them, never by the platform holding a key (ADR 0002):
+// Certificate's names, key algorithm and CA (an ACME CA or an Issuing CA of a Private CA), the script version and the
+// Renewal Policy. The rest is done through work items (work-items.ts) and what follows from them, never by the platform
+// holding a key (ADR 0002):
 //   1. `deployment.generate_key`: the Agent makes the key in a store only its service account reads and reports a CSR for
 //      it. The platform checks the CSR as it does an Owner's, keeps it and begins the Issuance.
 //   2. When the Issuance stores the Certificate, `deployment.run`: the Agent is given the Certificate and the script
@@ -21,13 +22,14 @@ import type { Db, Tx } from "./db/client";
 import { agent, certificate, deployment, deploymentRun, deploymentScript, deploymentScriptVersion, issuance, managedCertificate, workItem } from "./db/schema";
 import { SCRIPT_INTERPRETERS } from "./deployment-script-kinds";
 import { HttpError, OrgParam, PageQuery, anyOf, errors, json, pageOf } from "./http";
-import { issuerColumns } from "./issuer";
+import { issuerAuditDetail, issuerColumns } from "./issuer";
 import type { Issuances } from "./issuance";
 import type { Notifications } from "./notifications";
 import { RenewalPolicy } from "./managed-certificate-reader";
 import { MAX_NAMES, normalizeNames } from "./names";
 import { checkNamesAndCsr, namesField } from "./names-and-csr";
 import { lockManagedCertificate } from "./name-change";
+import { IssuerField, issuerAsked, validityDaysField } from "./private-ca";
 import type { Actor, UnitOfWork } from "./unit-of-work";
 import { PreparationError, type RunReport, type WorkItems } from "./work-items";
 
@@ -372,7 +374,9 @@ export function registerDeployments(ctx: {
         "Organization Administrators only, and no Approval is needed. It creates the Managed Certificate (Key Custody: Agent, bound to this one Agent and this Deployment) with the names, key algorithm and Renewal Policy given, " +
         "and asks the Agent to make the key and send a CSR for it: the private key never reaches the platform. Once the Agent has, Issuance begins; when the Certificate is stored the Agent is given it and the script, " +
         "and its report of running it is the first Deployment Run. One Agent can serve many Deployments. The script version is pinned: the latest unless `scriptVersion` says. " +
-        "An Agent that is offline does the work when it next polls.",
+        "An Agent that is offline does the work when it next polls. " +
+        "Its issuer is an ACME CA (staging unless `environment` says otherwise) or, given `issuer`, an active Issuing CA of one of the Organization's Private CAs, which issues with no DCV; " +
+        "names outside the Issuing CA's permitted name rules are refused with 422, as is a `validityDays` above its maximum; `validityDays` with an ACME CA, or both `issuer` and `environment`, is refused with 400.",
       request: {
         params: OrgParam,
         body: {
@@ -384,7 +388,11 @@ export function registerDeployments(ctx: {
                 scriptVersion: z.number().int().min(1).optional().openapi({ description: "Which version of the script to run; the latest by default." }),
                 names: namesField("The DNS names to issue for."),
                 keyAlgorithm: z.enum(KEY_ALGORITHMS),
-                environment: z.enum(ACME_ENVIRONMENTS).default("staging").openapi({ description: "Which of the Organization's ACME accounts to issue through." }),
+                environment: z.enum(ACME_ENVIRONMENTS).optional().openapi({ description: "Which of the Organization's ACME accounts to issue through, when `issuer` is not given; staging unless given." }),
+                issuer: IssuerField.optional(),
+                validityDays: validityDaysField
+                  .optional()
+                  .openapi({ description: "For a Private CA issuer only: how many days its Certificates are valid for, at most the Issuing CA's maximum; its default when not given." }),
                 renewalPolicy: RenewalPolicy.default({ mode: "automatic", daysBeforeExpiry: 30 }),
               }),
             },
@@ -403,6 +411,7 @@ export function registerDeployments(ctx: {
       if (normalized.names.length > MAX_NAMES) throw new HttpError(400, `at most ${MAX_NAMES} names`);
       if (!UUID.test(body.agentId)) throw new HttpError(400, "the Agent must be the id of one of the Organization's Agents");
       if (!UUID.test(body.scriptId)) throw new HttpError(400, "the script must be the id of one of the Organization's Deployment Scripts");
+      const issuer = await issuerAsked(db, orgId, body, normalized.names);
 
       const created = await unitOfWork.run(actor, async (tx, change) => {
         // Shared, so that the Agent being revoked finishes first, or is seen revoked.
@@ -426,7 +435,8 @@ export function registerDeployments(ctx: {
             names: normalized.names,
             keyAlgorithm: body.keyAlgorithm,
             keyCustody: "agent",
-            ...issuerColumns({ kind: "acme", environment: body.environment }),
+            ...issuerColumns(issuer),
+            validityDays: body.validityDays ?? null,
             csr: null,
             renewalMode: body.renewalPolicy.mode,
             renewalDaysBeforeExpiry: body.renewalPolicy.daysBeforeExpiry,
@@ -449,7 +459,13 @@ export function registerDeployments(ctx: {
           organizationId: orgId,
           action: "managed_certificate.created",
           target: { type: "managed_certificate", id: mc!.id },
-          detail: { names: mc!.names, keyAlgorithm: mc!.keyAlgorithm, keyCustody: "agent", environment: mc!.environment, deploymentId: row!.id },
+          detail: {
+            names: mc!.names,
+            keyAlgorithm: mc!.keyAlgorithm,
+            keyCustody: "agent",
+            ...issuerAuditDetail(issuer, body.validityDays),
+            deploymentId: row!.id,
+          },
         });
         await change.audit({
           organizationId: orgId,
