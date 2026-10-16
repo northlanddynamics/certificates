@@ -1,7 +1,7 @@
 import { useQuery } from "@tanstack/react-query";
 import { Link, useParams } from "@tanstack/react-router";
 import { createColumnHelper, tableFeatures, useTable } from "@tanstack/react-table";
-import { MoreHorizontalIcon, PlusIcon } from "lucide-react";
+import { CheckIcon, ClipboardCheckIcon, KeyRoundIcon, LandmarkIcon, MoreHorizontalIcon, PlusIcon, ScrollTextIcon, ShieldCheckIcon, type LucideIcon } from "lucide-react";
 import { useState, type FormEvent } from "react";
 import {
   DEFAULT_DEVICE_EXTENDED_KEY_USAGES,
@@ -16,13 +16,15 @@ import {
   type DeviceKeyUsage,
 } from "../../../server/src/enrollment-profile-kinds";
 import { DataTable } from "@/components/data-table/data-table";
+import { Breadcrumb, BreadcrumbItem, BreadcrumbList, BreadcrumbPage, BreadcrumbSeparator } from "@/components/ui/breadcrumb";
 import { Button } from "@/components/ui/button";
 import { Checkbox } from "@/components/ui/checkbox";
-import { Dialog, DialogClose, DialogContent, DialogDescription, DialogFooter, DialogHeader, DialogTitle, DialogTrigger } from "@/components/ui/dialog";
+import { Dialog, DialogContent, DialogDescription, DialogTitle, DialogTrigger } from "@/components/ui/dialog";
 import { DropdownMenu, DropdownMenuContent, DropdownMenuItem, DropdownMenuTrigger } from "@/components/ui/dropdown-menu";
-import { Field, FieldDescription, FieldGroup, FieldLabel, FieldLegend, FieldSet } from "@/components/ui/field";
+import { Field, FieldDescription, FieldError, FieldGroup, FieldLabel, FieldLegend, FieldSet } from "@/components/ui/field";
 import { Input } from "@/components/ui/input";
 import { Select, SelectContent, SelectItem, SelectTrigger, SelectValue } from "@/components/ui/select";
+import { Sidebar, SidebarContent, SidebarGroup, SidebarGroupContent, SidebarMenu, SidebarMenuButton, SidebarMenuItem, SidebarProvider } from "@/components/ui/sidebar";
 import { api, can, type EnrollmentProfile } from "@/lib/api";
 import { daysLabel, issuingCaTitle, isValidityDays } from "@/lib/private-ca";
 import { useAction } from "@/lib/use-action";
@@ -43,6 +45,15 @@ const KEY_USAGE_LABEL: Record<DeviceKeyUsage, string> = {
   dataEncipherment: "Data encipherment",
   keyAgreement: "Key agreement",
 };
+const STEPS = [
+  { id: "issuer", title: "Issuing CA", icon: LandmarkIcon },
+  { id: "certificate", title: "Certificate", icon: ScrollTextIcon },
+  { id: "keys", title: "Device keys", icon: KeyRoundIcon },
+  { id: "validator", title: "Enrollment Validator", icon: ShieldCheckIcon },
+  { id: "review", title: "Review", icon: ClipboardCheckIcon },
+] as const satisfies readonly { id: string; title: string; icon: LucideIcon }[];
+type StepId = (typeof STEPS)[number]["id"];
+
 const KEY_TYPE_LABEL: Record<DeviceKeyType, string> = { "rsa-2048": "RSA 2048", "rsa-3072": "RSA 3072", "rsa-4096": "RSA 4096" };
 
 // The server lists every profile; an Organization has a handful.
@@ -159,11 +170,9 @@ function NewProfileDialog({ orgId }: { orgId: string }) {
           New profile
         </Button>
       </DialogTrigger>
-      <DialogContent className="sm:max-w-lg">
-        <DialogHeader>
-          <DialogTitle>New Enrollment Profile</DialogTitle>
-          <DialogDescription>The platform makes the profile's SCEP RA key, which it keeps, and has the Issuing CA sign its certificate.</DialogDescription>
-        </DialogHeader>
+      <DialogContent className="gap-0 overflow-hidden p-0 sm:max-w-[calc(100%-2rem)] md:max-w-[760px] lg:max-w-[860px]">
+        <DialogTitle className="sr-only">New Enrollment Profile</DialogTitle>
+        <DialogDescription className="sr-only">The platform makes the profile's SCEP RA key, which it keeps, and has the Issuing CA sign its certificate.</DialogDescription>
         {/* Only mounted while open, so each opening starts from a clean form. */}
         {open && <NewProfileForm orgId={orgId} onDone={() => setOpen(false)} />}
       </DialogContent>
@@ -190,11 +199,14 @@ function Choices<T extends string>({ legend, id, values, labels, chosen, onChang
           </Field>
         ))}
       </FieldGroup>
+      {chosen.length === 0 && <FieldError>Choose at least one.</FieldError>}
     </FieldSet>
   );
 }
 
+// Every step's state lives in the form, so moving between steps never loses what was entered.
 function NewProfileForm({ orgId, onDone }: { orgId: string; onDone: () => void }) {
+  const [step, setStep] = useState<StepId>("issuer");
   const privateCas = useQuery({ queryKey: ["private-cas", orgId], queryFn: () => api.privateCas(orgId) });
   const kinds = useQuery({ queryKey: ["enrollment-validator-kinds", orgId], queryFn: () => api.enrollmentValidatorKinds(orgId) });
   // Only an active Issuing CA under an active root issues.
@@ -213,75 +225,193 @@ function NewProfileForm({ orgId, onDone }: { orgId: string; onDone: () => void }
     onDone,
   );
   const validityOk = isValidityDays(validityDays, MAX_DEVICE_VALIDITY_DAYS);
-  const ready = name.trim() !== "" && issuingCaId !== "" && kind !== "" && validityOk && extendedKeyUsage.length > 0 && keyUsage.length > 0 && allowedKeyTypes.length > 0;
+
+  // Whether each step holds what it needs; Review only shows what was entered.
+  const complete: Record<StepId, boolean> = {
+    issuer: name.trim() !== "" && issuingCaId !== "",
+    certificate: validityOk && extendedKeyUsage.length > 0 && keyUsage.length > 0,
+    keys: allowedKeyTypes.length > 0,
+    validator: kind !== "",
+    review: true,
+  };
+  const index = STEPS.findIndex((s) => s.id === step);
+  const last = index === STEPS.length - 1;
+  // A step may be opened once every step before it is complete.
+  const reachable = (i: number) => STEPS.slice(0, i).every((s) => complete[s.id]);
+  const goTo = (i: number) => {
+    const target = STEPS[i];
+    if (target && reachable(i)) setStep(target.id);
+  };
 
   return (
-    <form
-      className="flex flex-col gap-4"
-      onSubmit={(e: FormEvent) => {
-        e.preventDefault();
-        create.mutate(undefined);
-      }}
-    >
-      <FieldGroup>
-        <Field>
-          <FieldLabel htmlFor="profile-name">Name</FieldLabel>
-          <Input id="profile-name" value={name} onChange={(e) => setName(e.target.value)} placeholder="Wi-Fi" />
-        </Field>
-        <Field>
-          <FieldLabel htmlFor="profile-issuing-ca">Issuing CA</FieldLabel>
-          <Select value={issuingCaId} onValueChange={setIssuingCaId}>
-            <SelectTrigger id="profile-issuing-ca" className="w-full">
-              <SelectValue placeholder={privateCas.isPending ? "Loading…" : issuingCas.length === 0 ? "No active Issuing CA" : "Choose an Issuing CA"} />
-            </SelectTrigger>
-            <SelectContent>
-              {issuingCas.map((i) => (
-                <SelectItem key={i.id} value={i.id}>
-                  {i.title}
-                </SelectItem>
-              ))}
-            </SelectContent>
-          </Select>
-        </Field>
-        <Field>
-          <FieldLabel htmlFor="profile-validator">Enrollment Validator</FieldLabel>
-          {kinds.data && kinds.data.items.length === 0 ? (
-            <FieldDescription>The platform runs no Enrollment Validator yet, so no profile can be created.</FieldDescription>
-          ) : (
-            <Select value={kind} onValueChange={setValidatorKind}>
-              <SelectTrigger id="profile-validator" className="w-full">
-                <SelectValue placeholder="Loading…" />
-              </SelectTrigger>
-              <SelectContent>
-                {(kinds.data?.items ?? []).map((k) => (
-                  <SelectItem key={k.kind} value={k.kind}>
-                    {k.kind}
-                  </SelectItem>
-                ))}
-              </SelectContent>
-            </Select>
+    <SidebarProvider className="h-[min(600px,85vh)] min-h-0 items-stretch">
+      <Sidebar collapsible="none" className="hidden border-r md:flex">
+        <SidebarContent>
+          <SidebarGroup>
+            <SidebarGroupContent>
+              <SidebarMenu>
+                {STEPS.map((s, i) => {
+                  const done = i < index && complete[s.id];
+                  return (
+                    <SidebarMenuItem key={s.id}>
+                      <SidebarMenuButton isActive={s.id === step} disabled={!reachable(i)} onClick={() => goTo(i)}>
+                        {done ? <CheckIcon className="text-primary" /> : <s.icon />}
+                        <span>{s.title}</span>
+                      </SidebarMenuButton>
+                    </SidebarMenuItem>
+                  );
+                })}
+              </SidebarMenu>
+            </SidebarGroupContent>
+          </SidebarGroup>
+        </SidebarContent>
+      </Sidebar>
+      <form
+        className="flex min-w-0 flex-1 flex-col"
+        onSubmit={(e: FormEvent) => {
+          e.preventDefault();
+          if (!last) goTo(index + 1);
+          else if (STEPS.every((s) => complete[s.id])) create.mutate(undefined);
+        }}
+      >
+        <header className="flex h-14 shrink-0 items-center justify-between gap-2 px-4 pr-12">
+          <Breadcrumb>
+            <BreadcrumbList>
+              <BreadcrumbItem className="hidden md:block">New Enrollment Profile</BreadcrumbItem>
+              <BreadcrumbSeparator className="hidden md:block" />
+              <BreadcrumbItem>
+                <BreadcrumbPage>{STEPS[index]?.title}</BreadcrumbPage>
+              </BreadcrumbItem>
+            </BreadcrumbList>
+          </Breadcrumb>
+          <span className="text-xs text-muted-foreground">
+            Step {index + 1} of {STEPS.length}
+          </span>
+        </header>
+        <div className="flex flex-1 flex-col gap-4 overflow-y-auto p-4 pt-0">
+          {step === "issuer" && (
+            <FieldSet>
+              <FieldLegend>Name it and choose its Issuing CA</FieldLegend>
+              <FieldDescription>The platform makes the profile's SCEP RA key, which it keeps, and has the Issuing CA sign its certificate.</FieldDescription>
+              <FieldGroup>
+                <Field>
+                  <FieldLabel htmlFor="profile-name">Name</FieldLabel>
+                  <Input id="profile-name" autoFocus value={name} onChange={(e) => setName(e.target.value)} placeholder="Wi-Fi" />
+                </Field>
+                <Field>
+                  <FieldLabel htmlFor="profile-issuing-ca">Issuing CA</FieldLabel>
+                  <Select value={issuingCaId} onValueChange={setIssuingCaId}>
+                    <SelectTrigger id="profile-issuing-ca" className="w-full">
+                      <SelectValue placeholder={privateCas.isPending ? "Loading…" : issuingCas.length === 0 ? "No active Issuing CA" : "Choose an Issuing CA"} />
+                    </SelectTrigger>
+                    <SelectContent>
+                      {issuingCas.map((i) => (
+                        <SelectItem key={i.id} value={i.id}>
+                          {i.title}
+                        </SelectItem>
+                      ))}
+                    </SelectContent>
+                  </Select>
+                  <FieldDescription>Only an active Issuing CA under an active root can be chosen.</FieldDescription>
+                </Field>
+              </FieldGroup>
+            </FieldSet>
           )}
-        </Field>
-        <Field>
-          <FieldLabel htmlFor="profile-validity">Validity (days)</FieldLabel>
-          <Input id="profile-validity" inputMode="numeric" value={validityDays} onChange={(e) => setValidityDays(e.target.value)} aria-invalid={!validityOk} />
-          <FieldDescription>Up to {daysLabel(MAX_DEVICE_VALIDITY_DAYS)}, and never past the Issuing CA's end.</FieldDescription>
-        </Field>
-        <Choices legend="Extended key usage" id="profile-eku" values={DEVICE_EXTENDED_KEY_USAGE_NAMES} labels={EXTENDED_KEY_USAGE_LABEL} chosen={extendedKeyUsage} onChange={setExtendedKeyUsage} />
-        <Choices legend="Key usage" id="profile-ku" values={DEVICE_KEY_USAGES} labels={KEY_USAGE_LABEL} chosen={keyUsage} onChange={setKeyUsage} />
-        <Choices legend="Device keys allowed" id="profile-keys" values={DEVICE_KEY_TYPES} labels={KEY_TYPE_LABEL} chosen={allowedKeyTypes} onChange={setAllowedKeyTypes} />
-      </FieldGroup>
-      {create.error && <p className="text-sm text-destructive">{create.error.message}</p>}
-      <DialogFooter>
-        <DialogClose asChild>
-          <Button type="button" variant="outline">
-            Cancel
+
+          {step === "certificate" && (
+            <FieldGroup>
+              <Field data-invalid={!validityOk}>
+                <FieldLabel htmlFor="profile-validity">Validity (days)</FieldLabel>
+                <Input id="profile-validity" inputMode="numeric" autoFocus value={validityDays} onChange={(e) => setValidityDays(e.target.value)} aria-invalid={!validityOk} />
+                <FieldDescription>Up to {daysLabel(MAX_DEVICE_VALIDITY_DAYS)}, and never past the Issuing CA's end.</FieldDescription>
+              </Field>
+              <Choices legend="Extended key usage" id="profile-eku" values={DEVICE_EXTENDED_KEY_USAGE_NAMES} labels={EXTENDED_KEY_USAGE_LABEL} chosen={extendedKeyUsage} onChange={setExtendedKeyUsage} />
+              <Choices legend="Key usage" id="profile-ku" values={DEVICE_KEY_USAGES} labels={KEY_USAGE_LABEL} chosen={keyUsage} onChange={setKeyUsage} />
+            </FieldGroup>
+          )}
+
+          {step === "keys" && (
+            <FieldGroup>
+              <FieldDescription>A device whose request is for any other kind of key is refused.</FieldDescription>
+              <Choices legend="Device keys allowed" id="profile-keys" values={DEVICE_KEY_TYPES} labels={KEY_TYPE_LABEL} chosen={allowedKeyTypes} onChange={setAllowedKeyTypes} />
+            </FieldGroup>
+          )}
+
+          {step === "validator" && (
+            <FieldGroup>
+              <Field>
+                <FieldLabel htmlFor="profile-validator">Enrollment Validator</FieldLabel>
+                {kinds.data && kinds.data.items.length === 0 ? (
+                  <FieldDescription>The platform runs no Enrollment Validator yet, so no profile can be created.</FieldDescription>
+                ) : (
+                  <Select value={kind} onValueChange={setValidatorKind}>
+                    <SelectTrigger id="profile-validator" className="w-full">
+                      <SelectValue placeholder="Loading…" />
+                    </SelectTrigger>
+                    <SelectContent>
+                      {(kinds.data?.items ?? []).map((k) => (
+                        <SelectItem key={k.kind} value={k.kind}>
+                          {k.kind}
+                        </SelectItem>
+                      ))}
+                    </SelectContent>
+                  </Select>
+                )}
+              </Field>
+            </FieldGroup>
+          )}
+
+          {step === "review" && (
+            <FieldGroup>
+              <FieldSet>
+                <FieldLegend>Review</FieldLegend>
+                <FieldDescription>Use Back to change anything.</FieldDescription>
+                <Summary
+                  rows={[
+                    { label: "Name", value: name.trim() },
+                    { label: "Issuing CA", value: issuingCas.find((i) => i.id === issuingCaId)?.title ?? "" },
+                    { label: "Validity", value: daysLabel(Number(validityDays)) },
+                    { label: "Extended key usage", value: extendedKeyUsage.map((u) => EXTENDED_KEY_USAGE_LABEL[u]).join(", ") },
+                    { label: "Key usage", value: keyUsage.map((u) => KEY_USAGE_LABEL[u]).join(", ") },
+                    { label: "Device keys", value: allowedKeyTypes.map((t) => KEY_TYPE_LABEL[t]).join(", ") },
+                    { label: "Validator", value: kind },
+                  ]}
+                />
+              </FieldSet>
+              {create.error && <FieldError>{create.error.message}</FieldError>}
+            </FieldGroup>
+          )}
+        </div>
+        <footer className="flex shrink-0 items-center justify-between gap-2 border-t bg-muted/50 p-4">
+          <Button type="button" variant="outline" disabled={index === 0} onClick={() => goTo(index - 1)}>
+            Back
           </Button>
-        </DialogClose>
-        <Button type="submit" disabled={!ready || create.isPending}>
-          Create
-        </Button>
-      </DialogFooter>
-    </form>
+          {last ? (
+            <Button key="create" type="submit" disabled={create.isPending}>
+              Create
+            </Button>
+          ) : (
+            <Button key="next" type="button" disabled={!complete[step]} onClick={() => goTo(index + 1)}>
+              Next
+            </Button>
+          )}
+        </footer>
+      </form>
+    </SidebarProvider>
+  );
+}
+
+function Summary({ rows }: { rows: { label: string; value: string }[] }) {
+  return (
+    <div className="rounded-md border p-4">
+      <dl className="grid grid-cols-[9rem_1fr] gap-x-4 gap-y-3 text-sm">
+        {rows.map(({ label, value }) => (
+          <div key={label} className="col-span-2 grid grid-cols-subgrid items-baseline">
+            <dt className="text-muted-foreground">{label}</dt>
+            <dd className="min-w-0 break-words">{value}</dd>
+          </div>
+        ))}
+      </dl>
+    </div>
   );
 }
