@@ -1,4 +1,4 @@
-import { BellIcon, BuildingIcon, LockKeyholeIcon, PlugIcon, ScrollTextIcon, SendIcon, BotIcon, FingerprintIcon, GlobeIcon, LandmarkIcon, FileKey2Icon, FileTerminalIcon, KeyRoundIcon, LogInIcon, RocketIcon, ShieldCheckIcon, ShieldEllipsisIcon, ShieldIcon, ShieldUserIcon, TabletSmartphoneIcon, UserRoundIcon, UsersIcon, type LucideIcon } from "lucide-react";
+import { BellIcon, BuildingIcon, LockKeyholeIcon, PlugIcon, ScrollTextIcon, SendIcon, BotIcon, GlobeIcon, LandmarkIcon, FileKey2Icon, FileTerminalIcon, KeyRoundIcon, LogInIcon, RocketIcon, ShieldCheckIcon, ShieldEllipsisIcon, ShieldIcon, ShieldUserIcon, TabletSmartphoneIcon, UserRoundIcon, UsersIcon, type LucideIcon } from "lucide-react";
 import { can, type Me } from "@/lib/api";
 
 type Org = Me["organizations"][number];
@@ -70,25 +70,24 @@ export function organizationNavGroups(org: Org): NavGroup[] {
           ],
         },
         {
-          title: "Device identity",
-          icon: FingerprintIcon,
-          items: can(org, "enrollmentProfile", "read") ? [{ title: "Enrollment Profiles", url: `${base}/enrollment-profiles`, icon: TabletSmartphoneIcon }] : [],
-        },
-        {
           title: "Security",
           icon: ShieldIcon,
           items: [
             ...(can(org, "loginPolicy", "read") ? [{ title: "Login policy", url: loginPolicyUrl(org.id), icon: LockKeyholeIcon }] : []),
             ...(can(org, "ssoConnection", "read") ? [{ title: "SSO connections", url: `${base}/sso-connections`, icon: LogInIcon }] : []),
-            {
-              title: "Audit",
-              items: [
-                ...(can(org, "audit", "read") ? [{ title: "Audit log", url: `${base}/audit-log`, icon: ScrollTextIcon }] : []),
-                ...(can(org, "auditForwarder", "read") ? [{ title: "Audit forwarding", url: `${base}/audit-forwarding`, icon: SendIcon }] : []),
-              ],
-            },
           ],
         },
+      ],
+    },
+    {
+      label: "Device identity",
+      items: can(org, "enrollmentProfile", "read") ? [{ title: "Enrollment Profiles", url: `${base}/enrollment-profiles`, icon: TabletSmartphoneIcon }] : [],
+    },
+    {
+      label: "Audit",
+      items: [
+        ...(can(org, "audit", "read") ? [{ title: "Audit log", url: `${base}/audit-log`, icon: ScrollTextIcon }] : []),
+        ...(can(org, "auditForwarder", "read") ? [{ title: "Audit forwarding", url: `${base}/audit-forwarding`, icon: SendIcon }] : []),
       ],
     },
     {
