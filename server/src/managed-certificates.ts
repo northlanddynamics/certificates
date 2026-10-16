@@ -8,32 +8,25 @@ import { OpenAPIHono, createRoute, z } from "@hono/zod-openapi";
 import { and, asc, desc, eq } from "drizzle-orm";
 import { silentSince } from "./agents";
 import type { Authorizer } from "./authorization";
-import { ACME_ENVIRONMENTS, type AcmeEnvironment } from "./certificate-authority";
+import { ACME_ENVIRONMENTS } from "./certificate-authority";
 import { certificateFacts } from "./certificate-facts";
 import { KEY_ALGORITHMS } from "./csr";
 import type { Db } from "./db/client";
 import { issuance, managedCertificate } from "./db/schema";
 import { HttpError, OrgParam, PageQuery, errors, json, pageOf } from "./http";
-import { issuerColumns, issuerDetail, type Issuer } from "./issuer";
+import { issuerAuditDetail, issuerColumns } from "./issuer";
 import { InventoryQuery, inventoryCondition } from "./inventory-filters";
 import { refusalMessage, type Issuances } from "./issuance";
 import { Certificate, CertificateFacts, Issuance, ManagedCertificate, ManagedCertificateParams, toCertificate, toIssuance, type ManagedCertificateReader } from "./managed-certificate-reader";
 import { checkNamesAndCsr, csrField, namesField } from "./names-and-csr";
 import { OwnerRef, addOwner } from "./owners";
 import { roleCan } from "./permissions";
-import { issuerRefusal, validityDaysField } from "./private-ca";
+import { IssuerField, issuerAsked, validityDaysField } from "./private-ca";
 import { revocationsOf } from "./revocation";
 import type { Actor, UnitOfWork } from "./unit-of-work";
 
 const MAX_OWNERS = 50;
 
-/** The issuer a Managed Certificate is created or proposed with. */
-const IssuerField = z
-  .discriminatedUnion("kind", [
-    z.object({ kind: z.literal("acme"), environment: z.enum(ACME_ENVIRONMENTS).default("staging") }),
-    z.object({ kind: z.literal("private_ca"), issuingCaId: z.string() }),
-  ])
-  .openapi({ description: "`acme`: through the Organization's ACME account in `environment`. `private_ca`: from an active Issuing CA of one of the Organization's Private CAs, with no DCV." });
 export function registerManagedCertificates(ctx: {
   app: OpenAPIHono;
   db: Db;
@@ -48,20 +41,6 @@ export function registerManagedCertificates(ctx: {
 }) {
   const { app, db, requireUser, authorize, unitOfWork, issuances, reader, clock, agentOfflineAfterSeconds } = ctx;
   const { findManagedCertificate, findReadable, visibleTo, certificatesOf, withState } = reader;
-
-  /**
-   * The issuer asked for: `issuer`, or the ACME kind in `environment`. An Issuing CA must be one of the Organization's,
-   * active under an active root, permit the names (normalised), and allow the validity chosen, which only a Private CA
-   * lets be chosen.
-   */
-  async function issuerAsked(orgId: string, body: { environment?: AcmeEnvironment; issuer?: z.infer<typeof IssuerField>; validityDays?: number }, names: string[]): Promise<Issuer> {
-    if (body.issuer && body.environment) throw new HttpError(400, "give either `issuer` or `environment`, not both");
-    const issuer = body.issuer ?? { kind: "acme", environment: body.environment ?? "staging" };
-    const validityDays = body.validityDays ?? null;
-    const refusal = await issuerRefusal(db, orgId, issuer, { names, validityDays });
-    if (refusal) throw new HttpError(refusal.status, refusal.message);
-    return issuer;
-  }
 
   app.openapi(
     createRoute({
@@ -141,7 +120,7 @@ export function registerManagedCertificates(ctx: {
       if (needsApproval) await authorize(actor, orgId, { managedCertificate: ["propose"] });
 
       const { names, csr } = await checkNamesAndCsr(body);
-      const issuer = await issuerAsked(orgId, body, names);
+      const issuer = await issuerAsked(db, orgId, body, names);
 
       const created = await unitOfWork.run(actor, async (tx, change) => {
         const [row] = await tx
@@ -165,9 +144,7 @@ export function registerManagedCertificates(ctx: {
             names,
             keyAlgorithm: body.keyAlgorithm,
             keyCustody: "owner",
-            ...(issuer.kind === "acme" && { environment: issuer.environment }),
-            ...issuerDetail(issuer),
-            ...(body.validityDays !== undefined && { validityDays: body.validityDays }),
+            ...issuerAuditDetail(issuer, body.validityDays),
             csrFingerprint: csr.fingerprint,
           },
         });

@@ -12,6 +12,7 @@ import { and, asc, eq, inArray } from "drizzle-orm";
 import { randomUUID } from "node:crypto";
 import type { Authorizer } from "./authorization";
 import { makeCaCsr, makeIssuingCa, makeRoot, makeTlsServer, nameConstraintsOf, parseSubject, rootSubjectOf, signedCertificateRefusal, type CaKey, type Signer } from "./ca-certificates";
+import { ACME_ENVIRONMENTS, type AcmeEnvironment } from "./certificate-authority";
 import { publicationOf, type Crls } from "./crl";
 import { KEY_ALGORITHMS } from "./csr";
 import type { Db, Tx } from "./db/client";
@@ -217,6 +218,28 @@ export async function issuerRefusal(db: Db | Tx, organizationId: string, issuer:
   if (!of) return refused(422, "the Organization has no such Issuing CA");
   const refusal = issuingRefusal(of) ?? namesRefusal(of, asked.names) ?? validityRefusal(of, asked.validityDays);
   return refusal ? refused(422, refusal) : undefined;
+}
+
+/** The issuer a Managed Certificate is created or proposed with, or a Deployment set up with. */
+export const IssuerField = z
+  .discriminatedUnion("kind", [
+    z.object({ kind: z.literal("acme"), environment: z.enum(ACME_ENVIRONMENTS).default("staging") }),
+    z.object({ kind: z.literal("private_ca"), issuingCaId: z.string() }),
+  ])
+  .openapi({ description: "`acme`: through the Organization's ACME account in `environment`. `private_ca`: from an active Issuing CA of one of the Organization's Private CAs, with no DCV." });
+
+/**
+ * The issuer asked for: `issuer`, or the ACME kind in `environment`. An Issuing CA must be one of the Organization's,
+ * active under an active root, permit the names (normalised), and allow the validity chosen, which only a Private CA
+ * lets be chosen.
+ */
+export async function issuerAsked(db: Db, orgId: string, body: { environment?: AcmeEnvironment; issuer?: z.infer<typeof IssuerField>; validityDays?: number }, names: string[]): Promise<Issuer> {
+  if (body.issuer && body.environment) throw new HttpError(400, "give either `issuer` or `environment`, not both");
+  const issuer = body.issuer ?? { kind: "acme", environment: body.environment ?? "staging" };
+  const validityDays = body.validityDays ?? null;
+  const refusal = await issuerRefusal(db, orgId, issuer, { names, validityDays });
+  if (refusal) throw new HttpError(refusal.status, refusal.message);
+  return issuer;
 }
 
 /** What the Private CA kind of issuer issues with: signing a CSR from an Issuing CA, revoking from it, and its root. */

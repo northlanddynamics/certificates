@@ -56,6 +56,8 @@ export async function refreshRenewalInfo({ db, issuers, now }: { db: Db; issuers
     .where(
       and(
         renewsAutomatically,
+        // A CA that never suggests when to renew is not asked: its Certificates renew by the Renewal Policy alone.
+        inArray(current.issuerKind, [...issuers.renewalInfoKinds]),
         // One that has ended is past a window.
         sql`${current.notAfter} > ${now}`,
         or(isNull(renewalInfo.certificateId), lte(renewalInfo.nextCheckAt, now)),
