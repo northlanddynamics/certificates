@@ -198,6 +198,10 @@ _Avoid_: SCEP profile, template
 The pluggable integration an Enrollment Profile names, which decides whether an enrollment request may be issued, is told the outcome, and may feed Revocations. It declares whether it vouches for the names in a request; a profile whose validator does not carries name rules that the platform enforces instead. Its credentials are Secrets. Intune is the first kind; Iru, which does not vouch for names, is the next.
 _Avoid_: MDM integration (network gear is not an MDM), challenge provider, Kandji (Iru's former name)
 
+**Shared Challenge**:
+The one secret every device enrolling under an Enrollment Profile presents, for a validator such as Iru's that has no per-device challenge. The platform makes it and shows it once; a profile holds at most two, the current one and, while a rotation is under way, the previous one, until an Organization Administrator retires it or it expires. Anyone who holds it can enroll, so its profile's Name Rules bound what they can get.
+_Avoid_: static challenge, PSK, challenge password (the CSR field that carries it)
+
 **Name Rules**:
 What an Enrollment Profile whose Enrollment Validator does not vouch for names lets a device put in its subject and subject alternative names: required subject attributes, allowed SAN types, and wildcard patterns. Anything they do not name is refused. Not to be confused with an Issuing CA's Permitted Name Rules, which still apply on top.
 _Avoid_: subject policy, SAN rules
