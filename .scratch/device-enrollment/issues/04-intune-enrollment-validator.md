@@ -4,7 +4,7 @@
 
 **Blocked by:** 01, 03
 
-**Status:** resolved
+**Status:** done
 
 - [x] An Organization Administrator configures the Entra tenant ID, app ID and app secret (a Secret, never read back) and tests the connection (`enrollment_validator.tested`).
 - [x] Each request is sent to Intune for validation; refused, failing or unreachable Intune answers FAILURE, with nothing issued.
