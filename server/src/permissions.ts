@@ -13,7 +13,7 @@ export const APPROVER_ROLE = "approver";
 export const MEMBER_ROLE = "member";
 
 // Every permission there is. The organization, member, invitation and team resources are the ones Better Auth's
-// organization plugin checks itself; `audit`, `acmeAccount`, `dnsProvider`, `validationZone`, `dcvRule`, `managedCertificate`, `approval`, `agent`, `deploymentScript`, `deployment`, `notificationChannel`, `auditForwarder`, `loginPolicy`, `ssoConnection`, `privateCa`, `enrollmentProfile` and `apiKey` are ours (the last is the plugin's too).
+// organization plugin checks itself; `audit`, `acmeAccount`, `dnsProvider`, `validationZone`, `dcvRule`, `managedCertificate`, `approval`, `agent`, `deploymentScript`, `deployment`, `notificationChannel`, `auditForwarder`, `loginPolicy`, `ssoConnection`, `privateCa`, `enrollmentProfile`, `deviceCertificate` and `apiKey` are ours (the last is the plugin's too).
 const statements = {
   organization: ["update", "delete"],
   member: ["create", "update", "delete"],
@@ -64,6 +64,9 @@ const statements = {
   // Organization Administrators hold any of this. `read` sees them, their SCEP URLs and CA certificates; `create`,
   // `update` and `disable` configure them.
   enrollmentProfile: ["read", "create", "update", "disable"],
+  // Device Certificates: what Enrollment Profiles issued to devices, kept apart from the Managed Certificates. Only
+  // Organization Administrators hold any of this; `read` lists and searches a profile's and downloads one.
+  deviceCertificate: ["read"],
 } as const;
 
 export type Permissions = { [R in keyof typeof statements]?: (typeof statements)[R][number][] };

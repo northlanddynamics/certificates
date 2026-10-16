@@ -159,10 +159,11 @@ export async function createHarness(overrides: Partial<AppDeps> = {}, { database
   const memberRemovalHooks: MemberRemovalHook[] = [];
   const enrollmentValidations: EnrollmentRequest[] = [];
   const validatorDouble = new ValidatorDouble();
-  /** A test-only kind that allows every request, needs no settings or secret, and is told nothing. */
+  /** A test-only kind that allows every request, needs no settings or secret, and is told nothing. It knows a device by its `IntuneDeviceId://` URI, as Intune does. */
   const allowing = (vouchesForNames: boolean): EnrollmentValidatorKind => ({
     settings: z.object({}).strict(),
     vouchesForNames,
+    deviceIdOf: (names) => names.find((n) => n.type === "url" && n.value.startsWith("IntuneDeviceId://"))?.value.slice("IntuneDeviceId://".length),
     create: () => ({
       async validate(request) {
         enrollmentValidations.push(request);

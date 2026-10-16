@@ -100,6 +100,11 @@ export interface EnrollmentValidatorKind<Settings = any> {
    * at most once every `intervalMs`, for all of them.
    */
   revocationFeed?: { intervalMs: number; sourceOf(settings: Settings): string };
+  /**
+   * The device a request came from as the kind knows it, from the subject alternative names the device asked for (such as
+   * Intune's device ID, in an `IntuneDeviceId://` URI); none when they do not say. Device Certificates can be found by it.
+   */
+  deviceIdOf?(subjectAltNames: { type: string; value: string }[]): string | undefined;
   /** A validator that runs with the settings and the secret (an empty string for a kind without one). */
   create(settings: Settings, secret: string): EnrollmentValidator;
 }

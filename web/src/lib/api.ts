@@ -337,6 +337,26 @@ export interface EnrollmentProfile {
   raCertificate: { subject: string; serial: string; notAfter: string };
   createdAt: string;
 }
+/** A Certificate an Enrollment Profile issued to a device. */
+export interface DeviceCertificate {
+  id: string;
+  enrollmentProfileId: string;
+  /** Upper-case hex. */
+  serial: string;
+  subject: string;
+  subjectAltNames: { type: string; value: string }[];
+  /** The device as its Enrollment Validator knows it, such as Intune's device ID. */
+  deviceId: string | null;
+  /** The Issuing CA's subject. */
+  issuer: string;
+  notBefore: string;
+  notAfter: string;
+  status: DeviceCertificateStatus;
+  revocation: { reason: string; revokedAt: string } | null;
+  createdAt: string;
+}
+export const DEVICE_CERTIFICATE_STATUSES = ["active", "expired", "revoked"] as const;
+export type DeviceCertificateStatus = (typeof DEVICE_CERTIFICATE_STATUSES)[number];
 export interface NewEnrollmentProfile {
   name: string;
   issuingCaId: string;
@@ -722,6 +742,16 @@ export const api = {
   changeIssuer: (orgId: string, id: string, issuingCaId: string) =>
     call<ManagedCertificate>(`/api/organizations/${orgId}/managed-certificates/${id}/issuer`, { method: "PUT", body: { issuer: { kind: "private_ca", issuingCaId } } }),
   enrollmentProfiles: (orgId: string) => call<{ items: EnrollmentProfile[] }>(`/api/organizations/${orgId}/enrollment-profiles`),
+  enrollmentProfile: (orgId: string, id: string) => call<EnrollmentProfile>(`/api/organizations/${orgId}/enrollment-profiles/${id}`),
+  /** A page of the Device Certificates a profile issued, newest first: `q` searches subject, names, serial and device ID. */
+  deviceCertificates: (orgId: string, profileId: string, search: { q?: string; status?: DeviceCertificateStatus }, paging: { page: number; pageSize: number }) => {
+    const query = new URLSearchParams({ page: String(paging.page), pageSize: String(paging.pageSize) });
+    if (search.q) query.set("q", search.q);
+    if (search.status) query.set("status", search.status);
+    return call<Page<DeviceCertificate>>(`/api/organizations/${orgId}/enrollment-profiles/${profileId}/device-certificates?${query}`);
+  },
+  /** Where a Device Certificate downloads from, PEM. */
+  deviceCertificateUrl: (orgId: string, profileId: string, id: string) => `/api/organizations/${orgId}/enrollment-profiles/${profileId}/device-certificates/${id}/certificate`,
   createEnrollmentProfile: (orgId: string, body: NewEnrollmentProfile) => call<EnrollmentProfile>(`/api/organizations/${orgId}/enrollment-profiles`, { body }),
   /** The Enrollment Validator kinds the platform runs, one of which a profile must name. */
   enrollmentValidatorKinds: (orgId: string) => call<{ items: { kind: string; vouchesForNames: boolean; takesSecret: boolean }[] }>(`/api/organizations/${orgId}/enrollment-validator-kinds`),

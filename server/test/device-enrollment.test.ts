@@ -7,6 +7,7 @@ import * as x509 from "@peculiar/x509";
 import { PASSWORD, PKI_BASE_URL, createHarness, type Harness } from "./harness";
 import { FailInfo, ScepFailureError, type CreateCsrOptions } from "ts-scep";
 import { scepDevice } from "./scep-device";
+import { DOUBLE_SECRET } from "./enrollment-validator-double";
 
 let h: Harness;
 let operator: string;
@@ -209,6 +210,7 @@ describe("a device enrolling over SCEP", () => {
       serial: cert.serialNumber.toUpperCase(),
       subject: "CN=device-08",
       subjectAltNames: [{ type: "dns", value: "device-08.devices.acme" }],
+      deviceId: null,
       notAfter: cert.notAfter.toISOString(),
     });
     expect(typeof issued[0]!.detail.transactionId).toBe("string");
@@ -310,3 +312,159 @@ describe("Enrollment Profiles", () => {
   });
 });
 
+
+describe("a profile's Device Certificates", () => {
+  const certificatesOf = (profileId: string, query = "", cookie = org.cookie) => h.api(`${profiles()}/${profileId}/device-certificates${query}`, { cookie });
+
+  test("lists what devices enrolled for, newest first, as an Organization Administrator sees it", async () => {
+    const ca = await createCa();
+    const profile = await createProfile(ca.issuing.id);
+    const device = scepDevice(h, profile.scepUrl);
+    const first = read((await device.enroll({ subject: "CN=device-a", subjectAltNames: { dns: ["device-a.devices.acme"], uri: ["IntuneDeviceId://5b1e4f0e-8b2c-4a57-9a1d-0c6f3e2a7b11"] } })).certificate);
+    h.setNow(new Date(START + DAY_MS));
+    const second = read((await device.enroll({ subject: "CN=device-b" })).certificate);
+
+    const res = await certificatesOf(profile.id);
+    expect(res.status).toBe(200);
+    expect(res.body).toMatchObject({ total: 2, page: 1, pageSize: 25 });
+    expect(res.body.items.map((c: { serial: string }) => c.serial)).toEqual([second.serialNumber.toUpperCase(), first.serialNumber.toUpperCase()]);
+    expect(res.body.items[1]).toEqual({
+      id: expect.any(String),
+      enrollmentProfileId: profile.id,
+      serial: first.serialNumber.toUpperCase(),
+      subject: "CN=device-a",
+      subjectAltNames: [
+        { type: "dns", value: "device-a.devices.acme" },
+        { type: "url", value: "IntuneDeviceId://5b1e4f0e-8b2c-4a57-9a1d-0c6f3e2a7b11" },
+      ],
+      deviceId: "5b1e4f0e-8b2c-4a57-9a1d-0c6f3e2a7b11",
+      issuer: first.issuer,
+      notBefore: new Date(START).toISOString(),
+      notAfter: new Date(START + 365 * DAY_MS).toISOString(),
+      status: "active",
+      revocation: null,
+      createdAt: new Date(START).toISOString(),
+    });
+  });
+
+  test("are found by part of the subject, a SAN, the serial or the Intune device ID, and by status", async () => {
+    const ca = await createCa();
+    const profile = await createProfile(ca.issuing.id);
+    const device = scepDevice(h, profile.scepUrl);
+    const enroll = async (subject: string, subjectAltNames: Parameters<typeof device.enroll>[0]["subjectAltNames"] = {}) => read((await device.enroll({ subject, subjectAltNames })).certificate).serialNumber.toUpperCase();
+    const laptop = await enroll("CN=laptop-17, O=Acme", { dns: ["laptop-17.devices.acme"], uri: ["IntuneDeviceId://aaaaaaaa-1111-4a57-9a1d-0c6f3e2a7b11"] });
+    const phone = await enroll("CN=phone-03, O=Acme", { email: ["ann@devices.acme"], uri: ["IntuneDeviceId://bbbbbbbb-2222-4a57-9a1d-0c6f3e2a7b11"] });
+    h.setNow(new Date(START + 200 * DAY_MS));
+    const tablet = await enroll("CN=tablet-100%_x, O=Acme");
+    const serialsFor = async (query: string) => {
+      const res = await certificatesOf(profile.id, query);
+      expect(res.status).toBe(200);
+      expect(res.body.total).toBe(res.body.items.length);
+      return res.body.items.map((c: { serial: string }) => c.serial).sort();
+    };
+
+    expect(await serialsFor("?q=LAPTOP")).toEqual([laptop]);
+    expect(await serialsFor("?q=ann%40devices")).toEqual([phone]);
+    expect(await serialsFor(`?q=${phone.slice(4, 14).toLowerCase()}`)).toEqual([phone]);
+    expect(await serialsFor(`?q=${encodeURIComponent(laptop.slice(0, 8).match(/../g)!.join(":"))}`)).toEqual([laptop]);
+    expect(await serialsFor("?q=BBBBBBBB-2222")).toEqual([phone]);
+    // LIKE's wildcards are taken as they are written.
+    expect(await serialsFor("?q=100%25_")).toEqual([tablet]);
+    expect(await serialsFor("?q=_")).toEqual([tablet]);
+    expect(await serialsFor("?q=nothing-like-it")).toEqual([]);
+
+    // The first two end at START + 365 days; the tablet a year after it enrolled.
+    h.setNow(new Date(START + 400 * DAY_MS));
+    expect(await serialsFor("?status=expired")).toEqual([laptop, phone].sort());
+    expect(await serialsFor("?status=active")).toEqual([tablet]);
+    expect(await serialsFor("?status=revoked")).toEqual([]);
+    expect(await serialsFor("?status=expired&q=phone")).toEqual([phone]);
+    expect((await certificatesOf(profile.id, "?status=lost")).status).toBe(400);
+  });
+
+  test("are paged on the server", async () => {
+    const ca = await createCa();
+    const profile = await createProfile(ca.issuing.id);
+    const device = scepDevice(h, profile.scepUrl);
+    const serials: string[] = [];
+    for (let i = 0; i < 5; i++) {
+      h.setNow(new Date(START + i * DAY_MS));
+      serials.unshift(read((await device.enroll({ subject: `CN=device-${i}` })).certificate).serialNumber.toUpperCase());
+    }
+
+    const pages = await Promise.all([1, 2, 3].map((page) => certificatesOf(profile.id, `?page=${page}&pageSize=2`)));
+    expect(pages.map((p) => p.body.total)).toEqual([5, 5, 5]);
+    expect(pages.flatMap((p) => p.body.items.map((c: { serial: string }) => c.serial))).toEqual(serials);
+    expect((await certificatesOf(profile.id, "?pageSize=101")).status).toBe(400);
+  });
+
+  test("shows a Device Certificate revoked through its validator's feed as revoked, with the reason", async () => {
+    const ca = await createCa();
+    const profile = await createProfile(ca.issuing.id, { validator: { kind: "test_double", settings: { tenant: "contoso" }, secret: DOUBLE_SECRET } });
+    const cert = read((await scepDevice(h, profile.scepUrl).enroll({ subject: "CN=retired" })).certificate);
+    h.validatorDouble.queueRevocation("contoso", cert.serialNumber);
+    h.setNow(new Date(START + DAY_MS));
+    await h.pollRevocationFeeds();
+
+    const [listed] = (await certificatesOf(profile.id, "?status=revoked")).body.items;
+    expect(listed).toMatchObject({ serial: cert.serialNumber.toUpperCase(), status: "revoked", revocation: { reason: "cessationOfOperation", revokedAt: new Date(START + DAY_MS).toISOString() } });
+  });
+
+  test("can each be looked at and downloaded", async () => {
+    const ca = await createCa();
+    const profile = await createProfile(ca.issuing.id);
+    const { certificate } = await scepDevice(h, profile.scepUrl).enroll({ subject: "CN=device-dl" });
+    const [listed] = (await certificatesOf(profile.id)).body.items;
+
+    const one = await h.api(`${profiles()}/${profile.id}/device-certificates/${listed.id}`, { cookie: org.cookie });
+    expect(one.status).toBe(200);
+    expect(one.body).toEqual(listed);
+
+    const res = await h.app.request(`http://localhost${profiles()}/${profile.id}/device-certificates/${listed.id}/certificate`, { headers: { cookie: org.cookie } });
+    expect(res.status).toBe(200);
+    expect(res.headers.get("content-disposition")).toBe(`attachment; filename="${listed.serial.toLowerCase()}.pem"`);
+    const downloaded = certificatesIn(await res.text());
+    expect(downloaded).toHaveLength(1);
+    expect(Buffer.from(downloaded[0]!.rawData).equals(Buffer.from(certificate.raw))).toBe(true);
+
+    expect((await h.api(`${profiles()}/${profile.id}/device-certificates/${crypto.randomUUID()}`, { cookie: org.cookie })).status).toBe(404);
+    expect((await h.api(`${profiles()}/${profile.id}/device-certificates/not-an-id`, { cookie: org.cookie })).status).toBe(404);
+  });
+
+  test("are only Organization Administrators' business, as /api/me reports", async () => {
+    const ca = await createCa();
+    const profile = await createProfile(ca.issuing.id);
+    await scepDevice(h, profile.scepUrl).enroll({ subject: "CN=device-p" });
+    const [listed] = (await certificatesOf(profile.id)).body.items;
+    const join = async (email: string, role: string) => {
+      const invited = await h.api("/api/auth/organization/invite-member", { cookie: org.cookie, body: { email, role, organizationId: org.orgId } });
+      const cookie = await h.signUp(email, PASSWORD);
+      await h.api("/api/auth/organization/accept-invitation", { cookie, body: { invitationId: invited.body.id } });
+      return h.signIn(email, PASSWORD);
+    };
+    const permissionsOf = async (cookie: string) => (await h.api("/api/me", { cookie })).body.organizations[0].permissions;
+    expect((await permissionsOf(org.cookie)).deviceCertificate).toEqual(["read"]);
+
+    for (const role of ["approver", "member"]) {
+      const cookie = await join(`${role}@acme.test`, role);
+      expect((await permissionsOf(cookie)).deviceCertificate).toBeUndefined();
+      expect((await certificatesOf(profile.id, "", cookie)).status).toBe(403);
+      expect((await h.api(`${profiles()}/${profile.id}/device-certificates/${listed.id}`, { cookie })).status).toBe(403);
+      expect((await h.app.request(`http://localhost${profiles()}/${profile.id}/device-certificates/${listed.id}/certificate`, { headers: { cookie } })).status).toBe(403);
+    }
+  });
+
+  test("are kept apart per Organization", async () => {
+    const ca = await createCa();
+    const profile = await createProfile(ca.issuing.id);
+    await scepDevice(h, profile.scepUrl).enroll({ subject: "CN=acme-device" });
+    const [listed] = (await certificatesOf(profile.id)).body.items;
+    const other = await h.createOrgWithAdmin(operator, "globex", "admin@globex.test");
+    const theirs = await createProfile((await createCa(other)).issuing.id, {}, other);
+
+    expect((await h.api(`${profiles(other.orgId)}/${profile.id}/device-certificates`, { cookie: other.cookie })).status).toBe(404);
+    expect((await certificatesOf(profile.id, "", other.cookie)).status).toBe(404);
+    expect((await h.api(`${profiles(other.orgId)}/${theirs.id}/device-certificates/${listed.id}`, { cookie: other.cookie })).status).toBe(404);
+    expect((await h.api(`${profiles(other.orgId)}/${theirs.id}/device-certificates`, { cookie: other.cookie })).body.total).toBe(0);
+  });
+});
