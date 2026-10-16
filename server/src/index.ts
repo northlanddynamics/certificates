@@ -12,7 +12,7 @@ const localKmsKey = process.env.LOCAL_KMS_KEY;
 if (!databaseUrl || !secret || !localKmsKey) throw new Error("DATABASE_URL, AUTH_SECRET and LOCAL_KMS_KEY are required");
 
 const pool = new Pool({ connectionString: databaseUrl });
-const { app, auth, db, issuances, renewals, notifications, auditForwarding, crls } = createApp({
+const { app, auth, db, issuances, renewals, notifications, auditForwarding, crls, enrollmentValidators } = createApp({
   pool,
   mailer: new ConsoleMailer(),
   clock: () => new Date(),
@@ -59,6 +59,19 @@ const CRL_PASS_MS = 60_000;
 (async function reissueCrls() {
   await crls.tick().catch((err) => console.error("CRL pass failed", err));
   setTimeout(reissueCrls, CRL_PASS_MS);
+})();
+
+// Enrollment Validators are told what became of requests and Revocations every half a minute, and their revocation feeds
+// are pulled once a minute (each no more often than its kind allows); each pass waits for the one before it.
+const ENROLLMENT_VALIDATOR_DELIVERY_PASS_MS = 30_000;
+(async function tellEnrollmentValidators() {
+  await enrollmentValidators.deliver().catch((err) => console.error("Enrollment Validator delivery pass failed", err));
+  setTimeout(tellEnrollmentValidators, ENROLLMENT_VALIDATOR_DELIVERY_PASS_MS);
+})();
+const REVOCATION_FEED_PASS_MS = 60_000;
+(async function pullRevocationFeeds() {
+  await enrollmentValidators.pollFeeds().catch((err) => console.error("revocation feed pass failed", err));
+  setTimeout(pullRevocationFeeds, REVOCATION_FEED_PASS_MS);
 })();
 
 if (process.env.OPERATOR_EMAIL && process.env.OPERATOR_PASSWORD) {

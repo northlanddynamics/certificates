@@ -191,8 +191,12 @@ _Avoid_: audit entry, audit record, log line
 ### Device enrollment
 
 **Enrollment Profile**:
-A protocol-neutral template under which devices obtain client Certificates in bulk from a Private CA's Issuing CA, without per-certificate Approval or Owners. It fixes the Issuing CA, the validity, key usage, EKU and allowed key types of what it issues, and the integration that decides each request; anything a device asks for beyond it is ignored. Devices enroll at its SCEP URL, under an opaque id.
+A protocol-neutral template under which devices obtain client Certificates in bulk from a Private CA's Issuing CA, without per-certificate Approval or Owners. It fixes the Issuing CA, the validity, key usage, EKU and allowed key types of what it issues, and the Enrollment Validator that decides each request; anything a device asks for beyond it is ignored. Devices enroll at its SCEP URL, under an opaque id.
 _Avoid_: SCEP profile, template
+
+**Enrollment Validator**:
+The pluggable integration an Enrollment Profile names, which decides whether an enrollment request may be issued, is told the outcome, and may feed Revocations. It declares whether it vouches for the names in a request; a profile whose validator does not carries name rules that the platform enforces instead. Its credentials are Secrets. Intune is the first kind.
+_Avoid_: MDM integration (network gear is not an MDM), challenge provider
 
 **Device Certificate**:
 A Certificate issued under an Enrollment Profile. It belongs to the profile, not to a Managed Certificate, has no Owners, never appears among Managed Certificates, and is renewed by the device enrolling again.

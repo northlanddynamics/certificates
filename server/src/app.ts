@@ -23,6 +23,8 @@ import { createCrls, registerPkiRoutes } from "./crl";
 import { createDb } from "./db/client";
 import { registerEnrollmentProfiles } from "./enrollment-profiles";
 import type { EnrollmentValidators } from "./enrollment-validator";
+import { ENROLLMENT_VALIDATOR_KINDS } from "./enrollment-validator-kinds";
+import { createEnrollmentValidatorRuns } from "./enrollment-validators";
 import { DEFAULT_DNS_RELAY, createDnsRelay, type DnsRelayConfig } from "./dns-relay";
 import { createDnsProviders, registerDnsProviders } from "./dns-providers";
 import { member, organization } from "./db/schema";
@@ -94,7 +96,7 @@ export interface AppDeps {
   auditTransport?: AuditTransport;
   /** See `OrganizationChangesDeps.memberRemovalHooks`. */
   memberRemovalHooks?: MemberRemovalHook[];
-  /** The Enrollment Validator kinds Enrollment Profiles can name, by name (enrollment-validator.ts); none unless given. */
+  /** The Enrollment Validator kinds Enrollment Profiles can name, by name (enrollment-validator.ts); ENROLLMENT_VALIDATOR_KINDS unless given. */
   enrollmentValidators?: EnrollmentValidators;
 }
 
@@ -301,8 +303,9 @@ export function createApp(deps: AppDeps) {
   registerPrivateCas({ app, db, requireUser, authorize, unitOfWork, kms: deps.kms, clock, crls, pkiBaseURL });
   registerPkiRoutes({ app, db });
   const privateCas = createPrivateCas({ kms: deps.kms, clock, crls, pkiBaseURL });
-  const enrollmentValidators = deps.enrollmentValidators ?? {};
-  registerEnrollmentProfiles({ app, db, requireUser, authorize, unitOfWork, secrets, privateCas, validators: enrollmentValidators, baseURL: deps.baseURL });
+  const validatorKinds = deps.enrollmentValidators ?? ENROLLMENT_VALIDATOR_KINDS;
+  const enrollmentValidators = createEnrollmentValidatorRuns({ db, unitOfWork, secrets, privateCas, kinds: validatorKinds, clock });
+  registerEnrollmentProfiles({ app, db, requireUser, authorize, unitOfWork, secrets, privateCas, kinds: validatorKinds, validators: enrollmentValidators, baseURL: deps.baseURL });
   registerScep({ app, db, unitOfWork, secrets, privateCas, validators: enrollmentValidators });
   const issuers = createIssuers({ acme: deps.certificateAuthority, secrets, privateCas });
   const issuances = createIssuances({ db, unitOfWork, issuers, dcv });
@@ -370,5 +373,5 @@ export function createApp(deps: AppDeps) {
     }),
   );
 
-  return { app, auth, db, unitOfWork, issuances, renewals, notifications, auditForwarding, crls };
+  return { app, auth, db, unitOfWork, issuances, renewals, notifications, auditForwarding, crls, enrollmentValidators };
 }

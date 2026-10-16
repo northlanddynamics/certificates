@@ -330,7 +330,10 @@ export interface EnrollmentProfile {
   keyUsage: DeviceKeyUsage[];
   extendedKeyUsage: DeviceExtendedKeyUsage[];
   allowedKeyTypes: DeviceKeyType[];
-  validator: { kind: string };
+  /** Its settings are shown; its secret, if it has one, never is. */
+  validator: { kind: string; settings: Record<string, unknown>; hasSecret: boolean };
+  /** What a device's names must keep; none when the validator vouches for names. */
+  nameRules: NameRules | null;
   raCertificate: { subject: string; serial: string; notAfter: string };
   createdAt: string;
 }
@@ -341,7 +344,15 @@ export interface NewEnrollmentProfile {
   keyUsage: DeviceKeyUsage[];
   extendedKeyUsage: DeviceExtendedKeyUsage[];
   allowedKeyTypes: DeviceKeyType[];
-  validator: { kind: string };
+  validator: { kind: string; settings?: Record<string, unknown>; secret?: string };
+  nameRules?: NameRules;
+}
+/** What an Enrollment Profile whose validator does not vouch for names lets a device ask for; patterns are wildcards (`*`). */
+export interface NameRules {
+  requiredSubjectAttributes: string[];
+  subjectPatterns: Record<string, string[]>;
+  allowedSanTypes: ("dns" | "email" | "ip" | "url" | "upn")[];
+  sanPatterns: Partial<Record<"dns" | "email" | "ip" | "url" | "upn", string[]>>;
 }
 /** An Organization's account with a CA; its key is never returned. */
 export interface AcmeAccount {
@@ -713,7 +724,7 @@ export const api = {
   enrollmentProfiles: (orgId: string) => call<{ items: EnrollmentProfile[] }>(`/api/organizations/${orgId}/enrollment-profiles`),
   createEnrollmentProfile: (orgId: string, body: NewEnrollmentProfile) => call<EnrollmentProfile>(`/api/organizations/${orgId}/enrollment-profiles`, { body }),
   /** The Enrollment Validator kinds the platform runs, one of which a profile must name. */
-  enrollmentValidatorKinds: (orgId: string) => call<{ items: { kind: string }[] }>(`/api/organizations/${orgId}/enrollment-validator-kinds`),
+  enrollmentValidatorKinds: (orgId: string) => call<{ items: { kind: string; vouchesForNames: boolean; takesSecret: boolean }[] }>(`/api/organizations/${orgId}/enrollment-validator-kinds`),
   /** Where a profile's root or Issuing CA certificate downloads from, for the device management platform's trusted certificate profile. */
   enrollmentProfileCaCertificateUrl: (orgId: string, id: string, ca: "root" | "issuing") => `/api/organizations/${orgId}/enrollment-profiles/${id}/ca-certificate?ca=${ca}`,
   acmeAccounts: (orgId: string) => call<{ items: AcmeAccount[] }>(`/api/organizations/${orgId}/acme-accounts`),

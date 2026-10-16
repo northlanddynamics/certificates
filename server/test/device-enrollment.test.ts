@@ -146,6 +146,12 @@ describe("a device enrolling over SCEP", () => {
     expect(failure.failInfoText).toContain("rsa-2048");
     expect(h.enrollmentValidations).toEqual([]);
     expect((await auditOf()).some((e) => e.action === "device_certificate.issued")).toBe(false);
+    const refusals = (await auditOf()).filter((e) => e.action === "enrollment.refused");
+    expect(refusals).toHaveLength(1);
+    expect(refusals[0]!.actor).toEqual({ id: null, email: null });
+    expect(refusals[0]!.target).toEqual({ type: "enrollment_profile", id: profile.id });
+    expect(refusals[0]!.detail).toMatchObject({ enrollmentProfile: { id: profile.id, name: "Wi-Fi" }, validator: { kind: "test_allow" }, reason: failure.failInfoText });
+    expect(typeof refusals[0]!.detail.transactionId).toBe("string");
 
     const { certificate } = await device.enroll({ subject: "CN=device-04", keyBits: 3072 });
     expect(read(certificate).subject).toBe("CN=device-04");
@@ -225,7 +231,8 @@ describe("Enrollment Profiles", () => {
       keyUsage: ["digitalSignature", "keyEncipherment"],
       extendedKeyUsage: ["clientAuth"],
       allowedKeyTypes: ["rsa-2048", "rsa-3072", "rsa-4096"],
-      validator: { kind: "test_allow" },
+      validator: { kind: "test_allow", settings: {}, hasSecret: false },
+      nameRules: null,
     });
     // Opaque: it is neither the profile's id nor anything of the Organization's.
     expect(profile.publicId).toMatch(/^[0-9a-f]{32}$/);
@@ -254,7 +261,7 @@ describe("Enrollment Profiles", () => {
     const theirs = await createCa(other);
     const create = (body: Record<string, unknown>) => h.api(profiles(), { cookie: org.cookie, body: { name: "Wi-Fi", issuingCaId: ca.issuing.id, validator: { kind: "test_allow" }, ...body } });
 
-    expect((await h.api(`/api/organizations/${org.orgId}/enrollment-validator-kinds`, { cookie: org.cookie })).body.items).toEqual([{ kind: "test_allow" }]);
+    expect((await h.api(`/api/organizations/${org.orgId}/enrollment-validator-kinds`, { cookie: org.cookie })).body.items.map((k: { kind: string }) => k.kind)).toContain("test_allow");
     expect((await create({ validator: { kind: "intune" } })).status).toBe(422);
     expect((await create({ issuingCaId: theirs.issuing.id })).status).toBe(422);
     expect((await create({ allowedKeyTypes: ["ecdsa-p256"] })).status).toBe(400);

@@ -7,7 +7,9 @@ import { createApp, type AppDeps } from "../src/app";
 import { CertificateAuthorityError, createLetsEncrypt, type AcmeEnvironment, type RevocationReason } from "../src/certificate-authority";
 import { createTxtResolver, type TxtResolver } from "../src/dcv";
 import type { Db } from "../src/db/client";
-import type { EnrollmentRequest } from "../src/enrollment-validator";
+import { z } from "@hono/zod-openapi";
+import type { EnrollmentRequest, EnrollmentValidatorKind } from "../src/enrollment-validator";
+import { ValidatorDouble } from "./enrollment-validator-double";
 import type { Issuances } from "../src/issuance";
 import { createLocalKms } from "../src/kms";
 import { CapturingMailer } from "../src/mailer";
@@ -107,8 +109,14 @@ export interface Harness {
   createdAccountKeys: string[];
   /** The hooks the app runs when a member is removed; empty unless a test adds one (and takes it out again). */
   memberRemovalHooks: MemberRemovalHook[];
-  /** What the test-only Enrollment Validator kind `test_allow`, which allows every request, was asked, in order. */
+  /** What the test-only Enrollment Validator kinds `test_allow` and `test_names`, which allow every request, were asked, in order. */
   enrollmentValidations: EnrollmentRequest[];
+  /** The service behind the test-only Enrollment Validator kind `test_double`, which vouches for names and feeds Revocations. */
+  validatorDouble: ValidatorDouble;
+  /** One pass of telling Enrollment Validators what became of requests and Revocations, at the harness's clock. Returns how many were told. */
+  deliverEnrollmentNotifications(): Promise<number>;
+  /** One pass of pulling Enrollment Validators' revocation feeds that are due, at the harness's clock. Returns how many feeds were pulled. */
+  pollRevocationFeeds(): Promise<number>;
   setNow(d: Date): void;
   /** Sign up (Better Auth) and return the session cookie. */
   signUp(email: string, password: string, name?: string): Promise<string>;
@@ -150,6 +158,21 @@ export async function createHarness(overrides: Partial<AppDeps> = {}, { database
   const auditTransport = new CapturingAuditTransport();
   const memberRemovalHooks: MemberRemovalHook[] = [];
   const enrollmentValidations: EnrollmentRequest[] = [];
+  const validatorDouble = new ValidatorDouble();
+  /** A test-only kind that allows every request, needs no settings or secret, and is told nothing. */
+  const allowing = (vouchesForNames: boolean): EnrollmentValidatorKind => ({
+    settings: z.object({}).strict(),
+    vouchesForNames,
+    create: () => ({
+      async validate(request) {
+        enrollmentValidations.push(request);
+        return { allowed: true };
+      },
+      async issued() {},
+      async failed() {},
+      async test() {},
+    }),
+  });
   let now = new Date("2026-01-01T00:00:00Z");
   const caDirectories: Record<AcmeEnvironment, string> = { staging: PEBBLE_DIRECTORY, production: PEBBLE_DIRECTORY };
   const createdAccountKeys: string[] = [];
@@ -207,18 +230,12 @@ export async function createHarness(overrides: Partial<AppDeps> = {}, { database
     baseURL: BASE,
     pkiBaseURL: PKI_BASE_URL,
     secret: "test-secret-test-secret-test-secret-1234",
-    // A test-only Enrollment Validator kind that allows every request.
-    enrollmentValidators: {
-      test_allow: {
-        async validate(request) {
-          enrollmentValidations.push(request);
-          return { allowed: true };
-        },
-      },
-    },
+    // Test-only Enrollment Validator kinds: two that allow every request, one vouching for names and one not, and one
+    // backed by the validator double.
+    enrollmentValidators: { test_allow: allowing(true), test_names: allowing(false), test_double: validatorDouble.kind() },
     ...overrides,
   };
-  const { app, auth, db, unitOfWork, issuances, renewals, notifications, auditForwarding, crls } = createApp(deps);
+  const { app, auth, db, unitOfWork, issuances, renewals, notifications, auditForwarding, crls, enrollmentValidators } = createApp(deps);
   if (migrate) await runMigrations(pool);
   const reset = async () => {
     await issuances.idle();
@@ -237,6 +254,7 @@ export async function createHarness(overrides: Partial<AppDeps> = {}, { database
     auditTransport.failingAfter = null;
     memberRemovalHooks.length = 0;
     enrollmentValidations.length = 0;
+    validatorDouble.reset();
     createdAccountKeys.length = 0;
     caDirectories.staging = caDirectories.production = PEBBLE_DIRECTORY;
     now = new Date("2026-01-01T00:00:00Z");
@@ -284,6 +302,9 @@ export async function createHarness(overrides: Partial<AppDeps> = {}, { database
     createdAccountKeys,
     memberRemovalHooks,
     enrollmentValidations,
+    validatorDouble,
+    deliverEnrollmentNotifications: () => enrollmentValidators.deliver(),
+    pollRevocationFeeds: () => enrollmentValidators.pollFeeds(),
     setNow: (d) => {
       now = d;
     },

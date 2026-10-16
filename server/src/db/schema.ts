@@ -12,6 +12,7 @@ import type { IssuerKind } from "../issuer-kinds";
 import type { KeyAlgorithm, KeyCustody } from "../csr";
 import type { IssuingCaStatus, PrivateCaKind, PrivateCaStatus } from "../private-ca-kinds";
 import type { DeviceExtendedKeyUsage, DeviceKeyType, DeviceKeyUsage } from "../enrollment-profile-kinds";
+import type { NameRules } from "../name-rules";
 import type { AgentArch, AgentOs } from "../agent-kinds";
 import type { ApprovalStatus } from "../approval";
 import type { NameChangeStatus } from "../name-change";
@@ -545,7 +546,7 @@ export const certificateRevocation = pgTable(
 /**
  * An Enrollment Profile (enrollment-profiles.ts): the template under which devices obtain Device Certificates in bulk from
  * one Issuing CA, at a SCEP URL under its opaque `public_id`, with the Enrollment Validator of `validator_kind` deciding
- * each request. Its RA certificate, which the Issuing CA signed, and the RA's software RSA key, a Secret (ADR 0007),
+ * each request, and the name rules a device's names must keep when that validator does not vouch for them. Its RA certificate, which the Issuing CA signed, and the RA's software RSA key, a Secret (ADR 0007),
  * open SCEP requests and sign SCEP responses.
  */
 export const enrollmentProfile = pgTable(
@@ -564,8 +565,12 @@ export const enrollmentProfile = pgTable(
     keyUsage: text("key_usage").array().$type<DeviceKeyUsage[]>().notNull(),
     extendedKeyUsage: text("extended_key_usage").array().$type<DeviceExtendedKeyUsage[]>().notNull(),
     allowedKeyTypes: text("allowed_key_types").array().$type<DeviceKeyType[]>().notNull(),
-    /** The Enrollment Validator kind (enrollment-validator.ts) that decides its requests. */
+    /** The Enrollment Validator kind (enrollment-validator.ts) that decides its requests, its settings, and the Secret it runs with when its kind takes one. */
     validatorKind: text("validator_kind").notNull(),
+    validatorSettings: jsonb("validator_settings").$type<Record<string, unknown>>().notNull().default({}),
+    validatorSecretId: uuid("validator_secret_id"),
+    /** What a device's names must keep (name-rules.ts): present exactly when its validator does not vouch for names. */
+    nameRules: jsonb("name_rules").$type<NameRules>(),
     /** Its RA certificate (PEM), and the Secret holding the RA's private key (PKCS #8 PEM). */
     raCertificatePem: text("ra_certificate_pem").notNull(),
     raKeySecretId: uuid("ra_key_secret_id").notNull(),
@@ -576,6 +581,7 @@ export const enrollmentProfile = pgTable(
     unique("enrollment_profile_public_id_unique").on(t.publicId),
     foreignKey({ columns: [t.issuingCaId, t.organizationId], foreignColumns: [issuingCa.id, issuingCa.organizationId] }),
     foreignKey({ columns: [t.raKeySecretId, t.organizationId], foreignColumns: [secret.id, secret.organizationId] }),
+    foreignKey({ columns: [t.validatorSecretId, t.organizationId], foreignColumns: [secret.id, secret.organizationId] }),
     // Lets other tables reference a profile together with its Organization, so none can point at another's.
     unique("enrollment_profile_id_organization_unique").on(t.id, t.organizationId),
     check("enrollment_profile_validity", sql`${t.validityDays} >= 1`),
@@ -609,6 +615,9 @@ export const deviceCertificate = pgTable(
     deviceId: text("device_id"),
     /** The SCEP transaction ID of the request it answered. */
     transactionId: text("transaction_id").notNull(),
+    /** When it was revoked and why, which puts it on its Issuing CA's CRL until it expires; none while it is not. */
+    revokedAt: timestamp("revoked_at", { withTimezone: true }),
+    revocationReason: text("revocation_reason").$type<RevocationReason>(),
     createdAt: timestamp("created_at", { withTimezone: true }).notNull().defaultNow(),
   },
   (t) => [
@@ -616,7 +625,57 @@ export const deviceCertificate = pgTable(
     foreignKey({ columns: [t.issuingCaId, t.organizationId], foreignColumns: [issuingCa.id, issuingCa.organizationId] }),
     unique("device_certificate_organization_fingerprint_unique").on(t.organizationId, t.fingerprint),
     index("device_certificate_profile_idx").on(t.enrollmentProfileId, t.createdAt),
+    index("device_certificate_serial_idx").on(t.organizationId, t.serial),
+    index("device_certificate_revoked_idx").on(t.issuingCaId).where(sql`${t.revokedAt} is not null`),
+    check("device_certificate_revocation", sql`(${t.revokedAt} is null) = (${t.revocationReason} is null)`),
+    check("device_certificate_revocation_reason", sql`${t.revocationReason} in ('unspecified', 'keyCompromise', 'affiliationChanged', 'superseded', 'cessationOfOperation', 'privilegeWithdrawn')`),
   ],
+);
+
+/**
+ * What an Enrollment Profile's validator is to be told (enrollment-validators.ts): that a request was `issued`, or `failed`
+ * after it was asked about it, or the outcomes of the Revocations its feed asked for (`revocations`). Queued on the
+ * transaction of what it tells of and told afterwards by the delivery pass, tried again with backoff and given up as
+ * `failed` after a few tries, so that a device is never kept waiting for its validator to be told.
+ */
+export const enrollmentValidatorMessage = pgTable(
+  "enrollment_validator_message",
+  {
+    id: uuid("id").primaryKey().defaultRandom(),
+    organizationId: text("organization_id")
+      .notNull()
+      .references(() => organization.id),
+    enrollmentProfileId: uuid("enrollment_profile_id").notNull(),
+    type: text("type").$type<"issued" | "failed" | "revocations">().notNull(),
+    payload: jsonb("payload").$type<Record<string, unknown>>().notNull(),
+    status: text("status").$type<"queued" | "sent" | "failed">().notNull().default("queued"),
+    attempts: integer("attempts").notNull().default(0),
+    nextAttemptAt: timestamp("next_attempt_at", { withTimezone: true }).notNull(),
+    lastError: text("last_error"),
+    createdAt: timestamp("created_at", { withTimezone: true }).notNull(),
+    sentAt: timestamp("sent_at", { withTimezone: true }),
+  },
+  (t) => [
+    foreignKey({ columns: [t.enrollmentProfileId, t.organizationId], foreignColumns: [enrollmentProfile.id, enrollmentProfile.organizationId] }),
+    index("enrollment_validator_message_queued_idx").on(t.nextAttemptAt).where(sql`${t.status} = 'queued'`),
+    check("enrollment_validator_message_type", sql`${t.type} in ('issued', 'failed', 'revocations')`),
+    check("enrollment_validator_message_status", sql`${t.status} in ('queued', 'sent', 'failed')`),
+  ],
+);
+
+/** When each Enrollment Validator revocation feed (an Organization's, of one kind, from one source) may next be pulled. */
+export const enrollmentValidatorFeed = pgTable(
+  "enrollment_validator_feed",
+  {
+    organizationId: text("organization_id")
+      .notNull()
+      .references(() => organization.id),
+    validatorKind: text("validator_kind").notNull(),
+    source: text("source").notNull(),
+    lastPulledAt: timestamp("last_pulled_at", { withTimezone: true }),
+    nextPullAt: timestamp("next_pull_at", { withTimezone: true }).notNull(),
+  },
+  (t) => [primaryKey({ columns: [t.organizationId, t.validatorKind, t.source] })],
 );
 
 /**
