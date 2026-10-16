@@ -663,6 +663,36 @@ export const enrollmentValidatorMessage = pgTable(
   ],
 );
 
+/**
+ * A Revocation an Enrollment Validator's feed handed over (enrollment-validators.ts), kept from the moment it is pulled
+ * until it is acted on, so that one pulled just before the platform stops is still revoked and answered. `attempts` counts
+ * the changes that tried to act on it and rolled back; after a few it is answered as failed.
+ */
+export const enrollmentValidatorRevocationRequest = pgTable(
+  "enrollment_validator_revocation_request",
+  {
+    id: uuid("id").primaryKey().defaultRandom(),
+    organizationId: text("organization_id")
+      .notNull()
+      .references(() => organization.id),
+    validatorKind: text("validator_kind").notNull(),
+    source: text("source").notNull(),
+    /** The kind's own reference for the request, given back with its outcome. */
+    ref: text("ref").notNull(),
+    serial: text("serial").notNull(),
+    issuer: text("issuer"),
+    reason: text("reason").$type<RevocationReason>().notNull(),
+    attempts: integer("attempts").notNull().default(0),
+    /** When it was pulled, and where among what that pull handed over: the order its outcomes are told in. */
+    pulledAt: timestamp("pulled_at", { withTimezone: true }).notNull(),
+    position: integer("position").notNull(),
+  },
+  (t) => [
+    index("enrollment_validator_revocation_request_feed_idx").on(t.organizationId, t.validatorKind, t.source, t.pulledAt, t.position),
+    check("enrollment_validator_revocation_request_reason", sql`${t.reason} in ('unspecified', 'keyCompromise', 'affiliationChanged', 'superseded', 'cessationOfOperation', 'privilegeWithdrawn')`),
+  ],
+);
+
 /** When each Enrollment Validator revocation feed (an Organization's, of one kind, from one source) may next be pulled. */
 export const enrollmentValidatorFeed = pgTable(
   "enrollment_validator_feed",

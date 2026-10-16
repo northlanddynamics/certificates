@@ -3,7 +3,7 @@
 // unreachable, takes only its own credential, and keeps a queue of Revocations to feed. The seam's contract
 // (enrollment-validator-contract.ts) runs against it, and the platform's scenario tests drive it through the harness.
 import { z } from "@hono/zod-openapi";
-import type { DecidedRequest, EnrollmentRequest, EnrollmentValidatorKind, IssuedDeviceCertificate, RevocationOutcome, RevocationRequest } from "../src/enrollment-validator";
+import { EnrollmentValidatorError, type DecidedRequest, type EnrollmentRequest, type EnrollmentValidatorKind, type IssuedDeviceCertificate, type RevocationOutcome, type RevocationRequest } from "../src/enrollment-validator";
 import type { RevocationReason } from "../src/revocation-reasons";
 
 /** The credential the service takes; anything else is refused as unauthorized. */
@@ -23,6 +23,8 @@ export class ValidatorDouble {
   refusing: string | null = null;
   /** When set, no call reaches it. */
   unreachable = false;
+  /** When set, every call fails as a bug in a kind might: with an ordinary Error whose message quotes the secret. */
+  buggy = false;
   private queue: (RevocationRequest & { tenant: string })[] = [];
   private refs = 0;
 
@@ -36,13 +38,15 @@ export class ValidatorDouble {
     this.tests = 0;
     this.refusing = null;
     this.unreachable = false;
+    this.buggy = false;
     this.queue = [];
   }
 
   /** The call reaches the service with this credential, or throws as a client of it would. */
   private reach(secret: string) {
-    if (this.unreachable) throw new Error("the validator service did not answer");
-    if (secret !== DOUBLE_SECRET) throw new Error("the validator service answered 401: unauthorized");
+    if (this.buggy) throw new Error(`a bug that quotes the secret ${secret}`);
+    if (this.unreachable) throw new EnrollmentValidatorError("the validator service did not answer");
+    if (secret !== DOUBLE_SECRET) throw new EnrollmentValidatorError("the validator service answered 401: unauthorized");
   }
 
   /** The kind, as a platform registers it; `vouchesForNames` as given. */

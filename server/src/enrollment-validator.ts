@@ -54,7 +54,18 @@ export interface RevocationOutcome {
   message?: string;
 }
 
-/** A validator, running with its settings and secret. Every call may throw when the service cannot be reached. */
+/**
+ * What a validator throws when its service cannot be reached, refuses its credentials or answers what it should not. Its
+ * message is shown to administrators and kept, so it must say what went wrong without ever holding the secret or a token.
+ * Anything else a validator throws is taken for a bug in it, and its message is neither shown nor kept nor logged.
+ */
+export class EnrollmentValidatorError extends Error {}
+
+/** What may be shown, kept and logged of an error a validator threw. */
+export const describeValidatorError = (err: unknown) =>
+  err instanceof EnrollmentValidatorError ? err.message.replace(/\u0000/g, "").slice(0, 1000) : `the Enrollment Validator failed unexpectedly (${err instanceof Error ? err.name : typeof err})`;
+
+/** A validator, running with its settings and secret. Every call throws an EnrollmentValidatorError when its service cannot be reached. */
 export interface EnrollmentValidator {
   /** Whether the request may be issued. Throws when the validator cannot be asked, which refuses it too. */
   validate(request: EnrollmentRequest): Promise<EnrollmentDecision>;

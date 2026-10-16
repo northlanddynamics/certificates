@@ -340,17 +340,92 @@ describe("a validator's revocation feed", () => {
     expect((await auditOf()).filter((e) => e.action === "device_certificate.revoked")).toHaveLength(1);
   });
 
-  test("whose Revocations cannot be published is told they failed, and nothing is revoked", async () => {
+  test("keeps what it pulled until it is revoked: a change that rolls back is tried again on the next pass, without pulling again", async () => {
     const profile = await createProfile();
     const device = await enrolled(profile.scepUrl, "CN=device-kms");
     h.validatorDouble.queueRevocation("contoso", device.serialNumber);
     h.kms.failing = true;
     expect(await h.pollRevocationFeeds()).toBe(1);
+    expect((await auditOf()).some((e) => e.action === "device_certificate.revoked")).toBe(false);
+    await h.deliverEnrollmentNotifications();
+    expect(h.validatorDouble.reports).toEqual([]);
+
     h.kms.failing = false;
+    h.setNow(new Date(START + MINUTE_MS));
+    expect(await h.pollRevocationFeeds()).toBe(0);
+    expect(h.validatorDouble.pulls).toEqual(["contoso"]);
+    expect((await crlFor(device)).entries.map((e) => e.serialNumber.toUpperCase())).toEqual([device.serialNumber.toUpperCase()]);
+    await h.deliverEnrollmentNotifications();
+    expect(h.validatorDouble.reports.map((r) => r.outcomes.map((o) => o.outcome))).toEqual([["revoked"]]);
+  });
+
+  test("answers as failed, and revokes nothing, what still cannot be revoked after five tries", async () => {
+    const profile = await createProfile();
+    const device = await enrolled(profile.scepUrl, "CN=device-kms");
+    h.validatorDouble.queueRevocation("contoso", device.serialNumber);
+    h.kms.failing = true;
+    for (let pass = 0; pass < 5; pass++) {
+      h.setNow(new Date(START + pass * MINUTE_MS));
+      await h.pollRevocationFeeds();
+    }
+    h.kms.failing = false;
+    await h.pollRevocationFeeds();
 
     expect((await crlFor(device)).entries).toEqual([]);
     expect((await auditOf()).some((e) => e.action === "device_certificate.revoked")).toBe(false);
     await h.deliverEnrollmentNotifications();
     expect(h.validatorDouble.reports.map((r) => r.outcomes.map((o) => o.outcome))).toEqual([["failed"]]);
+  });
+
+  test("shared by profiles holding different secrets is pulled, and told, with whichever still works", async () => {
+    const stale = await createProfile({ ...DOUBLE, secret: "a-rotated-out-secret" });
+    const current = await createProfile(DOUBLE, { name: "VPN" });
+    const device = await enrolled(current.scepUrl, "CN=vpn-device");
+    expect(stale.id).not.toBe(current.id);
+    h.validatorDouble.queueRevocation("contoso", device.serialNumber);
+
+    expect(await h.pollRevocationFeeds()).toBe(1);
+    expect((await crlFor(device)).entries).toHaveLength(1);
+    await h.deliverEnrollmentNotifications();
+    expect(h.validatorDouble.reports.map((r) => r.outcomes.map((o) => o.outcome))).toEqual([["revoked"]]);
+  });
+});
+
+describe("a validator that fails unexpectedly", () => {
+  test("refuses the request, and its error, which may quote anything, is never shown or kept", async () => {
+    const profile = await createProfile();
+    h.validatorDouble.buggy = true;
+
+    const failure = await enroll(profile.scepUrl, { subject: "CN=device-bug" });
+    expect(failure).toBeInstanceOf(ScepFailureError);
+    const tested = await h.api(`${profiles()}/${profile.id}/validator/test`, { cookie: org.cookie, body: {} });
+    expect(tested.body.ok).toBe(false);
+    expect(tested.body.error).toContain("unexpectedly");
+    await h.deliverEnrollmentNotifications();
+
+    expect(JSON.stringify(tested.body)).not.toContain(DOUBLE_SECRET);
+    expect(JSON.stringify(await auditOf())).not.toContain(DOUBLE_SECRET);
+    const kept = await h.pool.query("select last_error from enrollment_validator_message");
+    expect(kept.rows.length).toBeGreaterThan(0);
+    expect(JSON.stringify(kept.rows)).not.toContain(DOUBLE_SECRET);
+  });
+});
+
+describe("a request the validator allowed", () => {
+  test("that the platform then fails to issue is refused, recorded and told to the validator, not left unanswered", async () => {
+    const profile = await createProfile();
+    h.kms.failing = true;
+
+    const failure = await enroll(profile.scepUrl, { subject: "CN=device-kms" });
+    expect(failure).toBeInstanceOf(ScepFailureError);
+    expect((failure as ScepFailureError).failInfo).toBe(FailInfo.badRequest);
+    expect(h.validatorDouble.validations).toHaveLength(1);
+    const audit = await auditOf();
+    expect(audit.some((e) => e.action === "device_certificate.issued")).toBe(false);
+    expect(audit.filter((e) => e.action === "enrollment.refused")).toHaveLength(1);
+
+    h.kms.failing = false;
+    await h.deliverEnrollmentNotifications();
+    expect(h.validatorDouble.failed).toHaveLength(1);
   });
 });

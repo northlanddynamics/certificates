@@ -14,7 +14,7 @@ import { subjectAltNamesOf } from "./ca-certificates";
 import type { Db } from "./db/client";
 import { deviceCertificate, enrollmentProfile } from "./db/schema";
 import { DEVICE_EXTENDED_KEY_USAGES, DEVICE_KEY_TYPES, type DeviceKeyType } from "./enrollment-profile-kinds";
-import type { EnrollmentValidator } from "./enrollment-validator";
+import { describeValidatorError, type EnrollmentValidator } from "./enrollment-validator";
 import type { EnrollmentValidatorRuns } from "./enrollment-validators";
 import { IssuanceFailure } from "./issuance-failure";
 import { findIssuingCa, type PrivateCas } from "./private-ca";
@@ -81,13 +81,13 @@ export function registerScep(ctx: { app: OpenAPIHono; db: Db; unitOfWork: UnitOf
     try {
       validator = await validators.open(db, profile);
     } catch (err) {
-      console.error("the Enrollment Validator could not be opened", err);
+      console.error("the Enrollment Validator could not be opened:", describeValidatorError(err));
       return refused(`the Enrollment Validator ${profile.validatorKind} is not available`);
     }
     const decision = await validator.validate({ csr: request.csr.der, challengePassword: request.csr.challengePassword, transactionId: request.transactionId }).then(
       (decision) => (decision.allowed ? decision : { allowed: false as const, reason: `the Enrollment Validator refused the request: ${decision.reason}` }),
       (err: unknown) => {
-        console.error("the Enrollment Validator could not be asked", err);
+        console.error("the Enrollment Validator could not be asked:", describeValidatorError(err));
         return { allowed: false as const, reason: "the Enrollment Validator could not be asked" };
       },
     );
@@ -103,43 +103,51 @@ export function registerScep(ctx: { app: OpenAPIHono; db: Db; unitOfWork: UnitOf
       });
     } catch (err) {
       if (err instanceof IssuanceFailure) return refused(err.message, true);
-      throw err;
+      // Anything else (the KMS not signing, say) is still this request's answer, and its validator, which allowed it, is told.
+      console.error("could not issue a Device Certificate", err);
+      return refused("the platform could not issue the Device Certificate; enroll again", true);
     }
     const { certificate } = issued;
     const serial = certificate.serialNumber.toUpperCase();
     const subjectAltNames = subjectAltNamesOf(certificate);
-    await unitOfWork.run(null, async (tx, change) => {
-      const [row] = await tx
-        .insert(deviceCertificate)
-        .values({
+    try {
+      await unitOfWork.run(null, async (tx, change) => {
+        const [row] = await tx
+          .insert(deviceCertificate)
+          .values({
+            organizationId: profile.organizationId,
+            enrollmentProfileId: profile.id,
+            issuingCaId: profile.issuingCaId,
+            serial,
+            fingerprint: createHash("sha256").update(new Uint8Array(certificate.rawData)).digest("hex"),
+            subject: certificate.subject,
+            subjectAltNames,
+            notBefore: certificate.notBefore,
+            notAfter: certificate.notAfter,
+            certificatePem: certificate.toString("pem"),
+            transactionId: request.transactionId,
+          })
+          .returning({ id: deviceCertificate.id });
+        await change.audit({
           organizationId: profile.organizationId,
-          enrollmentProfileId: profile.id,
-          issuingCaId: profile.issuingCaId,
-          serial,
-          fingerprint: createHash("sha256").update(new Uint8Array(certificate.rawData)).digest("hex"),
-          subject: certificate.subject,
-          subjectAltNames,
-          notBefore: certificate.notBefore,
-          notAfter: certificate.notAfter,
-          certificatePem: certificate.toString("pem"),
-          transactionId: request.transactionId,
-        })
-        .returning({ id: deviceCertificate.id });
-      await change.audit({
-        organizationId: profile.organizationId,
-        action: "device_certificate.issued",
-        target: { type: "device_certificate", id: row!.id },
-        detail: {
-          enrollmentProfile: { id: profile.id, name: profile.name },
-          serial,
-          subject: certificate.subject,
-          subjectAltNames,
-          notAfter: certificate.notAfter.toISOString(),
-          transactionId: request.transactionId,
-        },
+          action: "device_certificate.issued",
+          target: { type: "device_certificate", id: row!.id },
+          detail: {
+            enrollmentProfile: { id: profile.id, name: profile.name },
+            serial,
+            subject: certificate.subject,
+            subjectAltNames,
+            notAfter: certificate.notAfter.toISOString(),
+            transactionId: request.transactionId,
+          },
+        });
+        await validators.tellIssued(tx, change, profile, { csr: request.csr.der, transactionId: request.transactionId }, { pem: certificate.toString("pem"), serial, notAfter: certificate.notAfter, issuer: certificate.issuer });
       });
-      await validators.tellIssued(tx, change, profile, { csr: request.csr.der, transactionId: request.transactionId }, { pem: certificate.toString("pem"), serial, notAfter: certificate.notAfter, issuer: certificate.issuer });
-    });
+    } catch (err) {
+      // Signed but not stored: it is answered as refused, so no device holds a Device Certificate the platform does not know of.
+      console.error("could not store a Device Certificate", err);
+      return refused("the platform could not issue the Device Certificate; enroll again", true);
+    }
     return { certificate: certificate.toString("pem"), certificates: [certificate.toString("pem"), ...issued.chainPem] };
   }
 

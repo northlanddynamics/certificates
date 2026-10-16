@@ -21,7 +21,7 @@ import {
   DEVICE_KEY_USAGES,
   MAX_DEVICE_VALIDITY_DAYS,
 } from "./enrollment-profile-kinds";
-import type { EnrollmentValidators } from "./enrollment-validator";
+import { describeValidatorError, type EnrollmentValidators } from "./enrollment-validator";
 import type { EnrollmentValidatorRuns } from "./enrollment-validators";
 import { HttpError, OrgParam, errors, isUniqueViolation, json } from "./http";
 import { IssuanceFailure } from "./issuance-failure";
@@ -344,7 +344,7 @@ export function registerEnrollmentProfiles(ctx: {
         .then((validator) => validator.test())
         .then(
           () => ({ ok: true as const }),
-          (err: unknown) => ({ ok: false as const, error: (err instanceof Error ? err.message : String(err)).slice(0, 1000) }),
+          (err: unknown) => ({ ok: false as const, error: describeValidatorError(err) }),
         );
       await unitOfWork.run(actor, (_tx, change) =>
         change.audit({ organizationId: orgId, action: "enrollment_validator.tested", target: { type: "enrollment_profile", id: row.id }, detail: { validator: { kind: row.validatorKind }, ...outcome } }),
