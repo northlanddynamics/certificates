@@ -21,6 +21,7 @@ import { bootstrapPlatformOperator } from "../src/operator";
 import type { UnitOfWork } from "../src/unit-of-work";
 import { createIntuneKind } from "../src/intune";
 import { IntuneDouble } from "./intune-double";
+import { SCEP_DEFAULTS, type ScepConfig } from "../src/scep";
 
 export const TEST_DATABASE_URL =
   process.env.TEST_DATABASE_URL ?? "postgres://postgres:postgres@localhost:5433/certs_test";
@@ -103,6 +104,8 @@ export interface Harness {
   runCrlScheduler(): Promise<number>;
   /** The KMS as the platform sees it: `failing` makes every signature it is asked for fail. */
   kms: { failing: boolean };
+  /** The SCEP routes' rate limits (see `ScepConfig`), which a test may lower; the platform's defaults again after reset. */
+  scepRateLimit: Pick<ScepConfig, "perAddress" | "perProfile">;
   /** What the platform does when it starts: ends the Issuances an earlier run left running. */
   failInterruptedIssuances(): Promise<void>;
   /** The roots the CA's chains end in, as an export that includes the root finds them: Pebble's, unless a test sets `current` to something else. */
@@ -111,7 +114,7 @@ export interface Harness {
   createdAccountKeys: string[];
   /** The hooks the app runs when a member is removed; empty unless a test adds one (and takes it out again). */
   memberRemovalHooks: MemberRemovalHook[];
-  /** What the test-only Enrollment Validator kinds `test_allow` and `test_names`, which allow every request, were asked, in order. */
+  /** What the test-only Enrollment Validator kinds `test_allow`, `test_names` and `test_renewal`, which allow every request, were asked, in order. */
   enrollmentValidations: EnrollmentRequest[];
   /** The service behind the test-only Enrollment Validator kind `test_double`, which vouches for names and feeds Revocations. */
   validatorDouble: ValidatorDouble;
@@ -165,9 +168,10 @@ export async function createHarness(overrides: Partial<AppDeps> = {}, { database
   const validatorDouble = new ValidatorDouble();
   const intune = new IntuneDouble();
   /** A test-only kind that allows every request, needs no settings or secret, and is told nothing. It knows a device by its `IntuneDeviceId://` URI, as Intune does. */
-  const allowing = (vouchesForNames: boolean): EnrollmentValidatorKind => ({
+  const allowing = (vouchesForNames: boolean, allowsRenewal = false): EnrollmentValidatorKind => ({
     settings: z.object({}).strict(),
     vouchesForNames,
+    allowsRenewal,
     deviceIdOf: (names) => names.find((n) => n.type === "url" && n.value.startsWith("IntuneDeviceId://"))?.value.slice("IntuneDeviceId://".length),
     create: () => ({
       async validate(request) {
@@ -186,6 +190,8 @@ export async function createHarness(overrides: Partial<AppDeps> = {}, { database
   const ari: Harness["ari"] = { enabled: false, asked: [], replaces: [], failing: false };
   const revocations: Harness["revocations"] = [];
   const kmsState = { failing: false };
+  // Devices are told apart by the X-Forwarded-For a TLS terminator would add, as tests have no sockets.
+  const scep: ScepConfig = { ...SCEP_DEFAULTS, trustForwardedFor: true };
   const localKms = createLocalKms(TEST_KMS_KEY);
   // The real ACME client against Pebble; it only notes the keys it generated.
   const letsEncrypt = createLetsEncrypt({
@@ -233,15 +239,16 @@ export async function createHarness(overrides: Partial<AppDeps> = {}, { database
     },
     dcv: { resolver: { lookupTxt: (name) => dcvResolver.current.lookupTxt(name), lookupCname: (name) => dcvResolver.current.lookupCname(name) }, visibilityTimeoutMs: 1500, pollIntervalMs: 50 },
     clock: () => now,
+    scep,
     baseURL: BASE,
     pkiBaseURL: PKI_BASE_URL,
     secret: "test-secret-test-secret-test-secret-1234",
-    // Test-only Enrollment Validator kinds: two that allow every request, one vouching for names and one not, and one
-    // backed by the validator double; and the platform's Intune kind, reaching the Intune double.
-    enrollmentValidators: { test_allow: allowing(true), test_names: allowing(false), test_double: validatorDouble.kind(), intune: createIntuneKind({ fetch: intune.fetch }) },
+    // Test-only Enrollment Validator kinds: three that allow every request (one vouching for names, one not, and one also
+    // allowing RenewalReq), and one backed by the validator double; and the platform's Intune kind, reaching the Intune double.
+    enrollmentValidators: { test_allow: allowing(true), test_names: allowing(false), test_renewal: allowing(true, true), test_double: validatorDouble.kind(), intune: createIntuneKind({ fetch: intune.fetch }) },
     ...overrides,
   };
-  const { app, auth, db, unitOfWork, issuances, renewals, notifications, auditForwarding, crls, enrollmentValidators } = createApp(deps);
+  const { app, auth, db, unitOfWork, issuances, renewals, notifications, auditForwarding, crls, enrollmentValidators, scep: scepRoutes } = createApp(deps);
   if (migrate) await runMigrations(pool);
   const reset = async () => {
     await issuances.idle();
@@ -249,6 +256,8 @@ export async function createHarness(overrides: Partial<AppDeps> = {}, { database
     caRoots.current = pebbleRoots;
     Object.assign(ari, { enabled: false, failing: false, replacing: undefined });
     kmsState.failing = false;
+    Object.assign(scep, { perAddress: SCEP_DEFAULTS.perAddress, perProfile: SCEP_DEFAULTS.perProfile });
+    scepRoutes.resetRateLimits();
     ari.asked.length = ari.replaces.length = revocations.length = 0;
     // Cascades through every table that references an Organization or a user.
     await pool.query(`truncate organization, "user", apikey cascade`);
@@ -293,6 +302,7 @@ export async function createHarness(overrides: Partial<AppDeps> = {}, { database
     runRenewalScheduler: () => renewals.tick(),
     runCrlScheduler: () => crls.tick(),
     kms: kmsState,
+    scepRateLimit: scep,
     ari,
     revocations,
     async setPebbleWindow(certificate, window) {

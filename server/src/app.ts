@@ -58,7 +58,8 @@ import { removeTeamFromSubscribers, removeUserFromSubscribers } from "./subscrib
 import { createOrganizations } from "./organizations";
 import { createPrivateCas, registerPrivateCas } from "./private-ca";
 import { ROLE_NAMES, permissionsOf } from "./permissions";
-import { registerScep } from "./scep";
+import { registerScep, type ScepConfig } from "./scep";
+import { createScepTransactions } from "./scep-transactions";
 import { createSecrets } from "./secrets";
 import { registerSsoConnections } from "./sso-connections";
 import { provisionOnSsoSignIn } from "./sso-sign-in";
@@ -99,6 +100,8 @@ export interface AppDeps {
   memberRemovalHooks?: MemberRemovalHook[];
   /** The Enrollment Validator kinds Enrollment Profiles can name, by name (enrollment-validator.ts); ENROLLMENT_VALIDATOR_KINDS unless given. */
   enrollmentValidators?: EnrollmentValidators;
+  /** How the SCEP routes are rate limited and tell devices apart: see `ScepConfig`. */
+  scep?: Partial<ScepConfig>;
 }
 
 export function createApp(deps: AppDeps) {
@@ -308,7 +311,7 @@ export function createApp(deps: AppDeps) {
   const enrollmentValidators = createEnrollmentValidatorRuns({ db, unitOfWork, secrets, privateCas, kinds: validatorKinds, clock });
   registerEnrollmentProfiles({ app, db, requireUser, authorize, unitOfWork, secrets, privateCas, kinds: validatorKinds, validators: enrollmentValidators, baseURL: deps.baseURL });
   registerDeviceCertificates({ app, db, requireUser, authorize, unitOfWork, privateCas, clock });
-  registerScep({ app, db, unitOfWork, secrets, privateCas, kinds: validatorKinds, validators: enrollmentValidators });
+  const scep = registerScep({ app, db, unitOfWork, secrets, privateCas, kinds: validatorKinds, validators: enrollmentValidators, transactions: createScepTransactions({ db, clock }), clock, config: deps.scep });
   const issuers = createIssuers({ acme: deps.certificateAuthority, secrets, privateCas });
   const issuances = createIssuances({ db, unitOfWork, issuers, dcv });
   const notifications = createNotifications({
@@ -375,5 +378,5 @@ export function createApp(deps: AppDeps) {
     }),
   );
 
-  return { app, auth, db, unitOfWork, issuances, renewals, notifications, auditForwarding, crls, enrollmentValidators };
+  return { app, auth, db, unitOfWork, issuances, renewals, notifications, auditForwarding, crls, enrollmentValidators, scep };
 }

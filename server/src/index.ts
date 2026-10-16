@@ -29,6 +29,8 @@ const { app, auth, db, issuances, renewals, notifications, auditForwarding, crls
     longPollSeconds: Number(process.env.AGENT_LONG_POLL_SECONDS ?? 20),
     ...(process.env.AGENT_LATEST_VERSION && { latestVersion: process.env.AGENT_LATEST_VERSION }),
   },
+  // SCEP's rate limit counts the address in X-Forwarded-For only behind a TLS terminator that sets it (see ScepConfig).
+  scep: { trustForwardedFor: process.env.TRUST_FORWARDED_FOR === "true" },
 });
 await runMigrations(pool);
 await issuances.failInterrupted();
