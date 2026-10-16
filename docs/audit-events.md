@@ -56,10 +56,10 @@ Each resource's verbs, as of this writing. New ones may be added within version 
 | `managed_certificate` | `created`, `proposed`, `approved`, `rejected`, `owner_added`, `owner_removed`, `subscriber_added`, `subscriber_removed`, `renewal_policy_changed`, `csr_uploaded`, `names_changed`, `archived`, `issuer_changed` |
 | `certificate` | `revoked` |
 | `private_ca` | `created`, `issuing_ca_added`, `csr_signed`, `updated`, `retired`, `revoked`, `crl_published` |
-| `enrollment_profile` | `created` |
+| `enrollment_profile` | `created`, `updated`, `disabled`, `ra_rotated` |
 | `enrollment_validator` | `tested` |
 | `enrollment` | `refused` |
-| `device_certificate` | `issued`, `revoked` |
+| `device_certificate` | `issued`, `revoked`, `pruned` |
 | `name_change` | `proposed`, `approved`, `rejected`, `withdrawn`, `discarded` |
 | `issuance` | `started`, `succeeded`, `failed` |
 | `api_key` | `created`, `revoked`, `used` |
@@ -97,12 +97,20 @@ A Managed Certificate issued from a Private CA is audited with the same actions 
 
 ### Device enrollment
 
-`enrollment_profile.created` targets the Enrollment Profile (`enrollment_profile`, its id) an Organization Administrator created. Its `detail` has the `name`, the `issuingCa` it issues from (`id`, `subject`), `validityDays`, `keyUsage` and `extendedKeyUsage` (by name, such as `digitalSignature` and `clientAuth`), `allowedKeyTypes` (such as `rsa-2048`), the `validator` (`{ "kind": ..., "settings": { ... } }`, its kind's non-secret settings), its `nameRules` (null when its validator vouches for names), and the `serial` and `notAfter` of its `raCertificate`. Neither the RA's key nor the validator's secret is ever in it.
+`enrollment_profile.created` targets the Enrollment Profile (`enrollment_profile`, its id) an Organization Administrator created. Its `detail` has the `name`, the `issuingCa` it issues from (`id`, `subject`), `validityDays`, `keyUsage` and `extendedKeyUsage` (by name, such as `digitalSignature` and `clientAuth`), `allowedKeyTypes` (such as `rsa-2048`), the `validator` (`{ "kind": ..., "settings": { ... } }`, its kind's non-secret settings), its `nameRules` (null when its validator vouches for names), `retentionDays`, and the `serial` and `notAfter` of its `raCertificate`. Neither the RA's key nor the validator's secret is ever in it.
+
+`enrollment_profile.updated` targets the Enrollment Profile an Organization Administrator changed. Its `detail` has the profile's `name` and the `changes`, each `{ "from": ..., "to": ... }`: `issuingCa` (`id`, `subject`) when it was pointed at another Issuing CA, and `retentionDays`. When the Issuing CA changed, it also has the `serial` and `notAfter` of the new `raCertificate` that Issuing CA signed. A change that changes nothing is not audited.
+
+`enrollment_profile.disabled` targets the Enrollment Profile an Organization Administrator disabled; its `detail` has the `name`. From then on every enrollment under it is refused. Its Device Certificates are kept.
+
+`enrollment_profile.ra_rotated` targets the Enrollment Profile whose RA certificate and key an Organization Administrator replaced. Its `detail` has the `name`, and the `serial` and `notAfter` of the RA certificate it replaced (`from`) and of the new one (`to`). The RA's key is never in it.
 
 `device_certificate.issued` targets the Device Certificate (`device_certificate`, its id) a device enrolled for under an Enrollment Profile, with no actor (both null): a device is not a user. Its `detail` has the `enrollmentProfile` (`id`, `name`), the certificate's `serial` (upper-case hex), `subject` and `subjectAltNames` (each `{ "type": ..., "value": ... }`, the type being `dns`, `email`, `ip`, `url`, `upn` or `guid`), the `deviceId` its Enrollment Validator knows the device by (such as Intune's device ID; null when the request did not say), its `notAfter`, and the SCEP `transactionId` of the request.
 
 `enrollment.refused` targets the Enrollment Profile (`enrollment_profile`, its id) under which a device's request was refused, with no actor. Its `detail` has the `enrollmentProfile` (`id`, `name`), the `reason` the device was given (such as a key the profile does not allow, a name its name rules do not, or the Enrollment Validator's own refusal), the `validator` (`{ "kind": ... }`), and the SCEP `transactionId`. Nothing is issued.
 
 `enrollment_validator.tested` targets the Enrollment Profile whose Enrollment Validator an Organization Administrator tested. Its `detail` has the `validator` (`{ "kind": ... }`), `ok`, the `error` when it failed, and, when it worked, the `note` of what the test could not prove (an Intune test cannot prove the `scep_challenge_provider` permission).
+
+`device_certificate.pruned` targets the Organization (`organization`, its id), with no actor: one per pruning pass that deleted any of its Device Certificates, those that ended more than their Enrollment Profile's retention period ago. Its `detail` has the `count` deleted and the `enrollmentProfiles` they belonged to (`id`, `name`, `count`). The Audit Events of what was pruned are kept.
 
 `device_certificate.revoked` targets the Device Certificate revoked. When an Organization Administrator revoked it, they are the actor and there is no `detail.by`; when its Enrollment Validator's revocation feed asked for it, there is no actor, and `detail.by` is `{ "enrollmentValidator": { "kind": ... } }`. Its `detail` also has the `enrollmentProfile` (`id`, `name`), the `serial`, `subject`, and the RFC 5280 `reason` (such as `cessationOfOperation`). Its Issuing CA's CRL is reissued in the same change.

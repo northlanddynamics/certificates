@@ -574,6 +574,10 @@ export const enrollmentProfile = pgTable(
     /** Its RA certificate (PEM), and the Secret holding the RA's private key (PKCS #8 PEM). */
     raCertificatePem: text("ra_certificate_pem").notNull(),
     raKeySecretId: uuid("ra_key_secret_id").notNull(),
+    /** Whether it takes enrollment requests; a disabled profile refuses every one, and keeps what it issued. It is never enabled again. */
+    enabled: boolean("enabled").notNull().default(true),
+    /** How many days after its notAfter a Device Certificate it issued is pruned (device-certificate-pruning.ts). */
+    retentionDays: integer("retention_days").notNull().default(365),
     createdAt: timestamp("created_at", { withTimezone: true }).notNull().defaultNow(),
   },
   (t) => [
@@ -585,6 +589,7 @@ export const enrollmentProfile = pgTable(
     // Lets other tables reference a profile together with its Organization, so none can point at another's.
     unique("enrollment_profile_id_organization_unique").on(t.id, t.organizationId),
     check("enrollment_profile_validity", sql`${t.validityDays} >= 1`),
+    check("enrollment_profile_retention", sql`${t.retentionDays} >= 0`),
   ],
 );
 
@@ -626,6 +631,8 @@ export const deviceCertificate = pgTable(
     unique("device_certificate_organization_fingerprint_unique").on(t.organizationId, t.fingerprint),
     index("device_certificate_profile_idx").on(t.enrollmentProfileId, t.createdAt),
     index("device_certificate_serial_idx").on(t.organizationId, t.serial),
+    // What pruning looks for: a profile's Device Certificates that ended before its retention period.
+    index("device_certificate_expiry_idx").on(t.enrollmentProfileId, t.notAfter),
     index("device_certificate_revoked_idx").on(t.issuingCaId).where(sql`${t.revokedAt} is not null`),
     check("device_certificate_revocation", sql`(${t.revokedAt} is null) = (${t.revocationReason} is null)`),
     check("device_certificate_revocation_reason", sql`${t.revocationReason} in ('unspecified', 'keyCompromise', 'affiliationChanged', 'superseded', 'cessationOfOperation', 'privilegeWithdrawn')`),

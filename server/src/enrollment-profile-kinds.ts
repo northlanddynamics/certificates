@@ -30,3 +30,7 @@ export type DeviceKeyType = (typeof DEVICE_KEY_TYPES)[number];
 /** How long a Device Certificate is valid for unless the profile says otherwise, and at most, in days. */
 export const DEFAULT_DEVICE_VALIDITY_DAYS = 365;
 export const MAX_DEVICE_VALIDITY_DAYS = 1825;
+
+/** How many days after its end a Device Certificate is pruned unless the profile says otherwise, and at most. */
+export const DEFAULT_DEVICE_RETENTION_DAYS = 365;
+export const MAX_DEVICE_RETENTION_DAYS = 3650;

@@ -168,6 +168,7 @@ export function registerScep(ctx: {
     claim: ScepClaim,
   ): Promise<{ certificate: string; certificates: string[] } | { reason: string; validatorAsked: boolean; retryable: boolean }> {
     const refused = (reason: string, validatorAsked = false, retryable = false) => ({ reason, validatorAsked, retryable });
+    if (!profile.enabled) return refused("the Enrollment Profile is disabled, so it issues nothing");
     let renewalOf: string | undefined;
     if (request.renewal) {
       const renewal = await renewalRefusal(profile, request);

@@ -12,7 +12,7 @@ const localKmsKey = process.env.LOCAL_KMS_KEY;
 if (!databaseUrl || !secret || !localKmsKey) throw new Error("DATABASE_URL, AUTH_SECRET and LOCAL_KMS_KEY are required");
 
 const pool = new Pool({ connectionString: databaseUrl });
-const { app, auth, db, issuances, renewals, notifications, auditForwarding, crls, enrollmentValidators } = createApp({
+const { app, auth, db, issuances, renewals, notifications, auditForwarding, crls, enrollmentValidators, deviceCertificatePruning } = createApp({
   pool,
   mailer: new ConsoleMailer(),
   clock: () => new Date(),
@@ -74,6 +74,13 @@ const REVOCATION_FEED_PASS_MS = 60_000;
 (async function pullRevocationFeeds() {
   await enrollmentValidators.pollFeeds().catch((err) => console.error("revocation feed pass failed", err));
   setTimeout(pullRevocationFeeds, REVOCATION_FEED_PASS_MS);
+})();
+
+// Device Certificates past their Enrollment Profile's retention period are pruned once an hour; each pass waits for the one before it.
+const PRUNING_PASS_MS = 3_600_000;
+(async function pruneDeviceCertificates() {
+  await deviceCertificatePruning.prune().catch((err) => console.error("Device Certificate pruning pass failed", err));
+  setTimeout(pruneDeviceCertificates, PRUNING_PASS_MS);
 })();
 
 if (process.env.OPERATOR_EMAIL && process.env.OPERATOR_PASSWORD) {

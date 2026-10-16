@@ -7,27 +7,31 @@ import { toast } from "sonner";
 import {
   DEFAULT_DEVICE_EXTENDED_KEY_USAGES,
   DEFAULT_DEVICE_KEY_USAGES,
+  DEFAULT_DEVICE_RETENTION_DAYS,
   DEFAULT_DEVICE_VALIDITY_DAYS,
   DEVICE_EXTENDED_KEY_USAGE_NAMES,
   DEVICE_KEY_TYPES,
   DEVICE_KEY_USAGES,
+  MAX_DEVICE_RETENTION_DAYS,
   MAX_DEVICE_VALIDITY_DAYS,
   type DeviceExtendedKeyUsage,
   type DeviceKeyType,
   type DeviceKeyUsage,
 } from "../../../server/src/enrollment-profile-kinds";
+import { ConfirmDialog } from "@/components/confirm-dialog";
 import { DataTable } from "@/components/data-table/data-table";
+import { Badge } from "@/components/ui/badge";
 import { Breadcrumb, BreadcrumbItem, BreadcrumbList, BreadcrumbPage, BreadcrumbSeparator } from "@/components/ui/breadcrumb";
 import { Button } from "@/components/ui/button";
 import { Checkbox } from "@/components/ui/checkbox";
-import { Dialog, DialogContent, DialogDescription, DialogTitle, DialogTrigger } from "@/components/ui/dialog";
-import { DropdownMenu, DropdownMenuContent, DropdownMenuItem, DropdownMenuTrigger } from "@/components/ui/dropdown-menu";
+import { Dialog, DialogContent, DialogDescription, DialogFooter, DialogHeader, DialogTitle, DialogTrigger } from "@/components/ui/dialog";
+import { DropdownMenu, DropdownMenuContent, DropdownMenuItem, DropdownMenuSeparator, DropdownMenuTrigger } from "@/components/ui/dropdown-menu";
 import { Field, FieldDescription, FieldError, FieldGroup, FieldLabel, FieldLegend, FieldSet } from "@/components/ui/field";
 import { Input } from "@/components/ui/input";
 import { Select, SelectContent, SelectItem, SelectTrigger, SelectValue } from "@/components/ui/select";
 import { Sidebar, SidebarContent, SidebarGroup, SidebarGroupContent, SidebarMenu, SidebarMenuButton, SidebarMenuItem, SidebarProvider } from "@/components/ui/sidebar";
 import { api, can, type EnrollmentProfile } from "@/lib/api";
-import { daysLabel, issuingCaTitle, isValidityDays } from "@/lib/private-ca";
+import { daysLabel, findIssuingCa, issuingCaTitle, isValidityDays } from "@/lib/private-ca";
 import { useAction } from "@/lib/use-action";
 
 const ROUTE = "/app/organizations/$orgId/enrollment-profiles";
@@ -70,7 +74,12 @@ const columnHelper = createColumnHelper<typeof features, EnrollmentProfile>();
 const columns = columnHelper.columns([
   columnHelper.accessor("name", {
     header: "Name",
-    cell: ({ row }) => <DeviceCertificatesLink profile={row.original} />,
+    cell: ({ row }) => (
+      <span className="flex items-center gap-2">
+        <DeviceCertificatesLink profile={row.original} />
+        {!row.original.enabled && <Badge variant="secondary">Disabled</Badge>}
+      </span>
+    ),
   }),
   columnHelper.accessor("scepUrl", {
     header: "SCEP URL",
@@ -79,11 +88,7 @@ const columns = columnHelper.columns([
   columnHelper.display({
     id: "issues",
     header: "Issues",
-    cell: ({ row }) => (
-      <span className="text-sm">
-        {row.original.extendedKeyUsage.map((usage) => EXTENDED_KEY_USAGE_LABEL[usage]).join(", ")} for {daysLabel(row.original.validityDays)}
-      </span>
-    ),
+    cell: ({ row }) => <Issues profile={row.original} />,
   }),
   columnHelper.display({ id: "actions", header: () => <span className="sr-only">Actions</span>, cell: ({ row }) => <ProfileActions profile={row.original} /> }),
 ]);
@@ -124,6 +129,28 @@ export function EnrollmentProfilesPage() {
   );
 }
 
+/**
+ * What a profile issues, and from which Issuing CA; when that one no longer issues (it was retired, say), that the
+ * profile refuses every device until it is pointed at an active one.
+ */
+function Issues({ profile }: { profile: EnrollmentProfile }) {
+  const { orgId } = useParams({ from: ROUTE });
+  const privateCas = useQuery({ queryKey: ["private-cas", orgId], queryFn: () => api.privateCas(orgId) });
+  const issuing = findIssuingCa(privateCas.data?.items ?? [], profile.issuingCaId);
+  const issues = privateCas.data?.items.find((ca) => ca.id === profile.privateCaId)?.status === "active" && issuing?.status === "active";
+  return (
+    <span className="flex flex-col gap-1 text-sm">
+      <span>
+        {profile.extendedKeyUsage.map((usage) => EXTENDED_KEY_USAGE_LABEL[usage]).join(", ")} for {daysLabel(profile.validityDays)}
+      </span>
+      {issuing && <span className="text-xs text-muted-foreground">from {issuing.name}</span>}
+      {issuing && !issues && profile.enabled && (
+        <span className="max-w-72 whitespace-normal text-xs text-destructive">{issuing.status === "active" ? "Its Issuing CA's root does not issue" : `Its Issuing CA is ${issuing.status}`}, so every device is refused: point the profile at an active Issuing CA.</span>
+      )}
+    </span>
+  );
+}
+
 /** A profile's name, as the way to its Device Certificates. */
 function DeviceCertificatesLink({ profile }: { profile: EnrollmentProfile }) {
   const { orgId } = useParams({ from: ROUTE });
@@ -136,12 +163,17 @@ function DeviceCertificatesLink({ profile }: { profile: EnrollmentProfile }) {
 
 /**
  * A profile's actions: test its Enrollment Validator's connection, and a menu of its Device Certificates, its SCEP URL
- * and the certificates devices must trust. A test that works is a toast, with what it could not prove; one that fails
- * stays by the buttons, where its reason can be read.
+ * and the certificates devices must trust, and, for those who may change it, pointing it at another Issuing CA, its
+ * retention period, rotating its RA certificate and disabling it. A test that works is a toast, with what it could not
+ * prove; one that fails stays by the buttons, where its reason can be read.
  */
 function ProfileActions({ profile }: { profile: EnrollmentProfile }) {
   const { orgId } = useParams({ from: ROUTE });
   const org = useQuery({ queryKey: ["me"], queryFn: api.me, select: (me) => me.organizations.find((o) => o.id === orgId) }).data;
+  const mayUpdate = org ? can(org, "enrollmentProfile", "update") : false;
+  const mayDisable = org ? can(org, "enrollmentProfile", "disable") && profile.enabled : false;
+  const [editing, setEditing] = useState<"issuing-ca" | "retention" | "rotate" | "disable" | null>(null);
+  const openOne = (which: NonNullable<typeof editing>) => (open: boolean) => setEditing(open ? which : null);
   const test = useMutation({
     mutationFn: () => api.testEnrollmentValidator(orgId, profile.id),
     onSuccess: (result) => {
@@ -179,12 +211,195 @@ function ProfileActions({ profile }: { profile: EnrollmentProfile }) {
                 Download Issuing CA certificate
               </a>
             </DropdownMenuItem>
+            {(mayUpdate || mayDisable) && <DropdownMenuSeparator />}
+            {mayUpdate && <DropdownMenuItem onSelect={() => setEditing("issuing-ca")}>Change Issuing CA…</DropdownMenuItem>}
+            {mayUpdate && <DropdownMenuItem onSelect={() => setEditing("retention")}>Retention period…</DropdownMenuItem>}
+            {mayUpdate && <DropdownMenuItem onSelect={() => setEditing("rotate")}>Rotate RA certificate…</DropdownMenuItem>}
+            {mayDisable && (
+              <DropdownMenuItem variant="destructive" onSelect={() => setEditing("disable")}>
+                Disable…
+              </DropdownMenuItem>
+            )}
           </DropdownMenuContent>
         </DropdownMenu>
       </div>
+      {mayUpdate && <IssuingCaDialog profile={profile} open={editing === "issuing-ca"} onOpenChange={openOne("issuing-ca")} />}
+      {mayUpdate && <RetentionDialog profile={profile} open={editing === "retention"} onOpenChange={openOne("retention")} />}
+      {mayUpdate && <RotateRaDialog profile={profile} open={editing === "rotate"} onOpenChange={openOne("rotate")} />}
+      {mayDisable && <DisableDialog profile={profile} open={editing === "disable"} onOpenChange={openOne("disable")} />}
       {test.data && !test.data.ok && <span role="alert" className="max-w-72 whitespace-normal break-words text-right text-sm text-destructive">{test.data.error}</span>}
       {test.error && <span role="alert" className="max-w-72 whitespace-normal break-words text-right text-sm text-destructive">{test.error.message}</span>}
     </div>
+  );
+}
+
+type ProfileDialogProps = { profile: EnrollmentProfile; open: boolean; onOpenChange: (open: boolean) => void };
+
+/** Points the profile at another active Issuing CA, as when its own is retired; the new one signs it a new RA certificate. */
+function IssuingCaDialog({ profile, open, onOpenChange }: ProfileDialogProps) {
+  const { orgId } = useParams({ from: ROUTE });
+  const privateCas = useQuery({ queryKey: ["private-cas", orgId], queryFn: () => api.privateCas(orgId), enabled: open });
+  const choices = (privateCas.data?.items ?? []).flatMap((ca) =>
+    ca.status === "active" ? ca.issuingCas.filter((i) => i.status === "active" && i.id !== profile.issuingCaId).map((i) => ({ id: i.id, title: issuingCaTitle(ca.name, i.subject), privateCaId: ca.id })) : [],
+  );
+  const [issuingCaId, setIssuingCaId] = useState("");
+  const chosen = choices.find((c) => c.id === issuingCaId);
+  const save = useAction(() => api.updateEnrollmentProfile(orgId, profile.id, { issuingCaId }), ["enrollment-profiles"], () => onOpenChange(false));
+  return (
+    <Dialog
+      open={open}
+      onOpenChange={(next) => {
+        if (next) {
+          save.reset();
+          setIssuingCaId("");
+        }
+        onOpenChange(next);
+      }}
+    >
+      <DialogContent>
+        <form
+          className="flex flex-col gap-4"
+          onSubmit={(e: FormEvent) => {
+            e.preventDefault();
+            if (issuingCaId) save.mutate(undefined);
+          }}
+        >
+          <DialogHeader>
+            <DialogTitle>Change the Issuing CA of {profile.name}</DialogTitle>
+            <DialogDescription>
+              Devices enroll from the new Issuing CA, which signs the profile a new RA certificate. What the old one issued stays its own, and on its CRL once revoked.
+            </DialogDescription>
+          </DialogHeader>
+          <Field>
+            <FieldLabel htmlFor={`profile-${profile.id}-issuing-ca`}>Issuing CA</FieldLabel>
+            <Select value={issuingCaId} onValueChange={setIssuingCaId}>
+              <SelectTrigger id={`profile-${profile.id}-issuing-ca`} className="w-full">
+                <SelectValue placeholder={privateCas.isPending ? "Loading…" : choices.length === 0 ? "No other active Issuing CA" : "Choose an Issuing CA"} />
+              </SelectTrigger>
+              <SelectContent>
+                {choices.map((c) => (
+                  <SelectItem key={c.id} value={c.id}>
+                    {c.title}
+                  </SelectItem>
+                ))}
+              </SelectContent>
+            </Select>
+            {chosen && chosen.privateCaId !== profile.privateCaId && (
+              <FieldDescription>It is under another root: give your device management platform's trusted certificate profile the new root before devices enroll again.</FieldDescription>
+            )}
+          </Field>
+          {save.error && <FieldError>{save.error.message}</FieldError>}
+          <DialogFooter>
+            <Button type="button" variant="outline" onClick={() => onOpenChange(false)}>
+              Cancel
+            </Button>
+            <Button type="submit" disabled={!issuingCaId || save.isPending}>
+              Change Issuing CA
+            </Button>
+          </DialogFooter>
+        </form>
+      </DialogContent>
+    </Dialog>
+  );
+}
+
+const isRetentionDays = (text: string) => /^\d+$/.test(text.trim()) && Number(text) <= MAX_DEVICE_RETENTION_DAYS;
+
+/** How long after they end the profile's Device Certificates are kept before they are pruned. */
+function RetentionDialog({ profile, open, onOpenChange }: ProfileDialogProps) {
+  const { orgId } = useParams({ from: ROUTE });
+  const [days, setDays] = useState(String(profile.retentionDays));
+  const ok = isRetentionDays(days);
+  const save = useAction(() => api.updateEnrollmentProfile(orgId, profile.id, { retentionDays: Number(days) }), ["enrollment-profiles"], () => onOpenChange(false));
+  return (
+    <Dialog
+      open={open}
+      onOpenChange={(next) => {
+        if (next) {
+          save.reset();
+          setDays(String(profile.retentionDays));
+        }
+        onOpenChange(next);
+      }}
+    >
+      <DialogContent>
+        <form
+          className="flex flex-col gap-4"
+          onSubmit={(e: FormEvent) => {
+            e.preventDefault();
+            if (ok) save.mutate(undefined);
+          }}
+        >
+          <DialogHeader>
+            <DialogTitle>Retention period of {profile.name}</DialogTitle>
+            <DialogDescription>A Device Certificate is deleted this long after it ends. Its Audit Events are kept.</DialogDescription>
+          </DialogHeader>
+          <Field data-invalid={!ok}>
+            <FieldLabel htmlFor={`profile-${profile.id}-retention`}>Retention (days)</FieldLabel>
+            <Input id={`profile-${profile.id}-retention`} inputMode="numeric" autoFocus value={days} onChange={(e) => setDays(e.target.value)} aria-invalid={!ok} />
+            <FieldDescription>Up to {daysLabel(MAX_DEVICE_RETENTION_DAYS)}; 0 deletes them as soon as they end.</FieldDescription>
+          </Field>
+          {save.error && <FieldError>{save.error.message}</FieldError>}
+          <DialogFooter>
+            <Button type="button" variant="outline" onClick={() => onOpenChange(false)}>
+              Cancel
+            </Button>
+            <Button type="submit" disabled={!ok || save.isPending}>
+              Save
+            </Button>
+          </DialogFooter>
+        </form>
+      </DialogContent>
+    </Dialog>
+  );
+}
+
+/** Has the profile's Issuing CA sign it a new RA certificate for a new key, which devices are given from then on. */
+function RotateRaDialog({ profile, open, onOpenChange }: ProfileDialogProps) {
+  const { orgId } = useParams({ from: ROUTE });
+  const rotate = useAction(
+    () => api.rotateEnrollmentProfileRa(orgId, profile.id),
+    ["enrollment-profiles"],
+    () => {
+      onOpenChange(false);
+      toast.success(`${profile.name}: the RA certificate was replaced`);
+    },
+  );
+  return (
+    <ConfirmDialog
+      open={open}
+      onOpenChange={(next) => {
+        if (next) rotate.reset();
+        onOpenChange(next);
+      }}
+      title={`Rotate the RA certificate of ${profile.name}?`}
+      description={`Its Issuing CA signs a new RA certificate for a new key, which devices are given from now on. The current one ends ${new Date(profile.raCertificate.notAfter).toLocaleDateString()}. A device midway through enrolling with the old one enrolls again.`}
+      confirmLabel="Rotate"
+      pending={rotate.isPending}
+      error={rotate.error}
+      onConfirm={() => rotate.mutate(undefined)}
+    />
+  );
+}
+
+/** Disables the profile for good: it refuses every device, and keeps its Device Certificates. */
+function DisableDialog({ profile, open, onOpenChange }: ProfileDialogProps) {
+  const { orgId } = useParams({ from: ROUTE });
+  const disable = useAction(() => api.disableEnrollmentProfile(orgId, profile.id), ["enrollment-profiles"], () => onOpenChange(false));
+  return (
+    <ConfirmDialog
+      open={open}
+      onOpenChange={(next) => {
+        if (next) disable.reset();
+        onOpenChange(next);
+      }}
+      title={`Disable ${profile.name}?`}
+      description="Every device that enrolls at its SCEP URL is refused from now on. Its Device Certificates are kept, and revoked ones stay on the CRL. A disabled profile cannot be enabled again."
+      confirmLabel="Disable"
+      pending={disable.isPending}
+      error={disable.error}
+      onConfirm={() => disable.mutate(undefined)}
+    />
   );
 }
 
@@ -242,6 +457,7 @@ function NewProfileForm({ orgId, onDone }: { orgId: string; onDone: () => void }
   const [name, setName] = useState("");
   const [issuingCaId, setIssuingCaId] = useState("");
   const [validityDays, setValidityDays] = useState(String(DEFAULT_DEVICE_VALIDITY_DAYS));
+  const [retentionDays, setRetentionDays] = useState(String(DEFAULT_DEVICE_RETENTION_DAYS));
   const [extendedKeyUsage, setExtendedKeyUsage] = useState<DeviceExtendedKeyUsage[]>(DEFAULT_DEVICE_EXTENDED_KEY_USAGES);
   const [keyUsage, setKeyUsage] = useState<DeviceKeyUsage[]>(DEFAULT_DEVICE_KEY_USAGES);
   const [allowedKeyTypes, setAllowedKeyTypes] = useState<DeviceKeyType[]>([...DEVICE_KEY_TYPES]);
@@ -254,16 +470,17 @@ function NewProfileForm({ orgId, onDone }: { orgId: string; onDone: () => void }
   const intuneOk = TENANT.test(tenantId.trim()) && GUID.test(appId.trim()) && appSecret !== "";
   const validator = intune ? { kind, settings: { tenantId: tenantId.trim(), appId: appId.trim() }, secret: appSecret } : { kind };
   const create = useAction(
-    () => api.createEnrollmentProfile(orgId, { name: name.trim(), issuingCaId, validityDays: Number(validityDays), keyUsage, extendedKeyUsage, allowedKeyTypes, validator }),
+    () => api.createEnrollmentProfile(orgId, { name: name.trim(), issuingCaId, validityDays: Number(validityDays), retentionDays: Number(retentionDays), keyUsage, extendedKeyUsage, allowedKeyTypes, validator }),
     ["enrollment-profiles"],
     onDone,
   );
   const validityOk = isValidityDays(validityDays, MAX_DEVICE_VALIDITY_DAYS);
+  const retentionOk = isRetentionDays(retentionDays);
 
   // Whether each step holds what it needs; Review only shows what was entered.
   const complete: Record<StepId, boolean> = {
     issuer: name.trim() !== "" && issuingCaId !== "",
-    certificate: validityOk && extendedKeyUsage.length > 0 && keyUsage.length > 0,
+    certificate: validityOk && retentionOk && extendedKeyUsage.length > 0 && keyUsage.length > 0,
     keys: allowedKeyTypes.length > 0,
     validator: kind !== "" && (!intune || intuneOk),
     review: true,
@@ -359,6 +576,11 @@ function NewProfileForm({ orgId, onDone }: { orgId: string; onDone: () => void }
                 <Input id="profile-validity" inputMode="numeric" autoFocus value={validityDays} onChange={(e) => setValidityDays(e.target.value)} aria-invalid={!validityOk} />
                 <FieldDescription>Up to {daysLabel(MAX_DEVICE_VALIDITY_DAYS)}, and never past the Issuing CA's end.</FieldDescription>
               </Field>
+              <Field data-invalid={!retentionOk}>
+                <FieldLabel htmlFor="profile-retention">Retention (days)</FieldLabel>
+                <Input id="profile-retention" inputMode="numeric" value={retentionDays} onChange={(e) => setRetentionDays(e.target.value)} aria-invalid={!retentionOk} />
+                <FieldDescription>How long after it ends a Device Certificate is kept before it is deleted; its Audit Events are kept.</FieldDescription>
+              </Field>
               <div className="grid gap-6 sm:grid-cols-2">
                 <Choices legend="Key usage" id="profile-ku" values={DEVICE_KEY_USAGES} labels={KEY_USAGE_LABEL} chosen={keyUsage} onChange={setKeyUsage} />
                 <Choices legend="Extended key usage" id="profile-eku" values={DEVICE_EXTENDED_KEY_USAGE_NAMES} labels={EXTENDED_KEY_USAGE_LABEL} chosen={extendedKeyUsage} onChange={setExtendedKeyUsage} />
@@ -432,6 +654,7 @@ function NewProfileForm({ orgId, onDone }: { orgId: string; onDone: () => void }
                     { label: "Name", value: name.trim() },
                     { label: "Issuing CA", value: issuingCas.find((i) => i.id === issuingCaId)?.title ?? "" },
                     { label: "Validity", value: daysLabel(Number(validityDays)) },
+                    { label: "Retention", value: `${daysLabel(Number(retentionDays))} after it ends` },
                     { label: "Extended key usage", value: extendedKeyUsage.map((u) => EXTENDED_KEY_USAGE_LABEL[u]).join(", ") },
                     { label: "Key usage", value: keyUsage.map((u) => KEY_USAGE_LABEL[u]).join(", ") },
                     { label: "Device keys", value: allowedKeyTypes.map((t) => KEY_TYPE_LABEL[t]).join(", ") },
