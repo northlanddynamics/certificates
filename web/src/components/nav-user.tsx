@@ -5,9 +5,10 @@ import { Avatar, AvatarFallback } from "@/components/ui/avatar";
 import { DropdownMenu, DropdownMenuContent, DropdownMenuItem, DropdownMenuLabel, DropdownMenuSeparator, DropdownMenuTrigger } from "@/components/ui/dropdown-menu";
 import { SidebarMenu, SidebarMenuButton, SidebarMenuItem, useSidebar } from "@/components/ui/sidebar";
 import { api, type Me } from "@/lib/api";
-import { ACCOUNT_SECURITY_URL } from "@/lib/navigation";
+import { ACCOUNT_SECURITY_URL, organizationAccountNav } from "@/lib/navigation";
 
-export function NavUser({ user }: { user: Me["user"] }) {
+/** `active` is the Organization whose pages of the user's own the menu offers. */
+export function NavUser({ user, active }: { user: Me["user"]; active: Me["organizations"][number] | undefined }) {
   const { isMobile } = useSidebar();
   const navigate = useNavigate();
   const queryClient = useQueryClient();
@@ -43,6 +44,13 @@ export function NavUser({ user }: { user: Me["user"] }) {
               <ShieldUserIcon />
               Account security
             </DropdownMenuItem>
+            {active &&
+              organizationAccountNav(active).map((item) => (
+                <DropdownMenuItem key={item.url} onClick={() => navigate({ to: item.url })}>
+                  <item.icon />
+                  {item.title}
+                </DropdownMenuItem>
+              ))}
             <DropdownMenuItem onClick={() => signOut.mutate()}>
               <LogOutIcon />
               Sign out

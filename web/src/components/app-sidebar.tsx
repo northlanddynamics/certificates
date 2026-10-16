@@ -18,7 +18,7 @@ export function AppSidebar({ me, active, ...props }: { me: Me; active: Me["organ
         {me.user.isPlatformOperator && <NavMain label="Platform" items={platformNav} />}
       </SidebarContent>
       <SidebarFooter>
-        <NavUser user={me.user} />
+        <NavUser user={me.user} active={active} />
       </SidebarFooter>
       <SidebarRail />
     </Sidebar>
