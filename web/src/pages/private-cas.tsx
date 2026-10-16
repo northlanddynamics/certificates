@@ -1,10 +1,9 @@
 import { useQuery } from "@tanstack/react-query";
 import { useParams } from "@tanstack/react-router";
-import { createColumnHelper, createExpandedRowModel, rowExpandingFeature, tableFeatures, useTable } from "@tanstack/react-table";
+import { createColumnHelper, tableFeatures, useTable } from "@tanstack/react-table";
 import { CalendarClockIcon, CheckIcon, ClipboardCheckIcon, FingerprintIcon, GlobeIcon, KeyRoundIcon, MoreHorizontalIcon, NetworkIcon, PlusIcon, type LucideIcon } from "lucide-react";
 import { useMemo, useState, type FormEvent, type ReactNode } from "react";
 import { DataTable } from "@/components/data-table/data-table";
-import { ExpandButton } from "@/components/data-table/expand-button";
 import { Badge } from "@/components/ui/badge";
 import { Breadcrumb, BreadcrumbItem, BreadcrumbList, BreadcrumbPage, BreadcrumbSeparator } from "@/components/ui/breadcrumb";
 import { Button } from "@/components/ui/button";
@@ -30,31 +29,21 @@ const ROUTE = "/app/organizations/$orgId/private-cas";
 const STATUS_LABEL: Record<IssuingCa["status"], string> = { awaiting_signature: "Awaiting signature", active: "Active", retired: "Retired", revoked: "Revoked" };
 const date = (iso: string) => new Date(iso).toLocaleDateString(undefined, { year: "numeric", month: "short", day: "numeric" });
 
-/** A CA in a Private CA's hierarchy: its root, which opens to the Issuing CAs it signs, or one of those. */
+/** A CA in a Private CA's hierarchy: its root, or one of the Issuing CAs it signs, which are always listed beneath it. */
 type CaRow =
-  | { id: string; ca: PrivateCa; level: "root"; subject: string | undefined; notAfter: string | undefined; subRows: CaRow[] }
+  | { id: string; ca: PrivateCa; level: "root"; subject: string | undefined; notAfter: string | undefined }
   | { id: string; ca: PrivateCa; level: "issuing"; issuing: IssuingCa; subject: string; notAfter: string | undefined };
-const rowsOf = (ca: PrivateCa): CaRow => ({
-  id: ca.id,
-  ca,
-  level: "root",
-  subject: ca.root?.subject,
-  notAfter: ca.root?.notAfter,
-  subRows: ca.issuingCas.map((issuing) => ({ id: issuing.id, ca, level: "issuing", issuing, subject: issuing.subject, notAfter: issuing.notAfter ?? undefined })),
-});
+const rowsOf = (ca: PrivateCa): CaRow[] => [
+  { id: ca.id, ca, level: "root", subject: ca.root?.subject, notAfter: ca.root?.notAfter },
+  ...ca.issuingCas.map((issuing): CaRow => ({ id: issuing.id, ca, level: "issuing", issuing, subject: issuing.subject, notAfter: issuing.notAfter ?? undefined })),
+];
 
 const StatusBadge = ({ status }: { status: IssuingCa["status"] }) => <Badge variant={status === "active" ? "default" : status === "revoked" ? "destructive" : "secondary"}>{STATUS_LABEL[status]}</Badge>;
 
 // The server lists every Private CA, and an Organization has few, so there is nothing to page.
-const features = tableFeatures({ rowExpandingFeature, expandedRowModel: createExpandedRowModel() });
+const features = tableFeatures({});
 const columnHelper = createColumnHelper<typeof features, CaRow>();
 const columns = columnHelper.columns([
-  columnHelper.display({
-    id: "expand",
-    header: () => <span className="sr-only">Issuing CA</span>,
-    cell: ({ row }) =>
-      row.getCanExpand() ? <ExpandButton open={row.getIsExpanded()} what={`the root of ${row.original.ca.name}`} onToggle={() => row.toggleExpanded()} /> : null,
-  }),
   columnHelper.display({
     id: "name",
     header: "Name",
@@ -127,8 +116,8 @@ export function PrivateCasPage() {
   const org = useQuery({ queryKey: ["me"], queryFn: api.me, select: (me) => me.organizations.find((o) => o.id === orgId) }).data;
   const allowed = org ? can(org, "privateCa", "read") : false;
   const cas = useQuery({ queryKey: ["private-cas", orgId], queryFn: () => api.privateCas(orgId), enabled: allowed });
-  const rows = useMemo(() => cas.data?.items.map(rowsOf) ?? noRows, [cas.data]);
-  const table = useTable({ features, columns, data: rows, getRowId: (row) => row.id, getSubRows: (row) => (row.level === "root" ? row.subRows : undefined) });
+  const rows = useMemo(() => cas.data?.items.flatMap(rowsOf) ?? noRows, [cas.data]);
+  const table = useTable({ features, columns, data: rows, getRowId: (row) => row.id });
 
   return (
     <div className="flex flex-col gap-6">
