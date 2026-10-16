@@ -19,7 +19,7 @@ import type { Change, UnitOfWork } from "./unit-of-work";
 type ProfileRow = typeof enrollmentProfile.$inferSelect;
 type MessageRow = typeof enrollmentValidatorMessage.$inferSelect;
 
-/** A message that could not be told is tried again after these waits, then given up. */
+/** A message that could not be told is tried again after each of these waits in turn, then given up (`failed`). */
 const RETRY_DELAYS_MS = [60_000, 5 * 60_000, 30 * 60_000, 2 * 3_600_000, 6 * 3_600_000, 24 * 3_600_000];
 /** How long a message being told is left alone by other passes; a pass that stopped while telling it has it told again after this. */
 const LEASE_MS = 5 * 60_000;

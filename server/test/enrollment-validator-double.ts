@@ -15,7 +15,7 @@ export class ValidatorDouble {
   readonly issued: { tenant: string; request: DecidedRequest; certificate: IssuedDeviceCertificate }[] = [];
   readonly failed: { tenant: string; request: DecidedRequest; reason: string }[] = [];
   readonly reports: { tenant: string; outcomes: RevocationOutcome[] }[] = [];
-  /** How many times its feed was pulled, per tenant. */
+  /** The tenant of each pull of its feed, in order. */
   readonly pulls: string[] = [];
   /** How many connection tests reached it. */
   tests = 0;

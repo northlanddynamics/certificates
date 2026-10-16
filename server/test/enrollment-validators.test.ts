@@ -311,7 +311,7 @@ describe("a validator's revocation feed", () => {
   test("is pulled at most as often as its kind allows, once for every profile sharing it, and an already revoked certificate is told as such", async () => {
     const first = await createProfile();
     const second = await createProfile(DOUBLE, { name: "VPN" });
-    const other = await createProfile({ ...DOUBLE, settings: { tenant: "fabrikam" } }, { name: "Lab" });
+    await createProfile({ ...DOUBLE, settings: { tenant: "fabrikam" } }, { name: "Lab" });
     const device = await enrolled(second.scepUrl, "CN=vpn-device");
     expect(first.id).not.toBe(second.id);
 
@@ -338,7 +338,6 @@ describe("a validator's revocation feed", () => {
       ]),
     );
     expect((await auditOf()).filter((e) => e.action === "device_certificate.revoked")).toHaveLength(1);
-    expect(other.id).toBeDefined();
   });
 
   test("whose Revocations cannot be published is told they failed, and nothing is revoked", async () => {

@@ -84,11 +84,14 @@ export function registerScep(ctx: { app: OpenAPIHono; db: Db; unitOfWork: UnitOf
       console.error("the Enrollment Validator could not be opened", err);
       return refused(`the Enrollment Validator ${profile.validatorKind} is not available`);
     }
-    const decision = await validator.validate({ csr: request.csr.der, challengePassword: request.csr.challengePassword, transactionId: request.transactionId }).catch((err: unknown) => {
-      console.error("the Enrollment Validator could not be asked", err);
-      return { allowed: false as const, reason: "the Enrollment Validator could not be asked" };
-    });
-    if (!decision.allowed) return refused(`the Enrollment Validator refused the request: ${decision.reason}`, true);
+    const decision = await validator.validate({ csr: request.csr.der, challengePassword: request.csr.challengePassword, transactionId: request.transactionId }).then(
+      (decision) => (decision.allowed ? decision : { allowed: false as const, reason: `the Enrollment Validator refused the request: ${decision.reason}` }),
+      (err: unknown) => {
+        console.error("the Enrollment Validator could not be asked", err);
+        return { allowed: false as const, reason: "the Enrollment Validator could not be asked" };
+      },
+    );
+    if (!decision.allowed) return refused(decision.reason, true);
 
     let issued: Awaited<ReturnType<PrivateCas["issueDevice"]>>;
     try {
