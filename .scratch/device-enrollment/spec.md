@@ -133,7 +133,7 @@ A refusal writes an `enrollment.refused` Audit Event with the reason and no Cert
 - `device_certificate.issued`: one per certificate, carrying the profile, serial, subject and device ID
 - `enrollment.refused`: carrying the profile, reason, validator and transaction ID
 - `device_certificate.revoked`: with the reason, and the validator as actor when Intune triggered it
-- `device_certificate.pruned`: a single event per pruning pass, with a count
+- `device_certificate.pruned`: a single event per pruning pass (per Organization, as every Audit Event belongs to one), with a count
 
 **Web.** Under the Organization's settings, for Organization Administrators:
 - **Enrollment Profiles:** create and edit, Intune setup with a connection test, the SCEP URL and CA certificate for pasting into Intune, RA rotation, and disable.

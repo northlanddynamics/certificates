@@ -335,6 +335,10 @@ export interface EnrollmentProfile {
   /** What a device's names must keep; none when the validator vouches for names. */
   nameRules: NameRules | null;
   raCertificate: { subject: string; serial: string; notAfter: string };
+  /** Whether it takes enrollment requests; a disabled profile refuses every one, and is never enabled again. */
+  enabled: boolean;
+  /** How many days after it ends a Device Certificate it issued is pruned. */
+  retentionDays: number;
   createdAt: string;
 }
 /** A Certificate an Enrollment Profile issued to a device. */
@@ -366,6 +370,7 @@ export interface NewEnrollmentProfile {
   allowedKeyTypes: DeviceKeyType[];
   validator: { kind: string; settings?: Record<string, unknown>; secret?: string };
   nameRules?: NameRules;
+  retentionDays?: number;
 }
 /** What an Enrollment Profile whose validator does not vouch for names lets a device ask for; patterns are wildcards (`*`). */
 export interface NameRules {
@@ -756,6 +761,13 @@ export const api = {
   /** Where a Device Certificate downloads from, PEM. */
   deviceCertificateUrl: (orgId: string, profileId: string, id: string) => `/api/organizations/${orgId}/enrollment-profiles/${profileId}/device-certificates/${id}/certificate`,
   createEnrollmentProfile: (orgId: string, body: NewEnrollmentProfile) => call<EnrollmentProfile>(`/api/organizations/${orgId}/enrollment-profiles`, { body }),
+  /** Points a profile at another Issuing CA, which signs it a new RA certificate, or changes its retention period. */
+  updateEnrollmentProfile: (orgId: string, id: string, body: { issuingCaId?: string; retentionDays?: number }) =>
+    call<EnrollmentProfile>(`/api/organizations/${orgId}/enrollment-profiles/${id}`, { method: "PATCH", body }),
+  /** Disables a profile: it refuses all enrollment from then on, and keeps its Device Certificates. */
+  disableEnrollmentProfile: (orgId: string, id: string) => call<EnrollmentProfile>(`/api/organizations/${orgId}/enrollment-profiles/${id}/disable`, { method: "POST", body: {} }),
+  /** Replaces a profile's RA certificate and key, signed by its Issuing CA. */
+  rotateEnrollmentProfileRa: (orgId: string, id: string) => call<EnrollmentProfile>(`/api/organizations/${orgId}/enrollment-profiles/${id}/ra-rotation`, { method: "POST", body: {} }),
   /** The Enrollment Validator kinds the platform runs, one of which a profile must name. */
   enrollmentValidatorKinds: (orgId: string) => call<{ items: { kind: string; vouchesForNames: boolean; takesSecret: boolean; allowsRenewal: boolean }[] }>(`/api/organizations/${orgId}/enrollment-validator-kinds`),
   /** Whether the profile's Enrollment Validator can reach its service; `note` says what the test could not prove. */

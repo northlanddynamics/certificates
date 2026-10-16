@@ -124,6 +124,8 @@ export interface Harness {
   deliverEnrollmentNotifications(): Promise<number>;
   /** One pass of pulling Enrollment Validators' revocation feeds that are due, at the harness's clock. Returns how many feeds were pulled. */
   pollRevocationFeeds(): Promise<number>;
+  /** One pass of pruning Device Certificates past their Enrollment Profile's retention period, at the harness's clock. Returns how many were deleted. */
+  pruneDeviceCertificates(): Promise<number>;
   setNow(d: Date): void;
   /** Sign up (Better Auth) and return the session cookie. */
   signUp(email: string, password: string, name?: string): Promise<string>;
@@ -248,7 +250,7 @@ export async function createHarness(overrides: Partial<AppDeps> = {}, { database
     enrollmentValidators: { test_allow: allowing(true), test_names: allowing(false), test_renewal: allowing(true, true), test_double: validatorDouble.kind(), intune: createIntuneKind({ fetch: intune.fetch }) },
     ...overrides,
   };
-  const { app, auth, db, unitOfWork, issuances, renewals, notifications, auditForwarding, crls, enrollmentValidators, scep: scepRoutes } = createApp(deps);
+  const { app, auth, db, unitOfWork, issuances, renewals, notifications, auditForwarding, crls, enrollmentValidators, deviceCertificatePruning, scep: scepRoutes } = createApp(deps);
   if (migrate) await runMigrations(pool);
   const reset = async () => {
     await issuances.idle();
@@ -323,6 +325,7 @@ export async function createHarness(overrides: Partial<AppDeps> = {}, { database
     intune,
     deliverEnrollmentNotifications: () => enrollmentValidators.deliver(),
     pollRevocationFeeds: () => enrollmentValidators.pollFeeds(),
+    pruneDeviceCertificates: () => deviceCertificatePruning.prune(),
     setNow: (d) => {
       now = d;
     },

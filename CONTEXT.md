@@ -191,7 +191,7 @@ _Avoid_: audit entry, audit record, log line
 ### Device enrollment
 
 **Enrollment Profile**:
-A protocol-neutral template under which devices obtain client Certificates in bulk from a Private CA's Issuing CA, without per-certificate Approval or Owners. It fixes the Issuing CA, the validity, key usage, EKU and allowed key types of what it issues, and the Enrollment Validator that decides each request; anything a device asks for beyond it is ignored. Devices enroll at its SCEP URL, under an opaque id.
+A protocol-neutral template under which devices obtain client Certificates in bulk from a Private CA's Issuing CA, without per-certificate Approval or Owners. It fixes the Issuing CA, the validity, key usage, EKU and allowed key types of what it issues, and the Enrollment Validator that decides each request; anything a device asks for beyond it is ignored. Devices enroll at its SCEP URL, under an opaque id. Its Issuing CA changes only when an Organization Administrator points it at another, as when the old one is retired, which refuses enrollment until then. A disabled profile refuses every request for good and keeps what it issued; its Device Certificates are pruned a retention period after they end.
 _Avoid_: SCEP profile, template
 
 **Enrollment Validator**:

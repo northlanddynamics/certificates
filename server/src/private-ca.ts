@@ -31,7 +31,7 @@ const DAY_MS = 24 * 60 * 60 * 1000;
 type PrivateCaRow = typeof privateCa.$inferSelect;
 type IssuingCaRow = typeof issuingCa.$inferSelect;
 /** An Issuing CA with the Private CA it is under. */
-type IssuingCaOf = { issuing: IssuingCaRow; ca: PrivateCaRow };
+export type IssuingCaOf = { issuing: IssuingCaRow; ca: PrivateCaRow };
 
 export const PrivateCaParams = OrgParam.extend({ id: z.string().openapi({ param: { name: "id", in: "path" } }) });
 const IssuingCaParams = PrivateCaParams.extend({ issuingCaId: z.string().openapi({ param: { name: "issuingCaId", in: "path" } }) });
