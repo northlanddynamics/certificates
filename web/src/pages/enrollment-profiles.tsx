@@ -359,8 +359,10 @@ function NewProfileForm({ orgId, onDone }: { orgId: string; onDone: () => void }
                 <Input id="profile-validity" inputMode="numeric" autoFocus value={validityDays} onChange={(e) => setValidityDays(e.target.value)} aria-invalid={!validityOk} />
                 <FieldDescription>Up to {daysLabel(MAX_DEVICE_VALIDITY_DAYS)}, and never past the Issuing CA's end.</FieldDescription>
               </Field>
-              <Choices legend="Extended key usage" id="profile-eku" values={DEVICE_EXTENDED_KEY_USAGE_NAMES} labels={EXTENDED_KEY_USAGE_LABEL} chosen={extendedKeyUsage} onChange={setExtendedKeyUsage} />
-              <Choices legend="Key usage" id="profile-ku" values={DEVICE_KEY_USAGES} labels={KEY_USAGE_LABEL} chosen={keyUsage} onChange={setKeyUsage} />
+              <div className="grid gap-6 sm:grid-cols-2">
+                <Choices legend="Key usage" id="profile-ku" values={DEVICE_KEY_USAGES} labels={KEY_USAGE_LABEL} chosen={keyUsage} onChange={setKeyUsage} />
+                <Choices legend="Extended key usage" id="profile-eku" values={DEVICE_EXTENDED_KEY_USAGE_NAMES} labels={EXTENDED_KEY_USAGE_LABEL} chosen={extendedKeyUsage} onChange={setExtendedKeyUsage} />
+              </div>
             </FieldGroup>
           )}
 
