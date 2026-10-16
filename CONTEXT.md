@@ -195,8 +195,8 @@ A protocol-neutral template under which devices obtain client Certificates in bu
 _Avoid_: SCEP profile, template
 
 **Enrollment Validator**:
-The pluggable integration an Enrollment Profile names, which decides whether an enrollment request may be issued, is told the outcome, and may feed Revocations. It declares whether it vouches for the names in a request; a profile whose validator does not carries name rules that the platform enforces instead. Its credentials are Secrets. Intune is the first kind.
-_Avoid_: MDM integration (network gear is not an MDM), challenge provider
+The pluggable integration an Enrollment Profile names, which decides whether an enrollment request may be issued, is told the outcome, and may feed Revocations. It declares whether it vouches for the names in a request; a profile whose validator does not carries name rules that the platform enforces instead. Its credentials are Secrets. Intune is the first kind; Iru, which does not vouch for names, is the next.
+_Avoid_: MDM integration (network gear is not an MDM), challenge provider, Kandji (Iru's former name)
 
 **Name Rules**:
 What an Enrollment Profile whose Enrollment Validator does not vouch for names lets a device put in its subject and subject alternative names: required subject attributes, allowed SAN types, and wildcard patterns. Anything they do not name is refused. Not to be confused with an Issuing CA's Permitted Name Rules, which still apply on top.
