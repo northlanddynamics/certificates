@@ -30,7 +30,7 @@ export const NameRules = z
   })
   .strict()
   .refine((rules) => Object.keys(rules.sanPatterns).every((type) => rules.allowedSanTypes.includes(type as SanType)), "sanPatterns may only name allowed SAN types")
-  .openapi("NameRules", { description: "Patterns are matched against the whole value, ignoring case; `*` stands for any run of characters." });
+  .openapi({ description: "Patterns are matched against the whole value, ignoring case; `*` stands for any run of characters." });
 export type NameRules = z.infer<typeof NameRules>;
 
 /** Whether the whole value matches the wildcard pattern, ignoring case: one pass, falling back only to the latest `*`. */
