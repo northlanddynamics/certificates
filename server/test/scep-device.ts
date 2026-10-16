@@ -28,6 +28,9 @@ export function scepDevice(h: Harness, scepUrl: string, { usePost }: { usePost?:
   const client = new ScepClient({
     url: scepUrl,
     usePost,
+    // What the tracer supports: PKCS#1 v1.5 key transport and AES content encryption.
+    keyTransport: "rsa-pkcs1",
+    encryptionAlgorithm: "aes-128-cbc",
     fetch: async (input, init) => h.app.request(String(input), init),
   });
   return {

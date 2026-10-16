@@ -11,7 +11,7 @@ import { FailInfo, ScepServer, type EnrollmentRequest as ScepEnrollmentRequest, 
 import { subjectAltNamesOf } from "./ca-certificates";
 import type { Db } from "./db/client";
 import { deviceCertificate, enrollmentProfile } from "./db/schema";
-import { DEVICE_EXTENDED_KEY_USAGES } from "./enrollment-profile-kinds";
+import { DEVICE_EXTENDED_KEY_USAGES, DEVICE_KEY_TYPES, type DeviceKeyType } from "./enrollment-profile-kinds";
 import type { EnrollmentValidators } from "./enrollment-validator";
 import { IssuanceFailure } from "./issuance-failure";
 import { findIssuingCa, type PrivateCas } from "./private-ca";
@@ -26,9 +26,10 @@ const CAPABILITIES = ["POSTPKIOperation", "SHA-256", "SHA-512", "AES", "SCEPStan
 const refused = (failInfoText: string, failInfo = FailInfo.badRequest): ScepResult => ({ status: "failure", failInfo, failInfoText });
 
 /** The device key's type as a profile names it, such as "rsa-2048"; none for a key no profile can allow. */
-function keyTypeOf(request: ScepEnrollmentRequest) {
+function keyTypeOf(request: ScepEnrollmentRequest): DeviceKeyType | undefined {
   const key = request.csr.publicKey;
-  return key.asymmetricKeyType === "rsa" ? `rsa-${key.asymmetricKeyDetails?.modulusLength}` : undefined;
+  const type = `rsa-${key.asymmetricKeyDetails?.modulusLength}`;
+  return key.asymmetricKeyType === "rsa" && (DEVICE_KEY_TYPES as readonly string[]).includes(type) ? (type as DeviceKeyType) : undefined;
 }
 
 export function registerScep(ctx: { app: OpenAPIHono; db: Db; unitOfWork: UnitOfWork; secrets: Secrets; privateCas: PrivateCas; validators: EnrollmentValidators }) {
@@ -38,9 +39,13 @@ export function registerScep(ctx: { app: OpenAPIHono; db: Db; unitOfWork: UnitOf
   async function enroll(profile: ProfileRow, request: ScepEnrollmentRequest): Promise<ScepResult> {
     if (request.renewal) return refused("RenewalReq is not supported: enroll again with PKCSReq");
     const keyType = keyTypeOf(request);
-    if (!keyType || !(profile.allowedKeyTypes as string[]).includes(keyType)) {
-      return refused(`the Enrollment Profile does not allow a ${keyType ?? request.csr.publicKey.asymmetricKeyType} key; it allows ${profile.allowedKeyTypes.join(", ")}`);
+    if (!keyType || !profile.allowedKeyTypes.includes(keyType)) {
+      const asked = request.csr.publicKey.asymmetricKeyType === "rsa" ? `rsa-${request.csr.publicKey.asymmetricKeyDetails?.modulusLength}` : request.csr.publicKey.asymmetricKeyType;
+      return refused(`the Enrollment Profile does not allow a ${asked} key; it allows ${profile.allowedKeyTypes.join(", ")}`);
     }
+    // Before the validator is asked, so that a request the Issuing CA would refuse does not use up a one-time challenge.
+    const caRefusal = await privateCas.deviceRefusal(db, profile.organizationId, profile.issuingCaId, request.csr.der);
+    if (caRefusal) return refused(caRefusal);
     const validator = validators[profile.validatorKind];
     if (!validator) return refused(`the Enrollment Validator ${profile.validatorKind} is not available`);
     const decision = await validator.validate({ csr: request.csr.der, challengePassword: request.csr.challengePassword, transactionId: request.transactionId }).catch((err: unknown) => {

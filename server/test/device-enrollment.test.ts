@@ -77,6 +77,7 @@ describe("a device enrolling over SCEP", () => {
     });
     const cert = read(certificate);
     const chain = await chainOf(ca);
+    expect(h.enrollmentValidations.map((v) => v.challengePassword)).toEqual(["one-time-challenge"]);
 
     // The device gave it in RFC 4514's order, most specific first; @peculiar/x509 shows it in the order it is encoded.
     expect(cert.subject).toBe("O=Acme, CN=device-01");
@@ -143,6 +144,7 @@ describe("a device enrolling over SCEP", () => {
     expect(failure).toBeInstanceOf(ScepFailureError);
     expect(failure.failInfo).toBe(FailInfo.badRequest);
     expect(failure.failInfoText).toContain("rsa-2048");
+    expect(h.enrollmentValidations).toEqual([]);
     expect((await auditOf()).some((e) => e.action === "device_certificate.issued")).toBe(false);
 
     const { certificate } = await device.enroll({ subject: "CN=device-04", keyBits: 3072 });
@@ -157,6 +159,8 @@ describe("a device enrolling over SCEP", () => {
     expect(failure).toBeInstanceOf(ScepFailureError);
     expect(failure.failInfo).toBe(FailInfo.badRequest);
     expect(failure.failInfoText).toContain("device-05.elsewhere.example");
+    // Refused before the validator is asked, so a one-time challenge is not used up.
+    expect(h.enrollmentValidations).toEqual([]);
   });
 
   test("is refused once the profile's Issuing CA is retired", async () => {
@@ -167,6 +171,7 @@ describe("a device enrolling over SCEP", () => {
     const failure = await scepDevice(h, profile.scepUrl).enroll({ subject: "CN=device-06" }).catch((err) => err);
     expect(failure).toBeInstanceOf(ScepFailureError);
     expect(failure.failInfoText).toContain("retired");
+    expect(h.enrollmentValidations).toEqual([]);
   });
 
   test("gets a certificate that ends with its Issuing CA when the profile's validity would outlast it", async () => {

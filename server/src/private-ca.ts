@@ -278,6 +278,8 @@ export interface PrivateCas {
     issuingCaId: string,
     request: { csr: Uint8Array; validityDays: number; keyUsage: (keyof typeof x509.KeyUsageFlags)[]; extendedKeyUsages: string[] },
   ): Promise<{ certificate: x509.X509Certificate; chainPem: string[] }>;
+  /** Why `issueDevice` would refuse the CSR (DER) now: the Issuing CA does not issue, or not for one of its DNS names. None when it would sign it. */
+  deviceRefusal(db: Db | Tx, organizationId: string, issuingCaId: string, csr: Uint8Array): Promise<string | undefined>;
 }
 
 /**
@@ -296,6 +298,19 @@ async function issuingAt(db: Db | Tx, organizationId: string, issuingCaId: strin
   if (end <= now.getTime()) throw new IssuanceFailure("ca_rejected", `${issuingCaLabel(of)} has ended, or its root has`);
   const signer: Signer = { key: issuing.key, context: organizationId, algorithm: ca.keyAlgorithm, certificate };
   return { of, signer, end, above };
+}
+
+/**
+ * The Issuing CA as `issuingAt` gives it, when it may sign a Device Certificate for the CSR (DER): it issues for no DNS
+ * name outside its rules, which a platform-made one also carries as name constraints that relying parties enforce.
+ * Throws an IssuanceFailure otherwise.
+ */
+async function deviceIssuingAt(db: Db | Tx, organizationId: string, issuingCaId: string, csr: Uint8Array, now: Date) {
+  const at = await issuingAt(db, organizationId, issuingCaId, now);
+  const dnsNames = subjectAltNamesOf(new x509.Pkcs10CertificateRequest(new Uint8Array(csr))).filter((name) => name.type === "dns").map((name) => name.value.toLowerCase().replace(/\.$/, ""));
+  const outside = namesRefusal(at.of, dnsNames);
+  if (outside) throw new IssuanceFailure("name_not_permitted", outside);
+  return at;
 }
 
 export function createPrivateCas({ kms, clock, crls, pkiBaseURL }: { kms: Kms; clock: () => Date; crls: Crls; pkiBaseURL: string }): PrivateCas {
@@ -328,14 +343,19 @@ export function createPrivateCas({ kms, clock, crls, pkiBaseURL }: { kms: Kms; c
     },
     async issueDevice(db, organizationId, issuingCaId, { csr, validityDays, keyUsage, extendedKeyUsages }) {
       const notBefore = clock();
-      const { of, signer, end, above } = await issuingAt(db, organizationId, issuingCaId, notBefore);
-      // The Issuing CA issues for no DNS name outside its rules, which a platform-made one also carries as name constraints that relying parties enforce.
-      const dnsNames = subjectAltNamesOf(new x509.Pkcs10CertificateRequest(new Uint8Array(csr))).filter((name) => name.type === "dns").map((name) => name.value.toLowerCase().replace(/\.$/, ""));
-      const outside = namesRefusal(of, dnsNames);
-      if (outside) throw new IssuanceFailure("name_not_permitted", outside);
+      const { of, signer, end, above } = await deviceIssuingAt(db, organizationId, issuingCaId, csr, notBefore);
       const notAfter = new Date(Math.min(notBefore.getTime() + validityDays * DAY_MS, end));
       const certificate = await makeDeviceCertificate(kms, signer, { csr, keyUsage, extendedKeyUsages, notBefore, notAfter, publication: publicationOf(pkiBaseURL, { signer: "issuing", id: issuingCaId }) });
       return { certificate, chainPem: [of.issuing.certificatePem!, ...above.map((cert) => cert.toString("pem"))] };
+    },
+    async deviceRefusal(db, organizationId, issuingCaId, csr) {
+      try {
+        await deviceIssuingAt(db, organizationId, issuingCaId, csr, clock());
+        return undefined;
+      } catch (err) {
+        if (err instanceof IssuanceFailure) return err.message;
+        throw err;
+      }
     },
   };
 }
