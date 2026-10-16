@@ -1,11 +1,12 @@
 import { useQuery } from "@tanstack/react-query";
 import { useParams } from "@tanstack/react-router";
 import { createColumnHelper, createExpandedRowModel, rowExpandingFeature, tableFeatures, useTable } from "@tanstack/react-table";
-import { MoreHorizontalIcon, PlusIcon } from "lucide-react";
-import { useMemo, useState, type FormEvent } from "react";
+import { CalendarClockIcon, CheckIcon, ClipboardCheckIcon, FingerprintIcon, GlobeIcon, KeyRoundIcon, MoreHorizontalIcon, NetworkIcon, PlusIcon, type LucideIcon } from "lucide-react";
+import { useMemo, useState, type FormEvent, type ReactNode } from "react";
 import { DataTable } from "@/components/data-table/data-table";
 import { ExpandButton } from "@/components/data-table/expand-button";
 import { Badge } from "@/components/ui/badge";
+import { Breadcrumb, BreadcrumbItem, BreadcrumbList, BreadcrumbPage, BreadcrumbSeparator } from "@/components/ui/breadcrumb";
 import { Button } from "@/components/ui/button";
 import { Dialog, DialogClose, DialogContent, DialogDescription, DialogFooter, DialogHeader, DialogTitle, DialogTrigger } from "@/components/ui/dialog";
 import { DropdownMenu, DropdownMenuContent, DropdownMenuItem, DropdownMenuSeparator, DropdownMenuTrigger } from "@/components/ui/dropdown-menu";
@@ -15,13 +16,14 @@ import { RadioGroup, RadioGroupItem } from "@/components/ui/radio-group";
 import { Textarea } from "@/components/ui/textarea";
 import { Tooltip, TooltipContent, TooltipTrigger } from "@/components/ui/tooltip";
 import { ConfirmDialog } from "@/components/confirm-dialog";
-import { Field, FieldLabel } from "@/components/ui/field";
+import { Field, FieldDescription, FieldError, FieldGroup, FieldLabel, FieldLegend, FieldSet } from "@/components/ui/field";
 import { Select, SelectContent, SelectItem, SelectTrigger, SelectValue } from "@/components/ui/select";
+import { Sidebar, SidebarContent, SidebarGroup, SidebarGroupContent, SidebarMenu, SidebarMenuButton, SidebarMenuItem, SidebarProvider } from "@/components/ui/sidebar";
 import { api, can, issuingCaRevocationReasons, type IssuingCa, type PermittedNames, type PrivateCa, type PrivateCaValidity } from "@/lib/api";
 import { KEY_ALGORITHMS, KEY_ALGORITHM_LABELS, type KeyAlgorithm } from "@/lib/csr-generator";
 import { splitNames } from "@/lib/csr-names";
 import { keyAlgorithmLabel } from "@/lib/managed-certificate";
-import { DEFAULT_VALIDITY_DAYS, MAX_LIFETIME_YEARS, MAX_VALIDITY_DAYS, commonNameOf, daysLabel, isValidityDays, rootSubjectOf } from "@/lib/private-ca";
+import { DEFAULT_VALIDITY_DAYS, MAX_LIFETIME_YEARS, MAX_VALIDITY_DAYS, commonNameOf, daysLabel, isValidityDays, rootSubjectOf, validityLabel } from "@/lib/private-ca";
 import { useAction } from "@/lib/use-action";
 
 const ROUTE = "/app/organizations/$orgId/private-cas";
@@ -661,18 +663,147 @@ function UploadCertificateForm({ orgId, ca, issuing, onDone }: EditFormProps) {
   );
 }
 
+/** The dialog that holds a stepped form, sized as the New Managed Certificate dialog is. */
+const STEPPED_DIALOG = "gap-0 overflow-hidden p-0 sm:max-w-[calc(100%-2rem)] md:max-w-[760px] lg:max-w-[860px]";
+
+type Step<Id extends string> = { id: Id; title: string; icon: LucideIcon };
+
+/**
+ * A form in steps, laid out as the New Managed Certificate dialog is: the steps down the side, one shown at a time, Back and Next below.
+ * A step may be opened once every step before it is complete; submitting the last one calls `onSubmit`.
+ */
+function SteppedForm<Id extends string>({
+  title,
+  steps,
+  step,
+  onStep,
+  complete,
+  submitLabel,
+  pending,
+  onSubmit,
+  children,
+}: {
+  title: string;
+  steps: readonly Step<Id>[];
+  step: Id;
+  onStep: (step: Id) => void;
+  complete: Record<Id, boolean>;
+  submitLabel: string;
+  pending: boolean;
+  onSubmit: () => void;
+  children: ReactNode;
+}) {
+  const index = steps.findIndex((s) => s.id === step);
+  const last = index === steps.length - 1;
+  const reachable = (i: number) => steps.slice(0, i).every((s) => complete[s.id]);
+  const goTo = (i: number) => {
+    const target = steps[i];
+    if (target && reachable(i)) onStep(target.id);
+  };
+  return (
+    <SidebarProvider className="h-[min(600px,85vh)] min-h-0 items-stretch">
+      <Sidebar collapsible="none" className="hidden border-r md:flex">
+        <SidebarContent>
+          <SidebarGroup>
+            <SidebarGroupContent>
+              <SidebarMenu>
+                {steps.map((s, i) => (
+                  <SidebarMenuItem key={s.id}>
+                    <SidebarMenuButton isActive={s.id === step} disabled={!reachable(i)} onClick={() => goTo(i)}>
+                      {i < index && complete[s.id] ? <CheckIcon className="text-primary" /> : <s.icon />}
+                      <span>{s.title}</span>
+                    </SidebarMenuButton>
+                  </SidebarMenuItem>
+                ))}
+              </SidebarMenu>
+            </SidebarGroupContent>
+          </SidebarGroup>
+        </SidebarContent>
+      </Sidebar>
+      <form
+        className="flex min-w-0 flex-1 flex-col"
+        onSubmit={(e: FormEvent) => {
+          e.preventDefault();
+          if (!last) goTo(index + 1);
+          else if (steps.every((s) => complete[s.id])) onSubmit();
+        }}
+      >
+        <header className="flex h-14 shrink-0 items-center justify-between gap-2 px-4 pr-12">
+          <Breadcrumb>
+            <BreadcrumbList>
+              <BreadcrumbItem className="hidden md:block">{title}</BreadcrumbItem>
+              <BreadcrumbSeparator className="hidden md:block" />
+              <BreadcrumbItem>
+                <BreadcrumbPage>{steps[index]?.title}</BreadcrumbPage>
+              </BreadcrumbItem>
+            </BreadcrumbList>
+          </Breadcrumb>
+          <span className="text-xs text-muted-foreground">
+            Step {index + 1} of {steps.length}
+          </span>
+        </header>
+        <div className="flex flex-1 flex-col gap-4 overflow-y-auto p-4 pt-0">{children}</div>
+        <footer className="flex shrink-0 items-center justify-between gap-2 border-t bg-muted/50 p-4">
+          <Button type="button" variant="outline" disabled={index === 0} onClick={() => goTo(index - 1)}>
+            Back
+          </Button>
+          {last ? (
+            <Button key="submit" type="submit" disabled={pending}>
+              {submitLabel}
+            </Button>
+          ) : (
+            <Button key="next" type="button" disabled={!complete[step]} onClick={() => goTo(index + 1)}>
+              Next
+            </Button>
+          )}
+        </footer>
+      </form>
+    </SidebarProvider>
+  );
+}
+
+function Summary({ rows }: { rows: { label: string; value: ReactNode }[] }) {
+  return (
+    <div className="rounded-md border p-4">
+      <dl className="grid grid-cols-[9rem_1fr] gap-x-4 gap-y-3 text-sm">
+        {rows.map(({ label, value }) => (
+          <div key={label} className="col-span-2 grid grid-cols-subgrid items-baseline">
+            <dt className="text-muted-foreground">{label}</dt>
+            <dd className="min-w-0 break-words">{value}</dd>
+          </div>
+        ))}
+      </dl>
+    </div>
+  );
+}
+
+const none = <span className="text-muted-foreground">None</span>;
+const nameList = (names: string[]) => (names.length > 0 ? <ul className="flex flex-col gap-0.5 font-mono text-xs">{names.map((name) => <li key={name}>{name}</li>)}</ul> : none);
+
+/** The review rows shared by both forms: an Issuing CA's permitted names and validity limits. */
+const rulesRows = (rules: RulesText, validity: ValidityText) => {
+  const permitted = rulesOf(rules);
+  return [
+    { label: "Permitted zones", value: nameList(permitted.zones) },
+    { label: "Permitted names", value: nameList(permitted.exact) },
+    { label: "Validity", value: validityLabel(validityOfText(validity)) },
+  ];
+};
+
+const ADD_STEPS = [
+  { id: "issuing", title: "Issuing CA", icon: FingerprintIcon },
+  { id: "names", title: "Permitted names", icon: GlobeIcon },
+  { id: "validity", title: "Validity", icon: CalendarClockIcon },
+  { id: "review", title: "Review", icon: ClipboardCheckIcon },
+] as const satisfies readonly Step<string>[];
+type AddStepId = (typeof ADD_STEPS)[number]["id"];
+
 function AddIssuingCaDialog({ orgId, ca, open, onOpenChange }: { orgId: string; ca: PrivateCa; open: boolean; onOpenChange: (open: boolean) => void }) {
   return (
     <Dialog open={open} onOpenChange={onOpenChange}>
-      <DialogContent className="max-h-[90vh] overflow-y-auto sm:max-w-lg">
-        <DialogHeader>
-          <DialogTitle>Add an Issuing CA to {ca.name}</DialogTitle>
-          <DialogDescription>
-            {ca.kind === "platform_root"
-              ? "The platform makes a new key in the KMS and has the root sign it. It can issue at once, and whatever trusts the root trusts it; the other Issuing CAs are unaffected."
-              : "The platform makes a new key in the KMS. Download its CSR from its row, have your root sign it, and upload the result; it issues once that is accepted. The other Issuing CAs are unaffected."}
-          </DialogDescription>
-        </DialogHeader>
+      <DialogContent className={STEPPED_DIALOG}>
+        <DialogTitle className="sr-only">Add an Issuing CA to {ca.name}</DialogTitle>
+        <DialogDescription className="sr-only">{addIssuingCaDescription(ca)}</DialogDescription>
         {/* Only mounted while open, so each opening starts from a clean form. */}
         {open && <AddIssuingCaForm orgId={orgId} ca={ca} onDone={() => onOpenChange(false)} />}
       </DialogContent>
@@ -680,7 +811,13 @@ function AddIssuingCaDialog({ orgId, ca, open, onOpenChange }: { orgId: string; 
   );
 }
 
+const addIssuingCaDescription = (ca: PrivateCa) =>
+  ca.kind === "platform_root"
+    ? "The platform makes a new key in the KMS and has the root sign it. It can issue at once, and whatever trusts the root trusts it; the other Issuing CAs are unaffected."
+    : "The platform makes a new key in the KMS. Download its CSR from its row, have your root sign it, and upload the result; it issues once that is accepted. The other Issuing CAs are unaffected.";
+
 function AddIssuingCaForm({ orgId, ca, onDone }: { orgId: string; ca: PrivateCa; onDone: () => void }) {
+  const [step, setStep] = useState<AddStepId>("issuing");
   const [subject, setSubject] = useState("");
   // Empty for until the root ends.
   const [lifetimeYears, setLifetimeYears] = useState("");
@@ -699,60 +836,117 @@ function AddIssuingCaForm({ orgId, ca, onDone }: { orgId: string; ca: PrivateCa;
   );
   const platformRoot = ca.kind === "platform_root";
   const lifetimeOk = !platformRoot || lifetimeYears.trim() === "" || (/^\d+$/.test(lifetimeYears.trim()) && Number(lifetimeYears) >= 1 && Number(lifetimeYears) <= MAX_LIFETIME_YEARS);
-  const ready = subject.trim() !== "" && hasRules(rules) && validityProblem(validity) === undefined && lifetimeOk;
+  const untilRootEnds = `Until the root ends${ca.root ? `, ${date(ca.root.notAfter)}` : ""}`;
+  const complete: Record<AddStepId, boolean> = {
+    issuing: subject.trim() !== "" && lifetimeOk,
+    names: hasRules(rules),
+    validity: validityProblem(validity) === undefined,
+    review: true,
+  };
   return (
-    <form
-      className="flex flex-col gap-4"
-      onSubmit={(e: FormEvent) => {
-        e.preventDefault();
-        add.mutate(undefined);
-      }}
+    <SteppedForm
+      title={`Add an Issuing CA to ${ca.name}`}
+      steps={ADD_STEPS}
+      step={step}
+      onStep={setStep}
+      complete={complete}
+      submitLabel="Add"
+      pending={add.isPending}
+      onSubmit={() => add.mutate(undefined)}
     >
-      <div className="flex flex-col gap-2">
-        <Label htmlFor={`add-issuing-${ca.id}-subject`}>Subject</Label>
-        <Input id={`add-issuing-${ca.id}-subject`} className="font-mono text-xs" value={subject} onChange={(e) => setSubject(e.target.value)} placeholder="CN=Acme Devices, O=Acme" />
-        <p className="text-xs text-muted-foreground">A distinguished name, with a common name, that no other Issuing CA of {ca.name} has.</p>
-      </div>
-      {platformRoot && (
-        <div className="flex flex-col gap-2">
-          <Label htmlFor={`add-issuing-${ca.id}-lifetime`}>Lifetime (years)</Label>
-          <Input
-            id={`add-issuing-${ca.id}-lifetime`}
-            type="number"
-            min={1}
-            max={MAX_LIFETIME_YEARS}
-            className="w-32"
-            value={lifetimeYears}
-            placeholder="Root's"
-            aria-invalid={!lifetimeOk}
-            onChange={(e) => setLifetimeYears(e.target.value)}
-          />
-          <p className="text-xs text-muted-foreground">
-            Leave empty for until the root ends{ca.root ? `, ${date(ca.root.notAfter)}` : ""}. It never outlives the root, and no Certificate outlives it.
-          </p>
-        </div>
+      {step === "issuing" && (
+        <FieldSet>
+          <FieldLegend>The new Issuing CA</FieldLegend>
+          <FieldDescription>{addIssuingCaDescription(ca)}</FieldDescription>
+          <FieldGroup>
+            <Field>
+              <FieldLabel htmlFor={`add-issuing-${ca.id}-subject`}>Subject</FieldLabel>
+              <Input
+                id={`add-issuing-${ca.id}-subject`}
+                className="font-mono text-xs"
+                autoFocus
+                value={subject}
+                onChange={(e) => setSubject(e.target.value)}
+                placeholder="CN=Acme Devices, O=Acme"
+              />
+              <FieldDescription>A distinguished name, with a common name, that no other Issuing CA of {ca.name} has.</FieldDescription>
+            </Field>
+            {platformRoot && (
+              <Field data-invalid={!lifetimeOk}>
+                <FieldLabel htmlFor={`add-issuing-${ca.id}-lifetime`}>Lifetime (years)</FieldLabel>
+                {/* A Field stretches its children; the div keeps the input narrow. */}
+                <div>
+                  <Input
+                    id={`add-issuing-${ca.id}-lifetime`}
+                    type="number"
+                    min={1}
+                    max={MAX_LIFETIME_YEARS}
+                    className="w-32"
+                    value={lifetimeYears}
+                    placeholder="Root's"
+                    aria-invalid={!lifetimeOk}
+                    onChange={(e) => setLifetimeYears(e.target.value)}
+                  />
+                </div>
+                <FieldDescription>
+                  Leave empty for until the root ends{ca.root ? `, ${date(ca.root.notAfter)}` : ""}. It never outlives the root, and no Certificate outlives it.
+                </FieldDescription>
+                {!lifetimeOk && <FieldError>A whole number of years from 1 to {MAX_LIFETIME_YEARS}.</FieldError>}
+              </Field>
+            )}
+          </FieldGroup>
+        </FieldSet>
       )}
-      <PermittedNamesFields id={`add-issuing-${ca.id}`} value={rules} onChange={setRules} />
-      <p className="-mt-2 text-xs text-muted-foreground">
-        {platformRoot
-          ? "It carries them as name constraints, which relying parties enforce. You can change the names later, but not those constraints without another Issuing CA, so prefer broad zones."
-          : "The platform issues only for these. Relying parties enforce whatever name constraints your root puts in what it signs."}
-      </p>
-      <ValidityFields id={`add-issuing-${ca.id}-validity`} value={validity} onChange={setValidity} />
-      {add.error && <p className="text-sm text-destructive">{add.error.message}</p>}
-      <DialogFooter>
-        <DialogClose asChild>
-          <Button type="button" variant="outline">
-            Cancel
-          </Button>
-        </DialogClose>
-        <Button type="submit" disabled={!ready || add.isPending}>
-          Add
-        </Button>
-      </DialogFooter>
-    </form>
+
+      {step === "names" && (
+        <FieldSet>
+          <FieldLegend>Permitted names</FieldLegend>
+          <FieldDescription>
+            {platformRoot
+              ? "It carries them as name constraints, which relying parties enforce. You can change the names later, but not those constraints without another Issuing CA, so prefer broad zones."
+              : "The platform issues only for these. Relying parties enforce whatever name constraints your root puts in what it signs."}
+          </FieldDescription>
+          <PermittedNamesFields id={`add-issuing-${ca.id}`} value={rules} onChange={setRules} />
+        </FieldSet>
+      )}
+
+      {step === "validity" && (
+        <FieldSet>
+          <FieldLegend>Validity</FieldLegend>
+          <ValidityFields id={`add-issuing-${ca.id}-validity`} value={validity} onChange={setValidity} />
+        </FieldSet>
+      )}
+
+      {step === "review" && (
+        <FieldGroup>
+          <FieldSet>
+            <FieldLegend>Review</FieldLegend>
+            <FieldDescription>Use Back to change anything.</FieldDescription>
+            <Summary
+              rows={[
+                { label: "Private CA", value: ca.name },
+                { label: "Subject", value: <span className="break-all font-mono text-xs">{subject.trim()}</span> },
+                ...(platformRoot ? [{ label: "Lifetime", value: lifetimeYears.trim() === "" ? untilRootEnds : `${Number(lifetimeYears)} ${Number(lifetimeYears) === 1 ? "year" : "years"}` }] : []),
+                ...rulesRows(rules, validity),
+              ]}
+            />
+          </FieldSet>
+          {add.error && <FieldError>{add.error.message}</FieldError>}
+        </FieldGroup>
+      )}
+    </SteppedForm>
   );
 }
+
+const CREATE_STEPS = [
+  { id: "hierarchy", title: "Hierarchy", icon: NetworkIcon },
+  { id: "issuing", title: "Issuing CA", icon: FingerprintIcon },
+  { id: "key", title: "Key", icon: KeyRoundIcon },
+  { id: "names", title: "Permitted names", icon: GlobeIcon },
+  { id: "validity", title: "Validity", icon: CalendarClockIcon },
+  { id: "review", title: "Review", icon: ClipboardCheckIcon },
+] as const satisfies readonly Step<string>[];
+type CreateStepId = (typeof CREATE_STEPS)[number]["id"];
 
 function CreatePrivateCaDialog({ orgId }: { orgId: string }) {
   const [open, setOpen] = useState(false);
@@ -764,20 +958,18 @@ function CreatePrivateCaDialog({ orgId }: { orgId: string }) {
           New Private CA
         </Button>
       </DialogTrigger>
-      <DialogContent className="max-h-[90vh] overflow-y-auto sm:max-w-lg">
-        <DialogHeader>
-          <DialogTitle>New Private CA</DialogTitle>
-          <DialogDescription>
-            A root and a first Issuing CA under it, its key in the KMS. The platform can make the root too, or your Organization's own root can sign the Issuing CA. You can add
-            more Issuing CAs under the root later.
-          </DialogDescription>
-        </DialogHeader>
+      <DialogContent className={STEPPED_DIALOG}>
+        <DialogTitle className="sr-only">New Private CA</DialogTitle>
+        <DialogDescription className="sr-only">{CREATE_DESCRIPTION}</DialogDescription>
         {/* Only mounted while open, so each opening starts from a clean form. */}
         {open && <CreatePrivateCaForm orgId={orgId} onDone={() => setOpen(false)} />}
       </DialogContent>
     </Dialog>
   );
 }
+
+const CREATE_DESCRIPTION =
+  "A root and a first Issuing CA under it, its key in the KMS. The platform can make the root too, or your Organization's own root can sign the Issuing CA. You can add more Issuing CAs under the root later.";
 
 const HIERARCHIES: { value: PrivateCa["kind"]; title: string; description: string }[] = [
   { value: "platform_root", title: "Platform root", description: "The platform makes a self-signed root and signs the Issuing CA with it. It issues at once." },
@@ -789,6 +981,7 @@ const HIERARCHIES: { value: PrivateCa["kind"]; title: string; description: strin
 ];
 
 function CreatePrivateCaForm({ orgId, onDone }: { orgId: string; onDone: () => void }) {
+  const [step, setStep] = useState<CreateStepId>("hierarchy");
   const [kind, setKind] = useState<PrivateCa["kind"]>("platform_root");
   const platformRoot = kind === "platform_root";
   const [name, setName] = useState("");
@@ -812,96 +1005,163 @@ function CreatePrivateCaForm({ orgId, onDone }: { orgId: string; onDone: () => v
     onDone,
   );
   const lifetimeOk = !platformRoot || (Number.isInteger(Number(lifetimeYears)) && Number(lifetimeYears) >= 1 && Number(lifetimeYears) <= MAX_LIFETIME_YEARS);
-  const ready = name.trim() !== "" && subject.trim() !== "" && hasRules(rules) && validityProblem(validity) === undefined && lifetimeOk;
+  const complete: Record<CreateStepId, boolean> = {
+    hierarchy: name.trim() !== "",
+    issuing: subject.trim() !== "",
+    key: lifetimeOk,
+    names: hasRules(rules),
+    validity: validityProblem(validity) === undefined,
+    review: true,
+  };
+  const hierarchy = HIERARCHIES.find((h) => h.value === kind);
   return (
-    <form
-      className="flex flex-col gap-4"
-      onSubmit={(e: FormEvent) => {
-        e.preventDefault();
-        create.mutate(undefined);
-      }}
+    <SteppedForm
+      title="New Private CA"
+      steps={CREATE_STEPS}
+      step={step}
+      onStep={setStep}
+      complete={complete}
+      submitLabel="Create"
+      pending={create.isPending}
+      onSubmit={() => create.mutate(undefined)}
     >
-      <div className="flex flex-col gap-2">
-        <Label htmlFor="private-ca-name">Name</Label>
-        <Input id="private-ca-name" value={name} onChange={(e) => setName(e.target.value)} placeholder="Internal TLS" />
-      </div>
-      <fieldset className="flex flex-col gap-2">
-        <legend className="mb-2 text-sm font-medium">Hierarchy</legend>
-        <RadioGroup value={kind} onValueChange={(value) => setKind(value as PrivateCa["kind"])}>
-          {HIERARCHIES.map((h) => (
-            <Label key={h.value} htmlFor={`private-ca-kind-${h.value}`} className="flex items-start gap-3 rounded-md border p-3 font-normal">
-              <RadioGroupItem value={h.value} id={`private-ca-kind-${h.value}`} className="mt-0.5" />
-              <span className="flex flex-col gap-1">
-                <span className="font-medium">{h.title}</span>
-                <span className="text-xs text-muted-foreground">{h.description}</span>
-              </span>
-            </Label>
-          ))}
-        </RadioGroup>
-      </fieldset>
-      <div className="flex gap-4">
-        <div className="flex flex-1 flex-col gap-2">
-          <Label htmlFor="private-ca-algorithm">Key algorithm</Label>
-          <select
-            id="private-ca-algorithm"
-            className="h-9 rounded-md border bg-transparent px-3 text-sm"
-            value={keyAlgorithm}
-            onChange={(e) => setKeyAlgorithm(e.target.value as KeyAlgorithm)}
-          >
-            {KEY_ALGORITHMS.map((value) => (
-              <option key={value} value={value}>
-                {KEY_ALGORITHM_LABELS[value]}
-              </option>
-            ))}
-          </select>
-        </div>
-        {platformRoot && (
-          <div className="flex flex-col gap-2">
-            <Label htmlFor="private-ca-lifetime">Lifetime (years)</Label>
-            <Input id="private-ca-lifetime" type="number" min={1} max={MAX_LIFETIME_YEARS} className="w-32" value={lifetimeYears} onChange={(e) => setLifetimeYears(e.target.value)} />
-          </div>
-        )}
-      </div>
-      <p className="-mt-2 text-xs text-muted-foreground">
-        {platformRoot ? "For both the root and the Issuing CA, each with its own key. No Certificate outlives them." : "Of the Issuing CA's key. Your root decides how long the Issuing CA lasts."}
-      </p>
-      <fieldset className="flex flex-col gap-1 rounded-md border p-3">
-        <legend className="px-1 text-sm font-medium">Root CA</legend>
-        {platformRoot ? (
-          <>
-            <span className="break-all font-mono text-xs">{subject.trim() ? rootSubjectOf(subject.trim()) : <span className="font-sans text-muted-foreground">From the Issuing CA's subject</span>}</span>
-            <p className="text-xs text-muted-foreground">Self-signed. Its subject is the Issuing CA's, with "Root" after the common name.</p>
-          </>
-        ) : (
-          <p className="text-xs text-muted-foreground">Your Organization's own. You upload it, with any intermediates, together with the first Issuing CA's signed certificate.</p>
-        )}
-      </fieldset>
-      <fieldset className="ml-3 flex flex-col gap-4 rounded-md border p-3">
-        <legend className="px-1 text-sm font-medium">{platformRoot ? "Issuing CA, signed by the root" : "Issuing CA, awaiting your root's signature"}</legend>
-        <div className="flex flex-col gap-2">
-          <Label htmlFor="private-ca-subject">Subject</Label>
-          <Input id="private-ca-subject" className="font-mono text-xs" value={subject} onChange={(e) => setSubject(e.target.value)} placeholder="CN=Acme Internal TLS, O=Acme" />
-          <p className="text-xs text-muted-foreground">A distinguished name, with a common name.</p>
-        </div>
-        <PermittedNamesFields id="private-ca-new" value={rules} onChange={setRules} />
-        <p className="-mt-2 text-xs text-muted-foreground">
-          {platformRoot
-            ? "The Issuing CA carries them as name constraints, which relying parties enforce. You can change the names later, but not those constraints without a new Issuing CA, so prefer broad zones."
-            : "The platform issues only for these. Relying parties enforce whatever name constraints your root puts in what it signs."}
-        </p>
-        <ValidityFields id="private-ca-new-validity" value={validity} onChange={setValidity} />
-      </fieldset>
-      {create.error && <p className="text-sm text-destructive">{create.error.message}</p>}
-      <DialogFooter>
-        <DialogClose asChild>
-          <Button type="button" variant="outline">
-            Cancel
-          </Button>
-        </DialogClose>
-        <Button type="submit" disabled={!ready || create.isPending}>
-          Create
-        </Button>
-      </DialogFooter>
-    </form>
+      {step === "hierarchy" && (
+        <FieldSet>
+          <FieldLegend>Name and hierarchy</FieldLegend>
+          <FieldDescription>{CREATE_DESCRIPTION}</FieldDescription>
+          <FieldGroup>
+            <Field>
+              <FieldLabel htmlFor="private-ca-name">Name</FieldLabel>
+              <Input id="private-ca-name" autoFocus value={name} onChange={(e) => setName(e.target.value)} placeholder="Internal TLS" />
+            </Field>
+            <Field>
+              <FieldLabel>Hierarchy</FieldLabel>
+              <RadioGroup value={kind} onValueChange={(value) => setKind(value as PrivateCa["kind"])}>
+                {HIERARCHIES.map((h) => (
+                  <Label key={h.value} htmlFor={`private-ca-kind-${h.value}`} className="flex items-start gap-3 rounded-md border p-3 font-normal">
+                    <RadioGroupItem value={h.value} id={`private-ca-kind-${h.value}`} className="mt-0.5" />
+                    <span className="flex flex-col gap-1">
+                      <span className="font-medium">{h.title}</span>
+                      <span className="text-xs text-muted-foreground">{h.description}</span>
+                    </span>
+                  </Label>
+                ))}
+              </RadioGroup>
+            </Field>
+          </FieldGroup>
+        </FieldSet>
+      )}
+
+      {step === "issuing" && (
+        <FieldSet>
+          <FieldLegend>{platformRoot ? "Issuing CA, signed by the root" : "Issuing CA, awaiting your root's signature"}</FieldLegend>
+          <FieldGroup>
+            <Field>
+              <FieldLabel htmlFor="private-ca-subject">Subject</FieldLabel>
+              <Input id="private-ca-subject" className="font-mono text-xs" autoFocus value={subject} onChange={(e) => setSubject(e.target.value)} placeholder="CN=Acme Internal TLS, O=Acme" />
+              <FieldDescription>A distinguished name, with a common name.</FieldDescription>
+            </Field>
+            <Field>
+              <FieldLabel>Root CA</FieldLabel>
+              <div className="flex flex-col gap-1 rounded-md border p-3">
+                {platformRoot ? (
+                  <>
+                    <span className="break-all font-mono text-xs">{subject.trim() ? rootSubjectOf(subject.trim()) : <span className="font-sans text-muted-foreground">From the Issuing CA's subject</span>}</span>
+                    <p className="text-xs text-muted-foreground">Self-signed. Its subject is the Issuing CA's, with "Root" after the common name.</p>
+                  </>
+                ) : (
+                  <p className="text-xs text-muted-foreground">Your Organization's own. You upload it, with any intermediates, together with the first Issuing CA's signed certificate.</p>
+                )}
+              </div>
+            </Field>
+          </FieldGroup>
+        </FieldSet>
+      )}
+
+      {step === "key" && (
+        <FieldSet>
+          <FieldLegend>Key</FieldLegend>
+          <FieldDescription>
+            {platformRoot ? "For both the root and the Issuing CA, each with its own key. No Certificate outlives them." : "Of the Issuing CA's key. Your root decides how long the Issuing CA lasts."}
+          </FieldDescription>
+          <FieldGroup>
+            <Field>
+              <FieldLabel htmlFor="private-ca-algorithm">Key algorithm</FieldLabel>
+              <Select value={keyAlgorithm} onValueChange={(value) => setKeyAlgorithm(value as KeyAlgorithm)}>
+                <SelectTrigger id="private-ca-algorithm" className="w-full">
+                  <SelectValue />
+                </SelectTrigger>
+                <SelectContent>
+                  {KEY_ALGORITHMS.map((value) => (
+                    <SelectItem key={value} value={value}>
+                      {KEY_ALGORITHM_LABELS[value]}
+                    </SelectItem>
+                  ))}
+                </SelectContent>
+              </Select>
+            </Field>
+            {platformRoot && (
+              <Field data-invalid={!lifetimeOk}>
+                <FieldLabel htmlFor="private-ca-lifetime">Lifetime (years)</FieldLabel>
+                {/* A Field stretches its children; the div keeps the input narrow. */}
+                <div>
+                  <Input
+                    id="private-ca-lifetime"
+                    type="number"
+                    min={1}
+                    max={MAX_LIFETIME_YEARS}
+                    className="w-32"
+                    value={lifetimeYears}
+                    aria-invalid={!lifetimeOk}
+                    onChange={(e) => setLifetimeYears(e.target.value)}
+                  />
+                </div>
+                {!lifetimeOk && <FieldError>A whole number of years from 1 to {MAX_LIFETIME_YEARS}.</FieldError>}
+              </Field>
+            )}
+          </FieldGroup>
+        </FieldSet>
+      )}
+
+      {step === "names" && (
+        <FieldSet>
+          <FieldLegend>Permitted names</FieldLegend>
+          <FieldDescription>
+            {platformRoot
+              ? "The Issuing CA carries them as name constraints, which relying parties enforce. You can change the names later, but not those constraints without a new Issuing CA, so prefer broad zones."
+              : "The platform issues only for these. Relying parties enforce whatever name constraints your root puts in what it signs."}
+          </FieldDescription>
+          <PermittedNamesFields id="private-ca-new" value={rules} onChange={setRules} />
+        </FieldSet>
+      )}
+
+      {step === "validity" && (
+        <FieldSet>
+          <FieldLegend>Validity</FieldLegend>
+          <ValidityFields id="private-ca-new-validity" value={validity} onChange={setValidity} />
+        </FieldSet>
+      )}
+
+      {step === "review" && (
+        <FieldGroup>
+          <FieldSet>
+            <FieldLegend>Review</FieldLegend>
+            <FieldDescription>Use Back to change anything.</FieldDescription>
+            <Summary
+              rows={[
+                { label: "Name", value: name.trim() },
+                { label: "Hierarchy", value: hierarchy?.title ?? kind },
+                { label: "Root CA", value: platformRoot ? <span className="break-all font-mono text-xs">{rootSubjectOf(subject.trim())}</span> : "Your Organization's own, uploaded later" },
+                { label: "Issuing CA", value: <span className="break-all font-mono text-xs">{subject.trim()}</span> },
+                { label: "Key algorithm", value: KEY_ALGORITHM_LABELS[keyAlgorithm] },
+                { label: "Lifetime", value: platformRoot ? `${Number(lifetimeYears)} ${Number(lifetimeYears) === 1 ? "year" : "years"}` : "Set by your root" },
+                ...rulesRows(rules, validity),
+              ]}
+            />
+          </FieldSet>
+          {create.error && <FieldError>{create.error.message}</FieldError>}
+        </FieldGroup>
+      )}
+    </SteppedForm>
   );
 }
