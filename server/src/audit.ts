@@ -44,6 +44,7 @@ export const AUDIT_ACTIONS = [
   "certificate.revoked",
   "private_ca.created",
   "private_ca.issuing_ca_added",
+  "private_ca.csr_signed",
   "private_ca.updated",
   "private_ca.crl_published",
   "name_change.proposed",

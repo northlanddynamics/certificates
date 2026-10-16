@@ -140,6 +140,8 @@ describe("migrating a Private CA to one with its own Issuing CA", () => {
         notAfter: old.issuing.notAfter.toISOString(),
         permittedNames: { exact: ["app.corp.example"], zones: ["internal.acme"] },
         validity: { maximumDays: 90, defaultDays: 30 },
+        // What its certificate was made with, which its rules need not match.
+        nameConstraints: { permitted: ["dns:internal.acme"], excluded: ["ip:0.0.0.0/0", "ip:::/0"] },
       },
     ]);
     const issuingCa = ca.body.issuingCas[0];

@@ -11,6 +11,7 @@ import { Dialog, DialogClose, DialogContent, DialogDescription, DialogFooter, Di
 import { DropdownMenu, DropdownMenuContent, DropdownMenuItem, DropdownMenuSeparator, DropdownMenuTrigger } from "@/components/ui/dropdown-menu";
 import { Input } from "@/components/ui/input";
 import { Label } from "@/components/ui/label";
+import { RadioGroup, RadioGroupItem } from "@/components/ui/radio-group";
 import { Textarea } from "@/components/ui/textarea";
 import { Tooltip, TooltipContent, TooltipTrigger } from "@/components/ui/tooltip";
 import { api, can, type IssuingCa, type PermittedNames, type PrivateCa, type PrivateCaValidity } from "@/lib/api";
@@ -68,13 +69,24 @@ const columns = columnHelper.columns([
   }),
   columnHelper.accessor("subject", {
     header: "Subject",
-    cell: ({ cell }) => (cell.getValue() ? <span className="block max-w-64 whitespace-normal break-all font-mono text-xs">{cell.getValue()}</span> : <span className="text-muted-foreground">The Organization's own</span>),
+    cell: ({ cell }) =>
+      cell.getValue() ? (
+        <span className="block max-w-64 whitespace-normal break-all font-mono text-xs">{cell.getValue()}</span>
+      ) : (
+        <span className="text-muted-foreground">The Organization's own, not uploaded yet</span>
+      ),
   }),
   columnHelper.display({ id: "key", header: "Key", cell: ({ row }) => keyAlgorithmLabel(row.original.ca.keyAlgorithm) }),
   columnHelper.display({
     id: "permittedNames",
     header: "Permitted names",
-    cell: ({ row }) => (row.original.level === "issuing" ? <PermittedNamesChips names={row.original.issuing.permittedNames} /> : null),
+    cell: ({ row }) =>
+      row.original.level === "issuing" ? (
+        <span className="flex flex-col gap-1">
+          <PermittedNamesChips names={row.original.issuing.permittedNames} />
+          {row.original.ca.kind === "organization_root" && row.original.issuing.status !== "awaiting_signature" && <RootNameConstraints constraints={row.original.issuing.nameConstraints} />}
+        </span>
+      ) : null,
   }),
   columnHelper.display({
     id: "status",
@@ -155,6 +167,32 @@ function PermittedNamesChips({ names }: { names: PermittedNames }) {
   );
 }
 
+/**
+ * The name constraints the Organization's own root put in an Issuing CA, which relying parties enforce: the platform
+ * enforces the Issuing CA's permitted names, which may be narrower, and never these.
+ */
+function RootNameConstraints({ constraints }: { constraints: IssuingCa["nameConstraints"] }) {
+  if (!constraints) return <span className="text-xs text-muted-foreground">The root put no name constraints in it</span>;
+  const all = [...constraints.permitted.map((c) => `permits ${c}`), ...constraints.excluded.map((c) => `excludes ${c}`)];
+  return (
+    <Tooltip>
+      <TooltipTrigger asChild>
+        <span className="text-xs text-muted-foreground underline decoration-dotted" tabIndex={0} aria-label={`Name constraints from the root: ${all.join(", ")}`}>
+          Root's name constraints ({all.length})
+        </span>
+      </TooltipTrigger>
+      <TooltipContent>
+        <p className="mb-1">What the root put in it, which relying parties enforce:</p>
+        <ul className="flex flex-col gap-0.5 font-mono">
+          {all.map((c) => (
+            <li key={c}>{c}</li>
+          ))}
+        </ul>
+      </TooltipContent>
+    </Tooltip>
+  );
+}
+
 /** The Organization of the page, as /api/me reports it, and whether its user may change Private CAs. */
 function useMayUpdate() {
   const { orgId } = useParams({ from: ROUTE });
@@ -166,8 +204,8 @@ function useMayUpdate() {
 function RootActions({ ca }: { ca: PrivateCa }) {
   const { orgId, mayUpdate } = useMayUpdate();
   const [adding, setAdding] = useState(false);
-  // Only the platform signs an Issuing CA under a root it holds, and an active one.
-  const mayAdd = mayUpdate && ca.kind === "platform_root" && ca.status === "active";
+  // Under an active root only: the platform's signs the new one at once, the Organization's own signs its CSR later.
+  const mayAdd = mayUpdate && ca.status === "active";
   if (!mayAdd && !ca.root) return null;
   return (
     <div className="flex justify-end">
@@ -194,10 +232,12 @@ function RootActions({ ca }: { ca: PrivateCa }) {
   );
 }
 
-/** An Issuing CA's menu: its permitted names and validity, and its chain. */
+/** An Issuing CA's menu: under the Organization's own root, its CSR and the upload of what that root signed; its permitted names and validity; and its chain. */
 function IssuingCaActions({ ca, issuing }: { ca: PrivateCa; issuing: IssuingCa }) {
   const { orgId, mayUpdate } = useMayUpdate();
-  const [editing, setEditing] = useState<"names" | "validity" | null>(null);
+  const [editing, setEditing] = useState<"names" | "validity" | "upload" | null>(null);
+  const signedByOrganization = ca.kind === "organization_root";
+  const awaiting = issuing.status === "awaiting_signature";
   if (!mayUpdate && !issuing.notAfter) return null;
   const name = commonNameOf(issuing.subject);
   return (
@@ -208,7 +248,18 @@ function IssuingCaActions({ ca, issuing }: { ca: PrivateCa; issuing: IssuingCa }
             <MoreHorizontalIcon />
           </Button>
         </DropdownMenuTrigger>
-        <DropdownMenuContent align="end" className="w-44">
+        <DropdownMenuContent align="end" className="w-52">
+          {mayUpdate && signedByOrganization && (
+            <>
+              <DropdownMenuItem asChild>
+                <a href={api.issuingCaCsrUrl(orgId, ca.id, issuing.id)} download>
+                  Download CSR
+                </a>
+              </DropdownMenuItem>
+              {awaiting && <DropdownMenuItem onSelect={() => setEditing("upload")}>Upload signed certificate…</DropdownMenuItem>}
+              <DropdownMenuSeparator />
+            </>
+          )}
           {mayUpdate && (
             <>
               <DropdownMenuItem onSelect={() => setEditing("names")}>Permitted names…</DropdownMenuItem>
@@ -227,6 +278,7 @@ function IssuingCaActions({ ca, issuing }: { ca: PrivateCa; issuing: IssuingCa }
       </DropdownMenu>
       <EditPermittedNamesDialog orgId={orgId} ca={ca} issuing={issuing} open={editing === "names"} onOpenChange={(open) => setEditing(open ? "names" : null)} />
       <EditValidityDialog orgId={orgId} ca={ca} issuing={issuing} open={editing === "validity"} onOpenChange={(open) => setEditing(open ? "validity" : null)} />
+      {signedByOrganization && <UploadCertificateDialog orgId={orgId} ca={ca} issuing={issuing} open={editing === "upload"} onOpenChange={(open) => setEditing(open ? "upload" : null)} />}
     </div>
   );
 }
@@ -342,8 +394,9 @@ function EditPermittedNamesDialog({ orgId, ca, issuing, open, onOpenChange }: Ed
         <DialogHeader>
           <DialogTitle>Permitted names of {commonNameOf(issuing.subject)}</DialogTitle>
           <DialogDescription>
-            What it issues for from now on; Certificates already issued are unaffected. It keeps the name constraints it was made with, which relying parties enforce, so permitting
-            names beyond them needs a new Issuing CA, which you can add under the same root.
+            {ca.kind === "platform_root"
+              ? "What it issues for from now on; Certificates already issued are unaffected. It keeps the name constraints it was made with, which relying parties enforce, so permitting names beyond them needs a new Issuing CA, which you can add under the same root."
+              : "What it issues for from now on; Certificates already issued are unaffected. Relying parties also enforce whatever name constraints the Organization's root put in it, which these do not change."}
           </DialogDescription>
         </DialogHeader>
         {open && <EditPermittedNamesForm orgId={orgId} ca={ca} issuing={issuing} onDone={() => onOpenChange(false)} />}
@@ -379,6 +432,109 @@ function EditPermittedNamesForm({ orgId, ca, issuing, onDone }: EditFormProps) {
   );
 }
 
+/** A PEM field, typed or pasted, or read from a file chosen. */
+function PemField({ id, label, value, onChange, placeholder, hint }: { id: string; label: string; value: string; onChange: (value: string) => void; placeholder: string; hint: string }) {
+  return (
+    <div className="flex flex-col gap-2">
+      <div className="flex items-center justify-between gap-2">
+        <Label htmlFor={id}>{label}</Label>
+        <Input
+          type="file"
+          accept=".pem,.crt,.cer,.txt"
+          aria-label={`${label} from a file`}
+          className="h-8 w-56 text-xs"
+          onChange={async (e) => {
+            const file = e.target.files?.[0];
+            if (file) onChange(await file.text());
+          }}
+        />
+      </div>
+      <Textarea id={id} rows={4} className="font-mono text-xs" value={value} onChange={(e) => onChange(e.target.value)} placeholder={placeholder} />
+      <p className="text-xs text-muted-foreground">{hint}</p>
+    </div>
+  );
+}
+
+const PEM_PLACEHOLDER = "-----BEGIN CERTIFICATE-----";
+
+function UploadCertificateDialog({ orgId, ca, issuing, open, onOpenChange }: EditDialogProps) {
+  return (
+    <Dialog open={open} onOpenChange={onOpenChange}>
+      <DialogContent className="max-h-[90vh] overflow-y-auto sm:max-w-lg">
+        <DialogHeader>
+          <DialogTitle>Upload the signed certificate of {commonNameOf(issuing.subject)}</DialogTitle>
+          <DialogDescription>
+            The certificate your root signed for its CSR. It is refused unless it is a CA certificate for the CSR's key and subject that verifies up to the root
+            {ca.root ? `, ${commonNameOf(ca.root.subject)}, which ${ca.name} already has` : ""}. Once accepted it issues at once.
+          </DialogDescription>
+        </DialogHeader>
+        {open && <UploadCertificateForm orgId={orgId} ca={ca} issuing={issuing} onDone={() => onOpenChange(false)} />}
+      </DialogContent>
+    </Dialog>
+  );
+}
+
+function UploadCertificateForm({ orgId, ca, issuing, onDone }: EditFormProps) {
+  const [certificate, setCertificate] = useState("");
+  const [root, setRoot] = useState("");
+  const [chain, setChain] = useState("");
+  // The root and chain above are uploaded once, with the first Issuing CA signed, and shared by the rest.
+  const first = ca.root === null;
+  const upload = useAction(
+    () =>
+      api.uploadIssuingCaCertificate(orgId, ca.id, issuing.id, {
+        certificate: certificate.trim(),
+        ...(first && { root: root.trim() }),
+        ...(first && chain.trim() !== "" && { chain: chain.trim() }),
+      }),
+    ["private-cas"],
+    onDone,
+  );
+  const ready = certificate.trim() !== "" && (!first || root.trim() !== "");
+  return (
+    <form
+      className="flex flex-col gap-4"
+      onSubmit={(e: FormEvent) => {
+        e.preventDefault();
+        upload.mutate(undefined);
+      }}
+    >
+      <PemField id={`upload-${issuing.id}-certificate`} label="Signed certificate" value={certificate} onChange={setCertificate} placeholder={PEM_PLACEHOLDER} hint="PEM, the Issuing CA's certificate alone." />
+      {first && (
+        <>
+          <PemField
+            id={`upload-${issuing.id}-root`}
+            label="Root certificate"
+            value={root}
+            onChange={setRoot}
+            placeholder={PEM_PLACEHOLDER}
+            hint={`PEM, self-signed. Uploaded once: ${ca.name}'s other Issuing CAs share it.`}
+          />
+          <PemField
+            id={`upload-${issuing.id}-chain`}
+            label="Chain (optional)"
+            value={chain}
+            onChange={setChain}
+            placeholder={PEM_PLACEHOLDER}
+            hint="PEM, any CAs between the root and the Issuing CA, the one that signed it first. Leave empty when the root signed it itself."
+          />
+        </>
+      )}
+      {upload.error && <p className="text-sm text-destructive">{upload.error.message}</p>}
+      <DialogFooter>
+        <DialogClose asChild>
+          <Button type="button" variant="outline">
+            Cancel
+          </Button>
+        </DialogClose>
+        <Button type="submit" disabled={!ready || upload.isPending}>
+          Upload
+        </Button>
+      </DialogFooter>
+    </form>
+  );
+}
+
 function AddIssuingCaDialog({ orgId, ca, open, onOpenChange }: { orgId: string; ca: PrivateCa; open: boolean; onOpenChange: (open: boolean) => void }) {
   return (
     <Dialog open={open} onOpenChange={onOpenChange}>
@@ -386,7 +542,9 @@ function AddIssuingCaDialog({ orgId, ca, open, onOpenChange }: { orgId: string; 
         <DialogHeader>
           <DialogTitle>Add an Issuing CA to {ca.name}</DialogTitle>
           <DialogDescription>
-            The platform makes a new key in the KMS and has the root sign it. It can issue at once, and whatever trusts the root trusts it; the other Issuing CAs are unaffected.
+            {ca.kind === "platform_root"
+              ? "The platform makes a new key in the KMS and has the root sign it. It can issue at once, and whatever trusts the root trusts it; the other Issuing CAs are unaffected."
+              : "The platform makes a new key in the KMS. Download its CSR from its row, have your root sign it, and upload the result; it issues once that is accepted. The other Issuing CAs are unaffected."}
           </DialogDescription>
         </DialogHeader>
         {/* Only mounted while open, so each opening starts from a clean form. */}
@@ -406,14 +564,15 @@ function AddIssuingCaForm({ orgId, ca, onDone }: { orgId: string; ca: PrivateCa;
     () =>
       api.addIssuingCa(orgId, ca.id, {
         subject: subject.trim(),
-        ...(lifetimeYears.trim() !== "" && { lifetimeYears: Number(lifetimeYears) }),
+        ...(platformRoot && lifetimeYears.trim() !== "" && { lifetimeYears: Number(lifetimeYears) }),
         permittedNames: rulesOf(rules),
         validity: validityOfText(validity),
       }),
     ["private-cas"],
     onDone,
   );
-  const lifetimeOk = lifetimeYears.trim() === "" || (/^\d+$/.test(lifetimeYears.trim()) && Number(lifetimeYears) >= 1 && Number(lifetimeYears) <= MAX_LIFETIME_YEARS);
+  const platformRoot = ca.kind === "platform_root";
+  const lifetimeOk = !platformRoot || lifetimeYears.trim() === "" || (/^\d+$/.test(lifetimeYears.trim()) && Number(lifetimeYears) >= 1 && Number(lifetimeYears) <= MAX_LIFETIME_YEARS);
   const ready = subject.trim() !== "" && hasRules(rules) && validityProblem(validity) === undefined && lifetimeOk;
   return (
     <form
@@ -428,27 +587,30 @@ function AddIssuingCaForm({ orgId, ca, onDone }: { orgId: string; ca: PrivateCa;
         <Input id={`add-issuing-${ca.id}-subject`} className="font-mono text-xs" value={subject} onChange={(e) => setSubject(e.target.value)} placeholder="CN=Acme Devices, O=Acme" />
         <p className="text-xs text-muted-foreground">A distinguished name, with a common name, that no other Issuing CA of {ca.name} has.</p>
       </div>
-      <div className="flex flex-col gap-2">
-        <Label htmlFor={`add-issuing-${ca.id}-lifetime`}>Lifetime (years)</Label>
-        <Input
-          id={`add-issuing-${ca.id}-lifetime`}
-          type="number"
-          min={1}
-          max={MAX_LIFETIME_YEARS}
-          className="w-32"
-          value={lifetimeYears}
-          placeholder="Root's"
-          aria-invalid={!lifetimeOk}
-          onChange={(e) => setLifetimeYears(e.target.value)}
-        />
-        <p className="text-xs text-muted-foreground">
-          Leave empty for until the root ends{ca.root ? `, ${date(ca.root.notAfter)}` : ""}. It never outlives the root, and no Certificate outlives it.
-        </p>
-      </div>
+      {platformRoot && (
+        <div className="flex flex-col gap-2">
+          <Label htmlFor={`add-issuing-${ca.id}-lifetime`}>Lifetime (years)</Label>
+          <Input
+            id={`add-issuing-${ca.id}-lifetime`}
+            type="number"
+            min={1}
+            max={MAX_LIFETIME_YEARS}
+            className="w-32"
+            value={lifetimeYears}
+            placeholder="Root's"
+            aria-invalid={!lifetimeOk}
+            onChange={(e) => setLifetimeYears(e.target.value)}
+          />
+          <p className="text-xs text-muted-foreground">
+            Leave empty for until the root ends{ca.root ? `, ${date(ca.root.notAfter)}` : ""}. It never outlives the root, and no Certificate outlives it.
+          </p>
+        </div>
+      )}
       <PermittedNamesFields id={`add-issuing-${ca.id}`} value={rules} onChange={setRules} />
       <p className="-mt-2 text-xs text-muted-foreground">
-        It carries them as name constraints, which relying parties enforce. You can change the names later, but not those constraints without another Issuing CA, so prefer
-        broad zones.
+        {platformRoot
+          ? "It carries them as name constraints, which relying parties enforce. You can change the names later, but not those constraints without another Issuing CA, so prefer broad zones."
+          : "The platform issues only for these. Relying parties enforce whatever name constraints your root puts in what it signs."}
       </p>
       <ValidityFields id={`add-issuing-${ca.id}-validity`} value={validity} onChange={setValidity} />
       {add.error && <p className="text-sm text-destructive">{add.error.message}</p>}
@@ -479,7 +641,10 @@ function CreatePrivateCaDialog({ orgId }: { orgId: string }) {
       <DialogContent className="max-h-[90vh] overflow-y-auto sm:max-w-lg">
         <DialogHeader>
           <DialogTitle>New Private CA</DialogTitle>
-          <DialogDescription>The platform makes a root and a first Issuing CA under it, with separate keys in the KMS. It can issue at once, and you can add more Issuing CAs under the root later.</DialogDescription>
+          <DialogDescription>
+            A root and a first Issuing CA under it, its key in the KMS. The platform can make the root too, or your Organization's own root can sign the Issuing CA. You can add
+            more Issuing CAs under the root later.
+          </DialogDescription>
         </DialogHeader>
         {/* Only mounted while open, so each opening starts from a clean form. */}
         {open && <CreatePrivateCaForm orgId={orgId} onDone={() => setOpen(false)} />}
@@ -488,7 +653,18 @@ function CreatePrivateCaDialog({ orgId }: { orgId: string }) {
   );
 }
 
+const HIERARCHIES: { value: PrivateCa["kind"]; title: string; description: string }[] = [
+  { value: "platform_root", title: "Platform root", description: "The platform makes a self-signed root and signs the Issuing CA with it. It issues at once." },
+  {
+    value: "organization_root",
+    title: "Our own root",
+    description: "The platform makes only the Issuing CA's key. You download its CSR, sign it with your root (often offline), and upload the result with the root.",
+  },
+];
+
 function CreatePrivateCaForm({ orgId, onDone }: { orgId: string; onDone: () => void }) {
+  const [kind, setKind] = useState<PrivateCa["kind"]>("platform_root");
+  const platformRoot = kind === "platform_root";
   const [name, setName] = useState("");
   const [subject, setSubject] = useState("");
   const [keyAlgorithm, setKeyAlgorithm] = useState<KeyAlgorithm>("ecdsa-p256");
@@ -499,16 +675,18 @@ function CreatePrivateCaForm({ orgId, onDone }: { orgId: string; onDone: () => v
     () =>
       api.createPrivateCa(orgId, {
         name: name.trim(),
+        kind,
         subject: subject.trim(),
         keyAlgorithm,
-        lifetimeYears: Number(lifetimeYears),
+        ...(platformRoot && { lifetimeYears: Number(lifetimeYears) }),
         permittedNames: rulesOf(rules),
         validity: validityOfText(validity),
       }),
     ["private-cas"],
     onDone,
   );
-  const ready = name.trim() !== "" && subject.trim() !== "" && hasRules(rules) && validityProblem(validity) === undefined && Number.isInteger(Number(lifetimeYears)) && Number(lifetimeYears) >= 1 && Number(lifetimeYears) <= MAX_LIFETIME_YEARS;
+  const lifetimeOk = !platformRoot || (Number.isInteger(Number(lifetimeYears)) && Number(lifetimeYears) >= 1 && Number(lifetimeYears) <= MAX_LIFETIME_YEARS);
+  const ready = name.trim() !== "" && subject.trim() !== "" && hasRules(rules) && validityProblem(validity) === undefined && lifetimeOk;
   return (
     <form
       className="flex flex-col gap-4"
@@ -521,6 +699,20 @@ function CreatePrivateCaForm({ orgId, onDone }: { orgId: string; onDone: () => v
         <Label htmlFor="private-ca-name">Name</Label>
         <Input id="private-ca-name" value={name} onChange={(e) => setName(e.target.value)} placeholder="Internal TLS" />
       </div>
+      <fieldset className="flex flex-col gap-2">
+        <legend className="mb-2 text-sm font-medium">Hierarchy</legend>
+        <RadioGroup value={kind} onValueChange={(value) => setKind(value as PrivateCa["kind"])}>
+          {HIERARCHIES.map((h) => (
+            <Label key={h.value} htmlFor={`private-ca-kind-${h.value}`} className="flex items-start gap-3 rounded-md border p-3 font-normal">
+              <RadioGroupItem value={h.value} id={`private-ca-kind-${h.value}`} className="mt-0.5" />
+              <span className="flex flex-col gap-1">
+                <span className="font-medium">{h.title}</span>
+                <span className="text-xs text-muted-foreground">{h.description}</span>
+              </span>
+            </Label>
+          ))}
+        </RadioGroup>
+      </fieldset>
       <div className="flex gap-4">
         <div className="flex flex-1 flex-col gap-2">
           <Label htmlFor="private-ca-algorithm">Key algorithm</Label>
@@ -537,19 +729,29 @@ function CreatePrivateCaForm({ orgId, onDone }: { orgId: string; onDone: () => v
             ))}
           </select>
         </div>
-        <div className="flex flex-col gap-2">
-          <Label htmlFor="private-ca-lifetime">Lifetime (years)</Label>
-          <Input id="private-ca-lifetime" type="number" min={1} max={MAX_LIFETIME_YEARS} className="w-32" value={lifetimeYears} onChange={(e) => setLifetimeYears(e.target.value)} />
-        </div>
+        {platformRoot && (
+          <div className="flex flex-col gap-2">
+            <Label htmlFor="private-ca-lifetime">Lifetime (years)</Label>
+            <Input id="private-ca-lifetime" type="number" min={1} max={MAX_LIFETIME_YEARS} className="w-32" value={lifetimeYears} onChange={(e) => setLifetimeYears(e.target.value)} />
+          </div>
+        )}
       </div>
-      <p className="-mt-2 text-xs text-muted-foreground">For both the root and the Issuing CA, each with its own key. No Certificate outlives them.</p>
+      <p className="-mt-2 text-xs text-muted-foreground">
+        {platformRoot ? "For both the root and the Issuing CA, each with its own key. No Certificate outlives them." : "Of the Issuing CA's key. Your root decides how long the Issuing CA lasts."}
+      </p>
       <fieldset className="flex flex-col gap-1 rounded-md border p-3">
         <legend className="px-1 text-sm font-medium">Root CA</legend>
-        <span className="break-all font-mono text-xs">{subject.trim() ? rootSubjectOf(subject.trim()) : <span className="font-sans text-muted-foreground">From the Issuing CA's subject</span>}</span>
-        <p className="text-xs text-muted-foreground">Self-signed. Its subject is the Issuing CA's, with "Root" after the common name.</p>
+        {platformRoot ? (
+          <>
+            <span className="break-all font-mono text-xs">{subject.trim() ? rootSubjectOf(subject.trim()) : <span className="font-sans text-muted-foreground">From the Issuing CA's subject</span>}</span>
+            <p className="text-xs text-muted-foreground">Self-signed. Its subject is the Issuing CA's, with "Root" after the common name.</p>
+          </>
+        ) : (
+          <p className="text-xs text-muted-foreground">Your Organization's own. You upload it, with any intermediates, together with the first Issuing CA's signed certificate.</p>
+        )}
       </fieldset>
       <fieldset className="ml-3 flex flex-col gap-4 rounded-md border p-3">
-        <legend className="px-1 text-sm font-medium">Issuing CA, signed by the root</legend>
+        <legend className="px-1 text-sm font-medium">{platformRoot ? "Issuing CA, signed by the root" : "Issuing CA, awaiting your root's signature"}</legend>
         <div className="flex flex-col gap-2">
           <Label htmlFor="private-ca-subject">Subject</Label>
           <Input id="private-ca-subject" className="font-mono text-xs" value={subject} onChange={(e) => setSubject(e.target.value)} placeholder="CN=Acme Internal TLS, O=Acme" />
@@ -557,8 +759,9 @@ function CreatePrivateCaForm({ orgId, onDone }: { orgId: string; onDone: () => v
         </div>
         <PermittedNamesFields id="private-ca-new" value={rules} onChange={setRules} />
         <p className="-mt-2 text-xs text-muted-foreground">
-          The Issuing CA carries them as name constraints, which relying parties enforce. You can change the names later, but not those constraints without a new Issuing CA, so
-          prefer broad zones.
+          {platformRoot
+            ? "The Issuing CA carries them as name constraints, which relying parties enforce. You can change the names later, but not those constraints without a new Issuing CA, so prefer broad zones."
+            : "The platform issues only for these. Relying parties enforce whatever name constraints your root puts in what it signs."}
         </p>
         <ValidityFields id="private-ca-new-validity" value={validity} onChange={setValidity} />
       </fieldset>

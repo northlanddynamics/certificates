@@ -55,7 +55,7 @@ Each resource's verbs, as of this writing. New ones may be added within version 
 | `dcv_rule` | `created`, `changed`, `deleted` |
 | `managed_certificate` | `created`, `proposed`, `approved`, `rejected`, `owner_added`, `owner_removed`, `subscriber_added`, `subscriber_removed`, `renewal_policy_changed`, `csr_uploaded`, `names_changed`, `archived` |
 | `certificate` | `revoked` |
-| `private_ca` | `created`, `issuing_ca_added`, `updated`, `crl_published` |
+| `private_ca` | `created`, `issuing_ca_added`, `csr_signed`, `updated`, `crl_published` |
 | `name_change` | `proposed`, `approved`, `rejected`, `withdrawn`, `discarded` |
 | `issuance` | `started`, `succeeded`, `failed` |
 | `api_key` | `created`, `revoked`, `used` |
@@ -73,9 +73,11 @@ Each resource's verbs, as of this writing. New ones may be added within version 
 
 ### Private CAs
 
-`private_ca.created` targets the Private CA (`private_ca`, its id). Its `detail` has the `name`, `kind` (`platform_root`), `keyAlgorithm`, its first Issuing CA's `subject`, its `notAfter`, and the `serial` and SHA-256 `fingerprint` of the `root` and the `issuingCa` certificates (and the Issuing CA's `id` in `issuingCa`), the Issuing CA's `permittedNames` (`{ "exact": [...], "zones": [...] }`), and its `validity` (`{ "maximumDays": ..., "defaultDays": ... }`). No key material is in it: the keys never leave the KMS.
+`private_ca.created` targets the Private CA (`private_ca`, its id). Its `detail` has the `name`, `kind` (`platform_root` or `organization_root`), `keyAlgorithm`, its first Issuing CA's `subject`, the Issuing CA's `permittedNames` (`{ "exact": [...], "zones": [...] }`) and its `validity` (`{ "maximumDays": ..., "defaultDays": ... }`), and the Issuing CA's `id` in `issuingCa`. With a platform-made root it also has the `notAfter`, and the `serial` and SHA-256 `fingerprint` of the `root` and the `issuingCa` certificates; under the Organization's own root there are no certificates yet, and the Issuing CA awaits its signature. No key material is in it: the keys never leave the KMS.
 
-`private_ca.issuing_ca_added` targets the Private CA too, when an Organization Administrator adds an Issuing CA under its root. Its `detail` has the Private CA's `name`, and in `issuingCa` the new Issuing CA's `id`, `subject`, `notAfter`, `permittedNames`, `validity`, and its certificate's `serial` and SHA-256 `fingerprint`.
+`private_ca.issuing_ca_added` targets the Private CA too, when an Organization Administrator adds an Issuing CA under its root. Its `detail` has the Private CA's `name`, and in `issuingCa` the new Issuing CA's `id`, `subject`, `notAfter`, `permittedNames`, `validity`, and its certificate's `serial` and SHA-256 `fingerprint`. Under the Organization's own root it has no certificate yet: `issuingCa` has its `id`, `subject`, `status` (`awaiting_signature`), `permittedNames` and `validity`.
+
+`private_ca.csr_signed` targets the Private CA too, when an Organization Administrator uploads the certificate the Organization's own root signed for one of its Issuing CAs and it is accepted, making the Issuing CA active. Its `detail` has the Private CA's `name`, and in `issuingCa` the Issuing CA's `id`, `subject`, `notAfter`, and its certificate's `serial` and SHA-256 `fingerprint`. With the first Issuing CA of the Private CA to be signed, which uploads the root and the chain above its Issuing CAs, it also has the `root` (`subject`, `serial`, `fingerprint`) and the `chain` (each certificate's, the one that signs the Issuing CAs first). A refused upload is not an event.
 
 `private_ca.updated` targets the Private CA too, when an Organization Administrator changes one of its Issuing CAs. Its `detail` has the Private CA's `name`, the Issuing CA in `issuingCa` (`{ "id": ..., "subject": ... }`), and for each thing changed, what it was and what it is: `permittedNames: { "from": ..., "to": ... }`, and in `validity`, each of `maximumDays` and `defaultDays` changed, as `{ "from": ..., "to": ... }`. Changing both in one request is one event. A change that leaves everything as it was is not an event.
 

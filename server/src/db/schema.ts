@@ -41,9 +41,14 @@ export const privateCa = pgTable(
     status: text("status").$type<PrivateCaStatus>().notNull(),
     /** The algorithm of its keys, the root's and its Issuing CAs'. */
     keyAlgorithm: text("key_algorithm").$type<KeyAlgorithm>().notNull(),
-    /** The platform-made root: its certificate (PEM) and the KMS's reference to its key. */
+    /**
+     * The root: its certificate (PEM), and for a platform-made one, the KMS's reference to its key. An Organization's own
+     * root is uploaded with its first signed Issuing CA, with `chainPem`, the certificates between its Issuing CAs and it
+     * (PEM, the one that signs them first; none when it signs them itself), which its Issuing CAs share.
+     */
     rootCertificatePem: text("root_certificate_pem"),
     rootKey: text("root_key"),
+    chainPem: text("chain_pem"),
     /**
      * The root's latest CRL, of its Issuing CAs (crl.ts): a full CRL signed by the root's key, kept as it was signed and served as it is, with its number
      * and when it is current from and until; none until it is first published. `crlFailingSince` is when its scheduled

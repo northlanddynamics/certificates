@@ -37,6 +37,8 @@ const SIGNING_ALGORITHMS: Record<KeyAlgorithm, Algorithm & { hash: string }> = {
 function kmsSigning(kms: Kms, { key, context, algorithm }: CaKey) {
   const hash = SIGNATURE_HASH[algorithm];
   const subtle = {
+    // What a CSR is made with asks for the public key this way; the stand-in for it is its DER SubjectPublicKeyInfo.
+    exportKey: async (_format: "spki", publicKey: { spki: ArrayBuffer }) => publicKey.spki,
     digest: (alg: AlgorithmIdentifier, data: ArrayBuffer) => webcrypto.subtle.digest(alg, data),
     async sign(_alg: unknown, _key: unknown, data: ArrayBuffer) {
       const digest = new Uint8Array(await webcrypto.subtle.digest(hash, data));
@@ -59,7 +61,10 @@ export interface Publication {
 
 const publicationExtensions = ({ crl, caIssuers }: Publication) => [new x509.CRLDistributionPointsExtension([crl]), new x509.AuthorityInfoAccessExtension({ caIssuers })];
 
+// By OID: looked up by class, an extension is not found when two copies of the library are loaded.
 const EXTENDED_KEY_USAGE = "2.5.29.37";
+const BASIC_CONSTRAINTS = "2.5.29.19";
+const KEY_USAGE = "2.5.29.15";
 const CRL_NUMBER = "2.5.29.20";
 const NAME_CONSTRAINTS = "2.5.29.30";
 /** RFC 5280's upper bound on a common name. */
@@ -196,6 +201,125 @@ export async function makeTlsServer(kms: Kms, by: Signer, input: { csr: string; 
     },
     crypto,
   );
+}
+
+/**
+ * A CSR for an Issuing CA of `key` and `subject`, signed with that key, for the Organization's own root to sign. It asks
+ * for a CA that signs end-entity certificates only (pathLen 0); what the root puts in what it signs is the root's to decide.
+ */
+export async function makeCaCsr(kms: Kms, key: CaKey, subject: x509.Name) {
+  const spki = new Uint8Array(await kms.publicKey(key.key, key.context)).buffer;
+  const publicKey = new x509.PublicKey(spki);
+  const { crypto, signingKey } = kmsSigning(kms, key);
+  return x509.Pkcs10CertificateRequestGenerator.create(
+    {
+      name: subject,
+      keys: { privateKey: signingKey, publicKey: { spki } as unknown as CryptoKey },
+      signingAlgorithm: SIGNING_ALGORITHMS[key.algorithm],
+      extensions: [...(await caExtensions(publicKey, 0))],
+    },
+    crypto,
+  );
+}
+
+/** The DER elements in `bytes`, one after another: each one's tag and content. */
+function derElements(bytes: Uint8Array) {
+  const elements: { tag: number; content: Uint8Array }[] = [];
+  for (let i = 0; i < bytes.length; ) {
+    const tag = bytes[i++]!;
+    let length = bytes[i++]!;
+    if (length & 0x80) {
+      const octets = length & 0x7f;
+      length = 0;
+      for (let k = 0; k < octets; k++) length = length * 256 + bytes[i++]!;
+    }
+    if (i + length > bytes.length) throw new Error("a DER element runs past its end");
+    elements.push({ tag, content: bytes.subarray(i, i + length) });
+    i += length;
+  }
+  return elements;
+}
+
+/** An iPAddress subtree's base (address, then mask) as CIDR, such as 10.0.0.0/8 or ::/0. */
+function ipRange(bytes: Uint8Array) {
+  const half = bytes.length / 2;
+  const address = bytes.subarray(0, half);
+  const prefix = [...bytes.subarray(half)].reduce((bits, byte) => bits + byte.toString(2).replace(/0/g, "").length, 0);
+  const text =
+    half === 4
+      ? [...address].join(".")
+      : (Array.from({ length: 8 }, (_, k) => ((address[2 * k]! << 8) | address[2 * k + 1]!).toString(16)).join(":").replace(/(^|:)0(:0)+(:|$)/, "::") || "::");
+  return `${text}/${prefix}`;
+}
+
+/** A GeneralName (RFC 5280, 4.2.1.6) in words, such as "dns:example.com" or "ip:10.0.0.0/8". */
+function generalNameOf({ tag, content }: { tag: number; content: Uint8Array }) {
+  const text = () => Buffer.from(content).toString("latin1");
+  switch (tag) {
+    case 0x81:
+      return `email:${text()}`;
+    case 0x82:
+      return `dns:${text()}`;
+    case 0x86:
+      return `uri:${text()}`;
+    case 0x87:
+      return `ip:${ipRange(content)}`;
+    case 0xa4:
+      return `dn:${new x509.Name(Buffer.from(content)).toString()}`;
+    default:
+      return `other:${Buffer.from(content).toString("hex")}`;
+  }
+}
+
+/**
+ * A CA certificate's name constraints (RFC 5280, 4.2.1.10): the subtrees it permits and those it excludes, each as
+ * `generalNameOf` gives it; none when it has none, or none that can be read.
+ */
+export function nameConstraintsOf(certificate: x509.X509Certificate): { permitted: string[]; excluded: string[] } | null {
+  const extension = certificate.extensions.find((e) => e.type === NAME_CONSTRAINTS);
+  if (!extension) return null;
+  try {
+    const [sequence] = derElements(new Uint8Array(extension.value));
+    const parts = derElements(sequence!.content);
+    const subtrees = (tag: number) => derElements(parts.find((p) => p.tag === tag)?.content ?? new Uint8Array()).map((subtree) => generalNameOf(derElements(subtree.content)[0]!));
+    return { permitted: subtrees(0xa0), excluded: subtrees(0xa1) };
+  } catch {
+    return null;
+  }
+}
+
+
+/** Whether the certificate is a CA's: basic constraints say so, and its key usage, if any, lets it sign certificates. */
+function isCaCertificate(certificate: x509.X509Certificate) {
+  const constraints = certificate.getExtension(BASIC_CONSTRAINTS) as x509.BasicConstraintsExtension | null;
+  const usage = certificate.getExtension(KEY_USAGE) as x509.KeyUsagesExtension | null;
+  return constraints?.ca === true && (!usage || (usage.usages & x509.KeyUsageFlags.keyCertSign) !== 0);
+}
+
+/** Whether `cert` names `issuer` as its issuer and is signed by its key. */
+const isSignedBy = (cert: x509.X509Certificate, issuer: x509.X509Certificate) => cert.issuer === issuer.subject && cert.verify({ publicKey: issuer.publicKey, signatureOnly: true }).catch(() => false);
+
+/**
+ * Why the certificate uploaded for the Issuing CA, whose key's public key is `publicKey` (DER) and whose subject is
+ * `subject`, may not make it a CA under `root` through `chain` (the one that signs it first) at `now`: it is not for
+ * that key or subject, not a CA certificate, not valid now, or does not verify up to the root, a self-signed CA. None
+ * when it may. Only signatures, CA flags and validity are checked along the path, not its path lengths or name constraints.
+ */
+export async function signedCertificateRefusal(certificate: x509.X509Certificate, { publicKey, subject, root, chain, now }: { publicKey: Uint8Array; subject: string; root: x509.X509Certificate; chain: x509.X509Certificate[]; now: Date }) {
+  if (!Buffer.from(certificate.publicKey.rawData).equals(Buffer.from(publicKey))) return "the certificate is not for the Issuing CA's key, the one its CSR is for";
+  if (!isCaCertificate(certificate)) return "the certificate is not a CA certificate: its basic constraints must make it a CA, and its key usage, if any, must let it sign certificates";
+  if (new x509.Name(certificate.subject).toString() !== subject) return `the certificate's subject is ${certificate.subject}, not the Issuing CA's ${subject}`;
+  if (certificate.notBefore > now) return "the certificate is not valid yet";
+  if (certificate.notAfter <= now) return "the certificate has ended";
+  const above = [...chain, root];
+  if (!above.every(isCaCertificate)) return "the root and chain must be CA certificates";
+  if (above.some((cert) => cert.notAfter <= now)) return "a certificate of the root and chain has ended";
+  if (!(await isSignedBy(root, root))) return "the root is not self-signed";
+  const path = [certificate, ...above];
+  for (let i = 0; i < path.length - 1; i++) {
+    if (!(await isSignedBy(path[i]!, path[i + 1]!))) return `the certificate does not verify against the root and chain: ${path[i]!.subject} is not signed by ${path[i + 1]!.subject}`;
+  }
+  return undefined;
 }
 
 /** A certificate on a CRL: its serial (hex), when it was revoked, and its RFC 5280 CRLReason code. */
