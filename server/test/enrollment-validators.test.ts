@@ -165,6 +165,7 @@ describe("configuring a profile's Enrollment Validator", () => {
       { kind: "test_allow", vouchesForNames: true, takesSecret: false },
       { kind: "test_names", vouchesForNames: false, takesSecret: false },
       { kind: "test_double", vouchesForNames: true, takesSecret: true },
+      { kind: "intune", vouchesForNames: true, takesSecret: true },
     ]);
   });
 });
