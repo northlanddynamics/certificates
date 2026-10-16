@@ -307,7 +307,7 @@ export function createApp(deps: AppDeps) {
   const validatorKinds = deps.enrollmentValidators ?? ENROLLMENT_VALIDATOR_KINDS;
   const enrollmentValidators = createEnrollmentValidatorRuns({ db, unitOfWork, secrets, privateCas, kinds: validatorKinds, clock });
   registerEnrollmentProfiles({ app, db, requireUser, authorize, unitOfWork, secrets, privateCas, kinds: validatorKinds, validators: enrollmentValidators, baseURL: deps.baseURL });
-  registerDeviceCertificates({ app, db, requireUser, authorize, clock });
+  registerDeviceCertificates({ app, db, requireUser, authorize, unitOfWork, privateCas, clock });
   registerScep({ app, db, unitOfWork, secrets, privateCas, kinds: validatorKinds, validators: enrollmentValidators });
   const issuers = createIssuers({ acme: deps.certificateAuthority, secrets, privateCas });
   const issuances = createIssuances({ db, unitOfWork, issuers, dcv });

@@ -136,11 +136,11 @@ const REVOCATION_REASON_LABELS: Record<RevocationReason, string> = {
   privilegeWithdrawn: "Privilege withdrawn",
   unspecified: "Unspecified",
 };
+/** The reasons a Certificate from the kind of issuer may be revoked for, as the server takes them, in words. */
+export const revocationReasonsOf = (kind: keyof typeof REVOCATION_REASONS_OF): [string, string][] =>
+  (Object.entries(REVOCATION_REASON_LABELS) as [RevocationReason, string][]).filter(([value]) => REVOCATION_REASONS_OF[kind].includes(value));
 /** The reasons a Certificate may be revoked for, as the server takes them from its kind of issuer: a Private CA's when it came from one. */
-export const revocationReasonsFor = (certificate: Pick<Certificate, "issuingCaId">): [string, string][] => {
-  const offered = REVOCATION_REASONS_OF[certificate.issuingCaId ? "private_ca" : "acme"];
-  return (Object.entries(REVOCATION_REASON_LABELS) as [RevocationReason, string][]).filter(([value]) => offered.includes(value));
-};
+export const revocationReasonsFor = (certificate: Pick<Certificate, "issuingCaId">): [string, string][] => revocationReasonsOf(certificate.issuingCaId ? "private_ca" : "acme");
 /** The reasons a platform-made Issuing CA may be revoked for, by the name the server takes, in words. */
 export const issuingCaRevocationReasons = (): [string, string][] => ISSUING_CA_REVOCATION_REASONS.map((value) => [value, REVOCATION_REASON_LABELS[value]]);
 export const revocationReasonLabel = (reason: string) => REVOCATION_REASON_LABELS[reason as RevocationReason] ?? reason;
@@ -750,6 +750,9 @@ export const api = {
     if (search.status) query.set("status", search.status);
     return call<Page<DeviceCertificate>>(`/api/organizations/${orgId}/enrollment-profiles/${profileId}/device-certificates?${query}`);
   },
+  /** Revokes a Device Certificate, which its Issuing CA's CRL lists at once. */
+  revokeDeviceCertificate: (orgId: string, profileId: string, id: string, reason: string) =>
+    call<DeviceCertificate>(`/api/organizations/${orgId}/enrollment-profiles/${profileId}/device-certificates/${id}/revocation`, { body: { reason } }),
   /** Where a Device Certificate downloads from, PEM. */
   deviceCertificateUrl: (orgId: string, profileId: string, id: string) => `/api/organizations/${orgId}/enrollment-profiles/${profileId}/device-certificates/${id}/certificate`,
   createEnrollmentProfile: (orgId: string, body: NewEnrollmentProfile) => call<EnrollmentProfile>(`/api/organizations/${orgId}/enrollment-profiles`, { body }),

@@ -1,16 +1,18 @@
-import { keepPreviousData, useQuery } from "@tanstack/react-query";
+import { keepPreviousData, useMutation, useQuery, useQueryClient } from "@tanstack/react-query";
 import { Link, useParams } from "@tanstack/react-router";
 import { createColumnHelper, rowExpandingFeature, rowPaginationFeature, tableFeatures, useTable, type PaginationState } from "@tanstack/react-table";
-import { ChevronLeftIcon, DownloadIcon, SearchIcon, XIcon } from "lucide-react";
+import { BanIcon, ChevronLeftIcon, DownloadIcon, SearchIcon, XIcon } from "lucide-react";
 import { useEffect, useState } from "react";
 import { DataTable } from "@/components/data-table/data-table";
 import { DataTablePagination } from "@/components/data-table/data-table-pagination";
 import { ExpandButton } from "@/components/data-table/expand-button";
 import { Badge } from "@/components/ui/badge";
 import { Button } from "@/components/ui/button";
+import { Dialog, DialogContent, DialogDescription, DialogFooter, DialogHeader, DialogTitle, DialogTrigger } from "@/components/ui/dialog";
+import { Field, FieldLabel } from "@/components/ui/field";
 import { InputGroup, InputGroupAddon, InputGroupInput } from "@/components/ui/input-group";
 import { Select, SelectContent, SelectItem, SelectTrigger, SelectValue } from "@/components/ui/select";
-import { DEVICE_CERTIFICATE_STATUSES, api, can, revocationReasonLabel, type DeviceCertificate, type DeviceCertificateStatus } from "@/lib/api";
+import { DEVICE_CERTIFICATE_STATUSES, api, can, revocationReasonLabel, revocationReasonsOf, type DeviceCertificate, type DeviceCertificateStatus, type Me } from "@/lib/api";
 
 const ROUTE = "/app/organizations/$orgId/enrollment-profiles/$id/device-certificates";
 
@@ -40,7 +42,7 @@ const noRows: DeviceCertificate[] = [];
 
 /**
  * The Device Certificates an Enrollment Profile issued, newest first, searched by subject, subject alternative name,
- * serial or device ID, and narrowed by status. Each opens to its details and can be downloaded.
+ * serial or device ID, and narrowed by status. Each opens to its details and can be downloaded, and revoked by those who may.
  */
 export function DeviceCertificatesPage() {
   const { orgId, id } = useParams({ from: ROUTE });
@@ -137,7 +139,7 @@ export function DeviceCertificatesPage() {
           <DataTable
             table={table}
             empty={certificates.isPending ? "Loading…" : narrowed ? "No Device Certificates match." : "No device has enrolled under this profile yet."}
-            details={(certificate) => <CertificateDetails orgId={orgId} certificate={certificate} />}
+            details={(certificate) => <CertificateDetails org={org!} certificate={certificate} />}
           />
           <DataTablePagination
             pageIndex={pagination.pageIndex}
@@ -153,7 +155,7 @@ export function DeviceCertificatesPage() {
   );
 }
 
-function CertificateDetails({ orgId, certificate }: { orgId: string; certificate: DeviceCertificate }) {
+function CertificateDetails({ org, certificate }: { org: Me["organizations"][number]; certificate: DeviceCertificate }) {
   const facts: [string, React.ReactNode][] = [
     ["Subject", certificate.subject],
     ["Subject alternative names", certificate.subjectAltNames.length === 0 ? "None" : certificate.subjectAltNames.map((n) => `${n.type.toUpperCase()}: ${n.value}`).join(", ")],
@@ -174,12 +176,83 @@ function CertificateDetails({ orgId, certificate }: { orgId: string; certificate
           </div>
         ))}
       </dl>
-      <Button variant="outline" size="sm" className="self-start" asChild>
-        <a href={api.deviceCertificateUrl(orgId, certificate.enrollmentProfileId, certificate.id)} download>
-          <DownloadIcon />
-          Download certificate
-        </a>
-      </Button>
+      <div className="flex flex-wrap gap-2">
+        <Button variant="outline" size="sm" asChild>
+          <a href={api.deviceCertificateUrl(org.id, certificate.enrollmentProfileId, certificate.id)} download>
+            <DownloadIcon />
+            Download certificate
+          </a>
+        </Button>
+        <RevokeDialog org={org} certificate={certificate} />
+      </div>
     </div>
+  );
+}
+
+/** Revokes a Device Certificate with an RFC 5280 reason, for those who may; it is on its Issuing CA's CRL once this succeeds. */
+function RevokeDialog({ org, certificate }: { org: Me["organizations"][number]; certificate: DeviceCertificate }) {
+  const queryClient = useQueryClient();
+  const [open, setOpen] = useState(false);
+  const [reason, setReason] = useState("");
+  const revoke = useMutation({
+    mutationFn: () => api.revokeDeviceCertificate(org.id, certificate.enrollmentProfileId, certificate.id, reason),
+    onSuccess: async () => {
+      setOpen(false);
+      await queryClient.invalidateQueries({ queryKey: ["device-certificates", org.id, certificate.enrollmentProfileId] });
+    },
+  });
+  const selectId = `revocation-reason-${certificate.id}`;
+
+  if (certificate.revocation || !can(org, "deviceCertificate", "revoke")) return null;
+  return (
+    <Dialog
+      open={open}
+      onOpenChange={(next) => {
+        setOpen(next);
+        if (next) {
+          setReason("");
+          revoke.reset();
+        }
+      }}
+    >
+      <DialogTrigger asChild>
+        <Button variant="outline" size="sm">
+          <BanIcon />
+          Revoke
+        </Button>
+      </DialogTrigger>
+      <DialogContent>
+        <DialogHeader>
+          <DialogTitle>Revoke this Device Certificate?</DialogTitle>
+          <DialogDescription>
+            {certificate.subject}, serial <span className="break-all font-mono">{certificate.serial}</span>. It is on its Issuing CA&apos;s CRL at once; a revocation cannot be undone.
+          </DialogDescription>
+        </DialogHeader>
+        <Field>
+          <FieldLabel htmlFor={selectId}>Reason</FieldLabel>
+          <Select value={reason} onValueChange={setReason}>
+            <SelectTrigger id={selectId} className="w-full">
+              <SelectValue placeholder="Choose a reason (RFC 5280)" />
+            </SelectTrigger>
+            <SelectContent>
+              {revocationReasonsOf("private_ca").map(([value, text]) => (
+                <SelectItem key={value} value={value}>
+                  {text}
+                </SelectItem>
+              ))}
+            </SelectContent>
+          </Select>
+        </Field>
+        {revoke.error && <p className="text-sm text-destructive">{revoke.error.message}</p>}
+        <DialogFooter>
+          <Button type="button" variant="outline" onClick={() => setOpen(false)}>
+            Cancel
+          </Button>
+          <Button variant="destructive" disabled={!reason || revoke.isPending} onClick={() => revoke.mutate()}>
+            Revoke
+          </Button>
+        </DialogFooter>
+      </DialogContent>
+    </Dialog>
   );
 }

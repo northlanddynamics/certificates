@@ -65,8 +65,9 @@ const statements = {
   // `update` and `disable` configure them.
   enrollmentProfile: ["read", "create", "update", "disable"],
   // Device Certificates: what Enrollment Profiles issued to devices, kept apart from the Managed Certificates. Only
-  // Organization Administrators hold any of this; `read` lists and searches a profile's and downloads one.
-  deviceCertificate: ["read"],
+  // Organization Administrators hold any of this; `read` lists and searches a profile's and downloads one, `revoke`
+  // puts one on its Issuing CA's CRL.
+  deviceCertificate: ["read", "revoke"],
 } as const;
 
 export type Permissions = { [R in keyof typeof statements]?: (typeof statements)[R][number][] };
