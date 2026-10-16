@@ -15,7 +15,7 @@ An Organization Administrator creates an **Enrollment Profile**. It is a protoco
 The first Enrollment Validator kind is **Intune**:
 - The Organization Administrator configures an Entra app's credentials, held as a Secret.
 - For each SCEP request, the platform asks Intune to validate the CSR and its challenge, and reports success or failure back to Intune.
-- Intune's notices of device retirement or wipe revoke the device's Certificate.
+- When Intune retires, wipes or unenrolls a device, it queues a revocation request, and the platform's hourly poll of that queue revokes the device's Certificate.
 
 Each **Device Certificate** is a stored Certificate belonging to its Enrollment Profile, not to a Managed Certificate. It can be searched and revoked, appears on its Issuing CA's CRL until it expires, and is pruned after a retention period the Organization sets. Every issuance, refusal and Revocation is an Audit Event.
 
@@ -73,35 +73,38 @@ The out-of-scope list in `.scratch/certificate-platform/spec.md` loses "SCEP and
 - `vouchesForNames: boolean`
 - `validate(request)` → allow, or refuse with a reason. The request includes the CSR (DER), the challenge password and the transaction ID.
 - `issued(request, certificate)` and `failed(request, reason)`: notifications, at least once, retried in the background and never blocking the device's response.
-- an optional revocation feed: a way for the validator kind to tell the platform which Device Certificates to revoke and why.
+- an optional revocation feed: a way for the validator kind to tell the platform which Device Certificates to revoke (by serial and issuer) and why, and to be told each outcome, since Intune expects a result for every request.
 - `test()`: a connection check.
 
 Its credentials are Secrets, put into the validator only when it runs, never shown or logged.
 
-**Intune Enrollment Validator.** Follows Microsoft's SCEP third-party CA integration (the `Intune-Resource-Access` repo and "Use APIs to add third-party CAs for SCEP to Intune"):
-- `validate` sends the CSR and Intune's encrypted challenge to Intune's validation API. Intune checks the challenge's signature and expiry, that the profile still targets the device, and that the CSR matches what it expects.
-- `issued` and `failed` call Intune's success and failure notifications, with the certificate's thumbprint, serial, expiry and issuer.
+**Intune Enrollment Validator.** Follows Microsoft's SCEP third-party CA integration (the `Intune-Resource-Access` repo and "Use APIs to add third-party CAs for SCEP to Intune"). The exact contract, with example payloads, is in `docs/research/intune-scep-api.md`:
+- It discovers Intune's `ScepRequestValidationFEService` and `PkiConnectorFEService` URLs from Microsoft Graph and authenticates with the client credentials flow. The Entra app needs the Intune `scep_challenge_provider` and Graph `Application.Read.All` application permissions.
+- `validate` sends the base64 CSR, with Intune's challenge inside it as the `challengePassword`, and the transaction ID to Intune's `validateRequest`. Intune checks the challenge's signature and expiry, that the profile still targets the device, and that the CSR matches what it expects. Any answer but `Success` is a refusal, with Intune's code as the reason.
+- `issued` and `failed` call Intune's success and failure notifications, with the certificate's thumbprint, serial, expiry and issuer, or an HRESULT and description.
 - The Intune Enrollment Validator vouches for names.
-- Configuration is the Entra tenant ID, app ID and app secret (a Secret).
-- The first ticket confirms the exact API contract (endpoints, auth scopes, payloads), and how Intune asks a third-party CA to revoke (its revocation request API, polled per tenant), against the Microsoft repo before building. If revocation turns out to need a different mechanism, the revocation feed adapts, but the seam stays the same.
+- Intune's API never returns a device ID. The Intune device ID is taken from the CSR's `IntuneDeviceId://` URI SAN when the administrator's SCEP profile includes one.
+- Configuration is the Entra tenant ID, app ID and app secret (a Secret). The platform sends a fixed provider name and version as `callerInfo`.
+- `test` gets both tokens and discovers both services. It never calls validation or revocation, which would show in Intune's reports or start the revocation cool-down.
+- The revocation feed polls `downloadRevocationRequests` (up to 500 at a time, at most hourly because of Intune's cool-down) once per Entra credential. It matches each request by serial and issuer among the Organization's Device Certificates, and uploads a result for each with `uploadRevocationResults` once the Revocation has committed (`CertificateNotFoundError` for an unknown serial).
 - Intune-triggered Revocations use `cessationOfOperation` and record the Enrollment Validator as their actor.
 
 **Name rules.** When the profile's validator does not vouch for names, the profile must carry subject/SAN rules: required subject attributes, allowed SAN types, and patterns per type. Requests that break them are refused. When the validator vouches, the rules are empty and nothing is checked beyond the profile's policy. No validator that doesn't vouch for names is built in this spec, but the profile's rules and their enforcement are built and tested, so that the next kind is only an integration.
 
 **SCEP server** (RFC 8894). Public, unauthenticated routes at an opaque per-profile id. It supports:
-- `GetCACaps`, advertising POSTPKIOperation, SHA-256, SHA-512, AES, and SCEPStandard;
+- `GetCACaps`, advertising POSTPKIOperation, SHA-256, SHA-512, AES, and SCEPStandard, plus Renewal for validators that allow it;
 - `GetCACert`, returning a degenerate PKCS#7 with the RA certificate and the CA chain;
 - `PKIOperation` (GET and POST) with `PKCSReq`;
 - `RenewalReq` only for validators that allow it (Intune does not use it);
 - `GetCertInitial`, answered with the stored result, for clients that poll.
 
 Behaviour:
-- **Envelopes:** both PKCS#1 v1.5 and RSA-OAEP key transport, and AES or 3DES content encryption.
+- **Envelopes:** both PKCS#1 v1.5 and RSA-OAEP key transport (Windows uses OAEP; micromdm's client and Apple use PKCS#1 v1.5), and AES, 3DES or single DES content encryption. Single DES is accepted, never advertised, because micromdm's `scepclient` sends it regardless of `GetCACaps`. Requests signed with SHA-1 are accepted (Windows and micromdm sign with it). CertRep uses the key transport the request used.
 - **Responses:** CertRep is always SUCCESS or FAILURE with `failInfo` (badRequest, badMessageCheck, badTime, badCertId), never PENDING.
 - **Rate limiting:** per profile and per source address.
 - **Over TLS:** Android requires HTTPS for SCEP.
 
-The PKCS#7/CMS work uses an existing library (`pkijs` with `@peculiar/x509`) rather than hand-rolled ASN.1.
+The SCEP and PKCS#7/CMS work uses [ts-scep](https://github.com/northlanddynamics/ts-scep) rather than hand-rolled ASN.1. Its `ScepServer` runs as the profile's RA, so it needs only the RA key, and our handler signs through the Private CA module. It decrypts PKCS#1 v1.5 on Bun, whose `node:crypto` refuses it, with raw RSA and implicit rejection (no padding oracle). It handles the OAEP, single DES and macOS GET-encoding quirks above, and mounts on Hono through its `fetchHandler`.
 
 **Issuance flow per request.**
 1. Decrypt the envelope with the RA key and verify its signer.
@@ -116,7 +119,7 @@ A refusal writes an `enrollment.refused` Audit Event with the reason and no Cert
 
 **Schema.**
 - `enrollment_profile`: Organization, name, opaque public id, Private CA, validity, key usage, EKU list, allowed key types, validator kind and config, the validator's Secret reference, name rules, enabled, retention days, and RA certificate and wrapped key.
-- `device_certificate`: profile, serial, fingerprint, subject, SANs, not before and not after, PEM, the validator's device ID (such as Intune's device ID), transaction ID, revocation (reason and time), and created.
+- `device_certificate`: profile, serial, fingerprint, subject, SANs, not before and not after, PEM, the validator's device ID (such as Intune's device ID, from the CSR's `IntuneDeviceId://` SAN), transaction ID, revocation (reason and time), and created.
 - Device Certificates feed the same Issuing CA CRL as Managed Certificates' Certificates.
 - A pruning job deletes Device Certificates whose `notAfter` is older than the profile's retention period. Their Audit Events stay.
 
@@ -142,7 +145,7 @@ Device Certificates do not appear in the Managed Certificate inventory.
 
 - **What a good test does.** It acts as a device, Intune and a relying party would, through the public SCEP and CRL routes and the platform's API. It checks the SCEP responses, the certificates, the CRL, Intune's recorded calls and Audit Events, never internal tables.
 - **The seam.** The existing Seam A harness, with the local KMS. The outside world is replaced by:
-  - **An Intune double** (`intune-double.ts`, prior art `oidc-idp-double.ts` and `saml-idp-double.ts`). It records validation requests and success/failure notifications, can be told to refuse, to fail transiently or to be unreachable, and can queue a revocation for a device.
+  - **An Intune double** (`intune-double.ts`, prior art `oidc-idp-double.ts` and `saml-idp-double.ts`). It records validation requests and success/failure notifications, can be told to refuse, to fail transiently or to be unreachable, can queue revocation requests for serials, and records the revocation results uploaded to it.
   - **A SCEP device helper.** It builds real `GetCACaps`, `GetCACert`, and `PKCSReq` messages with enveloped and signed data, with both PKCS#1 v1.5 and OAEP key transport, and parses CertRep.
 - **Interoperability.** One test runs a real third-party SCEP client, `micromdm/scep`'s client, in a container next to Pebble and BIND in `docker-compose.yml`, against the app, and checks it gets a certificate.
 - **Scenarios:**
@@ -183,5 +186,6 @@ Device Certificates do not appear in the Managed Certificate inventory.
 - Fleet volume means many Audit Events and Device Certificate rows. This is accepted (TLM parity, and SIEM forwarding is where it belongs). The Device Certificate list must paginate on the server, and pruning keeps the table bounded.
 - Sources for the Intune and KMS facts this spec relies on:
   - [Use APIs to add third-party CAs for SCEP to Intune](https://learn.microsoft.com/en-us/mem/intune/protect/scep-libraries-apis)
+  - `docs/research/intune-scep-api.md`: the Intune API contract, revocation polling and SCEP client padding, from Microsoft's `Intune-Resource-Access` source
   - [Kandji SCEP Profile](https://support.kandji.io/scep): static challenge only
   - [AWS KMS key spec reference](https://docs.aws.amazon.com/kms/latest/developerguide/symm-asymm-choose-key-spec.html): RSA decryption is OAEP-only
