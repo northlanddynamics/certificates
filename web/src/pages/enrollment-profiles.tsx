@@ -1,5 +1,5 @@
 import { useQuery } from "@tanstack/react-query";
-import { useParams } from "@tanstack/react-router";
+import { Link, useParams } from "@tanstack/react-router";
 import { createColumnHelper, tableFeatures, useTable } from "@tanstack/react-table";
 import { MoreHorizontalIcon, PlusIcon } from "lucide-react";
 import { useState, type FormEvent } from "react";
@@ -49,7 +49,10 @@ const KEY_TYPE_LABEL: Record<DeviceKeyType, string> = { "rsa-2048": "RSA 2048", 
 const features = tableFeatures({});
 const columnHelper = createColumnHelper<typeof features, EnrollmentProfile>();
 const columns = columnHelper.columns([
-  columnHelper.accessor("name", { header: "Name" }),
+  columnHelper.accessor("name", {
+    header: "Name",
+    cell: ({ row }) => <DeviceCertificatesLink profile={row.original} />,
+  }),
   columnHelper.accessor("scepUrl", {
     header: "SCEP URL",
     cell: ({ cell }) => <span className="break-all font-mono text-xs">{cell.getValue()}</span>,
@@ -102,7 +105,17 @@ export function EnrollmentProfilesPage() {
   );
 }
 
-/** A profile's menu: copy its SCEP URL, and download the certificates devices must trust. */
+/** A profile's name, as the way to its Device Certificates. */
+function DeviceCertificatesLink({ profile }: { profile: EnrollmentProfile }) {
+  const { orgId } = useParams({ from: ROUTE });
+  return (
+    <Link to="/organizations/$orgId/enrollment-profiles/$id/device-certificates" params={{ orgId, id: profile.id }} className="font-medium underline-offset-4 hover:underline">
+      {profile.name}
+    </Link>
+  );
+}
+
+/** A profile's menu: its Device Certificates, copy its SCEP URL, and download the certificates devices must trust. */
 function ProfileActions({ profile }: { profile: EnrollmentProfile }) {
   const { orgId } = useParams({ from: ROUTE });
   return (
@@ -114,6 +127,11 @@ function ProfileActions({ profile }: { profile: EnrollmentProfile }) {
           </Button>
         </DropdownMenuTrigger>
         <DropdownMenuContent align="end" className="w-56">
+          <DropdownMenuItem asChild>
+            <Link to="/organizations/$orgId/enrollment-profiles/$id/device-certificates" params={{ orgId, id: profile.id }}>
+              Device Certificates
+            </Link>
+          </DropdownMenuItem>
           <DropdownMenuItem onSelect={() => void navigator.clipboard.writeText(profile.scepUrl)}>Copy SCEP URL</DropdownMenuItem>
           <DropdownMenuItem asChild>
             <a href={api.enrollmentProfileCaCertificateUrl(orgId, profile.id, "root")} download>

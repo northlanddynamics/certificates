@@ -14,7 +14,7 @@ import { subjectAltNamesOf } from "./ca-certificates";
 import type { Db } from "./db/client";
 import { deviceCertificate, enrollmentProfile } from "./db/schema";
 import { DEVICE_EXTENDED_KEY_USAGES, DEVICE_KEY_TYPES, type DeviceKeyType } from "./enrollment-profile-kinds";
-import { describeValidatorError, type EnrollmentValidator } from "./enrollment-validator";
+import { describeValidatorError, type EnrollmentValidator, type EnrollmentValidators } from "./enrollment-validator";
 import type { EnrollmentValidatorRuns } from "./enrollment-validators";
 import { IssuanceFailure } from "./issuance-failure";
 import { findIssuingCa, type PrivateCas } from "./private-ca";
@@ -34,8 +34,8 @@ function keyTypeOf(request: ScepEnrollmentRequest): DeviceKeyType | undefined {
   return key.asymmetricKeyType === "rsa" && (DEVICE_KEY_TYPES as readonly string[]).includes(type) ? (type as DeviceKeyType) : undefined;
 }
 
-export function registerScep(ctx: { app: OpenAPIHono; db: Db; unitOfWork: UnitOfWork; secrets: Secrets; privateCas: PrivateCas; validators: EnrollmentValidatorRuns }) {
-  const { app, db, unitOfWork, secrets, privateCas, validators } = ctx;
+export function registerScep(ctx: { app: OpenAPIHono; db: Db; unitOfWork: UnitOfWork; secrets: Secrets; privateCas: PrivateCas; kinds: EnrollmentValidators; validators: EnrollmentValidatorRuns }) {
+  const { app, db, unitOfWork, secrets, privateCas, kinds, validators } = ctx;
 
   /**
    * Answers a PKCSReq under the profile: its Device Certificate, or FAILURE with an `enrollment.refused` Audit Event. A
@@ -110,6 +110,7 @@ export function registerScep(ctx: { app: OpenAPIHono; db: Db; unitOfWork: UnitOf
     const { certificate } = issued;
     const serial = certificate.serialNumber.toUpperCase();
     const subjectAltNames = subjectAltNamesOf(certificate);
+    const deviceId = (Object.hasOwn(kinds, profile.validatorKind) ? kinds[profile.validatorKind]!.deviceIdOf?.(subjectAltNames) : undefined) ?? null;
     try {
       await unitOfWork.run(null, async (tx, change) => {
         const [row] = await tx
@@ -125,7 +126,9 @@ export function registerScep(ctx: { app: OpenAPIHono; db: Db; unitOfWork: UnitOf
             notBefore: certificate.notBefore,
             notAfter: certificate.notAfter,
             certificatePem: certificate.toString("pem"),
+            deviceId,
             transactionId: request.transactionId,
+            createdAt: change.occurredAt,
           })
           .returning({ id: deviceCertificate.id });
         await change.audit({
@@ -137,6 +140,7 @@ export function registerScep(ctx: { app: OpenAPIHono; db: Db; unitOfWork: UnitOf
             serial,
             subject: certificate.subject,
             subjectAltNames,
+            deviceId,
             notAfter: certificate.notAfter.toISOString(),
             transactionId: request.transactionId,
           },

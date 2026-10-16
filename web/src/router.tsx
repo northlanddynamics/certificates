@@ -6,6 +6,7 @@ import { AcceptInvitationPage } from "./pages/accept-invitation";
 import { AccountSecurityPage } from "./pages/account-security";
 import { AcmeAccountsPage } from "./pages/acme-accounts";
 import { PrivateCasPage } from "./pages/private-cas";
+import { DeviceCertificatesPage } from "./pages/device-certificates";
 import { EnrollmentProfilesPage } from "./pages/enrollment-profiles";
 import { AgentsPage } from "./pages/agents";
 import { ApiKeysPage } from "./pages/api-keys";
@@ -141,6 +142,12 @@ const enrollmentProfilesRoute = createRoute({
   component: EnrollmentProfilesPage,
 });
 
+const deviceCertificatesRoute = createRoute({
+  getParentRoute: () => appRoute,
+  path: "/organizations/$orgId/enrollment-profiles/$id/device-certificates",
+  component: DeviceCertificatesPage,
+});
+
 const dnsProvidersRoute = createRoute({
   getParentRoute: () => appRoute,
   path: "/organizations/$orgId/dns-providers",
@@ -208,7 +215,7 @@ const routeTree = rootRoute.addChildren([
       certificateNotificationsRoute,
       certificateUnknownTabRoute,
     ]),
-    membersRoute, teamsRoute, apiKeysRoute, agentsRoute, deploymentsRoute, deploymentScriptsRoute, acmeAccountsRoute, privateCasRoute, enrollmentProfilesRoute, dnsProvidersRoute, notificationChannelsRoute, auditLogRoute, auditForwardingRoute, loginPolicyRoute,
+    membersRoute, teamsRoute, apiKeysRoute, agentsRoute, deploymentsRoute, deploymentScriptsRoute, acmeAccountsRoute, privateCasRoute, enrollmentProfilesRoute, deviceCertificatesRoute, dnsProvidersRoute, notificationChannelsRoute, auditLogRoute, auditForwardingRoute, loginPolicyRoute,
     ssoConnectionsRoute, csrToolsRoute,
     accountSecurityRoute,
     platformOrganizationsRoute,

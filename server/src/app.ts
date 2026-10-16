@@ -21,6 +21,7 @@ import { registerAuditRoutes } from "./audit-routes";
 import { createAuditTransport, type AuditTransport } from "./audit-transport";
 import { createCrls, registerPkiRoutes } from "./crl";
 import { createDb } from "./db/client";
+import { registerDeviceCertificates } from "./device-certificates";
 import { registerEnrollmentProfiles } from "./enrollment-profiles";
 import type { EnrollmentValidators } from "./enrollment-validator";
 import { ENROLLMENT_VALIDATOR_KINDS } from "./enrollment-validator-kinds";
@@ -306,7 +307,8 @@ export function createApp(deps: AppDeps) {
   const validatorKinds = deps.enrollmentValidators ?? ENROLLMENT_VALIDATOR_KINDS;
   const enrollmentValidators = createEnrollmentValidatorRuns({ db, unitOfWork, secrets, privateCas, kinds: validatorKinds, clock });
   registerEnrollmentProfiles({ app, db, requireUser, authorize, unitOfWork, secrets, privateCas, kinds: validatorKinds, validators: enrollmentValidators, baseURL: deps.baseURL });
-  registerScep({ app, db, unitOfWork, secrets, privateCas, validators: enrollmentValidators });
+  registerDeviceCertificates({ app, db, requireUser, authorize, clock });
+  registerScep({ app, db, unitOfWork, secrets, privateCas, kinds: validatorKinds, validators: enrollmentValidators });
   const issuers = createIssuers({ acme: deps.certificateAuthority, secrets, privateCas });
   const issuances = createIssuances({ db, unitOfWork, issuers, dcv });
   const notifications = createNotifications({
