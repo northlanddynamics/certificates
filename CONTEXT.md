@@ -73,7 +73,7 @@ Soft deletion of a Managed Certificate by an Organization Administrator, not eve
 _Avoid_: delete, remove, decommission
 
 **Revocation**:
-Telling the Certificate Authority to distrust one Certificate, with an RFC 5280 reason, which an Owner of its Managed Certificate or an Organization Administrator may do, even once it is archived. The platform records it only once the CA has revoked the Certificate, and nothing else revokes: not Archive, not a name change, not removing a user. It issues no replacement. A Private CA revokes by putting the Certificate on its Issuing CA's CRL in the same change, and offers two reasons an ACME CA does not take: `affiliationChanged` and `privilegeWithdrawn`.
+Telling the Certificate Authority to distrust one Certificate, with an RFC 5280 reason, which an Owner of its Managed Certificate or an Organization Administrator may do, even once it is archived; a Device Certificate is also revoked when its Enrollment Validator's revocation feed asks. The platform records it only once the CA has revoked the Certificate, and nothing else revokes: not Archive, not a name change, not removing a user. It issues no replacement. A Private CA revokes by putting the Certificate on its Issuing CA's CRL in the same change, and offers two reasons an ACME CA does not take: `affiliationChanged` and `privilegeWithdrawn`.
 _Avoid_: cancel, kill, invalidate
 
 **Renewal**:
@@ -191,8 +191,16 @@ _Avoid_: audit entry, audit record, log line
 ### Device enrollment
 
 **Enrollment Profile**:
-A protocol-neutral template under which devices obtain client Certificates in bulk from a Private CA's Issuing CA, without per-certificate Approval or Owners. It fixes the Issuing CA, the validity, key usage, EKU and allowed key types of what it issues, and the integration that decides each request; anything a device asks for beyond it is ignored. Devices enroll at its SCEP URL, under an opaque id.
+A protocol-neutral template under which devices obtain client Certificates in bulk from a Private CA's Issuing CA, without per-certificate Approval or Owners. It fixes the Issuing CA, the validity, key usage, EKU and allowed key types of what it issues, and the Enrollment Validator that decides each request; anything a device asks for beyond it is ignored. Devices enroll at its SCEP URL, under an opaque id.
 _Avoid_: SCEP profile, template
+
+**Enrollment Validator**:
+The pluggable integration an Enrollment Profile names, which decides whether an enrollment request may be issued, is told the outcome, and may feed Revocations. It declares whether it vouches for the names in a request; a profile whose validator does not carries name rules that the platform enforces instead. Its credentials are Secrets. Intune is the first kind.
+_Avoid_: MDM integration (network gear is not an MDM), challenge provider
+
+**Name Rules**:
+What an Enrollment Profile whose Enrollment Validator does not vouch for names lets a device put in its subject and subject alternative names: required subject attributes, allowed SAN types, and wildcard patterns. Anything they do not name is refused. Not to be confused with an Issuing CA's Permitted Name Rules, which still apply on top.
+_Avoid_: subject policy, SAN rules
 
 **Device Certificate**:
 A Certificate issued under an Enrollment Profile. It belongs to the profile, not to a Managed Certificate, has no Owners, never appears among Managed Certificates, and is renewed by the device enrolling again.

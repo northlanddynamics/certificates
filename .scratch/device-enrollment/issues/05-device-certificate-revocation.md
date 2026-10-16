@@ -11,3 +11,7 @@
 - [ ] Check against a real tenant whether the revocation API needs an Entra permission beyond `scep_challenge_provider` and `Application.Read.All`, and confirm how the service accepts `errorCode` (open questions in the research note).
 - [ ] `device_certificate.revoked` Audit Events for both.
 - [ ] Tests fetch the CRL and find the serial, after an administrator Revocation and after the Intune double queues one.
+
+## Comments
+
+Ticket 03 built the feed half: Device Certificate revocation columns, revoked Device Certificates on the Issuing CA CRL, the feed pass (`server/src/enrollment-validators.ts`) with `device_certificate.revoked` (validator as actor), and its CRL tests against the test kind. This ticket still adds the administrator route and the Intune feed. Note that 03 matches feed requests among the Device Certificates of the profiles sharing the feed, not the whole Organization's; revisit if that is wrong for Intune.

@@ -13,7 +13,7 @@ import { and, eq, exists, gt, isNotNull, isNull, or, sql } from "drizzle-orm";
 import { makeCrl, type CrlEntry, type Publication, type Signer } from "./ca-certificates";
 import { CertificateAuthorityError } from "./certificate-authority";
 import type { Db, Tx } from "./db/client";
-import { certificate, certificateRevocation, issuingCa, privateCa } from "./db/schema";
+import { certificate, certificateRevocation, deviceCertificate, issuingCa, privateCa } from "./db/schema";
 import type { Kms } from "./kms";
 import type { CrlSigner } from "./private-ca-kinds";
 import { REVOCATION_REASONS } from "./revocation-reasons";
@@ -120,7 +120,15 @@ export function createCrls({ db, unitOfWork, kms, clock }: { db: Db; unitOfWork:
           .innerJoin(certificate, eq(certificate.id, certificateRevocation.certificateId))
           .where(and(eq(certificate.organizationId, organizationId), eq(certificate.issuingCaId, issuing.id), gt(certificate.notAfter, at)))
           .orderBy(certificateRevocation.revokedAt, certificate.serial);
-        return rows.map((r) => ({ serial: r.serial, revokedAt: r.revokedAt, reason: REVOCATION_REASONS[r.reason] }));
+        // And the Device Certificates it signed (scep.ts), which are revoked on their own rows.
+        const devices = await tx
+          .select({ serial: deviceCertificate.serial, revokedAt: deviceCertificate.revokedAt, reason: deviceCertificate.revocationReason })
+          .from(deviceCertificate)
+          .where(and(eq(deviceCertificate.organizationId, organizationId), eq(deviceCertificate.issuingCaId, issuing.id), isNotNull(deviceCertificate.revokedAt), gt(deviceCertificate.notAfter, at)))
+          .orderBy(deviceCertificate.revokedAt, deviceCertificate.serial);
+        return [...rows, ...devices.map((d) => ({ serial: d.serial, revokedAt: d.revokedAt!, reason: d.reason! }))]
+          .sort((a, b) => a.revokedAt.getTime() - b.revokedAt.getTime() || a.serial.localeCompare(b.serial))
+          .map((r) => ({ serial: r.serial, revokedAt: r.revokedAt, reason: REVOCATION_REASONS[r.reason] }));
       },
       store: (values: Partial<typeof issuingCa.$inferInsert>) => tx.update(issuingCa).set(values).where(eq(issuingCa.id, issuing.id)),
     };
@@ -178,10 +186,14 @@ export function createCrls({ db, unitOfWork, kms, clock }: { db: Db; unitOfWork:
         .select({ one: sql`1` })
         .from(certificate)
         .where(and(eq(certificate.issuingCaId, issuingCa.id), gt(certificate.notAfter, now)));
+      const unexpiredDevice = db
+        .select({ one: sql`1` })
+        .from(deviceCertificate)
+        .where(and(eq(deviceCertificate.issuingCaId, issuingCa.id), gt(deviceCertificate.notAfter, now)));
       const issuings = await db
         .select({ id: issuingCa.id, organizationId: issuingCa.organizationId, nextUpdate: issuingCa.crlNextUpdate })
         .from(issuingCa)
-        .where(and(isNotNull(issuingCa.certificatePem), or(eq(issuingCa.status, "active"), exists(unexpired))));
+        .where(and(isNotNull(issuingCa.certificatePem), or(eq(issuingCa.status, "active"), exists(unexpired), exists(unexpiredDevice))));
       const due = [...roots.map((r) => ({ ...r, signer: "root" as const })), ...issuings.map((r) => ({ ...r, signer: "issuing" as const }))].filter((r) => isDue(r.nextUpdate, now));
 
       let reissued = 0;

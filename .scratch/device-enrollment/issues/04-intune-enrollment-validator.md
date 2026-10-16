@@ -13,3 +13,7 @@
 - [ ] The Intune kind vouches for names; Intune's device ID, read from the CSR's `IntuneDeviceId://` URI SAN when present (Intune's API never returns it), is stored on the Device Certificate.
 - [ ] An Intune double records validation requests and notifications and can refuse, fail or be unreachable; the seam's contract test runs against it.
 - [ ] The Enrollment Profiles page is shown in production once this kind is registered, with the Intune setup and test.
+
+## Comments
+
+Ticket 03 built the generic connection test route (`POST .../enrollment-profiles/{id}/validator/test`, `enrollment_validator.tested`) and the contract test (`server/test/enrollment-validator-contract.ts`); this ticket adds the Intune kind behind them, its double, and the setup UI.

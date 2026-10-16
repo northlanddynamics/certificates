@@ -281,6 +281,13 @@
       "when": 1792150551095,
       "tag": "0039_enrollment_profiles",
       "breakpoints": true
+    },
+    {
+      "idx": 40,
+      "version": "7",
+      "when": 1792154759403,
+      "tag": "0040_enrollment_validators",
+      "breakpoints": true
     }
   ]
 }

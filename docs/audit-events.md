@@ -57,7 +57,9 @@ Each resource's verbs, as of this writing. New ones may be added within version 
 | `certificate` | `revoked` |
 | `private_ca` | `created`, `issuing_ca_added`, `csr_signed`, `updated`, `retired`, `revoked`, `crl_published` |
 | `enrollment_profile` | `created` |
-| `device_certificate` | `issued` |
+| `enrollment_validator` | `tested` |
+| `enrollment` | `refused` |
+| `device_certificate` | `issued`, `revoked` |
 | `name_change` | `proposed`, `approved`, `rejected`, `withdrawn`, `discarded` |
 | `issuance` | `started`, `succeeded`, `failed` |
 | `api_key` | `created`, `revoked`, `used` |
@@ -95,6 +97,12 @@ A Managed Certificate issued from a Private CA is audited with the same actions 
 
 ### Device enrollment
 
-`enrollment_profile.created` targets the Enrollment Profile (`enrollment_profile`, its id) an Organization Administrator created. Its `detail` has the `name`, the `issuingCa` it issues from (`id`, `subject`), `validityDays`, `keyUsage` and `extendedKeyUsage` (by name, such as `digitalSignature` and `clientAuth`), `allowedKeyTypes` (such as `rsa-2048`), the `validator` (`{ "kind": ... }`), and the `serial` and `notAfter` of its `raCertificate`. The RA's key is never in it.
+`enrollment_profile.created` targets the Enrollment Profile (`enrollment_profile`, its id) an Organization Administrator created. Its `detail` has the `name`, the `issuingCa` it issues from (`id`, `subject`), `validityDays`, `keyUsage` and `extendedKeyUsage` (by name, such as `digitalSignature` and `clientAuth`), `allowedKeyTypes` (such as `rsa-2048`), the `validator` (`{ "kind": ..., "settings": { ... } }`, its kind's non-secret settings), its `nameRules` (null when its validator vouches for names), and the `serial` and `notAfter` of its `raCertificate`. Neither the RA's key nor the validator's secret is ever in it.
 
-`device_certificate.issued` targets the Device Certificate (`device_certificate`, its id) a device enrolled for under an Enrollment Profile, with no actor (both null): a device is not a user. Its `detail` has the `enrollmentProfile` (`id`, `name`), the certificate's `serial` (upper-case hex), `subject` and `subjectAltNames` (each `{ "type": ..., "value": ... }`, the type being `dns`, `email`, `ip`, `url`, `upn` or `guid`), its `notAfter`, and the SCEP `transactionId` of the request. A refused request is not an event.
+`device_certificate.issued` targets the Device Certificate (`device_certificate`, its id) a device enrolled for under an Enrollment Profile, with no actor (both null): a device is not a user. Its `detail` has the `enrollmentProfile` (`id`, `name`), the certificate's `serial` (upper-case hex), `subject` and `subjectAltNames` (each `{ "type": ..., "value": ... }`, the type being `dns`, `email`, `ip`, `url`, `upn` or `guid`), its `notAfter`, and the SCEP `transactionId` of the request.
+
+`enrollment.refused` targets the Enrollment Profile (`enrollment_profile`, its id) under which a device's request was refused, with no actor. Its `detail` has the `enrollmentProfile` (`id`, `name`), the `reason` the device was given (such as a key the profile does not allow, a name its name rules do not, or the Enrollment Validator's own refusal), the `validator` (`{ "kind": ... }`), and the SCEP `transactionId`. Nothing is issued.
+
+`enrollment_validator.tested` targets the Enrollment Profile whose Enrollment Validator an Organization Administrator tested. Its `detail` has the `validator` (`{ "kind": ... }`), `ok`, and the `error` when it failed.
+
+`device_certificate.revoked` targets the Device Certificate revoked. When its Enrollment Validator's revocation feed asked for it, there is no actor, and `detail.by` is `{ "enrollmentValidator": { "kind": ... } }`. Its `detail` also has the `enrollmentProfile` (`id`, `name`), the `serial`, `subject`, and the RFC 5280 `reason` (such as `cessationOfOperation`). Its Issuing CA's CRL is reissued in the same change.
