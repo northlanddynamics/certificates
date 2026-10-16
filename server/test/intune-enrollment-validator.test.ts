@@ -26,6 +26,8 @@ enrollmentValidatorContract("Intune", () => {
       validated: () => double.validations.map((v) => v.transactionId),
       issued: () => double.successes.map((s) => ({ transactionId: s.transactionId, serial: s.certificateSerialNumber })),
       failed: () => double.failures.map((f) => f.transactionId),
+      queueRevocation: (serial, issuer) => void double.queueRevocation(serial, issuer),
+      revocationOutcomes: () => double.revocationResults.map((r) => (r.succeeded ? "revoked" : "failed")),
     },
   };
 });
@@ -113,5 +115,52 @@ describe("the Intune Enrollment Validator", () => {
     expect(kind.deviceIdOf!([{ type: "url", value: "intunedeviceid://5B1E4F0E-8B2C-4A57-9A1D-0C6F3E2A7B11" }])).toBe("5B1E4F0E-8B2C-4A57-9A1D-0C6F3E2A7B11");
     expect(kind.deviceIdOf!([{ type: "url", value: "https://example.com/" }])).toBeUndefined();
     expect(kind.deviceIdOf!([{ type: "url", value: "IntuneDeviceId://" }])).toBeUndefined();
+  });
+
+  test("feeds Revocations from Intune's queue at most hourly, one feed per tenant, whichever Entra app downloads it", () => {
+    expect(kind.revocationFeed!.intervalMs).toBe(60 * 60_000);
+    const sourceOf = (settings: Record<string, string>) => kind.revocationFeed!.sourceOf(kind.settings.parse(settings));
+    expect(sourceOf({ tenantId: INTUNE.tenantId.toUpperCase(), appId: INTUNE.appId.toUpperCase() })).toBe(sourceOf(SETTINGS));
+    expect(sourceOf({ ...SETTINGS, appId: INTUNE.otherApp.appId })).toBe(sourceOf(SETTINGS));
+    expect(sourceOf({ ...SETTINGS, tenantId: "4d9a6e3f-5c7b-4a8d-8e1f-cdef01234567" })).not.toBe(sourceOf(SETTINGS));
+  });
+
+  test("downloads up to 500 of Intune's revocation requests from its PKI connector service, revoked for cessation of operation", async () => {
+    const withIssuer = double.queueRevocation("5B0E7A", "CN=Acme Issuing CA 1,O=Acme");
+    const without = double.queueRevocation("0c11");
+
+    expect(await validator().revocations!.pull()).toEqual([
+      { ref: withIssuer, serial: "5B0E7A", issuer: "CN=Acme Issuing CA 1,O=Acme", reason: "cessationOfOperation" },
+      { ref: without, serial: "0c11", reason: "cessationOfOperation" },
+    ]);
+    expect(double.downloads).toEqual([{ maxRequests: 500, issuerName: null }]);
+    expect(double.intuneCalls()).toEqual(["CertificateAuthorityRequests/downloadRevocationRequests"]);
+    const sent = double.requests.at(-1)!;
+    expect(sent.headers).toMatchObject({ "api-version": "5019-05-05", useragent: INTUNE_CALLER_INFO });
+  });
+
+  test("uploads a result for each request: success for revoked or already revoked, 4004 for one not found, retryable 4100 for one that failed", async () => {
+    await validator().revocations!.report([
+      { ref: "a", outcome: "revoked" },
+      { ref: "b", outcome: "already_revoked" },
+      { ref: "c", outcome: "not_found" },
+      { ref: "d", outcome: "failed", message: "the platform could not revoke it; ask again" },
+    ]);
+    expect(double.revocationResults).toEqual([
+      { requestContext: "a", succeeded: true, errorCode: "0", errorMessage: null },
+      { requestContext: "b", succeeded: true, errorCode: "0", errorMessage: null },
+      { requestContext: "c", succeeded: false, errorCode: "4004", errorMessage: "No such certificate" },
+      { requestContext: "d", succeeded: false, errorCode: "4100", errorMessage: "the platform could not revoke it; ask again" },
+    ]);
+  });
+
+  test("throws, so that the results are uploaded again, when Intune does not record them or answers with an error", async () => {
+    double.recordsResults = false;
+    await expect(validator().revocations!.report([{ ref: "a", outcome: "revoked" }])).rejects.toThrow(/did not record/);
+    double.recordsResults = true;
+    double.failing = true;
+    await expect(validator().revocations!.pull()).rejects.toThrow(/503/);
+    await expect(validator().revocations!.report([{ ref: "a", outcome: "revoked" }])).rejects.toThrow(/503/);
+    expect(double.revocationResults).toEqual([]);
   });
 });

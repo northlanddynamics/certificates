@@ -2,14 +2,22 @@
 // answers as Entra ID's token endpoint (client credentials), Microsoft Graph's endpoint discovery for the Intune service
 // principal, and Intune's ScepRequestValidationFEService and PkiConnectorFEService, per docs/research/intune-scep-api.md.
 // Nothing leaves the process. It takes only its own tenant, app ID and secret, records what it was asked and told, and
-// can be told to refuse every request, to fail (answer 503) or to be unreachable (no connection at all).
+// can be told to refuse every request, to fail (answer 503) or to be unreachable (no connection at all). Revocations are
+// queued as Intune queues them when a device is retired, wiped or unenrolled, handed over once by
+// downloadRevocationRequests, and their results recorded from uploadRevocationResults.
 import { randomUUID } from "node:crypto";
 
 export const INTUNE = {
   tenantId: "8f0c2a4e-1b3d-4c5e-9f7a-0123456789ab",
   appId: "2b7e4c1d-3a5f-4e6b-8c9d-abcdef012345",
   secret: "entra-app-secret~value",
+  /** A second Entra app of the same tenant, as an Organization with two apps has. */
+  otherApp: { appId: "3c8f5d2e-4b6a-4f7c-9d0e-bcdef0123456", secret: "other-app-secret~value" },
 };
+const APP_SECRETS = new Map([
+  [INTUNE.appId, INTUNE.secret],
+  [INTUNE.otherApp.appId, INTUNE.otherApp.secret],
+]);
 
 const LOGIN = "https://login.microsoftonline.com";
 const GRAPH = "https://graph.microsoft.com";
@@ -37,6 +45,20 @@ export interface IntuneFailure extends IntuneValidation {
   hResult: number;
   errorDescription: string;
 }
+/** A revocation request as Intune queues and hands it over. */
+export interface IntuneRevocationRequest {
+  requestContext: string;
+  serialNumber: string;
+  issuerName?: string;
+  caConfiguration?: string | null;
+}
+export interface IntuneRevocationResult {
+  requestContext: string;
+  succeeded: boolean;
+  errorCode: string;
+  errorMessage: string | null;
+}
+
 export interface IntuneRequest {
   method: string;
   url: string;
@@ -49,6 +71,14 @@ export class IntuneDouble {
   readonly validations: IntuneValidation[] = [];
   readonly successes: IntuneSuccess[] = [];
   readonly failures: IntuneFailure[] = [];
+  /** What downloadRevocationRequests was asked for, each time it was called. */
+  readonly downloads: { maxRequests: number; issuerName: string | null }[] = [];
+  /** The results uploadRevocationResults was given, in order. */
+  readonly revocationResults: IntuneRevocationResult[] = [];
+  /** Queued, not yet handed over. */
+  private revocationQueue: IntuneRevocationRequest[] = [];
+  /** When unset, uploadRevocationResults answers `{ value: false }`, as when Intune did not record them. */
+  recordsResults = true;
   /** When set, Intune refuses every request with this code. */
   refusing: string | null = null;
   /** When set, every call is answered 503. */
@@ -62,10 +92,20 @@ export class IntuneDouble {
 
   reset() {
     this.requests.length = this.validations.length = this.successes.length = this.failures.length = 0;
+    this.downloads.length = this.revocationResults.length = 0;
+    this.revocationQueue = [];
+    this.recordsResults = true;
     this.refusing = null;
     this.failing = false;
     this.unreachable = false;
     this.graphConsented = true;
+  }
+
+  /** Queues a revocation of the serial, as Intune does for a device it retired; with the issuer unless none. Its requestContext. */
+  queueRevocation(serialNumber: string, issuerName?: string) {
+    const requestContext = randomUUID();
+    this.revocationQueue.push({ requestContext, serialNumber, ...(issuerName === undefined ? {} : { issuerName }), caConfiguration: null });
+    return requestContext;
   }
 
   /** The paths that reached Intune's own services (not Entra or Graph). */
@@ -111,14 +151,32 @@ export class IntuneDouble {
         return Response.json({ code: "Success", errorDescription: "" });
       }
     }
+    if (request.url.startsWith(`${PKI_CONNECTOR}/CertificateAuthorityRequests/`) && request.method === "POST") {
+      if (scope !== INTUNE_SCOPE) return new Response("unauthorized", { status: 401 });
+      if (request.headers.get("api-version") !== "5019-05-05") return new Response("unsupported api-version", { status: 400 });
+      const action = url.pathname.split("/").pop();
+      const body = (await request.json()) as { downloadParameters?: { maxRequests?: unknown; issuerName?: unknown }; results?: IntuneRevocationResult[] };
+      if (action === "downloadRevocationRequests" && body.downloadParameters) {
+        const { maxRequests, issuerName } = body.downloadParameters;
+        if (typeof maxRequests !== "number" || maxRequests < 1 || maxRequests > 500) return new Response("maxRequests must be from 1 to 500", { status: 400 });
+        this.downloads.push({ maxRequests, issuerName: (issuerName as string | null) ?? null });
+        return Response.json({ value: this.revocationQueue.splice(0, maxRequests) });
+      }
+      if (action === "uploadRevocationResults" && Array.isArray(body.results)) {
+        if (!this.recordsResults) return Response.json({ value: false });
+        this.revocationResults.push(...body.results);
+        return Response.json({ value: true });
+      }
+    }
     return new Response("not found", { status: 404 });
   }) as typeof fetch;
 
   private token(form: string) {
     const params = new URLSearchParams(form);
     if (params.get("grant_type") !== "client_credentials") return Response.json({ error: "unsupported_grant_type" }, { status: 400 });
-    if (params.get("client_id") !== INTUNE.appId) return Response.json({ error: "unauthorized_client", error_description: "AADSTS700016: Application with identifier was not found in the directory." }, { status: 400 });
-    if (params.get("client_secret") !== INTUNE.secret) return Response.json({ error: "invalid_client", error_description: "AADSTS7000215: Invalid client secret provided." }, { status: 401 });
+    const secret = APP_SECRETS.get(params.get("client_id") ?? "");
+    if (secret === undefined) return Response.json({ error: "unauthorized_client", error_description: "AADSTS700016: Application with identifier was not found in the directory." }, { status: 400 });
+    if (params.get("client_secret") !== secret) return Response.json({ error: "invalid_client", error_description: "AADSTS7000215: Invalid client secret provided." }, { status: 401 });
     const scope = params.get("scope") ?? "";
     if (scope !== GRAPH_SCOPE && scope !== INTUNE_SCOPE) return Response.json({ error: "invalid_scope", error_description: "AADSTS70011: The provided value for scope is not valid." }, { status: 400 });
     const token = `eyJ.${randomUUID()}`;

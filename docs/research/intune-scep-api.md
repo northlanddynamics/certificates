@@ -220,7 +220,7 @@ api-version: 5019-05-05
 Polling:
 
 - **Cool-down.** Intune enforces a **60-minute cool-down** after each download [MS-API, excerpt].
-- **One poll per credential.** Poll once an hour per distinct Entra app (tenant ID and app ID). The queue is per tenant, and several Enrollment Profiles may share one tenant.
+- **One poll per tenant.** The queue is per tenant, and several Enrollment Profiles (and Entra apps) may share one tenant, so poll once an hour per tenant, with any of its apps, which keeps every app within the cool-down. (This note first said per Entra app; ticket 05 settled on per tenant.)
 - **No `issuerName` filter.** Leave it out and match each request by serial (and `issuerName` when present) among the Organization's Device Certificates. The filter's exact string format is not documented. It is most likely the `issuingCertificateAuthority` we sent, but that is an inference.
 - **Results.**
   - An already-revoked Device Certificate counts as success.
@@ -270,7 +270,7 @@ Updated in the same change:
 1. **CMS library.** `pkijs` with `@peculiar/x509` is replaced by **ts-scep**, for the reasons in section 8.
 2. **The Intune validator sends only the CSR.** The challenge travels inside it. The seam's `validate(request)` still carries the CSR, challenge and transaction ID, since a static-challenge kind needs the challenge on its own.
 3. **Device ID comes from the CSR.** The Intune device ID is read from the CSR's `IntuneDeviceId://` URI SAN when present, because Intune's API never returns one.
-4. **Revocation is pulled.** The revocation feed is a poll, once an hour per Entra app, of `downloadRevocationRequests`, matched by serial and issuer. Results go back with `uploadRevocationResults`. The seam's "optional revocation feed" fits as written; the feed must also report each result back to the kind.
+4. **Revocation is pulled.** The revocation feed is a poll, once an hour per tenant (see ticket 05 below), of `downloadRevocationRequests`, matched by serial and issuer. Results go back with `uploadRevocationResults`. The seam's "optional revocation feed" fits as written; the feed must also report each result back to the kind.
 5. **Envelopes.**
    - Accept single DES-CBC content encryption besides AES and 3DES, without advertising it. Without DES the spec's own interop client, micromdm's `scepclient`, cannot enroll.
    - Accept SHA-1-signed requests, which Windows and micromdm send.
@@ -288,9 +288,15 @@ Ticket 04 (2026-10-16), from search excerpts, `learn.microsoft.com` still being 
 - **`IntuneDeviceId://` URI SAN: confirmed as the convention**, though not Intune's own doing: the administrator's SCEP profile adds the URI `IntuneDeviceId://{{DeviceId}}`, which Microsoft recommends for NAC solutions to identify devices ([SCEPman](https://docs.scepman.com/certificate-management/microsoft-intune/android), [ClearPass](https://arubanetworking.hpe.com/techdocs/NAC/clearpass/integrations/unified-endpoint-management/intune/)). Some NAC vendors use other forms (Portnox: `https://intunedeviceid/{{DeviceId}}`); only `IntuneDeviceId://` (any case) is read.
 - The 60-minute cool-down and any revocation permission are still ticket 05's.
 
+Ticket 05 (2026-10-16), built against the Intune double; no real tenant was reachable from here, so nothing below has been seen from Intune itself:
+- **Feed per tenant, not per app.** The queue is the tenant's, so the platform keys the feed by tenant ID: profiles of one tenant share one download, matched among all their Device Certificates, whichever Entra app each uses. That keeps the poll at most hourly for every app too.
+- **`errorCode` is sent as the numeric string** (`"0"`, `"4004"`, `"4100"`), the Java library's form. A request the platform could not revoke after its tries is answered `4100` (RetryableServiceException), so that Intune may queue it again.
+- **`issuerName`** is matched structurally against the Issuing CA's subject, so `CN=…,O=…` and `CN=…, O=…` both match.
+
 Still open:
 
-- Confirm the 60-minute cool-down, and whether revocation needs another permission (ticket 05).
+- Against a real tenant: confirm the 60-minute cool-down, whether revocation needs another permission, that the service takes `errorCode` as a numeric string, the form `issuerName` comes back in, and whether a tenant's queue is shared by its Entra apps (the platform assumes so).
+- Also against a real tenant: whether Intune queues a request again after a `4100` result (the platform has forgotten it by then, so if not, that revocation is lost). Two risks of downloading without an issuer filter: two Organizations configured with one tenant each download it, the first taking (and answering `4004`, for good) the other's requests and the two together breaking the cool-down; and requests for another third-party CA in the tenant are answered `4004` too. Both need the issuer filter's form, or a tenant shared once across the platform.
 - iOS/macOS padding is inferred, not observed. Both paddings are accepted, so this too is informational.
 - Confirm the `issuerName` string format against a real tenant before relying on the filter.
 - Android's padding: answered once a real Android device enrolls. Both paddings are accepted, so this is informational.

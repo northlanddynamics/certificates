@@ -6,13 +6,17 @@
 // kind vouches for names. Its API never says which device asked: the device ID is read from the CSR's
 // `IntuneDeviceId://` URI SAN, which Microsoft recommends Intune SCEP profiles carry for NAC.
 //
+// Its revocation feed is Intune's queue of the certificates of devices it retired, wiped or unenrolled, downloaded from
+// its PkiConnectorFEService at most hourly per tenant (Intune cools down for an hour after each download), each
+// revoked for cessationOfOperation, since Intune gives no reason, and a result uploaded for each once revoked.
+//
 // Tokens and the discovered services are kept a while per app, and the services forgotten whenever Intune cannot be
 // reached at the HTTP level, since they may have moved (as the libraries do). No error says what the secret or a token
 // is (should Entra quote the secret, it is taken out); what Entra and Intune say is wrong is kept short.
 import { z } from "@hono/zod-openapi";
 import { createHash, randomUUID } from "node:crypto";
 import * as x509 from "@peculiar/x509";
-import { EnrollmentValidatorError, type EnrollmentValidator, type EnrollmentValidatorKind } from "./enrollment-validator";
+import { EnrollmentValidatorError, type EnrollmentValidator, type EnrollmentValidatorKind, type RevocationOutcome, type RevocationRequest } from "./enrollment-validator";
 
 /** What the platform tells Intune it is, as `callerInfo` and `UserAgent`. */
 export const INTUNE_CALLER_INFO = "northland-certificates/1.0";
@@ -29,6 +33,23 @@ const INTUNE_HOSTS = ".manage.microsoft.com";
 const VALIDATION_SERVICE = "scepRequestValidationFEService";
 const PKI_CONNECTOR_SERVICE = "pkiConnectorFEService";
 const VALIDATION_API_VERSION = "2018-02-20";
+// The libraries' literal default, odd year and all.
+const PKI_CONNECTOR_API_VERSION = "5019-05-05";
+/** The most downloadRevocationRequests hands over at once. */
+const MAX_REVOCATION_REQUESTS = 500;
+/** How often a tenant's queue may be downloaded: Intune's cool-down. */
+const REVOCATION_INTERVAL_MS = 60 * 60_000;
+/**
+ * The result Intune is given for each outcome (IRA `CARequestErrorCode.cs`, as the Java library sends codes): an
+ * already-revoked certificate is a success, an unknown one CertificateNotFoundError, and one the platform could not
+ * revoke RetryableServiceException.
+ */
+const REVOCATION_RESULTS: Record<RevocationOutcome["outcome"], { succeeded: boolean; errorCode: string; errorMessage?: string }> = {
+  revoked: { succeeded: true, errorCode: "0" },
+  already_revoked: { succeeded: true, errorCode: "0" },
+  not_found: { succeeded: false, errorCode: "4004", errorMessage: "No such certificate" },
+  failed: { succeeded: false, errorCode: "4100" },
+};
 /** E_FAIL: what Intune is told a refused request failed with; it shows it in its reports. */
 const E_FAIL = 0x80004005;
 const MAX_DESCRIPTION = 255;
@@ -117,6 +138,9 @@ export function createIntuneKind(options: IntuneOptions = {}): EnrollmentValidat
     secret: z.string().min(1).max(1024),
     vouchesForNames: true,
     deviceIdOf: intuneDeviceIdOf,
+    // Intune's queue is the tenant's, whichever Entra app downloads it, so the tenant's profiles share one feed and a
+    // request is matched among all their Device Certificates. A tenant named once by ID and once by domain is two feeds.
+    revocationFeed: { intervalMs: REVOCATION_INTERVAL_MS, sourceOf: ({ tenantId }) => tenantId.toLowerCase() },
 
     create({ tenantId, appId }, secret): EnrollmentValidator {
       const app = `${tenantId.toLowerCase()} ${appId.toLowerCase()}`;
@@ -173,17 +197,17 @@ export function createIntuneKind(options: IntuneOptions = {}): EnrollmentValidat
         return found;
       }
 
-      /** One ScepActions call; resolves with Intune's code and description, or throws when Intune could not be asked. */
-      async function scepAction(action: string, payload: Record<string, unknown>) {
-        const { validation } = await discover();
-        const { ok, status, body } = await call("Intune", `${validation}/ScepActions/${action}`, {
+      /** One call to an Intune service; resolves with its answer, or throws when Intune could not be asked or answered an HTTP error. */
+      async function intuneCall(service: "validation" | "pkiConnector", path: string, apiVersion: string, payload: Record<string, unknown>) {
+        const base = (await discover())[service];
+        const { ok, status, body } = await call("Intune", `${base}/${path}`, {
           method: "POST",
           headers: {
             authorization: `Bearer ${await token(INTUNE_SCOPE)}`,
             "content-type": "application/json",
             accept: "application/json",
             "client-request-id": randomUUID(),
-            "api-version": VALIDATION_API_VERSION,
+            "api-version": apiVersion,
             UserAgent: INTUNE_CALLER_INFO,
           },
           body: JSON.stringify(payload),
@@ -195,9 +219,15 @@ export function createIntuneKind(options: IntuneOptions = {}): EnrollmentValidat
           // The service may have moved, or the token been revoked: both are found again next time.
           services.delete(app);
           if (status === 401) tokens.delete(tokenKey(INTUNE_SCOPE));
-          throw fail(`Intune answered ${status}${status === 401 || status === 403 ? ": check that the app has the Intune scep_challenge_provider application permission, with admin consent" : ""}`);
+          const permission = service === "validation" ? "the Intune scep_challenge_provider application permission" : "Intune's application permissions";
+          throw fail(`Intune answered ${status}${status === 401 || status === 403 ? `: check that the app has ${permission}, with admin consent` : ""}`);
         }
-        const { code, errorDescription } = (body ?? {}) as { code?: unknown; errorDescription?: unknown };
+        return body;
+      }
+
+      /** One ScepActions call; resolves with Intune's code and description, or throws when Intune could not be asked. */
+      async function scepAction(action: string, payload: Record<string, unknown>) {
+        const { code, errorDescription } = ((await intuneCall("validation", `ScepActions/${action}`, VALIDATION_API_VERSION, payload)) ?? {}) as { code?: unknown; errorDescription?: unknown };
         if (typeof code !== "string" || code === "") throw fail("Intune answered without a code, as it never should");
         return { code: said(code, 80), description: said(errorDescription) };
       }
@@ -235,6 +265,30 @@ export function createIntuneKind(options: IntuneOptions = {}): EnrollmentValidat
             hResult: E_FAIL,
             errorDescription: reason.slice(0, MAX_DESCRIPTION) || "refused",
           });
+        },
+        revocations: {
+          async pull() {
+            const body = await intuneCall("pkiConnector", "CertificateAuthorityRequests/downloadRevocationRequests", PKI_CONNECTOR_API_VERSION, {
+              // No issuer filter: its form is undocumented, so each request is matched by serial and issuer instead.
+              downloadParameters: { maxRequests: MAX_REVOCATION_REQUESTS, issuerName: null },
+            });
+            const value = (body as { value?: unknown } | null)?.value;
+            if (!Array.isArray(value)) throw fail("Intune answered the revocation download without a list of requests");
+            return value.flatMap((r): RevocationRequest[] => {
+              const { requestContext, serialNumber, issuerName } = (r ?? {}) as { requestContext?: unknown; serialNumber?: unknown; issuerName?: unknown };
+              // Without its requestContext, a request cannot be answered, so is left out; any other is answered, if only not found.
+              if (typeof requestContext !== "string" || requestContext === "") return [];
+              return [{ ref: requestContext, serial: typeof serialNumber === "string" ? serialNumber : "", ...(typeof issuerName === "string" && issuerName !== "" ? { issuer: issuerName } : {}), reason: "cessationOfOperation" }];
+            });
+          },
+          async report(outcomes) {
+            const results = outcomes.map(({ ref, outcome, message }) => {
+              const { succeeded, errorCode, errorMessage } = REVOCATION_RESULTS[outcome];
+              return { requestContext: ref, succeeded, errorCode, errorMessage: succeeded ? null : (errorMessage ?? message ?? outcome).slice(0, MAX_DESCRIPTION) };
+            });
+            const body = await intuneCall("pkiConnector", "CertificateAuthorityRequests/uploadRevocationResults", PKI_CONNECTOR_API_VERSION, { results });
+            if ((body as { value?: unknown } | null)?.value !== true) throw fail("Intune did not record the revocation results");
+          },
         },
         async test() {
           // Never validateRequest (it would show in Intune's reports) nor downloadRevocationRequests (it would start Intune's cool-down).
