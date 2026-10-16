@@ -44,6 +44,9 @@ jobs:
           done
           docker compose logs
           exit 1
+      # micromdm's SCEP client, which the SCEP interoperability test runs as `docker compose run scepclient`.
+      - name: Build the SCEP client
+        run: docker compose build scepclient
       - run: bun run typecheck
       - run: bun run test
       - run: bun run build:web

@@ -288,6 +288,13 @@
       "when": 1792154759403,
       "tag": "0040_enrollment_validators",
       "breakpoints": true
+    },
+    {
+      "idx": 41,
+      "version": "7",
+      "when": 1792174930255,
+      "tag": "0041_scep_transactions",
+      "breakpoints": true
     }
   ]
 }

@@ -633,6 +633,35 @@ export const deviceCertificate = pgTable(
 );
 
 /**
+ * A SCEP transaction an Enrollment Profile was sent (scep-transactions.ts), so that a request sent again, or asked after
+ * with GetCertInitial, is answered with what it was first answered and never issued twice. A request claims its
+ * transaction while it is decided, and records there the Device Certificate it was issued or why it was refused; a
+ * refusal that may not hold next time (its validator could not be asked, say) is not kept, so the device can try again.
+ */
+export const scepTransaction = pgTable(
+  "scep_transaction",
+  {
+    id: uuid("id").primaryKey().defaultRandom(),
+    organizationId: text("organization_id")
+      .notNull()
+      .references(() => organization.id),
+    enrollmentProfileId: uuid("enrollment_profile_id").notNull(),
+    /** The SCEP transaction ID, as the device chose it. */
+    transactionId: text("transaction_id").notNull(),
+    /** When the request deciding it claimed it; a claim left undecided for long is abandoned, and another request takes it over. */
+    claimedAt: timestamp("claimed_at", { withTimezone: true }).notNull(),
+    /** What it was answered: the Device Certificate it was issued, or why it was refused; neither while it is decided. */
+    deviceCertificateId: uuid("device_certificate_id").references(() => deviceCertificate.id, { onDelete: "cascade" }),
+    refusal: text("refusal"),
+  },
+  (t) => [
+    foreignKey({ columns: [t.enrollmentProfileId, t.organizationId], foreignColumns: [enrollmentProfile.id, enrollmentProfile.organizationId] }),
+    unique("scep_transaction_profile_transaction_unique").on(t.enrollmentProfileId, t.transactionId),
+    check("scep_transaction_answer", sql`${t.deviceCertificateId} is null or ${t.refusal} is null`),
+  ],
+);
+
+/**
  * What an Enrollment Profile's validator is to be told (enrollment-validators.ts): that a request was `issued`, or `failed`
  * after it was asked about it, or the outcomes of the Revocations its feed asked for (`revocations`). Queued on the
  * transaction of what it tells of and told afterwards by the delivery pass, tried again with backoff and given up as

@@ -51,7 +51,7 @@ describe("an Enrollment Profile connected to Intune", () => {
     expect(res.body.validator).toEqual({ kind: "intune", settings: { tenantId: INTUNE.tenantId, appId: INTUNE.appId }, hasSecret: true });
     expect(res.body.nameRules).toBeNull();
     const kinds = await h.api(`/api/organizations/${org.orgId}/enrollment-validator-kinds`, { cookie: org.cookie });
-    expect(kinds.body.items).toContainEqual({ kind: "intune", vouchesForNames: true, takesSecret: true });
+    expect(kinds.body.items).toContainEqual({ kind: "intune", vouchesForNames: true, takesSecret: true, allowsRenewal: false });
 
     const shown = JSON.stringify([(await h.api(`${profiles()}/${res.body.id}`, { cookie: org.cookie })).body, await auditOf()]);
     expect(shown).not.toContain(INTUNE.secret);

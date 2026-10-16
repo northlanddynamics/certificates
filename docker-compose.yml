@@ -44,5 +44,14 @@ services:
       - "5354:53/tcp"
       - "5354:53/udp"
 
+  # micromdm/scep's SCEP client, built from source (docker/scepclient), for the test that a real third-party client
+  # enrolls against the platform: `docker compose run --rm scepclient -server-url <SCEP URL> ...` prints the certificate it
+  # was issued. It reaches the tests' app on the host as host.docker.internal. Run only on demand, never by `up`.
+  scepclient:
+    build: docker/scepclient
+    profiles: ["interop"]
+    extra_hosts:
+      - "host.docker.internal:host-gateway"
+
 volumes:
   pgdata:

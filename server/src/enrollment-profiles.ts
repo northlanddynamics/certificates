@@ -131,14 +131,14 @@ export function registerEnrollmentProfiles(ctx: {
       summary: "The Enrollment Validator kinds an Enrollment Profile can name",
       description:
         "Those the platform runs. With none, no Enrollment Profile can be created. `vouchesForNames` says whether it checks the names a device asks for; a profile whose validator does not must carry name rules. " +
-        "`takesSecret` whether it is configured with a secret. Only Organization Administrators may ask.",
+        "`takesSecret` whether it is configured with a secret, and `allowsRenewal` whether a device may renew with a SCEP RenewalReq rather than enroll again. Only Organization Administrators may ask.",
       request: { params: OrgParam },
-      responses: { 200: json(z.object({ items: z.array(z.object({ kind: z.string(), vouchesForNames: z.boolean(), takesSecret: z.boolean() })) })), ...errors(401, 403, 404) },
+      responses: { 200: json(z.object({ items: z.array(z.object({ kind: z.string(), vouchesForNames: z.boolean(), takesSecret: z.boolean(), allowsRenewal: z.boolean() })) })), ...errors(401, 403, 404) },
     }),
     async (c) => {
       const { orgId } = c.req.valid("param");
       await authorize(await requireUser(c), orgId, { enrollmentProfile: ["read"] });
-      return c.json({ items: Object.entries(kinds).map(([kind, of]) => ({ kind, vouchesForNames: of.vouchesForNames, takesSecret: of.secret !== undefined })) }, 200);
+      return c.json({ items: Object.entries(kinds).map(([kind, of]) => ({ kind, vouchesForNames: of.vouchesForNames, takesSecret: of.secret !== undefined, allowsRenewal: of.allowsRenewal === true })) }, 200);
     },
   );
 

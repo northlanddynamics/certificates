@@ -81,7 +81,8 @@ status: ## Show the Docker services
 logs: ## Follow the Docker services' logs
 	$(COMPOSE) logs -f
 
-test: infra ## Run the server tests (they use the certs_test database)
+test: infra ## Run the server tests (they use the certs_test database, and build micromdm's SCEP client to run)
+	$(COMPOSE) build scepclient
 	bun run test
 
 check: ## Typecheck the server and the web app

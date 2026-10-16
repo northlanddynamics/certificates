@@ -15,10 +15,15 @@ export interface EnrollmentRequest {
   challengePassword?: string;
   /** The SCEP transaction ID. */
   transactionId: string;
+  /**
+   * For a RenewalReq, the serial (upper-case hex) of the Device Certificate it is signed with, which the platform has
+   * checked is the profile's own and neither revoked nor expired; none for a PKCSReq. Only kinds that allow renewal see it.
+   */
+  renewalOf?: string;
 }
 
 /** A request as a validator is told of its outcome: the challenge, used up by then, is not kept to tell it. */
-export type DecidedRequest = Omit<EnrollmentRequest, "challengePassword">;
+export type DecidedRequest = Omit<EnrollmentRequest, "challengePassword" | "renewalOf">;
 
 export type EnrollmentDecision = { allowed: true } | { allowed: false; reason: string };
 
@@ -98,6 +103,11 @@ export interface EnrollmentValidatorKind<Settings = any> {
    * carry name rules (name-rules.ts), which the platform checks instead.
    */
   vouchesForNames: boolean;
+  /**
+   * Whether a device may renew with a RenewalReq signed by its current Device Certificate, which GetCACaps then offers;
+   * otherwise a device re-enrolls with PKCSReq. Intune does not renew.
+   */
+  allowsRenewal?: boolean;
   /**
    * That it feeds Revocations: profiles whose settings give the same `sourceOf` share one feed, which is pulled once,
    * at most once every `intervalMs`, for all of them.

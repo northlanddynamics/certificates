@@ -5,7 +5,7 @@
 import { afterAll, beforeAll, beforeEach, describe, expect, test } from "bun:test";
 import * as x509 from "@peculiar/x509";
 import { PASSWORD, PKI_BASE_URL, createHarness, type Harness } from "./harness";
-import { FailInfo, ScepFailureError, type CreateCsrOptions } from "ts-scep";
+import { FailInfo, ScepFailureError, generateRsaKeyPair, type CreateCsrOptions } from "ts-scep";
 import { scepDevice } from "./scep-device";
 import { DOUBLE_SECRET } from "./enrollment-validator-double";
 
@@ -218,6 +218,236 @@ describe("a device enrolling over SCEP", () => {
     const mcs = await h.api(`/api/organizations/${org.orgId}/managed-certificates`, { cookie: org.cookie });
     expect(mcs.status).toBe(200);
     expect(mcs.body.items).toEqual([]);
+  });
+});
+
+describe("SCEP clients in the field", () => {
+  test.each([
+    ["RSA-OAEP key transport, 3DES and SHA-1, as Windows sends", { keyTransport: "rsa-oaep", encryptionAlgorithm: "des-ede3-cbc", digestAlgorithm: "sha1" }],
+    ["RSA-OAEP with SHA-1, AES-256 and SHA-512", { keyTransport: { scheme: "rsa-oaep", hash: "sha1" }, encryptionAlgorithm: "aes-256-cbc", digestAlgorithm: "sha512" }],
+    ["PKCS#1 v1.5 key transport and single DES, as micromdm's scepclient sends whatever GetCACaps says", { keyTransport: "rsa-pkcs1", encryptionAlgorithm: "des-cbc", digestAlgorithm: "sha1" }],
+  ] as const)("enrolls with %s", async (_, options) => {
+    const ca = await createCa();
+    const profile = await createProfile(ca.issuing.id);
+    const device = scepDevice(h, profile.scepUrl, options);
+
+    const { certificate } = await device.enroll({ subject: "CN=device-20", subjectAltNames: { dns: ["device-20.devices.acme"] } });
+    expect(read(certificate).subject).toBe("CN=device-20");
+  });
+
+  test("is not offered single DES, SHA-1 or Renewal by GetCACaps when its validator does not allow renewal", async () => {
+    const ca = await createCa();
+    const profile = await createProfile(ca.issuing.id);
+    const caps = await scepDevice(h, profile.scepUrl).client.getCACaps();
+    for (const capability of ["POSTPKIOperation", "SHA-256", "SHA-512", "AES", "SCEPStandard"]) expect(caps.has(capability)).toBe(true);
+    for (const capability of ["DES", "SHA-1", "Renewal"]) expect(caps.has(capability)).toBe(false);
+  });
+});
+
+describe("a repeated transaction ID", () => {
+  const DOUBLE = { kind: "test_double", settings: { tenant: "contoso" }, secret: DOUBLE_SECRET };
+  const issuedEvents = async () => (await auditOf()).filter((e) => e.action === "device_certificate.issued");
+
+  test("is answered with the certificate it was first issued, without asking the validator or issuing again", async () => {
+    const ca = await createCa();
+    const profile = await createProfile(ca.issuing.id, { validator: DOUBLE });
+    const device = scepDevice(h, profile.scepUrl);
+    const request = { subject: "CN=device-40", challengePassword: "one-time-challenge", privateKey: generateRsaKeyPair(2048).privateKey, transactionId: "tx-device-40" };
+
+    const first = await device.enroll(request);
+    const again = await device.enroll(request);
+    expect(again.certificate.serialNumber).toBe(first.certificate.serialNumber);
+    expect(h.validatorDouble.validations).toHaveLength(1);
+    expect(await issuedEvents()).toHaveLength(1);
+  });
+
+  test("sent twice at once is issued once, and both are answered with it", async () => {
+    const ca = await createCa();
+    const profile = await createProfile(ca.issuing.id, { validator: DOUBLE });
+    const device = scepDevice(h, profile.scepUrl);
+    const request = { subject: "CN=device-41", privateKey: generateRsaKeyPair(2048).privateKey, transactionId: "tx-device-41" };
+
+    const [one, other] = await Promise.all([device.enroll(request), device.enroll(request)]);
+    expect(other.certificate.serialNumber).toBe(one.certificate.serialNumber);
+    expect(h.validatorDouble.validations).toHaveLength(1);
+    expect(await issuedEvents()).toHaveLength(1);
+  });
+
+  test("is answered with the refusal it was first given, which is audited once", async () => {
+    const ca = await createCa();
+    const profile = await createProfile(ca.issuing.id, { validator: DOUBLE });
+    const device = scepDevice(h, profile.scepUrl);
+    const request = { subject: "CN=device-42", privateKey: generateRsaKeyPair(2048).privateKey, transactionId: "tx-device-42" };
+    h.validatorDouble.refusing = "ChallengeExpired";
+
+    const first = await device.enroll(request).catch((err) => err);
+    h.validatorDouble.refusing = null;
+    const again = await device.enroll(request).catch((err) => err);
+    expect(first).toBeInstanceOf(ScepFailureError);
+    expect(again).toBeInstanceOf(ScepFailureError);
+    expect(again.failInfoText).toBe(first.failInfoText);
+    expect(h.validatorDouble.validations).toHaveLength(1);
+    expect((await auditOf()).filter((e) => e.action === "enrollment.refused")).toHaveLength(1);
+  });
+
+  test("is decided again when the validator could not be asked the first time", async () => {
+    const ca = await createCa();
+    const profile = await createProfile(ca.issuing.id, { validator: DOUBLE });
+    const device = scepDevice(h, profile.scepUrl);
+    const request = { subject: "CN=device-43", privateKey: generateRsaKeyPair(2048).privateKey, transactionId: "tx-device-43" };
+    h.validatorDouble.unreachable = true;
+
+    const first = await device.enroll(request).catch((err) => err);
+    expect(first).toBeInstanceOf(ScepFailureError);
+    expect(await issuedEvents()).toEqual([]);
+    h.validatorDouble.unreachable = false;
+    const again = await device.enroll(request);
+    expect(read(again.certificate).subject).toBe("CN=device-43");
+  });
+
+  test("is the profile's own: another profile decides the same transaction ID for itself", async () => {
+    const ca = await createCa();
+    const profile = await createProfile(ca.issuing.id);
+    const other = await createProfile(ca.issuing.id, { name: "VPN" });
+    const request = { subject: "CN=device-44", privateKey: generateRsaKeyPair(2048).privateKey, transactionId: "tx-device-44" };
+
+    const here = await scepDevice(h, profile.scepUrl).enroll(request);
+    const there = await scepDevice(h, other.scepUrl).enroll(request);
+    expect(there.certificate.serialNumber).not.toBe(here.certificate.serialNumber);
+  });
+});
+
+describe("GetCertInitial", () => {
+  test("is answered with the certificate the transaction was issued", async () => {
+    const ca = await createCa();
+    const profile = await createProfile(ca.issuing.id);
+    const device = scepDevice(h, profile.scepUrl);
+    const request = { subject: "CN=device-45", privateKey: generateRsaKeyPair(2048).privateKey, transactionId: "tx-device-45" };
+    const enrolled = await device.enroll(request);
+
+    const polled = await device.poll(request);
+    expect(polled.certificate.serialNumber).toBe(enrolled.certificate.serialNumber);
+    expect(polled.certificates).toHaveLength(enrolled.certificates.length);
+    expect(h.enrollmentValidations).toHaveLength(1);
+  });
+
+  test("is answered with the refusal the transaction was given, and with FAILURE badCertId for a transaction the profile never had", async () => {
+    const ca = await createCa();
+    const profile = await createProfile(ca.issuing.id, { allowedKeyTypes: ["rsa-3072"] });
+    const device = scepDevice(h, profile.scepUrl);
+    const request = { subject: "CN=device-46", privateKey: generateRsaKeyPair(2048).privateKey, transactionId: "tx-device-46" };
+    const refused = await device.enroll(request).catch((err) => err);
+
+    const polled = await device.poll(request).catch((err) => err);
+    expect(polled).toBeInstanceOf(ScepFailureError);
+    expect(polled.failInfoText).toBe(refused.failInfoText);
+
+    const unknown = await device.poll({ ...request, transactionId: "tx-never-sent" }).catch((err) => err);
+    expect(unknown).toBeInstanceOf(ScepFailureError);
+    expect(unknown.failInfo).toBe(FailInfo.badCertId);
+  });
+});
+
+describe("RenewalReq", () => {
+  test("renews, signed by the device's Device Certificate, where the profile's validator allows it: offered by GetCACaps, and the validator asked knowing what is renewed", async () => {
+    const ca = await createCa();
+    const profile = await createProfile(ca.issuing.id, { validator: { kind: "test_renewal" } });
+    const device = scepDevice(h, profile.scepUrl);
+    expect((await device.client.getCACaps()).has("Renewal")).toBe(true);
+    const first = await device.enroll({ subject: "CN=device-30", challengePassword: "one-time-challenge" });
+
+    const renewed = await device.renew({ subject: "CN=device-30" }, first);
+    expect(read(renewed.certificate).subject).toBe("CN=device-30");
+    expect(renewed.certificate.serialNumber).not.toBe(first.certificate.serialNumber);
+    expect(h.enrollmentValidations.map((v) => v.renewalOf)).toEqual([undefined, first.certificate.serialNumber.toUpperCase()]);
+    expect((await auditOf()).filter((e) => e.action === "device_certificate.issued")).toHaveLength(2);
+  });
+
+  test("is refused, without asking the validator, where the profile's validator does not allow it", async () => {
+    const ca = await createCa();
+    const profile = await createProfile(ca.issuing.id);
+    const device = scepDevice(h, profile.scepUrl);
+    const first = await device.enroll({ subject: "CN=device-31" });
+
+    const failure = await device.renew({ subject: "CN=device-31" }, first).catch((err) => err);
+    expect(failure).toBeInstanceOf(ScepFailureError);
+    expect(failure.failInfo).toBe(FailInfo.badRequest);
+    expect(failure.failInfoText).toContain("RenewalReq");
+    expect(h.enrollmentValidations).toHaveLength(1);
+  });
+
+  test("is refused when signed by a revoked Device Certificate, or by one another profile issued", async () => {
+    const ca = await createCa();
+    const profile = await createProfile(ca.issuing.id, { validator: { kind: "test_renewal" } });
+    const other = await createProfile(ca.issuing.id, { name: "VPN", validator: { kind: "test_renewal" } });
+    const device = scepDevice(h, profile.scepUrl);
+    const first = await device.enroll({ subject: "CN=device-32" });
+    const elsewhere = await scepDevice(h, other.scepUrl).enroll({ subject: "CN=device-32" });
+
+    const fromOther = await device.renew({ subject: "CN=device-32" }, elsewhere).catch((err) => err);
+    expect(fromOther).toBeInstanceOf(ScepFailureError);
+    expect(fromOther.failInfoText).toContain("not signed with a Device Certificate of this Enrollment Profile");
+
+    const listed = await h.api(`${profiles()}/${profile.id}/device-certificates`, { cookie: org.cookie });
+    const revoked = await h.api(`${profiles()}/${profile.id}/device-certificates/${listed.body.items[0].id}/revocation`, { cookie: org.cookie, body: { reason: "keyCompromise" } });
+    expect(revoked.status).toBe(200);
+    const afterRevocation = await device.renew({ subject: "CN=device-32" }, first).catch((err) => err);
+    expect(afterRevocation).toBeInstanceOf(ScepFailureError);
+    expect(afterRevocation.failInfoText).toContain("revoked");
+    expect(h.enrollmentValidations).toHaveLength(2);
+  });
+});
+
+describe("rate limiting", () => {
+  const getCaCaps = (scepUrl: string, address: string) => h.app.request(`${scepUrl}?operation=GetCACaps`, { headers: { "x-forwarded-for": address } });
+
+  test("answers an address over its limit 429, with Retry-After, until the window passes, while other addresses go on", async () => {
+    const ca = await createCa();
+    const profile = await createProfile(ca.issuing.id);
+    h.scepRateLimit.perAddress = 3;
+
+    for (let i = 0; i < 3; i++) expect((await getCaCaps(profile.scepUrl, "198.51.100.7")).status).toBe(200);
+    const limited = await getCaCaps(profile.scepUrl, "198.51.100.7");
+    expect(limited.status).toBe(429);
+    expect(Number(limited.headers.get("retry-after"))).toBe(60);
+    expect((await getCaCaps(profile.scepUrl, "198.51.100.8")).status).toBe(200);
+
+    h.setNow(new Date(START + 60_000));
+    expect((await getCaCaps(profile.scepUrl, "198.51.100.7")).status).toBe(200);
+  });
+
+  test("counts the address the platform's TLS terminator saw, the last in X-Forwarded-For, not what the device claims", async () => {
+    const ca = await createCa();
+    const profile = await createProfile(ca.issuing.id);
+    h.scepRateLimit.perAddress = 1;
+
+    expect((await getCaCaps(profile.scepUrl, "203.0.113.1, 198.51.100.7")).status).toBe(200);
+    expect((await getCaCaps(profile.scepUrl, "203.0.113.2, 198.51.100.7")).status).toBe(429);
+  });
+
+  test("answers a profile over its limit 429 from any address, while other profiles go on", async () => {
+    const ca = await createCa();
+    const busy = await createProfile(ca.issuing.id);
+    const quiet = await createProfile(ca.issuing.id, { name: "VPN" });
+    h.scepRateLimit.perProfile = 2;
+
+    expect((await getCaCaps(busy.scepUrl, "198.51.100.1")).status).toBe(200);
+    expect((await getCaCaps(busy.scepUrl, "198.51.100.2")).status).toBe(200);
+    expect((await getCaCaps(busy.scepUrl, "198.51.100.3")).status).toBe(429);
+    expect((await getCaCaps(quiet.scepUrl, "198.51.100.3")).status).toBe(200);
+  });
+
+  test("refuses an enrollment over the limit without asking the validator or issuing", async () => {
+    const ca = await createCa();
+    const profile = await createProfile(ca.issuing.id);
+    // GetCACaps and GetCACert are let through; the PKIOperation is not.
+    h.scepRateLimit.perAddress = 2;
+
+    const failure = await scepDevice(h, profile.scepUrl).enroll({ subject: "CN=device-50", challengePassword: "one-time-challenge" }).catch((err) => err);
+    expect(failure).toBeInstanceOf(Error);
+    expect(String(failure.message)).toContain("429");
+    expect(h.enrollmentValidations).toEqual([]);
+    expect((await auditOf()).filter((e) => e.action === "device_certificate.issued" || e.action === "enrollment.refused")).toEqual([]);
   });
 });
 
