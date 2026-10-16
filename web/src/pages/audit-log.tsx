@@ -1,8 +1,9 @@
 import { useInfiniteQuery, useQuery } from "@tanstack/react-query";
 import { useParams } from "@tanstack/react-router";
-import { createColumnHelper, tableFeatures, useTable } from "@tanstack/react-table";
+import { createColumnHelper, rowExpandingFeature, tableFeatures, useTable } from "@tanstack/react-table";
 import { useState, type ComponentProps, type FormEvent } from "react";
 import { DataTable } from "@/components/data-table/data-table";
+import { ExpandButton } from "@/components/data-table/expand-button";
 import { Badge } from "@/components/ui/badge";
 import { Button } from "@/components/ui/button";
 import { Input } from "@/components/ui/input";
@@ -11,10 +12,18 @@ import { api, can, type AuditEvent, type AuditFilters } from "@/lib/api";
 
 const ROUTE = "/app/organizations/$orgId/audit-log";
 
-// The server pages by cursor; the page shows what has been loaded and loads older events on asking.
-const features = tableFeatures({});
+// The server pages by cursor; the page shows what has been loaded and loads older events on asking. An event with
+// detail opens, on a click on its row, to show it underneath.
+const features = tableFeatures({ rowExpandingFeature });
 const columnHelper = createColumnHelper<typeof features, AuditEvent>();
+const hasDetail = (event: AuditEvent) => Object.keys(event.detail).length > 0;
 const columns = columnHelper.columns([
+  columnHelper.display({
+    id: "expand",
+    header: () => <span className="sr-only">Detail</span>,
+    cell: ({ row }) =>
+      row.getCanExpand() ? <ExpandButton open={row.getIsExpanded()} what={`the ${row.original.action} event`} onToggle={() => row.toggleExpanded()} /> : null,
+  }),
   columnHelper.accessor("occurredAt", { header: "When", cell: ({ cell }) => <span className="whitespace-nowrap">{new Date(cell.getValue()).toLocaleString()}</span> }),
   columnHelper.display({
     id: "actor",
@@ -31,10 +40,6 @@ const columns = columnHelper.columns([
         {row.original.target.id && <span className="text-muted-foreground"> {row.original.target.id}</span>}
       </span>
     ),
-  }),
-  columnHelper.accessor("detail", {
-    header: "Detail",
-    cell: ({ cell }) => <code className="block max-w-md text-xs break-all whitespace-pre-wrap">{Object.keys(cell.getValue()).length > 0 ? JSON.stringify(cell.getValue()) : ""}</code>,
   }),
 ]);
 const noRows: AuditEvent[] = [];
@@ -60,7 +65,7 @@ export function AuditLogPage() {
     enabled: allowed,
   });
   const rows = events.data?.pages.flatMap((p) => p.items) ?? noRows;
-  const table = useTable({ features, columns, data: rows, getRowId: (e) => e.id });
+  const table = useTable({ features, columns, data: rows, getRowId: (e) => e.id, getRowCanExpand: (row) => hasDetail(row.original) });
 
   return (
     <div className="flex flex-col gap-6">
@@ -69,7 +74,12 @@ export function AuditLogPage() {
         Every change to the Organization, newest first. Audit Events are kept for ever and cannot be changed or deleted. To send them to a SIEM, see Audit forwarding.
       </p>
       <AuditFilterForm onSearch={setFilters} />
-      <DataTable table={table} empty={events.isPending && allowed ? "Loading…" : "No Audit Event matches."} />
+      <DataTable
+        table={table}
+        empty={events.isPending && allowed ? "Loading…" : "No Audit Event matches."}
+        details={(event) => <pre className="text-xs break-all whitespace-pre-wrap">{JSON.stringify(event.detail, null, 2)}</pre>}
+        openOnClick
+      />
       {events.error && <p className="text-sm text-destructive">{events.error.message}</p>}
       {events.hasNextPage && (
         <div className="flex justify-center">
