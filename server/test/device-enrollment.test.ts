@@ -264,7 +264,7 @@ describe("Enrollment Profiles", () => {
     const create = (body: Record<string, unknown>) => h.api(profiles(), { cookie: org.cookie, body: { name: "Wi-Fi", issuingCaId: ca.issuing.id, validator: { kind: "test_allow" }, ...body } });
 
     expect((await h.api(`/api/organizations/${org.orgId}/enrollment-validator-kinds`, { cookie: org.cookie })).body.items.map((k: { kind: string }) => k.kind)).toContain("test_allow");
-    expect((await create({ validator: { kind: "intune" } })).status).toBe(422);
+    expect((await create({ validator: { kind: "kandji" } })).status).toBe(422);
     expect((await create({ issuingCaId: theirs.issuing.id })).status).toBe(422);
     expect((await create({ allowedKeyTypes: ["ecdsa-p256"] })).status).toBe(400);
     expect((await create({})).status).toBe(201);

@@ -755,6 +755,9 @@ export const api = {
   createEnrollmentProfile: (orgId: string, body: NewEnrollmentProfile) => call<EnrollmentProfile>(`/api/organizations/${orgId}/enrollment-profiles`, { body }),
   /** The Enrollment Validator kinds the platform runs, one of which a profile must name. */
   enrollmentValidatorKinds: (orgId: string) => call<{ items: { kind: string; vouchesForNames: boolean; takesSecret: boolean }[] }>(`/api/organizations/${orgId}/enrollment-validator-kinds`),
+  /** Whether the profile's Enrollment Validator can reach its service; `note` says what the test could not prove. */
+  testEnrollmentValidator: (orgId: string, id: string) =>
+    call<{ ok: boolean; error?: string; note?: string }>(`/api/organizations/${orgId}/enrollment-profiles/${id}/validator/test`, { method: "POST", body: {} }),
   /** Where a profile's root or Issuing CA certificate downloads from, for the device management platform's trusted certificate profile. */
   enrollmentProfileCaCertificateUrl: (orgId: string, id: string, ca: "root" | "issuing") => `/api/organizations/${orgId}/enrollment-profiles/${id}/ca-certificate?ca=${ca}`,
   acmeAccounts: (orgId: string) => call<{ items: AcmeAccount[] }>(`/api/organizations/${orgId}/acme-accounts`),

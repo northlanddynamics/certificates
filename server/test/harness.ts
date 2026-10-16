@@ -19,6 +19,8 @@ import { CapturingAuditTransport } from "../src/audit-transport";
 import { runMigrations } from "../src/migrate";
 import { bootstrapPlatformOperator } from "../src/operator";
 import type { UnitOfWork } from "../src/unit-of-work";
+import { createIntuneKind } from "../src/intune";
+import { IntuneDouble } from "./intune-double";
 
 export const TEST_DATABASE_URL =
   process.env.TEST_DATABASE_URL ?? "postgres://postgres:postgres@localhost:5433/certs_test";
@@ -113,6 +115,8 @@ export interface Harness {
   enrollmentValidations: EnrollmentRequest[];
   /** The service behind the test-only Enrollment Validator kind `test_double`, which vouches for names and feeds Revocations. */
   validatorDouble: ValidatorDouble;
+  /** Entra ID, Graph and Intune, as the `intune` Enrollment Validator kind (the platform's own, intune.ts) reaches them. */
+  intune: IntuneDouble;
   /** One pass of telling Enrollment Validators what became of requests and Revocations, at the harness's clock. Returns how many were told. */
   deliverEnrollmentNotifications(): Promise<number>;
   /** One pass of pulling Enrollment Validators' revocation feeds that are due, at the harness's clock. Returns how many feeds were pulled. */
@@ -159,6 +163,7 @@ export async function createHarness(overrides: Partial<AppDeps> = {}, { database
   const memberRemovalHooks: MemberRemovalHook[] = [];
   const enrollmentValidations: EnrollmentRequest[] = [];
   const validatorDouble = new ValidatorDouble();
+  const intune = new IntuneDouble();
   /** A test-only kind that allows every request, needs no settings or secret, and is told nothing. It knows a device by its `IntuneDeviceId://` URI, as Intune does. */
   const allowing = (vouchesForNames: boolean): EnrollmentValidatorKind => ({
     settings: z.object({}).strict(),
@@ -232,8 +237,8 @@ export async function createHarness(overrides: Partial<AppDeps> = {}, { database
     pkiBaseURL: PKI_BASE_URL,
     secret: "test-secret-test-secret-test-secret-1234",
     // Test-only Enrollment Validator kinds: two that allow every request, one vouching for names and one not, and one
-    // backed by the validator double.
-    enrollmentValidators: { test_allow: allowing(true), test_names: allowing(false), test_double: validatorDouble.kind() },
+    // backed by the validator double; and the platform's Intune kind, reaching the Intune double.
+    enrollmentValidators: { test_allow: allowing(true), test_names: allowing(false), test_double: validatorDouble.kind(), intune: createIntuneKind({ fetch: intune.fetch }) },
     ...overrides,
   };
   const { app, auth, db, unitOfWork, issuances, renewals, notifications, auditForwarding, crls, enrollmentValidators } = createApp(deps);
@@ -256,6 +261,7 @@ export async function createHarness(overrides: Partial<AppDeps> = {}, { database
     memberRemovalHooks.length = 0;
     enrollmentValidations.length = 0;
     validatorDouble.reset();
+    intune.reset();
     createdAccountKeys.length = 0;
     caDirectories.staging = caDirectories.production = PEBBLE_DIRECTORY;
     now = new Date("2026-01-01T00:00:00Z");
@@ -304,6 +310,7 @@ export async function createHarness(overrides: Partial<AppDeps> = {}, { database
     memberRemovalHooks,
     enrollmentValidations,
     validatorDouble,
+    intune,
     deliverEnrollmentNotifications: () => enrollmentValidators.deliver(),
     pollRevocationFeeds: () => enrollmentValidators.pollFeeds(),
     setNow: (d) => {
