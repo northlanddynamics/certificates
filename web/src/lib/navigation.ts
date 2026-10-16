@@ -56,8 +56,6 @@ export function organizationNavGroups(org: Org): NavGroup[] {
           items: [
             ...(can(org, "acmeAccount", "read") ? [{ title: "ACME accounts", url: `${base}/acme-accounts`, icon: LandmarkIcon }] : []),
             ...(can(org, "dnsProvider", "read") ? [{ title: "DNS Providers", url: `${base}/dns-providers`, icon: GlobeIcon }] : []),
-            // Anyone may list the channels (to choose one as a Subscriber), but the page is for configuring them.
-            ...(can(org, "notificationChannel", "create") ? [{ title: "Notification channels", url: `${base}/notification-channels`, icon: BellIcon }] : []),
           ],
         },
         {
@@ -108,8 +106,13 @@ export const loginPolicyUrl = (orgId: string) => `/organizations/${orgId}/login-
 export const ACCOUNT_SECURITY_URL = "/account/security";
 export const accountNav: NavItem[] = [{ title: "Account security", url: ACCOUNT_SECURITY_URL, icon: ShieldUserIcon }];
 
-/** The signed-in user's pages within one Organization, which the user menu opens below their own. Anyone may make their own API keys, so the page is open to all. */
-export const organizationAccountNav = (org: Org): NavItem[] => [{ title: "API keys", url: `/organizations/${org.id}/api-keys`, icon: KeyRoundIcon }];
+/** The pages of one Organization that the user menu opens, below the user's own. */
+export const organizationAccountNav = (org: Org): NavItem[] => [
+  // Anyone may list the channels (to choose one as a Subscriber), but the page is for configuring them.
+  ...(can(org, "notificationChannel", "create") ? [{ title: "Notification channels", url: `/organizations/${org.id}/notification-channels`, icon: BellIcon }] : []),
+  // Anyone may make their own keys, so the page is open to all.
+  { title: "API keys", url: `/organizations/${org.id}/api-keys`, icon: KeyRoundIcon },
+];
 
 /** Whether `pathname` is on the page `url`. */
 export const isOnPage = (pathname: string, url: string) => pathname === url || pathname.startsWith(`${url}/`);
