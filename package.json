@@ -25,6 +25,7 @@
     "drizzle-orm": "0.45.4",
     "hono": "4.13.13",
     "pg": "8.23.1",
+    "ts-scep": "file:./vendor/ts-scep",
     "zod": "4.6.5"
   },
   "devDependencies": {
@@ -37,7 +38,8 @@
     "typescript": "5"
   },
   "overrides": {
-    "express": "5.2.1"
+    "express": "5.2.1",
+    "@peculiar/asn1-schema": "2.11.0"
   },
   "workspaces": [
     "web"

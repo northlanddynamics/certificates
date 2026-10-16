@@ -66,8 +66,16 @@ A Certificate issued from a Private CA names, in its CRL Distribution Point and 
 
 Deployment notes:
 
-- These routes must be public: reachable by every relying party (servers, load balancers, RADIUS servers, browsers) with no authentication, no VPN and no IP allowlist. They are the platform's only unauthenticated routes outside `/api/auth`.
+- These routes must be public: reachable by every relying party (servers, load balancers, RADIUS servers, browsers) with no authentication, no VPN and no IP allowlist. With the SCEP routes below, they are the platform's only unauthenticated routes outside `/api/auth`.
 - They must be reachable over plain HTTP, and must not redirect to HTTPS: a relying party checking revocation must not need TLS, which would need a revocation check of its own. Set `PKI_BASE_URL` to an `http://` URL, such as `http://pki.example.com`. A TLS terminator or load balancer in front of the platform must pass `/pki/*` through over HTTP (no HTTPS redirect, no HSTS on that host). When the platform serves TLS itself (`TLS_CERT_FILE`), set `PKI_HTTP_PORT` (such as 80) and it also listens there over plain HTTP, answering only `/pki/*`. They are served over HTTPS too, on the main listener.
+
+## Device enrollment (SCEP)
+
+An Organization Administrator creates an Enrollment Profile on an active Issuing CA (`POST /api/organizations/{orgId}/enrollment-profiles`): the validity (365 days unless given, never past the Issuing CA's end), key usage (digitalSignature and keyEncipherment), extended key usages (clientAuth) and RSA key sizes of the Device Certificates it issues, and the Enrollment Validator kind that decides each request (`GET .../enrollment-validator-kinds` lists those the platform runs; there are none in production yet, so the web hides the page outside development). The platform makes the profile an RA: a software RSA key held as a Secret, and a certificate the Issuing CA signs for it (ADR 0007). The profile's SCEP URL is `<BASE_URL>/scep/<publicId>`, an opaque id; `.../enrollment-profiles/{id}/ca-certificate?ca=root|issuing` downloads the certificate a device management platform's trusted certificate profile needs.
+
+A device enrolls there with `GetCACaps`, `GetCACert` (the Issuing CA, the RA certificate and the chain to the root) and `PKIOperation` `PKCSReq`, by POST or GET (also at `.../pkiclient.exe`, which Windows appends), served by [ts-scep](vendor/ts-scep/VENDORED.md). It gets a Device Certificate with the CSR's subject and subject alternative names and the profile's key usage, extended key usages and validity, and nothing else the CSR asks for; or FAILURE (`badRequest`) for a key the profile does not allow, a DNS name outside the Issuing CA's permitted names, an Issuing CA that no longer issues, or a request its validator refuses. Each Device Certificate is stored with its profile, apart from the Managed Certificates, with a `device_certificate.issued` Audit Event.
+
+Deployment notes: the SCEP routes must be public, reachable by devices from anywhere with no authentication, and served over HTTPS (Android requires it), so put `BASE_URL` on a TLS listener that devices can reach.
 
 ## Audit
 

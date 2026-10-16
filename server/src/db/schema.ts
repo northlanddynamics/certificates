@@ -11,6 +11,7 @@ import type { IssuanceKind } from "../issuance-kinds";
 import type { IssuerKind } from "../issuer-kinds";
 import type { KeyAlgorithm, KeyCustody } from "../csr";
 import type { IssuingCaStatus, PrivateCaKind, PrivateCaStatus } from "../private-ca-kinds";
+import type { DeviceExtendedKeyUsage, DeviceKeyType, DeviceKeyUsage } from "../enrollment-profile-kinds";
 import type { AgentArch, AgentOs } from "../agent-kinds";
 import type { ApprovalStatus } from "../approval";
 import type { NameChangeStatus } from "../name-change";
@@ -538,6 +539,83 @@ export const certificateRevocation = pgTable(
   (t) => [
     index("certificate_revocation_org_idx").on(t.organizationId),
     check("certificate_revocation_reason", sql`${t.reason} in ('unspecified', 'keyCompromise', 'affiliationChanged', 'superseded', 'cessationOfOperation', 'privilegeWithdrawn')`),
+  ],
+);
+
+/**
+ * An Enrollment Profile (enrollment-profiles.ts): the template under which devices obtain Device Certificates in bulk from
+ * one Issuing CA, at a SCEP URL under its opaque `public_id`, with the Enrollment Validator of `validator_kind` deciding
+ * each request. Its RA certificate, which the Issuing CA signed, and the RA's software RSA key, a Secret (ADR 0007),
+ * open SCEP requests and sign SCEP responses.
+ */
+export const enrollmentProfile = pgTable(
+  "enrollment_profile",
+  {
+    id: uuid("id").primaryKey().defaultRandom(),
+    organizationId: text("organization_id")
+      .notNull()
+      .references(() => organization.id),
+    name: text("name").notNull(),
+    /** What its SCEP URL is under: random, and nothing else about the profile or its Organization. */
+    publicId: text("public_id").notNull(),
+    issuingCaId: uuid("issuing_ca_id").notNull(),
+    /** How long its Device Certificates are valid for, in days, though never past the Issuing CA's end. */
+    validityDays: integer("validity_days").notNull(),
+    keyUsage: text("key_usage").array().$type<DeviceKeyUsage[]>().notNull(),
+    extendedKeyUsage: text("extended_key_usage").array().$type<DeviceExtendedKeyUsage[]>().notNull(),
+    allowedKeyTypes: text("allowed_key_types").array().$type<DeviceKeyType[]>().notNull(),
+    /** The Enrollment Validator kind (enrollment-validator.ts) that decides its requests. */
+    validatorKind: text("validator_kind").notNull(),
+    /** Its RA certificate (PEM), and the Secret holding the RA's private key (PKCS #8 PEM). */
+    raCertificatePem: text("ra_certificate_pem").notNull(),
+    raKeySecretId: uuid("ra_key_secret_id").notNull(),
+    createdAt: timestamp("created_at", { withTimezone: true }).notNull().defaultNow(),
+  },
+  (t) => [
+    unique("enrollment_profile_organization_name_unique").on(t.organizationId, t.name),
+    unique("enrollment_profile_public_id_unique").on(t.publicId),
+    foreignKey({ columns: [t.issuingCaId, t.organizationId], foreignColumns: [issuingCa.id, issuingCa.organizationId] }),
+    foreignKey({ columns: [t.raKeySecretId, t.organizationId], foreignColumns: [secret.id, secret.organizationId] }),
+    // Lets other tables reference a profile together with its Organization, so none can point at another's.
+    unique("enrollment_profile_id_organization_unique").on(t.id, t.organizationId),
+    check("enrollment_profile_validity", sql`${t.validityDays} >= 1`),
+  ],
+);
+
+/**
+ * A Device Certificate: one a device obtained under an Enrollment Profile. It belongs to the profile, not to a Managed
+ * Certificate, and has no Owners.
+ */
+export const deviceCertificate = pgTable(
+  "device_certificate",
+  {
+    id: uuid("id").primaryKey().defaultRandom(),
+    organizationId: text("organization_id")
+      .notNull()
+      .references(() => organization.id),
+    enrollmentProfileId: uuid("enrollment_profile_id").notNull(),
+    /** The Issuing CA that signed it, whose CRL lists it once revoked. */
+    issuingCaId: uuid("issuing_ca_id").notNull(),
+    /** Its serial number, upper-case hex, and the SHA-256 of its DER, lower-case hex. */
+    serial: text("serial").notNull(),
+    fingerprint: text("fingerprint").notNull(),
+    /** Its subject (RFC 4514) and subject alternative names, as the CSR gave them. */
+    subject: text("subject").notNull(),
+    subjectAltNames: jsonb("subject_alt_names").$type<{ type: string; value: string }[]>().notNull(),
+    notBefore: timestamp("not_before", { withTimezone: true }).notNull(),
+    notAfter: timestamp("not_after", { withTimezone: true }).notNull(),
+    certificatePem: text("certificate_pem").notNull(),
+    /** The device as its Enrollment Validator knows it, such as Intune's device ID; none when the request did not say. */
+    deviceId: text("device_id"),
+    /** The SCEP transaction ID of the request it answered. */
+    transactionId: text("transaction_id").notNull(),
+    createdAt: timestamp("created_at", { withTimezone: true }).notNull().defaultNow(),
+  },
+  (t) => [
+    foreignKey({ columns: [t.enrollmentProfileId, t.organizationId], foreignColumns: [enrollmentProfile.id, enrollmentProfile.organizationId] }),
+    foreignKey({ columns: [t.issuingCaId, t.organizationId], foreignColumns: [issuingCa.id, issuingCa.organizationId] }),
+    unique("device_certificate_organization_fingerprint_unique").on(t.organizationId, t.fingerprint),
+    index("device_certificate_profile_idx").on(t.enrollmentProfileId, t.createdAt),
   ],
 );
 

@@ -13,7 +13,7 @@ export const APPROVER_ROLE = "approver";
 export const MEMBER_ROLE = "member";
 
 // Every permission there is. The organization, member, invitation and team resources are the ones Better Auth's
-// organization plugin checks itself; `audit`, `acmeAccount`, `dnsProvider`, `validationZone`, `dcvRule`, `managedCertificate`, `approval`, `agent`, `deploymentScript`, `deployment`, `notificationChannel`, `auditForwarder`, `loginPolicy`, `ssoConnection`, `privateCa` and `apiKey` are ours (the last is the plugin's too).
+// organization plugin checks itself; `audit`, `acmeAccount`, `dnsProvider`, `validationZone`, `dcvRule`, `managedCertificate`, `approval`, `agent`, `deploymentScript`, `deployment`, `notificationChannel`, `auditForwarder`, `loginPolicy`, `ssoConnection`, `privateCa`, `enrollmentProfile` and `apiKey` are ours (the last is the plugin's too).
 const statements = {
   organization: ["update", "delete"],
   member: ["create", "update", "delete"],
@@ -60,6 +60,10 @@ const statements = {
   // Private CAs: the Organization's own CAs. Everyone may `read` them, to see which exist and download their chains, so
   // as to propose against the right one; only Organization Administrators `create`, `update`, `retire` or `revoke` one.
   privateCa: ["read", "create", "update", "retire", "revoke"],
+  // Enrollment Profiles: what devices enroll under, from the Private CAs, with no Approval and no Owners, so only
+  // Organization Administrators hold any of this. `read` sees them, their SCEP URLs and CA certificates; `create`,
+  // `update` and `disable` configure them.
+  enrollmentProfile: ["read", "create", "update", "disable"],
 } as const;
 
 export type Permissions = { [R in keyof typeof statements]?: (typeof statements)[R][number][] };

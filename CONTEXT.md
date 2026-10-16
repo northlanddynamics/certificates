@@ -188,11 +188,15 @@ _Avoid_: agent token (the registration token is used once and is not what an Age
 One record in an Organization's append-only audit log: who did what to which target, and when. Written together with the change it records, so a change that does not happen leaves none.
 _Avoid_: audit entry, audit record, log line
 
-### Device certificates (future)
+### Device enrollment
 
 **Enrollment Profile**:
-A template under which devices obtain client Certificates in bulk from a Private CA, without per-certificate Approval or Owners.
+A protocol-neutral template under which devices obtain client Certificates in bulk from a Private CA's Issuing CA, without per-certificate Approval or Owners. It fixes the Issuing CA, the validity, key usage, EKU and allowed key types of what it issues, and the integration that decides each request; anything a device asks for beyond it is ignored. Devices enroll at its SCEP URL, under an opaque id.
 _Avoid_: SCEP profile, template
+
+**Device Certificate**:
+A Certificate issued under an Enrollment Profile. It belongs to the profile, not to a Managed Certificate, has no Owners, never appears among Managed Certificates, and is renewed by the device enrolling again.
+_Avoid_: client cert, device cert record
 
 ### Discovery (future)
 

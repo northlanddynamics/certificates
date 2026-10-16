@@ -203,6 +203,84 @@ export async function makeTlsServer(kms: Kms, by: Signer, input: { csr: string; 
   );
 }
 
+const SUBJECT_ALT_NAME = "2.5.29.17";
+/** The Microsoft "Certificate Request Agent" EKU, which NDES gives its RA signing certificate. */
+const CERTIFICATE_REQUEST_AGENT = "1.3.6.1.4.1.311.20.2.1";
+
+/** A certificate's subject alternative names, each as @peculiar/x509 names its type ("dns", "url", "email", "ip", …); none when it has none. */
+export function subjectAltNamesOf(source: x509.X509Certificate | x509.Pkcs10CertificateRequest): { type: string; value: string }[] {
+  const extension = source.extensions.find((e) => e.type === SUBJECT_ALT_NAME);
+  return extension ? new x509.SubjectAlternativeNameExtension(extension.rawData).names.toJSON() : [];
+}
+
+/**
+ * An Enrollment Profile's SCEP RA certificate for the RA's own (software, RSA) key `publicKey` (DER
+ * SubjectPublicKeyInfo), signed by `by`: no CA, its key usage what decrypting requests and signing responses needs, and
+ * the request agent EKU that NDES's RA certificate has. It names where `by` publishes.
+ */
+export async function makeRaCertificate(kms: Kms, by: Signer, input: { publicKey: Uint8Array; subject: x509.Name; notBefore: Date; notAfter: Date; publication: Publication }) {
+  const publicKey = new x509.PublicKey(new Uint8Array(input.publicKey).buffer);
+  const { crypto, signingKey } = kmsSigning(kms, by);
+  return x509.X509CertificateGenerator.create(
+    {
+      serialNumber: newSerial(),
+      subject: input.subject,
+      issuer: by.certificate.subjectName,
+      notBefore: input.notBefore,
+      notAfter: input.notAfter,
+      publicKey,
+      signingKey,
+      extensions: [
+        new x509.BasicConstraintsExtension(false, undefined, true),
+        new x509.KeyUsagesExtension(x509.KeyUsageFlags.digitalSignature | x509.KeyUsageFlags.keyEncipherment, true),
+        new x509.ExtendedKeyUsageExtension([CERTIFICATE_REQUEST_AGENT]),
+        await x509.SubjectKeyIdentifierExtension.create(publicKey, false, webcrypto as unknown as Crypto),
+        await x509.AuthorityKeyIdentifierExtension.create(by.certificate.publicKey, false, webcrypto as unknown as Crypto),
+        ...publicationExtensions(input.publication),
+      ],
+    },
+    crypto,
+  );
+}
+
+/**
+ * A Device Certificate for the CSR (DER) signed by `by`: the CSR's subject and subject alternative names (critical when
+ * the subject is empty, as RFC 5280 asks), with the key usage and extended key usages (OIDs) given and nothing else the
+ * CSR asks for. It names where `by` publishes.
+ */
+export async function makeDeviceCertificate(
+  kms: Kms,
+  by: Signer,
+  input: { csr: Uint8Array; keyUsage: (keyof typeof x509.KeyUsageFlags)[]; extendedKeyUsages: string[]; notBefore: Date; notAfter: Date; publication: Publication },
+) {
+  const csr = new x509.Pkcs10CertificateRequest(new Uint8Array(input.csr));
+  const subject = new x509.Name(csr.subjectName.toArrayBuffer());
+  const san = csr.extensions.find((e) => e.type === SUBJECT_ALT_NAME);
+  const { crypto, signingKey } = kmsSigning(kms, by);
+  return x509.X509CertificateGenerator.create(
+    {
+      serialNumber: newSerial(),
+      subject,
+      issuer: by.certificate.subjectName,
+      notBefore: input.notBefore,
+      notAfter: input.notAfter,
+      publicKey: csr.publicKey,
+      signingKey,
+      extensions: [
+        new x509.BasicConstraintsExtension(false, undefined, true),
+        new x509.KeyUsagesExtension(input.keyUsage.reduce<number>((flags, usage) => flags | x509.KeyUsageFlags[usage], 0), true),
+        new x509.ExtendedKeyUsageExtension(input.extendedKeyUsages),
+        // As the CSR encoded them, so that every kind of name it has (an otherName UPN too) is kept as it was.
+        ...(san ? [new x509.Extension(SUBJECT_ALT_NAME, subject.toJSON().length === 0, san.value)] : []),
+        await x509.SubjectKeyIdentifierExtension.create(csr.publicKey, false, webcrypto as unknown as Crypto),
+        await x509.AuthorityKeyIdentifierExtension.create(by.certificate.publicKey, false, webcrypto as unknown as Crypto),
+        ...publicationExtensions(input.publication),
+      ],
+    },
+    crypto,
+  );
+}
+
 /**
  * A CSR for an Issuing CA of `key` and `subject`, signed with that key, for the Organization's own root to sign. It asks
  * for a CA that signs end-entity certificates only (pathLen 0); what the root puts in what it signs is the root's to decide.

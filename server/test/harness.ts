@@ -203,6 +203,8 @@ export async function createHarness(overrides: Partial<AppDeps> = {}, { database
     baseURL: BASE,
     pkiBaseURL: PKI_BASE_URL,
     secret: "test-secret-test-secret-test-secret-1234",
+    // A test-only Enrollment Validator kind that allows every request.
+    enrollmentValidators: { test_allow: { validate: async () => ({ allowed: true }) } },
     ...overrides,
   };
   const { app, auth, db, unitOfWork, issuances, renewals, notifications, auditForwarding, crls } = createApp(deps);

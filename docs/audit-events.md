@@ -56,6 +56,8 @@ Each resource's verbs, as of this writing. New ones may be added within version 
 | `managed_certificate` | `created`, `proposed`, `approved`, `rejected`, `owner_added`, `owner_removed`, `subscriber_added`, `subscriber_removed`, `renewal_policy_changed`, `csr_uploaded`, `names_changed`, `archived`, `issuer_changed` |
 | `certificate` | `revoked` |
 | `private_ca` | `created`, `issuing_ca_added`, `csr_signed`, `updated`, `retired`, `revoked`, `crl_published` |
+| `enrollment_profile` | `created` |
+| `device_certificate` | `issued` |
 | `name_change` | `proposed`, `approved`, `rejected`, `withdrawn`, `discarded` |
 | `issuance` | `started`, `succeeded`, `failed` |
 | `api_key` | `created`, `revoked`, `used` |
@@ -90,3 +92,9 @@ Each resource's verbs, as of this writing. New ones may be added within version 
 A Managed Certificate issued from a Private CA is audited with the same actions as one from an ACME CA. Its `managed_certificate.created` (also when a Deployment creates it) or `managed_certificate.proposed`, `issuance.started`, `issuance.succeeded` and `issuance.failed` (once the Managed Certificate was read) have `detail.issuer`, `{ "kind": "private_ca", "issuingCaId": "..." }`, the Issuing CA it is issued from, and no `environment`. Its `managed_certificate.created` or `managed_certificate.proposed` also has `validityDays` when it chose a validity, and none when it gets the Issuing CA's default. A name change that gives it another validity says so in its `managed_certificate.names_changed`, `name_change.proposed` and `name_change.approved`, as `validityDays: { "from": ..., "to": ... }` (null for the Issuing CA's default); one that keeps its validity has no `validityDays`. Its `certificate.revoked` has `detail.issuer` too, and its `reason` may also be `affiliationChanged` or `privilegeWithdrawn`.
 
 `managed_certificate.issuer_changed` targets the Managed Certificate when an Organization Administrator repoints it from one Issuing CA to another, as in rolling an Issuing CA over. Its `detail` has its `names`, and `from` and `to`, each `{ "kind": "private_ca", "issuingCaId": "..." }`. Repointing it to the Issuing CA it is on already is not an event.
+
+### Device enrollment
+
+`enrollment_profile.created` targets the Enrollment Profile (`enrollment_profile`, its id) an Organization Administrator created. Its `detail` has the `name`, the `issuingCa` it issues from (`id`, `subject`), `validityDays`, `keyUsage` and `extendedKeyUsage` (by name, such as `digitalSignature` and `clientAuth`), `allowedKeyTypes` (such as `rsa-2048`), the `validator` (`{ "kind": ... }`), and the `serial` and `notAfter` of its `raCertificate`. The RA's key is never in it.
+
+`device_certificate.issued` targets the Device Certificate (`device_certificate`, its id) a device enrolled for under an Enrollment Profile, with no actor (both null): a device is not a user. Its `detail` has the `enrollmentProfile` (`id`, `name`), the certificate's `serial` (upper-case hex), `subject` and `subjectAltNames` (each `{ "type": ..., "value": ... }`, the type being `dns`, `email`, `ip`, `url`, `upn` or `guid`), its `notAfter`, and the SCEP `transactionId` of the request. A refused request is not an event.

@@ -21,6 +21,8 @@ import { registerAuditRoutes } from "./audit-routes";
 import { createAuditTransport, type AuditTransport } from "./audit-transport";
 import { createCrls, registerPkiRoutes } from "./crl";
 import { createDb } from "./db/client";
+import { registerEnrollmentProfiles } from "./enrollment-profiles";
+import type { EnrollmentValidators } from "./enrollment-validator";
 import { DEFAULT_DNS_RELAY, createDnsRelay, type DnsRelayConfig } from "./dns-relay";
 import { createDnsProviders, registerDnsProviders } from "./dns-providers";
 import { member, organization } from "./db/schema";
@@ -53,6 +55,7 @@ import { removeTeamFromSubscribers, removeUserFromSubscribers } from "./subscrib
 import { createOrganizations } from "./organizations";
 import { createPrivateCas, registerPrivateCas } from "./private-ca";
 import { ROLE_NAMES, permissionsOf } from "./permissions";
+import { registerScep } from "./scep";
 import { createSecrets } from "./secrets";
 import { registerSsoConnections } from "./sso-connections";
 import { provisionOnSsoSignIn } from "./sso-sign-in";
@@ -91,6 +94,8 @@ export interface AppDeps {
   auditTransport?: AuditTransport;
   /** See `OrganizationChangesDeps.memberRemovalHooks`. */
   memberRemovalHooks?: MemberRemovalHook[];
+  /** The Enrollment Validator kinds Enrollment Profiles can name, by name (enrollment-validator.ts); none unless given. */
+  enrollmentValidators?: EnrollmentValidators;
 }
 
 export function createApp(deps: AppDeps) {
@@ -295,7 +300,11 @@ export function createApp(deps: AppDeps) {
   const crls = createCrls({ db, unitOfWork, kms: deps.kms, clock });
   registerPrivateCas({ app, db, requireUser, authorize, unitOfWork, kms: deps.kms, clock, crls, pkiBaseURL });
   registerPkiRoutes({ app, db });
-  const issuers = createIssuers({ acme: deps.certificateAuthority, secrets, privateCas: createPrivateCas({ kms: deps.kms, clock, crls, pkiBaseURL }) });
+  const privateCas = createPrivateCas({ kms: deps.kms, clock, crls, pkiBaseURL });
+  const enrollmentValidators = deps.enrollmentValidators ?? {};
+  registerEnrollmentProfiles({ app, db, requireUser, authorize, unitOfWork, secrets, privateCas, validators: enrollmentValidators, baseURL: deps.baseURL });
+  registerScep({ app, db, unitOfWork, secrets, privateCas, validators: enrollmentValidators });
+  const issuers = createIssuers({ acme: deps.certificateAuthority, secrets, privateCas });
   const issuances = createIssuances({ db, unitOfWork, issuers, dcv });
   const notifications = createNotifications({
     db,

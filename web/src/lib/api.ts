@@ -1,5 +1,6 @@
 // The server's own list of the reasons each kind of issuer takes, from a module that imports only types.
 import { ISSUING_CA_REVOCATION_REASONS, REVOCATION_REASONS_OF, type RevocationReason } from "../../../server/src/revocation-reasons";
+import type { DeviceExtendedKeyUsage, DeviceKeyType, DeviceKeyUsage } from "../../../server/src/enrollment-profile-kinds";
 
 // The web UI talks only to the platform's HTTP API (described by /api/openapi.json).
 // Sign-in and sign-up go through Better Auth's endpoints, which are mounted on that same API under /api/auth.
@@ -314,6 +315,33 @@ export interface NewPrivateCa {
   lifetimeYears?: number;
   permittedNames: PermittedNames;
   validity: PrivateCaValidity;
+}
+/** A template under which devices enroll over SCEP for Device Certificates from an Issuing CA. */
+export interface EnrollmentProfile {
+  id: string;
+  name: string;
+  /** The opaque id its SCEP URL is under. */
+  publicId: string;
+  /** Where devices enroll: pasted into the device management platform's SCEP profile. */
+  scepUrl: string;
+  issuingCaId: string;
+  privateCaId: string;
+  validityDays: number;
+  keyUsage: DeviceKeyUsage[];
+  extendedKeyUsage: DeviceExtendedKeyUsage[];
+  allowedKeyTypes: DeviceKeyType[];
+  validator: { kind: string };
+  raCertificate: { subject: string; serial: string; notAfter: string };
+  createdAt: string;
+}
+export interface NewEnrollmentProfile {
+  name: string;
+  issuingCaId: string;
+  validityDays: number;
+  keyUsage: DeviceKeyUsage[];
+  extendedKeyUsage: DeviceExtendedKeyUsage[];
+  allowedKeyTypes: DeviceKeyType[];
+  validator: { kind: string };
 }
 /** An Organization's account with a CA; its key is never returned. */
 export interface AcmeAccount {
@@ -682,6 +710,12 @@ export const api = {
   /** Repoints a Managed Certificate issued from a Private CA to another Issuing CA; its next Issuance comes from there. */
   changeIssuer: (orgId: string, id: string, issuingCaId: string) =>
     call<ManagedCertificate>(`/api/organizations/${orgId}/managed-certificates/${id}/issuer`, { method: "PUT", body: { issuer: { kind: "private_ca", issuingCaId } } }),
+  enrollmentProfiles: (orgId: string) => call<{ items: EnrollmentProfile[] }>(`/api/organizations/${orgId}/enrollment-profiles`),
+  createEnrollmentProfile: (orgId: string, body: NewEnrollmentProfile) => call<EnrollmentProfile>(`/api/organizations/${orgId}/enrollment-profiles`, { body }),
+  /** The Enrollment Validator kinds the platform runs, one of which a profile must name. */
+  enrollmentValidatorKinds: (orgId: string) => call<{ items: { kind: string }[] }>(`/api/organizations/${orgId}/enrollment-validator-kinds`),
+  /** Where a profile's root or Issuing CA certificate downloads from, for the device management platform's trusted certificate profile. */
+  enrollmentProfileCaCertificateUrl: (orgId: string, id: string, ca: "root" | "issuing") => `/api/organizations/${orgId}/enrollment-profiles/${id}/ca-certificate?ca=${ca}`,
   acmeAccounts: (orgId: string) => call<{ items: AcmeAccount[] }>(`/api/organizations/${orgId}/acme-accounts`),
   registerAcmeAccount: (orgId: string, body: { environment: AcmeAccount["environment"]; contactEmail?: string }) =>
     call<AcmeAccount>(`/api/organizations/${orgId}/acme-accounts`, { body: { ...body, termsOfServiceAgreed: true } }),
