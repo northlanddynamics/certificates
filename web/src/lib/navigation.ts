@@ -1,4 +1,4 @@
-import { BellIcon, BuildingIcon, LockKeyholeIcon, PlugIcon, ScrollTextIcon, SendIcon, BotIcon, GlobeIcon, LandmarkIcon, FileKey2Icon, FileTerminalIcon, KeyRoundIcon, LogInIcon, RocketIcon, ShieldCheckIcon, ShieldEllipsisIcon, ShieldIcon, ShieldUserIcon, TabletSmartphoneIcon, UserRoundIcon, UsersIcon, type LucideIcon } from "lucide-react";
+import { BadgeCheckIcon, BellIcon, BuildingIcon, LockKeyholeIcon, PlugIcon, ScrollTextIcon, SendIcon, BotIcon, GlobeIcon, LandmarkIcon, FileKey2Icon, FileTerminalIcon, KeyRoundIcon, LogInIcon, RocketIcon, ShieldCheckIcon, ShieldEllipsisIcon, ShieldIcon, ShieldUserIcon, TabletSmartphoneIcon, UserRoundIcon, UsersIcon, type LucideIcon } from "lucide-react";
 import { can, type Me } from "@/lib/api";
 
 type Org = Me["organizations"][number];
@@ -10,17 +10,11 @@ export interface NavItem {
   icon: LucideIcon;
 }
 
-/** Pages under a heading of their own inside a section. */
-export interface NavSubgroup {
-  title: string;
-  items: NavItem[];
-}
-
 /** Pages folded under one expandable entry of a group. */
 export interface NavSection {
   title: string;
   icon: LucideIcon;
-  items: (NavItem | NavSubgroup)[];
+  items: NavItem[];
 }
 
 export interface NavGroup {
@@ -30,12 +24,8 @@ export interface NavGroup {
 }
 
 export const isNavSection = (entry: NavItem | NavSection): entry is NavSection => "items" in entry;
-export const isNavSubgroup = (entry: NavItem | NavSubgroup): entry is NavSubgroup => "items" in entry;
 
-/** The pages of a section, its subgroups' included. */
-export const sectionPages = (section: NavSection): NavItem[] => section.items.flatMap((entry) => (isNavSubgroup(entry) ? entry.items : [entry]));
-
-/** The pages of one Organization that the caller may open, under the headings the sidebar gives them; a heading, section or subgroup with no page left under it is not shown. */
+/** The pages of one Organization that the caller may open, under the headings the sidebar gives them; a heading or section with no page left under it is not shown. */
 export function organizationNavGroups(org: Org): NavGroup[] {
   const base = `/organizations/${org.id}`;
   const groups: NavGroup[] = [
@@ -55,15 +45,16 @@ export function organizationNavGroups(org: Org): NavGroup[] {
       label: "Administration",
       items: [
         {
+          title: "Certificate authorities",
+          icon: BadgeCheckIcon,
+          // Anyone may list them (to choose one for a Managed Certificate), but the page is for managing them.
+          items: can(org, "privateCa", "create") ? [{ title: "Private CAs", url: `${base}/private-cas`, icon: ShieldEllipsisIcon }] : [],
+        },
+        {
           title: "Integrations",
           icon: PlugIcon,
           items: [
             ...(can(org, "acmeAccount", "read") ? [{ title: "ACME accounts", url: `${base}/acme-accounts`, icon: LandmarkIcon }] : []),
-            {
-              title: "Certificate authorities",
-              // Anyone may list them (to choose one for a Managed Certificate), but the page is for managing them.
-              items: can(org, "privateCa", "create") ? [{ title: "Private CAs", url: `${base}/private-cas`, icon: ShieldEllipsisIcon }] : [],
-            },
             ...(can(org, "dnsProvider", "read") ? [{ title: "DNS Providers", url: `${base}/dns-providers`, icon: GlobeIcon }] : []),
             // Anyone may list the channels (to choose one as a Subscriber), but the page is for configuring them.
             ...(can(org, "notificationChannel", "create") ? [{ title: "Notification channels", url: `${base}/notification-channels`, icon: BellIcon }] : []),
@@ -99,15 +90,14 @@ export function organizationNavGroups(org: Org): NavGroup[] {
       ],
     },
   ];
-  const pruneSection = (section: NavSection): NavSection => ({ ...section, items: section.items.filter((entry) => !isNavSubgroup(entry) || entry.items.length > 0) });
   return groups
-    .map((g) => ({ ...g, items: g.items.map((entry) => (isNavSection(entry) ? pruneSection(entry) : entry)).filter((entry) => !isNavSection(entry) || entry.items.length > 0) }))
+    .map((g) => ({ ...g, items: g.items.filter((entry) => !isNavSection(entry) || entry.items.length > 0) }))
     .filter((g) => g.items.length > 0);
 }
 
 /** The same pages in one list, to find the one that is open. */
 export const organizationNav = (org: Org): NavItem[] =>
-  [...organizationNavGroups(org).flatMap((g) => g.items.flatMap((entry) => (isNavSection(entry) ? sectionPages(entry) : [entry]))), ...organizationAccountNav(org)];
+  [...organizationNavGroups(org).flatMap((g) => g.items.flatMap((entry) => (isNavSection(entry) ? entry.items : [entry]))), ...organizationAccountNav(org)];
 
 export const platformNav: NavItem[] = [{ title: "Organizations", url: "/platform/organizations", icon: BuildingIcon }];
 

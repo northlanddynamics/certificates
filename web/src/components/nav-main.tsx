@@ -13,7 +13,7 @@ import {
   SidebarMenuSubItem,
   useSidebar,
 } from "@/components/ui/sidebar";
-import { isNavSection, isNavSubgroup, isOnPage, sectionPages, type NavItem, type NavSection } from "@/lib/navigation";
+import { isNavSection, isOnPage, type NavItem, type NavSection } from "@/lib/navigation";
 
 export function NavMain({ label, items }: { label?: string; items: (NavItem | NavSection)[] }) {
   const { pathname } = useLocation();
@@ -43,7 +43,7 @@ export function NavMain({ label, items }: { label?: string; items: (NavItem | Na
 /** An expandable entry, open while one of its pages is. */
 function NavMainSection({ section, pathname }: { section: NavSection; pathname: string }) {
   const sidebar = useSidebar();
-  const containsActive = sectionPages(section).some((item) => isOnPage(pathname, item.url));
+  const containsActive = section.items.some((item) => isOnPage(pathname, item.url));
   const [open, setOpen] = useState(containsActive);
   const [wasActive, setWasActive] = useState(containsActive);
   // Arriving on one of its pages opens the section; leaving leaves it as the user had it.
@@ -74,36 +74,19 @@ function NavMainSection({ section, pathname }: { section: NavSection; pathname: 
         </CollapsibleTrigger>
         <CollapsibleContent>
           <SidebarMenuSub>
-            {section.items.map((entry) =>
-              isNavSubgroup(entry) ? (
-                <SidebarMenuSubItem key={entry.title}>
-                  <div className="px-2 pt-1 text-xs font-medium text-sidebar-foreground/70">{entry.title}</div>
-                  <SidebarMenuSub className="mx-2">
-                    {entry.items.map((item) => (
-                      <NavMainSubItem key={item.url} item={item} pathname={pathname} />
-                    ))}
-                  </SidebarMenuSub>
-                </SidebarMenuSubItem>
-              ) : (
-                <NavMainSubItem key={entry.url} item={entry} pathname={pathname} />
-              ),
-            )}
+            {section.items.map((item) => (
+              <SidebarMenuSubItem key={item.url}>
+                <SidebarMenuSubButton asChild isActive={isOnPage(pathname, item.url)}>
+                  <Link to={item.url}>
+                    <item.icon />
+                    <span>{item.title}</span>
+                  </Link>
+                </SidebarMenuSubButton>
+              </SidebarMenuSubItem>
+            ))}
           </SidebarMenuSub>
         </CollapsibleContent>
       </SidebarMenuItem>
     </Collapsible>
-  );
-}
-
-function NavMainSubItem({ item, pathname }: { item: NavItem; pathname: string }) {
-  return (
-    <SidebarMenuSubItem>
-      <SidebarMenuSubButton asChild isActive={isOnPage(pathname, item.url)}>
-        <Link to={item.url}>
-          <item.icon />
-          <span>{item.title}</span>
-        </Link>
-      </SidebarMenuSubButton>
-    </SidebarMenuSubItem>
   );
 }
