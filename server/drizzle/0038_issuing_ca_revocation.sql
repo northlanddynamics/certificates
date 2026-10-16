@@ -1,4 +1,4 @@
 ALTER TABLE "issuing_ca" ADD COLUMN "revoked_at" timestamp with time zone;--> statement-breakpoint
 ALTER TABLE "issuing_ca" ADD COLUMN "revocation_reason" text;--> statement-breakpoint
 ALTER TABLE "issuing_ca" ADD CONSTRAINT "issuing_ca_revoked" CHECK (("issuing_ca"."status" = 'revoked') = ("issuing_ca"."revoked_at" is not null and "issuing_ca"."revocation_reason" is not null));--> statement-breakpoint
-ALTER TABLE "issuing_ca" ADD CONSTRAINT "issuing_ca_revocation_reason" CHECK ("issuing_ca"."revocation_reason" in ('unspecified', 'keyCompromise', 'affiliationChanged', 'superseded', 'cessationOfOperation'));
+ALTER TABLE "issuing_ca" ADD CONSTRAINT "issuing_ca_revocation_reason" CHECK ("issuing_ca"."revocation_reason" in ('unspecified', 'keyCompromise', 'cACompromise', 'affiliationChanged', 'superseded', 'cessationOfOperation'));

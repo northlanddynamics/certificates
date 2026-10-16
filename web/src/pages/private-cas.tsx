@@ -233,8 +233,8 @@ function RootNameConstraints({ constraints }: { constraints: IssuingCa["nameCons
   );
 }
 
-/** The Organization of the page, as /api/me reports it, and whether its user may change, retire and revoke Private CAs. */
-function useMayUpdate() {
+/** The Organization of the page, as /api/me reports it, and whether its user may change, retire and revoke its Private CAs. */
+function usePrivateCaPermissions() {
   const { orgId } = useParams({ from: ROUTE });
   const org = useQuery({ queryKey: ["me"], queryFn: api.me, select: (me) => me.organizations.find((o) => o.id === orgId) }).data;
   const may = (action: string) => (org ? can(org, "privateCa", action) : false);
@@ -243,7 +243,7 @@ function useMayUpdate() {
 
 /** A root's menu: add an Issuing CA under it, and download it. */
 function RootActions({ ca }: { ca: PrivateCa }) {
-  const { orgId, mayUpdate } = useMayUpdate();
+  const { orgId, mayUpdate } = usePrivateCaPermissions();
   const [adding, setAdding] = useState(false);
   // Under an active root only: the platform's signs the new one at once, the Organization's own signs its CSR later.
   const mayAdd = mayUpdate && ca.status === "active";
@@ -275,7 +275,7 @@ function RootActions({ ca }: { ca: PrivateCa }) {
 
 /** An Issuing CA's menu: under the Organization's own root, its CSR and the upload of what that root signed; its permitted names and validity; its chain; and retiring or revoking it. */
 function IssuingCaActions({ ca, issuing }: { ca: PrivateCa; issuing: IssuingCa }) {
-  const { orgId, mayUpdate, mayRetire, mayRevoke } = useMayUpdate();
+  const { orgId, mayUpdate, mayRetire, mayRevoke } = usePrivateCaPermissions();
   const [editing, setEditing] = useState<"names" | "validity" | "upload" | "retire" | "revoke" | null>(null);
   const retirable = mayRetire && issuing.status === "active";
   // Only the platform's own root revokes; the Organization's root revokes what it signed itself.

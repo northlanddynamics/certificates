@@ -70,10 +70,11 @@ function RepointForm({ org, m, currentId, onDone }: { org: Me["organizations"][n
   const [chosen, setChosen] = useState("");
   const privateCas = useQuery({ queryKey: ["private-cas", org.id], queryFn: () => api.privateCas(org.id) });
   const repoint = useAction(() => api.changeIssuer(org.id, m.id, chosen), ["private-cas"], onDone);
-  // The Issuing CAs that issue, other than its own, grouped by their Private CA.
+  // The Issuing CAs that issue, other than its own, grouped by their Private CA: active, under an active root, and not ended.
+  const now = Date.now();
   const offered = (privateCas.data?.items ?? [])
     .filter((ca) => ca.status === "active")
-    .map((ca) => ({ ...ca, issuingCas: ca.issuingCas.filter((i) => i.status === "active" && i.id !== currentId) }))
+    .map((ca) => ({ ...ca, issuingCas: ca.issuingCas.filter((i) => i.status === "active" && i.id !== currentId && i.notAfter !== null && Date.parse(i.notAfter) > now) }))
     .filter((ca) => ca.issuingCas.length > 0);
   const chosenCa = chosen ? findIssuingCa(offered, chosen) : undefined;
   return (

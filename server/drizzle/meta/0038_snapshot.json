@@ -1,5 +1,5 @@
 {
-  "id": "a4b097ed-4653-47f0-be6c-1ce2177cd1fd",
+  "id": "c752f161-e0db-484d-84c1-7ca1f65dbaa5",
   "prevId": "3a19f23c-8fd3-4773-ae67-990dfe988e8b",
   "version": "7",
   "dialect": "postgresql",
@@ -2863,7 +2863,7 @@
         },
         "issuing_ca_revocation_reason": {
           "name": "issuing_ca_revocation_reason",
-          "value": "\"issuing_ca\".\"revocation_reason\" in ('unspecified', 'keyCompromise', 'affiliationChanged', 'superseded', 'cessationOfOperation')"
+          "value": "\"issuing_ca\".\"revocation_reason\" in ('unspecified', 'keyCompromise', 'cACompromise', 'affiliationChanged', 'superseded', 'cessationOfOperation')"
         }
       },
       "isRLSEnabled": false

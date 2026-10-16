@@ -83,7 +83,7 @@ Each resource's verbs, as of this writing. New ones may be added within version 
 
 `private_ca.retired` targets the Private CA too, when an Organization Administrator retires one of its Issuing CAs: it issues nothing more, and keeps publishing its CRL until its last Certificate expires. Its `detail` has the Private CA's `name` and the Issuing CA in `issuingCa` (`{ "id": ..., "subject": ... }`).
 
-`private_ca.revoked` targets the Private CA too, when an Organization Administrator revokes one of its platform-made Issuing CAs, which its root's CRL then lists. Its `detail` has the Private CA's `name`, in `issuingCa` the Issuing CA's `id`, `subject`, and its certificate's `serial` and SHA-256 `fingerprint`, and the RFC 5280 `reason` (`unspecified`, `keyCompromise`, `affiliationChanged`, `superseded` or `cessationOfOperation`).
+`private_ca.revoked` targets the Private CA too, when an Organization Administrator revokes one of its platform-made Issuing CAs, which its root's CRL then lists. Its `detail` has the Private CA's `name`, in `issuingCa` the Issuing CA's `id`, `subject`, and its certificate's `serial` and SHA-256 `fingerprint`, and the RFC 5280 `reason` (`unspecified`, `keyCompromise`, `cACompromise`, `affiliationChanged`, `superseded` or `cessationOfOperation`).
 
 `private_ca.crl_published` targets the Private CA when one of its CRLs is published again after its scheduled reissue had failed (the KMS did not sign it): by the platform (no actor) on a later pass, or with a change that publishes it, such as a revocation. A routine reissue is no event. Its `detail` has which `crl` (`issuing`, an Issuing CA's, with its `issuingCaId`, or `root`, the platform-made root's), its CRL `number`, and `failingSince`, when the reissue first failed.
 

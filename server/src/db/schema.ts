@@ -120,7 +120,7 @@ export const issuingCa = pgTable(
     check("issuing_ca_signed", sql`${t.status} = 'awaiting_signature' or ${t.certificatePem} is not null`),
     check("issuing_ca_validity", sql`${t.defaultValidityDays} between 1 and ${t.maxValidityDays}`),
     check("issuing_ca_revoked", sql`(${t.status} = 'revoked') = (${t.revokedAt} is not null and ${t.revocationReason} is not null)`),
-    check("issuing_ca_revocation_reason", sql`${t.revocationReason} in ('unspecified', 'keyCompromise', 'affiliationChanged', 'superseded', 'cessationOfOperation')`),
+    check("issuing_ca_revocation_reason", sql`${t.revocationReason} in ('unspecified', 'keyCompromise', 'cACompromise', 'affiliationChanged', 'superseded', 'cessationOfOperation')`),
   ],
 );
 

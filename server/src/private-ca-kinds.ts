@@ -25,7 +25,7 @@ export const ISSUING_CA_STATUSES = [
   "active",
   /** It issues nothing more, and keeps publishing its CRL until its last Certificate expires. */
   "retired",
-  /** It was revoked. */
+  /** It was revoked: its root's CRL lists it, and it keeps publishing its own CRL until its last Certificate expires. */
   "revoked",
 ] as const;
 export type IssuingCaStatus = (typeof ISSUING_CA_STATUSES)[number];

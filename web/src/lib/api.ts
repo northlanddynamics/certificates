@@ -128,6 +128,7 @@ export interface Revocation {
 /** Each reason a Certificate may be revoked for (RFC 5280), by the name the server takes, in words, in the order offered. */
 const REVOCATION_REASON_LABELS: Record<RevocationReason, string> = {
   keyCompromise: "Key compromise",
+  cACompromise: "CA compromise",
   superseded: "Superseded",
   cessationOfOperation: "Cessation of operation",
   affiliationChanged: "Affiliation changed",

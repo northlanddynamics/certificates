@@ -314,6 +314,20 @@ describe("revoking a platform-made Issuing CA", () => {
     expect((await ended(mc.id)).issuance).toMatchObject({ status: "failed", failure: { code: "ca_rejected" } });
   });
 
+  test("its own CRL keeps being reissued while a Certificate it signed is unexpired, so relying parties never see it go stale", async () => {
+    const ca = await createCa();
+    const mc = await issued(ca, ["app.internal.acme"], { validityDays: 10 });
+    const leaf = await leafOf(mc.id);
+    expect((await revokeCa(ca, "cACompromise")).status).toBe(200);
+
+    h.setNow(new Date(JAN_1 + 4 * DAY));
+    expect(await h.runCrlScheduler()).toBe(2);
+    expect((await crlAt(crlUrlOf(leaf))).thisUpdate.toISOString()).toBe(new Date(JAN_1 + 4 * DAY).toISOString());
+
+    h.setNow(new Date(JAN_1 + 12 * DAY));
+    expect(await h.runCrlScheduler()).toBe(1);
+  });
+
   test("leaves the other Issuing CAs under its root as they are, and its root's CRL lists only it", async () => {
     const ca = await createCa();
     const next = await addIssuingCa(ca, "CN=Acme Internal TLS 2, O=Acme");
