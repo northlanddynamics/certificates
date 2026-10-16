@@ -4,7 +4,7 @@
 
 **Blocked by:** 01
 
-**Status:** ready-for-agent
+**Status:** done
 
 - [x] A server test, written first, covers `GET …/managed-certificates/:id/certificates/:certId` returning subject names, issuer, serial, signature algorithm, chain, CA and ACME Account with its environment, and any revocation; and "not found" for a caller who may not see the Managed Certificate or for a Certificate of another one.
 - [x] The Certificate list item gains its serial.

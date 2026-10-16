@@ -4,7 +4,7 @@
 
 **Blocked by:** 01 (CSR Generator and the Tools page)
 
-**Status:** ready-for-agent
+**Status:** done
 
 - [x] The embedded generator takes the form's names and key algorithm and shows them read-only; the form's own validation stays the source of those values, and changing them clears a CSR already generated.
 - [x] "Use this CSR" fills the form's CSR textarea and is disabled until the key has been downloaded or copied.
@@ -21,3 +21,5 @@ Implemented in the commit "CSR Generator: embed it in the new Managed Certificat
 - `weakSignatureWarning` (`web/src/lib/csr-signature.ts`) and `CsrSignatureWarning` (`web/src/components/csr-signature-warning.tsx`) are the shared warning for ticket 03. MD5 is not named by `@peculiar/x509`; it comes back as its OID, which the module matches.
 - Checked in the browser pane through a temporary harness page mounting the real dialog: locked names and algorithm, "Use this CSR" disabled until the key was downloaded (the pane refuses clipboard writes, so Copy was not exercised), CSR filled in, cleared on a name change, SHA-1 paste warns.
 - Server tests: a generated CSR for a wildcard and its base name is created and issued; a generated CSR for a wildcard is proposed and waits for Approval.
+
+`web/src/pages/new-managed-certificate-dialog.tsx` is now committed with the sidebar rework; closed as done.

@@ -4,7 +4,7 @@
 
 **Blocked by:** none
 
-**Status:** ready-for-agent
+**Status:** done
 
 - [x] Start by checking which renewal and Certificate fields the API already exposes; none is added in this ticket except what Overview strictly needs.
 - [x] The route is a layout with child routes `/issued`, `/activity`, `/services`, `/notifications` and an index; an unknown slug redirects to Overview.

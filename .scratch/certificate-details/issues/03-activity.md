@@ -4,7 +4,7 @@
 
 **Blocked by:** 01
 
-**Status:** ready-for-agent
+**Status:** done
 
 - [x] A server test, written first, covers `GET …/managed-certificates/:id/issuances`: each attempt's time, kind (first issue, Renewal, Name Change), status and failure code and message; ordered newest first; and "not found" for a caller who may not see the Managed Certificate.
 - [x] The Activity tab shows the existing history entries and the attempts, interleaved by time, each worded as in the existing history, with failures in the destructive style.

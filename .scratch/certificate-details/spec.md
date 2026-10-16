@@ -1,6 +1,6 @@
 # Spec: Managed Certificate details page
 
-Status: ready-for-agent
+Status: done
 
 ## Problem Statement
 
