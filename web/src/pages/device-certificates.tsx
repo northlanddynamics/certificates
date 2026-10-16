@@ -38,16 +38,6 @@ const columns = columnHelper.columns([
 ]);
 const noRows: DeviceCertificate[] = [];
 
-/** `value`, once it has stopped changing for `ms`. */
-function useSettled<T>(value: T, ms: number): T {
-  const [settled, setSettled] = useState(value);
-  useEffect(() => {
-    const timer = setTimeout(() => setSettled(value), ms);
-    return () => clearTimeout(timer);
-  }, [value, ms]);
-  return settled;
-}
-
 /**
  * The Device Certificates an Enrollment Profile issued, newest first, searched by subject, subject alternative name,
  * serial or device ID, and narrowed by status. Each opens to its details and can be downloaded.
@@ -58,11 +48,23 @@ export function DeviceCertificatesPage() {
   const allowed = org ? can(org, "deviceCertificate", "read") : false;
   const profile = useQuery({ queryKey: ["enrollment-profile", orgId, id], queryFn: () => api.enrollmentProfile(orgId, id), enabled: org ? can(org, "enrollmentProfile", "read") : false });
   const [typed, setTyped] = useState("");
-  const q = useSettled(typed.trim(), SEARCH_DELAY_MS);
+  const [q, setQ] = useState("");
   const [status, setStatus] = useState<DeviceCertificateStatus | undefined>();
   const [pagination, setPagination] = useState<PaginationState>({ pageIndex: 0, pageSize: 25 });
-  // A new search starts again from the first page.
-  useEffect(() => setPagination((p) => ({ ...p, pageIndex: 0 })), [q, status]);
+  // A new search starts again from the first page, sent once typing pauses.
+  useEffect(() => {
+    const settled = typed.trim();
+    if (settled === q) return;
+    const timer = setTimeout(() => {
+      setQ(settled);
+      setPagination((p) => ({ ...p, pageIndex: 0 }));
+    }, SEARCH_DELAY_MS);
+    return () => clearTimeout(timer);
+  }, [typed, q]);
+  const narrowStatus = (next: DeviceCertificateStatus | undefined) => {
+    setStatus(next);
+    setPagination({ ...pagination, pageIndex: 0 });
+  };
   const certificates = useQuery({
     queryKey: ["device-certificates", orgId, id, q, status, pagination],
     queryFn: () => api.deviceCertificates(orgId, id, { q, status }, { page: pagination.pageIndex + 1, pageSize: pagination.pageSize }),
@@ -104,7 +106,7 @@ export function DeviceCertificatesPage() {
               </InputGroupAddon>
               <InputGroupInput aria-label="Search Device Certificates" placeholder="Subject, name, serial or device ID" value={typed} onChange={(e) => setTyped(e.target.value)} />
             </InputGroup>
-            <Select value={status ?? ANY_STATUS} onValueChange={(v) => setStatus(v === ANY_STATUS ? undefined : (v as DeviceCertificateStatus))}>
+            <Select value={status ?? ANY_STATUS} onValueChange={(v) => narrowStatus(v === ANY_STATUS ? undefined : (v as DeviceCertificateStatus))}>
               <SelectTrigger className="w-36" aria-label="Status">
                 <SelectValue />
               </SelectTrigger>
@@ -123,7 +125,8 @@ export function DeviceCertificatesPage() {
                 size="sm"
                 onClick={() => {
                   setTyped("");
-                  setStatus(undefined);
+                  setQ("");
+                  narrowStatus(undefined);
                 }}
               >
                 Reset

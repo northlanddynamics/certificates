@@ -203,7 +203,7 @@ What an Enrollment Profile whose Enrollment Validator does not vouch for names l
 _Avoid_: subject policy, SAN rules
 
 **Device Certificate**:
-A Certificate issued under an Enrollment Profile. It belongs to the profile, not to a Managed Certificate, has no Owners, never appears among Managed Certificates, and is renewed by the device enrolling again.
+A Certificate issued under an Enrollment Profile. It belongs to the profile, not to a Managed Certificate, has no Owners, never appears among Managed Certificates, and is renewed by the device enrolling again. It carries the device's ID as its Enrollment Validator knows it (such as Intune's device ID), when the request says.
 _Avoid_: client cert, device cert record
 
 ### Discovery (future)

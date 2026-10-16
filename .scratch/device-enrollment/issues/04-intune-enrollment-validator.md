@@ -17,3 +17,5 @@
 ## Comments
 
 Ticket 03 built the generic connection test route (`POST .../enrollment-profiles/{id}/validator/test`, `enrollment_validator.tested`) and the contract test (`server/test/enrollment-validator-contract.ts`); this ticket adds the Intune kind behind them, its double, and the setup UI.
+
+- Ticket 06: the Intune kind should implement `deviceIdOf` (`server/src/enrollment-validator.ts`) from the `IntuneDeviceId://` URI SAN, so that its Device Certificates carry the device ID and can be found by it.

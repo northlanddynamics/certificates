@@ -59,7 +59,7 @@ function matching(q: string): SQL {
   )!;
 }
 
-/** What has `status` as of `now`. */
+/** What has `status` as of `now`: the rule `toDeviceCertificate` gives each its status by, in SQL. */
 function inStatus(status: DeviceCertificateStatus, now: Date): SQL {
   if (status === "revoked") return isNotNull(deviceCertificate.revokedAt);
   return and(isNull(deviceCertificate.revokedAt), status === "active" ? gt(deviceCertificate.notAfter, now) : lte(deviceCertificate.notAfter, now))!;
@@ -67,6 +67,7 @@ function inStatus(status: DeviceCertificateStatus, now: Date): SQL {
 
 type Row = { certificate: typeof deviceCertificate.$inferSelect; issuer: string };
 
+/** The Device Certificate as the API shows it; its status as `inStatus` finds it. */
 function toDeviceCertificate({ certificate: row, issuer }: Row, now: Date): z.infer<typeof DeviceCertificate> {
   return {
     id: row.id,

@@ -6,7 +6,7 @@
 
 **Status:** ready-for-agent
 
-- [ ] Organization Administrators (`deviceCertificate.revoke`) revoke with `unspecified`, `keyCompromise`, `affiliationChanged`, `superseded`, `cessationOfOperation` or `privilegeWithdrawn`; the CRL is regenerated in the same Unit of Work.
+- [ ] Organization Administrators (`deviceCertificate.revoke`, to be added to the `deviceCertificate` resource in `server/src/permissions.ts`, which ticket 06 declared with `read` only) revoke with `unspecified`, `keyCompromise`, `affiliationChanged`, `superseded`, `cessationOfOperation` or `privilegeWithdrawn`; the CRL is regenerated in the same Unit of Work.
 - [ ] The Intune revocation feed revokes the device's certificates with `cessationOfOperation`, recording the Enrollment Validator as actor, polling Intune's revocation queue at most hourly per Entra app and uploading a result for each request, as `docs/research/intune-scep-api.md` describes.
 - [ ] Check against a real tenant whether the revocation API needs an Entra permission beyond `scep_challenge_provider` and `Application.Read.All`, and confirm how the service accepts `errorCode` (open questions in the research note).
 - [ ] `device_certificate.revoked` Audit Events for both.
