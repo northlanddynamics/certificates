@@ -21,3 +21,9 @@ export const REVOCATION_REASONS_OF: Record<IssuerKind, readonly RevocationReason
   acme: ["unspecified", "keyCompromise", "superseded", "cessationOfOperation"],
   private_ca: ["unspecified", "keyCompromise", "affiliationChanged", "superseded", "cessationOfOperation", "privilegeWithdrawn"],
 };
+
+/**
+ * The reasons a platform-made Issuing CA may be revoked for, which its root's CRL gives: those of a Private CA
+ * Certificate that fit a CA. The database check on `issuing_ca` (schema.ts) lists these too.
+ */
+export const ISSUING_CA_REVOCATION_REASONS = ["unspecified", "keyCompromise", "affiliationChanged", "superseded", "cessationOfOperation"] as const satisfies readonly RevocationReason[];

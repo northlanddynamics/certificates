@@ -6,7 +6,7 @@ This reverses `spec.md`'s former Out of Scope entry "multiple Issuing CAs under 
 
 **Blocked by:** None (03, 04 and 05 are done)
 
-**Status:** ready-for-agent
+**Status:** done
 
 ## Why now
 

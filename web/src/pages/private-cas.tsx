@@ -14,11 +14,14 @@ import { Label } from "@/components/ui/label";
 import { RadioGroup, RadioGroupItem } from "@/components/ui/radio-group";
 import { Textarea } from "@/components/ui/textarea";
 import { Tooltip, TooltipContent, TooltipTrigger } from "@/components/ui/tooltip";
-import { api, can, type IssuingCa, type PermittedNames, type PrivateCa, type PrivateCaValidity } from "@/lib/api";
+import { ConfirmDialog } from "@/components/confirm-dialog";
+import { Field, FieldLabel } from "@/components/ui/field";
+import { Select, SelectContent, SelectItem, SelectTrigger, SelectValue } from "@/components/ui/select";
+import { api, can, issuingCaRevocationReasons, type IssuingCa, type PermittedNames, type PrivateCa, type PrivateCaValidity } from "@/lib/api";
 import { KEY_ALGORITHMS, KEY_ALGORITHM_LABELS, type KeyAlgorithm } from "@/lib/csr-generator";
 import { splitNames } from "@/lib/csr-names";
 import { keyAlgorithmLabel } from "@/lib/managed-certificate";
-import { DEFAULT_VALIDITY_DAYS, MAX_LIFETIME_YEARS, MAX_VALIDITY_DAYS, commonNameOf, isValidityDays, rootSubjectOf } from "@/lib/private-ca";
+import { DEFAULT_VALIDITY_DAYS, MAX_LIFETIME_YEARS, MAX_VALIDITY_DAYS, commonNameOf, daysLabel, isValidityDays, rootSubjectOf } from "@/lib/private-ca";
 import { useAction } from "@/lib/use-action";
 
 const ROUTE = "/app/organizations/$orgId/private-cas";
@@ -38,7 +41,7 @@ const rowsOf = (ca: PrivateCa): CaRow => ({
   subRows: ca.issuingCas.map((issuing) => ({ id: issuing.id, ca, level: "issuing", issuing, subject: issuing.subject, notAfter: issuing.notAfter ?? undefined })),
 });
 
-const StatusBadge = ({ status }: { status: IssuingCa["status"] }) => <Badge variant={status === "active" ? "default" : "secondary"}>{STATUS_LABEL[status]}</Badge>;
+const StatusBadge = ({ status }: { status: IssuingCa["status"] }) => <Badge variant={status === "active" ? "default" : status === "revoked" ? "destructive" : "secondary"}>{STATUS_LABEL[status]}</Badge>;
 
 // The server lists every Private CA, and an Organization has few, so there is nothing to page.
 const features = tableFeatures({ rowExpandingFeature, expandedRowModel: createExpandedRowModel() });
@@ -93,7 +96,18 @@ const columns = columnHelper.columns([
     header: "Status",
     cell: ({ row }) => <StatusBadge status={row.original.level === "root" ? row.original.ca.status : row.original.issuing.status} />,
   }),
-  columnHelper.accessor("notAfter", { header: "Expires", cell: ({ cell }) => (cell.getValue() ? date(cell.getValue()!) : <span className="text-muted-foreground">Unknown</span>) }),
+  columnHelper.accessor("notAfter", {
+    header: "Expires",
+    cell: ({ row, cell }) =>
+      cell.getValue() ? (
+        <span className="flex items-center gap-2">
+          {date(cell.getValue()!)}
+          {row.original.level === "issuing" && <RolloverDue issuing={row.original.issuing} />}
+        </span>
+      ) : (
+        <span className="text-muted-foreground">Unknown</span>
+      ),
+  }),
   columnHelper.display({
     id: "actions",
     header: () => <span className="sr-only">Actions</span>,
@@ -134,6 +148,32 @@ export function PrivateCasPage() {
         </div>
       )}
     </div>
+  );
+}
+
+const DAY_MS = 24 * 60 * 60 * 1000;
+
+/**
+ * A warning on an active Issuing CA that ends sooner than its maximum validity: the Certificates it issues from now on are
+ * cut short at its end, so it is time to add another under the root, repoint its Managed Certificates and retire it.
+ */
+function RolloverDue({ issuing }: { issuing: IssuingCa }) {
+  if (issuing.status !== "active" || !issuing.notAfter) return null;
+  const left = Math.floor((new Date(issuing.notAfter).getTime() - Date.now()) / DAY_MS);
+  if (left >= issuing.validity.maximumDays) return null;
+  return (
+    <Tooltip>
+      <TooltipTrigger asChild>
+        <Badge variant="destructive" tabIndex={0}>
+          {left <= 0 ? "Ended" : "Roll over"}
+        </Badge>
+      </TooltipTrigger>
+      <TooltipContent className="max-w-72">
+        {left <= 0
+          ? "It has ended and issues nothing. Repoint its Managed Certificates to another Issuing CA."
+          : `It ends in ${daysLabel(left)}, sooner than its maximum validity of ${daysLabel(issuing.validity.maximumDays)}, so what it issues now is cut short. Add another Issuing CA under the root, repoint its Managed Certificates to it, and retire this one.`}
+      </TooltipContent>
+    </Tooltip>
   );
 }
 
@@ -193,11 +233,12 @@ function RootNameConstraints({ constraints }: { constraints: IssuingCa["nameCons
   );
 }
 
-/** The Organization of the page, as /api/me reports it, and whether its user may change Private CAs. */
+/** The Organization of the page, as /api/me reports it, and whether its user may change, retire and revoke Private CAs. */
 function useMayUpdate() {
   const { orgId } = useParams({ from: ROUTE });
   const org = useQuery({ queryKey: ["me"], queryFn: api.me, select: (me) => me.organizations.find((o) => o.id === orgId) }).data;
-  return { orgId, mayUpdate: org ? can(org, "privateCa", "update") : false };
+  const may = (action: string) => (org ? can(org, "privateCa", action) : false);
+  return { orgId, mayUpdate: may("update"), mayRetire: may("retire"), mayRevoke: may("revoke") };
 }
 
 /** A root's menu: add an Issuing CA under it, and download it. */
@@ -232,10 +273,13 @@ function RootActions({ ca }: { ca: PrivateCa }) {
   );
 }
 
-/** An Issuing CA's menu: under the Organization's own root, its CSR and the upload of what that root signed; its permitted names and validity; and its chain. */
+/** An Issuing CA's menu: under the Organization's own root, its CSR and the upload of what that root signed; its permitted names and validity; its chain; and retiring or revoking it. */
 function IssuingCaActions({ ca, issuing }: { ca: PrivateCa; issuing: IssuingCa }) {
-  const { orgId, mayUpdate } = useMayUpdate();
-  const [editing, setEditing] = useState<"names" | "validity" | "upload" | null>(null);
+  const { orgId, mayUpdate, mayRetire, mayRevoke } = useMayUpdate();
+  const [editing, setEditing] = useState<"names" | "validity" | "upload" | "retire" | "revoke" | null>(null);
+  const retirable = mayRetire && issuing.status === "active";
+  // Only the platform's own root revokes; the Organization's root revokes what it signed itself.
+  const revocable = mayRevoke && ca.kind === "platform_root" && (issuing.status === "active" || issuing.status === "retired");
   const signedByOrganization = ca.kind === "organization_root";
   const awaiting = issuing.status === "awaiting_signature";
   if (!mayUpdate && !issuing.notAfter) return null;
@@ -274,12 +318,94 @@ function IssuingCaActions({ ca, issuing }: { ca: PrivateCa; issuing: IssuingCa }
               </a>
             </DropdownMenuItem>
           )}
+          {(retirable || revocable) && <DropdownMenuSeparator />}
+          {retirable && <DropdownMenuItem onSelect={() => setEditing("retire")}>Retire…</DropdownMenuItem>}
+          {revocable && (
+            <DropdownMenuItem variant="destructive" onSelect={() => setEditing("revoke")}>
+              Revoke…
+            </DropdownMenuItem>
+          )}
         </DropdownMenuContent>
       </DropdownMenu>
       <EditPermittedNamesDialog orgId={orgId} ca={ca} issuing={issuing} open={editing === "names"} onOpenChange={(open) => setEditing(open ? "names" : null)} />
       <EditValidityDialog orgId={orgId} ca={ca} issuing={issuing} open={editing === "validity"} onOpenChange={(open) => setEditing(open ? "validity" : null)} />
       {signedByOrganization && <UploadCertificateDialog orgId={orgId} ca={ca} issuing={issuing} open={editing === "upload"} onOpenChange={(open) => setEditing(open ? "upload" : null)} />}
+      {retirable && <RetireDialog orgId={orgId} ca={ca} issuing={issuing} open={editing === "retire"} onOpenChange={(open) => setEditing(open ? "retire" : null)} />}
+      {revocable && <RevokeIssuingCaDialog orgId={orgId} ca={ca} issuing={issuing} open={editing === "revoke"} onOpenChange={(open) => setEditing(open ? "revoke" : null)} />}
     </div>
+  );
+}
+
+function RetireDialog({ orgId, ca, issuing, open, onOpenChange }: EditDialogProps) {
+  const retire = useAction(() => api.retireIssuingCa(orgId, ca.id, issuing.id), ["private-cas"], () => onOpenChange(false));
+  return (
+    <ConfirmDialog
+      open={open}
+      onOpenChange={(next) => {
+        if (next) retire.reset();
+        onOpenChange(next);
+      }}
+      title={`Retire ${commonNameOf(issuing.subject)}?`}
+      description="It issues nothing more, and its Managed Certificates cannot renew until they are repointed to another Issuing CA. Its Certificates stay valid, and it keeps publishing its CRL until the last of them expires. The other Issuing CAs under the root are unaffected. It cannot be made active again."
+      confirmLabel="Retire"
+      pending={retire.isPending}
+      error={retire.error}
+      onConfirm={() => retire.mutate(undefined)}
+    />
+  );
+}
+
+function RevokeIssuingCaDialog({ orgId, ca, issuing, open, onOpenChange }: EditDialogProps) {
+  const [reason, setReason] = useState("");
+  const revoke = useAction(() => api.revokeIssuingCa(orgId, ca.id, issuing.id, reason), ["private-cas"], () => onOpenChange(false));
+  const selectId = `issuing-ca-${issuing.id}-revocation-reason`;
+  return (
+    <Dialog
+      open={open}
+      onOpenChange={(next) => {
+        if (next) {
+          setReason("");
+          revoke.reset();
+        }
+        onOpenChange(next);
+      }}
+    >
+      <DialogContent>
+        <DialogHeader>
+          <DialogTitle>Revoke {commonNameOf(issuing.subject)}?</DialogTitle>
+          <DialogDescription>
+            The root's CRL lists it at once, so relying parties distrust it and every Certificate it issued. It issues nothing more, and its Managed Certificates cannot renew until
+            they are repointed to another Issuing CA. The other Issuing CAs under the root are unaffected. A revocation cannot be undone.
+          </DialogDescription>
+        </DialogHeader>
+        <Field>
+          <FieldLabel htmlFor={selectId}>Reason</FieldLabel>
+          <Select value={reason} onValueChange={setReason}>
+            <SelectTrigger id={selectId} className="w-full">
+              <SelectValue placeholder="Choose a reason (RFC 5280)" />
+            </SelectTrigger>
+            <SelectContent>
+              {issuingCaRevocationReasons().map(([value, text]) => (
+                <SelectItem key={value} value={value}>
+                  {text}
+                </SelectItem>
+              ))}
+            </SelectContent>
+          </Select>
+        </Field>
+        {revoke.error && <p className="text-sm text-destructive">{revoke.error.message}</p>}
+        <DialogFooter>
+          <DialogClose asChild>
+            <Button type="button" variant="outline">
+              Cancel
+            </Button>
+          </DialogClose>
+          <Button variant="destructive" disabled={!reason || revoke.isPending} onClick={() => revoke.mutate(undefined)}>
+            Revoke
+          </Button>
+        </DialogFooter>
+      </DialogContent>
+    </Dialog>
   );
 }
 

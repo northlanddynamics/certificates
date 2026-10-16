@@ -1,5 +1,5 @@
 // The server's own list of the reasons each kind of issuer takes, from a module that imports only types.
-import { REVOCATION_REASONS_OF, type RevocationReason } from "../../../server/src/revocation-reasons";
+import { ISSUING_CA_REVOCATION_REASONS, REVOCATION_REASONS_OF, type RevocationReason } from "../../../server/src/revocation-reasons";
 
 // The web UI talks only to the platform's HTTP API (described by /api/openapi.json).
 // Sign-in and sign-up go through Better Auth's endpoints, which are mounted on that same API under /api/auth.
@@ -139,6 +139,8 @@ export const revocationReasonsFor = (certificate: Pick<Certificate, "issuingCaId
   const offered = REVOCATION_REASONS_OF[certificate.issuingCaId ? "private_ca" : "acme"];
   return (Object.entries(REVOCATION_REASON_LABELS) as [RevocationReason, string][]).filter(([value]) => offered.includes(value));
 };
+/** The reasons a platform-made Issuing CA may be revoked for, by the name the server takes, in words. */
+export const issuingCaRevocationReasons = (): [string, string][] => ISSUING_CA_REVOCATION_REASONS.map((value) => [value, REVOCATION_REASON_LABELS[value]]);
 export const revocationReasonLabel = (reason: string) => REVOCATION_REASON_LABELS[reason as RevocationReason] ?? reason;
 export type HistoryEntry =
   | {
@@ -671,6 +673,14 @@ export const api = {
   /** Uploads what the Organization's own root signed for an Issuing CA's CSR; the root and chain above only with the first one signed. */
   uploadIssuingCaCertificate: (orgId: string, id: string, issuingCaId: string, body: { certificate: string; root?: string; chain?: string }) =>
     call<IssuingCa>(`/api/organizations/${orgId}/private-cas/${id}/issuing-cas/${issuingCaId}/certificate`, { body }),
+  /** Retires an Issuing CA: it issues nothing more, and keeps publishing its CRL until its last Certificate expires. */
+  retireIssuingCa: (orgId: string, id: string, issuingCaId: string) => call<IssuingCa>(`/api/organizations/${orgId}/private-cas/${id}/issuing-cas/${issuingCaId}/retire`, { method: "POST", body: {} }),
+  /** Revokes a platform-made Issuing CA, which its root's CRL then lists. */
+  revokeIssuingCa: (orgId: string, id: string, issuingCaId: string, reason: string) =>
+    call<IssuingCa>(`/api/organizations/${orgId}/private-cas/${id}/issuing-cas/${issuingCaId}/revocation`, { body: { reason } }),
+  /** Repoints a Managed Certificate issued from a Private CA to another Issuing CA; its next Issuance comes from there. */
+  changeIssuer: (orgId: string, id: string, issuingCaId: string) =>
+    call<ManagedCertificate>(`/api/organizations/${orgId}/managed-certificates/${id}/issuer`, { method: "PUT", body: { issuer: { kind: "private_ca", issuingCaId } } }),
   acmeAccounts: (orgId: string) => call<{ items: AcmeAccount[] }>(`/api/organizations/${orgId}/acme-accounts`),
   registerAcmeAccount: (orgId: string, body: { environment: AcmeAccount["environment"]; contactEmail?: string }) =>
     call<AcmeAccount>(`/api/organizations/${orgId}/acme-accounts`, { body: { ...body, termsOfServiceAgreed: true } }),

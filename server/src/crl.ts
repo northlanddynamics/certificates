@@ -1,15 +1,15 @@
 // What a Private CA publishes for relying parties: the CRL and certificate of each of its Issuing CAs and of its
 // platform-made root, at public, unauthenticated routes under their ids on the platform's public base URL, which the
 // certificates they sign name in their CRL Distribution Point and AIA caIssuers. An Issuing CA's CRL lists the
-// Certificates it signed that were revoked and have not expired yet; the root's lists its Issuing CAs once one is
-// revoked. Each is a full CRL signed by its own CA's key in the KMS, with the next CRL number each time and `nextUpdate`
+// Certificates it signed that were revoked and have not expired yet; the root's, its Issuing CAs that were revoked and
+// have not expired yet. Each is a full CRL signed by its own CA's key in the KMS, with the next CRL number each time and `nextUpdate`
 // 7 days after `thisUpdate`, kept on the CA's own row. It is reissued in the Unit of Work that revokes a Certificate, and
 // by a scheduled pass (`tick`) at least 3 days before its `nextUpdate`. The routes are served over plain HTTP as well as
 // HTTPS, never redirecting: a relying party must be able to check revocation without TLS, which would itself need a
 // revocation check.
 import { OpenAPIHono, createRoute, z } from "@hono/zod-openapi";
 import * as x509 from "@peculiar/x509";
-import { and, eq, gt, isNotNull, isNull } from "drizzle-orm";
+import { and, eq, exists, gt, isNotNull, isNull, or, sql } from "drizzle-orm";
 import { makeCrl, type CrlEntry, type Publication, type Signer } from "./ca-certificates";
 import { CertificateAuthorityError } from "./certificate-authority";
 import type { Db, Tx } from "./db/client";
@@ -56,7 +56,7 @@ export interface Crls {
   publish(tx: Tx, change: Change, organizationId: string, by: CrlIssuer): Promise<void>;
   /**
    * One pass at the clock's time: reissues each CRL that is due (at least 3 days before its `nextUpdate`, or never
-   * published) and returns how many it reissued. It never throws for one CRL's trouble: a CRL that cannot be reissued
+   * published) and returns how many it reissued; a retired Issuing CA's only until its last Certificate expires. It never throws for one CRL's trouble: a CRL that cannot be reissued
    * is noted as failing, and tried again on the next pass.
    */
   tick(): Promise<number>;
@@ -82,8 +82,18 @@ export function createCrls({ db, unitOfWork, kms, clock }: { db: Db; unitOfWork:
         privateCaId: ca.id,
         latest: ca as CrlColumns,
         signer: { key: ca.rootKey, context: organizationId, algorithm: ca.keyAlgorithm, certificate: new x509.X509Certificate(ca.rootCertificatePem) } satisfies Signer,
-        // Its Issuing CAs, once one can be revoked.
-        entries: async (): Promise<CrlEntry[]> => [],
+        // Its Issuing CAs that are revoked and not expired.
+        async entries(): Promise<CrlEntry[]> {
+          const rows = await tx
+            .select({ certificatePem: issuingCa.certificatePem, revokedAt: issuingCa.revokedAt, reason: issuingCa.revocationReason })
+            .from(issuingCa)
+            .where(and(eq(issuingCa.privateCaId, ca.id), eq(issuingCa.status, "revoked")))
+            .orderBy(issuingCa.revokedAt, issuingCa.id);
+          return rows
+            .map((r) => ({ certificate: new x509.X509Certificate(r.certificatePem!), revokedAt: r.revokedAt!, reason: REVOCATION_REASONS[r.reason!] }))
+            .filter((r) => r.certificate.notAfter > at)
+            .map(({ certificate, revokedAt, reason }) => ({ serial: certificate.serialNumber, revokedAt, reason }));
+        },
         store: (values: Partial<typeof privateCa.$inferInsert>) => tx.update(privateCa).set(values).where(eq(privateCa.id, ca.id)),
       };
     }
@@ -162,10 +172,15 @@ export function createCrls({ db, unitOfWork, kms, clock }: { db: Db; unitOfWork:
         .select({ id: privateCa.id, organizationId: privateCa.organizationId, nextUpdate: privateCa.crlNextUpdate })
         .from(privateCa)
         .where(isNotNull(privateCa.rootKey));
+      // A retired Issuing CA publishes until its last Certificate expires, when there is nothing left for its CRL to cover.
+      const unexpired = db
+        .select({ one: sql`1` })
+        .from(certificate)
+        .where(and(eq(certificate.issuingCaId, issuingCa.id), gt(certificate.notAfter, now)));
       const issuings = await db
         .select({ id: issuingCa.id, organizationId: issuingCa.organizationId, nextUpdate: issuingCa.crlNextUpdate })
         .from(issuingCa)
-        .where(isNotNull(issuingCa.certificatePem));
+        .where(and(isNotNull(issuingCa.certificatePem), or(eq(issuingCa.status, "active"), and(eq(issuingCa.status, "retired"), exists(unexpired)))));
       const due = [...roots.map((r) => ({ ...r, signer: "root" as const })), ...issuings.map((r) => ({ ...r, signer: "issuing" as const }))].filter((r) => isDue(r.nextUpdate, now));
 
       let reissued = 0;

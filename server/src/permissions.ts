@@ -32,8 +32,8 @@ const statements = {
   // `proposeNameChange`); `changeNames` changes its names outright, where a proposed name change waits for Approval;
   // `download` exports a Certificate it may see, and is what an API key must carry to do the same; `revoke` tells the CA
   // to distrust a Certificate (its Owners may, whatever their role) and `archive` retires the Managed Certificate (only
-  // those who hold it may, so not its Owners).
-  managedCertificate: ["read", "create", "propose", "issue", "changeOwners", "renew", "setRenewalPolicy", "replaceCsr", "proposeNameChange", "changeNames", "download", "revoke", "archive", "changeSubscribers"],
+  // those who hold it may, so not its Owners); `changeIssuer` repoints it to another Issuing CA, with no Approval.
+  managedCertificate: ["read", "create", "propose", "issue", "changeOwners", "renew", "setRenewalPolicy", "replaceCsr", "proposeNameChange", "changeNames", "download", "revoke", "archive", "changeSubscribers", "changeIssuer"],
   approval: ["read", "decide"],
   // Agents: `register` makes the single-use token by which one registers into the Organization, `read` lists them, `revoke` ends one's credential.
   agent: ["read", "register", "revoke"],
