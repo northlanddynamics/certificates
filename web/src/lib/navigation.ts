@@ -1,7 +1,10 @@
-import { BellIcon, BuildingIcon, LockKeyholeIcon, PlugIcon, ScrollTextIcon, SendIcon, BotIcon, GlobeIcon, LandmarkIcon, FileKey2Icon, FileTerminalIcon, KeyRoundIcon, LogInIcon, RocketIcon, ShieldCheckIcon, ShieldEllipsisIcon, ShieldIcon, ShieldUserIcon, UserRoundIcon, UsersIcon, type LucideIcon } from "lucide-react";
+import { BellIcon, BuildingIcon, LockKeyholeIcon, PlugIcon, ScrollTextIcon, SendIcon, BotIcon, GlobeIcon, LandmarkIcon, FileKey2Icon, FileTerminalIcon, KeyRoundIcon, LogInIcon, RocketIcon, ShieldCheckIcon, ShieldEllipsisIcon, ShieldIcon, ShieldUserIcon, TabletSmartphoneIcon, UserRoundIcon, UsersIcon, type LucideIcon } from "lucide-react";
 import { can, type Me } from "@/lib/api";
 
 type Org = Me["organizations"][number];
+
+/** Whether the Enrollment Profiles page is offered: in development only, until the Intune Enrollment Validator ships. */
+const SHOW_ENROLLMENT_PROFILES = import.meta.env.DEV;
 
 export interface NavItem {
   title: string;
@@ -51,6 +54,8 @@ export function organizationNavGroups(org: Org): NavGroup[] {
             ...(can(org, "acmeAccount", "read") ? [{ title: "ACME accounts", url: `${base}/acme-accounts`, icon: LandmarkIcon }] : []),
             // Anyone may list them (to choose one for a Managed Certificate), but the page is for managing them.
             ...(can(org, "privateCa", "create") ? [{ title: "Private CAs", url: `${base}/private-cas`, icon: ShieldEllipsisIcon }] : []),
+            // Hidden in production until the platform runs an Enrollment Validator kind (Intune), without which no profile can be made.
+            ...(SHOW_ENROLLMENT_PROFILES && can(org, "enrollmentProfile", "read") ? [{ title: "Enrollment Profiles", url: `${base}/enrollment-profiles`, icon: TabletSmartphoneIcon }] : []),
             ...(can(org, "dnsProvider", "read") ? [{ title: "DNS Providers", url: `${base}/dns-providers`, icon: GlobeIcon }] : []),
             // Anyone may list the channels (to choose one as a Subscriber), but the page is for configuring them.
             ...(can(org, "notificationChannel", "create") ? [{ title: "Notification channels", url: `${base}/notification-channels`, icon: BellIcon }] : []),

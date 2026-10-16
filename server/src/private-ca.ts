@@ -11,7 +11,7 @@ import * as x509 from "@peculiar/x509";
 import { and, asc, eq, inArray } from "drizzle-orm";
 import { randomUUID } from "node:crypto";
 import type { Authorizer } from "./authorization";
-import { makeCaCsr, makeIssuingCa, makeRoot, makeTlsServer, nameConstraintsOf, parseSubject, rootSubjectOf, signedCertificateRefusal, type CaKey, type Signer } from "./ca-certificates";
+import { makeCaCsr, makeDeviceCertificate, makeIssuingCa, makeRaCertificate, makeRoot, makeTlsServer, nameConstraintsOf, parseSubject, rootSubjectOf, signedCertificateRefusal, subjectAltNamesOf, type CaKey, type Signer } from "./ca-certificates";
 import { ACME_ENVIRONMENTS, CertificateAuthorityError, type AcmeEnvironment } from "./certificate-authority";
 import { publicationOf, type Crls } from "./crl";
 import { KEY_ALGORITHMS } from "./csr";
@@ -260,29 +260,72 @@ export interface PrivateCas {
   publishRevocation(tx: Tx, change: Change, organizationId: string, issuingCaId: string): Promise<void>;
   /** The root (PEM) of the Issuing CA's Private CA, when the platform has it. */
   rootsOf(db: Db | Tx, organizationId: string, issuingCaId: string): Promise<string[]>;
+  /**
+   * Signs an Enrollment Profile's SCEP RA certificate for the RA's key (`publicKey`, DER SubjectPublicKeyInfo) from the
+   * Organization's Issuing CA, valid from now for `validityDays` but never past the Issuing CA's end. Throws an
+   * IssuanceFailure when the Issuing CA cannot issue.
+   */
+  issueRa(db: Db | Tx, organizationId: string, issuingCaId: string, request: { publicKey: Uint8Array; subject: x509.Name; validityDays: number }): Promise<x509.X509Certificate>;
+  /**
+   * Signs a Device Certificate for the CSR (DER) from the Organization's Issuing CA, with the CSR's subject and subject
+   * alternative names and the key usages given, valid from now for `validityDays` but never past the Issuing CA's end.
+   * Resolves with it and the certificates above it, up to the root (PEM, the Issuing CA first). Throws an
+   * IssuanceFailure when the Issuing CA cannot issue, or not for one of the CSR's DNS names.
+   */
+  issueDevice(
+    db: Db | Tx,
+    organizationId: string,
+    issuingCaId: string,
+    request: { csr: Uint8Array; validityDays: number; keyUsage: (keyof typeof x509.KeyUsageFlags)[]; extendedKeyUsages: string[] },
+  ): Promise<{ certificate: x509.X509Certificate; chainPem: string[] }>;
+  /** Why `issueDevice` would refuse the CSR (DER) now: the Issuing CA does not issue, or not for one of its DNS names. None when it would sign it. */
+  deviceRefusal(db: Db | Tx, organizationId: string, issuingCaId: string, csr: Uint8Array): Promise<string | undefined>;
+}
+
+/**
+ * The Organization's Issuing CA, when it issues: what signs with it, and the end of what it may issue (its own, or
+ * anything's above it, an Organization's own root may have signed it for longer than itself). Throws an IssuanceFailure otherwise.
+ */
+async function issuingAt(db: Db | Tx, organizationId: string, issuingCaId: string, now: Date) {
+  const of = await findIssuingCa(db, organizationId, issuingCaId);
+  if (!of) throw new IssuanceFailure("internal", "the Issuing CA is gone");
+  const refusal = issuingRefusal(of);
+  if (refusal) throw new IssuanceFailure("ca_rejected", refusal);
+  const { issuing, ca } = of;
+  const certificate = new x509.X509Certificate(issuing.certificatePem!);
+  const above = certificatesAsked([ca.chainPem, ca.rootCertificatePem].filter(Boolean).join("\n"), "the chain", { none: true });
+  const end = Math.min(certificate.notAfter.getTime(), ...above.map((cert) => cert.notAfter.getTime()));
+  if (end <= now.getTime()) throw new IssuanceFailure("ca_rejected", `${issuingCaLabel(of)} has ended, or its root has`);
+  const signer: Signer = { key: issuing.key, context: organizationId, algorithm: ca.keyAlgorithm, certificate };
+  return { of, signer, end, above };
+}
+
+/**
+ * The Issuing CA as `issuingAt` gives it, when it may sign a Device Certificate for the CSR (DER): it issues for no DNS
+ * name outside its rules, which a platform-made one also carries as name constraints that relying parties enforce.
+ * Throws an IssuanceFailure otherwise.
+ */
+async function deviceIssuingAt(db: Db | Tx, organizationId: string, issuingCaId: string, csr: Uint8Array, now: Date) {
+  const at = await issuingAt(db, organizationId, issuingCaId, now);
+  const dnsNames = subjectAltNamesOf(new x509.Pkcs10CertificateRequest(new Uint8Array(csr))).filter((name) => name.type === "dns").map((name) => name.value.toLowerCase().replace(/\.$/, ""));
+  const outside = namesRefusal(at.of, dnsNames);
+  if (outside) throw new IssuanceFailure("name_not_permitted", outside);
+  return at;
 }
 
 export function createPrivateCas({ kms, clock, crls, pkiBaseURL }: { kms: Kms; clock: () => Date; crls: Crls; pkiBaseURL: string }): PrivateCas {
   return {
     async issueFrom(db, organizationId, issuingCaId, { csr, names, validityDays }) {
-      const of = await findIssuingCa(db, organizationId, issuingCaId);
-      if (!of) throw new IssuanceFailure("internal", "the Issuing CA is gone");
-      const refusal = issuingRefusal(of);
-      if (refusal) throw new IssuanceFailure("ca_rejected", refusal);
+      const notBefore = clock();
+      // Nothing it issues outlives it, nor anything above it.
+      const { of, signer, end } = await issuingAt(db, organizationId, issuingCaId, notBefore);
       // A backstop: names outside the rules are refused when they are asked for, but the rules may have changed since.
       const outside = namesRefusal(of, names);
       if (outside) throw new IssuanceFailure("name_not_permitted", outside);
       const { issuing, ca } = of;
-      const certificate = new x509.X509Certificate(issuing.certificatePem!);
-      const notBefore = clock();
-      // Nothing it issues outlives it, nor anything above it: an Organization's own root may have signed it for longer than itself.
-      const above = certificatesAsked([ca.chainPem, ca.rootCertificatePem].filter(Boolean).join("\n"), "the chain", { none: true });
-      const end = Math.min(certificate.notAfter.getTime(), ...above.map((cert) => cert.notAfter.getTime()));
-      if (end <= notBefore.getTime()) throw new IssuanceFailure("ca_rejected", `${issuingCaLabel(of)} has ended, or its root has`);
       // The maximum may have been lowered since the Managed Certificate chose its validity.
       const days = Math.min(validityDays ?? issuing.defaultValidityDays, issuing.maxValidityDays);
       const notAfter = new Date(Math.min(notBefore.getTime() + days * DAY_MS, end));
-      const signer: Signer = { key: issuing.key, context: organizationId, algorithm: ca.keyAlgorithm, certificate };
       const leaf = await makeTlsServer(kms, signer, { csr, names, notBefore, notAfter, publication: publicationOf(pkiBaseURL, { signer: "issuing", id: issuing.id }) });
       // The root is not in it: whoever downloads the chain is given it (`rootsOf`) when they ask for it.
       return { chainPem: [leaf.toString("pem"), issuing.certificatePem, ...(ca.chainPem ? [ca.chainPem] : [])].join("\n"), name: ca.name };
@@ -291,6 +334,28 @@ export function createPrivateCas({ kms, clock, crls, pkiBaseURL }: { kms: Kms; c
     async rootsOf(db, organizationId, issuingCaId) {
       const of = await findIssuingCa(db, organizationId, issuingCaId);
       return of?.ca.rootCertificatePem ? [of.ca.rootCertificatePem] : [];
+    },
+    async issueRa(db, organizationId, issuingCaId, { publicKey, subject, validityDays }) {
+      const notBefore = clock();
+      const { signer, end } = await issuingAt(db, organizationId, issuingCaId, notBefore);
+      const notAfter = new Date(Math.min(notBefore.getTime() + validityDays * DAY_MS, end));
+      return makeRaCertificate(kms, signer, { publicKey, subject, notBefore, notAfter, publication: publicationOf(pkiBaseURL, { signer: "issuing", id: issuingCaId }) });
+    },
+    async issueDevice(db, organizationId, issuingCaId, { csr, validityDays, keyUsage, extendedKeyUsages }) {
+      const notBefore = clock();
+      const { of, signer, end, above } = await deviceIssuingAt(db, organizationId, issuingCaId, csr, notBefore);
+      const notAfter = new Date(Math.min(notBefore.getTime() + validityDays * DAY_MS, end));
+      const certificate = await makeDeviceCertificate(kms, signer, { csr, keyUsage, extendedKeyUsages, notBefore, notAfter, publication: publicationOf(pkiBaseURL, { signer: "issuing", id: issuingCaId }) });
+      return { certificate, chainPem: [of.issuing.certificatePem!, ...above.map((cert) => cert.toString("pem"))] };
+    },
+    async deviceRefusal(db, organizationId, issuingCaId, csr) {
+      try {
+        await deviceIssuingAt(db, organizationId, issuingCaId, csr, clock());
+        return undefined;
+      } catch (err) {
+        if (err instanceof IssuanceFailure) return err.message;
+        throw err;
+      }
     },
   };
 }
