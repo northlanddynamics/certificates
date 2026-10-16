@@ -11,4 +11,4 @@
 
 ## Comments
 
-Done: `docs/research/intune-scep-api.md`. `learn.microsoft.com` was unreachable from the research environment, so the Microsoft doc facts (Entra permission names, the 60-minute revocation cool-down) come from search excerpts and are flagged in the note for re-checking in ticket 04. The spec is updated: ts-scep replaces pkijs, the Intune validator sends only the CSR, the device ID comes from the CSR's SAN, revocation is an hourly pull, and single DES and SHA-1 requests are accepted.
+Done: `docs/research/intune-scep-api.md`. `learn.microsoft.com` was unreachable from the research environment, so the Microsoft doc facts (Entra permission names, the 60-minute revocation cool-down) come from search excerpts and are flagged in the note for re-checking in tickets 04 and 05. Windows padding is observed (OAEP); iOS/macOS (PKCS#1 v1.5) is inferred and Android is not established, which the spec covers by accepting both. The spec is updated: ts-scep replaces pkijs, the Intune validator sends only the CSR, the device ID comes from the CSR's SAN, revocation is an hourly pull, and single DES and SHA-1 requests are accepted.

@@ -106,7 +106,7 @@ The codes [IRA `IntuneScepServiceException.cs`]:
 
 Treat an unrecognised code as a refusal; the Java library maps it to `Unknown`. The code becomes the `enrollment.refused` reason. These are Intune's own checks, which is why the Intune kind vouches for names.
 
-**What the answer does not include: any device ID.** The validate answer carries no Intune device ID. Neither does any other call in the contract. Ticket 04 can only store a device ID if the device's CSR carries one, which happens when the administrator's Intune SCEP profile puts `{{DeviceId}}` in a SAN. Intune's convention is a URI SAN `IntuneDeviceId://{{DeviceId}}`. That convention is from my knowledge of Intune's SCEP profile docs, which I could not fetch here.
+**What the answer does not include: any device ID.** The validate answer carries no Intune device ID. Neither does any other call in the contract. Ticket 04 can only store a device ID if the device's CSR carries one, which happens when the administrator's Intune SCEP profile puts `{{DeviceId}}` in a SAN. Intune's convention for this is a URI SAN `IntuneDeviceId://{{DeviceId}}`. **Unverified:** that convention is not in [IRA], and Intune's SCEP profile docs could not be fetched here, so ticket 04 must confirm it before relying on it.
 
 ## 5. Success and failure notifications
 
@@ -133,9 +133,9 @@ api-version: 2018-02-20
 
 - **Required fields:** `transactionId`, `certificateRequest`, `certificateThumbprint`, `certificateSerialNumber`, `certificateExpirationDateUtc` and `issuingCertificateAuthority`. The libraries reject an empty value for any of them.
 - **Optional fields:** `caConfiguration` and `certificateAuthority`. They are ADCS-style and may be null.
-- **Formats.** The library does not pin the formats; it passes strings through. Use:
-  - an ISO-8601 UTC date, as in the Java example;
-  - the SHA-1 thumbprint and the serial in hex, which is how Windows and Intune show them;
+- **Formats.**
+  - The expiry is pinned: "web UTC time (YYYY-MM-DDThh:mm:ss.sssTZD) ISO 8601" [IRA `IntuneScepValidator.cs`, `certExpirationDate` doc comment].
+  - The thumbprint and serial are free strings in the library ("Thumbprint of the certificate issued", "Serial number of the certificate issued"). Our choice is the SHA-1 thumbprint and the serial in hex, matching Windows' own certificate thumbprint and serial display; the serial must match what `downloadRevocationRequests` later returns, so use one format everywhere;
   - the Issuing CA's subject DN as `issuingCertificateAuthority`.
   - The DN matters for revocation: see section 6 on `issuerName`.
 
@@ -156,14 +156,14 @@ api-version: 2018-02-20
 }
 ```
 
-- `hResult` is a Windows HRESULT as a 64-bit integer. The examples use `0x8000FFFF` (`E_UNEXPECTED`) and `0xFFFF`. Intune shows it in its reports; no code list is defined.
-- `errorDescription` is required.
+- `hResult` is a 32-bit Windows HRESULT, carried in a `long` [IRA `IntuneScepValidator.cs`, `hResult` doc comment: "32-bit error code", shown in the Intune console]. The examples use `0x8000FFFF` (`E_UNEXPECTED`) and `0xFFFF`. Intune shows it in its reports; no code list is defined.
+- `errorDescription` is required, at most 255 characters [same doc comment].
 - We should send `0x80004005` (`E_FAIL`), shown above as 2147500037, with our refusal reason as the description.
 - Both notifications answer in the same `{code, errorDescription}` shape as validate.
 
 ## 6. Revocation: Intune asks, the CA polls
 
-Intune never calls the CA. When a device is wiped, retired or unenrolled, or the SCEP profile is removed from it, Intune removes the certificate from the device and **queues a revocation request** [MS-3P, excerpt: "queues them for revocation"; "revocation depends on API implementation by each third party"]. The CA downloads the queue, revokes, and reports back [IRA `IntuneRevocationClient.cs`, `csharp/revocationExample/Program.cs`].
+Intune never calls the CA. When a device is wiped, retired or unenrolled, or the Intune SCEP profile is removed from it, Intune removes the certificate from the device and **queues a revocation request** [MS-3P, excerpt: "queues them for revocation"; "revocation depends on API implementation by each third party"]. The CA downloads the queue, revokes, and reports back [IRA `IntuneRevocationClient.cs`, `csharp/revocationExample/Program.cs`].
 
 Download:
 
@@ -203,8 +203,8 @@ api-version: 5019-05-05
 
 {
   "results": [
-    { "requestContext": "opaque-id-1", "succeeded": true,  "errorCode": 0,    "errorMessage": null },
-    { "requestContext": "opaque-id-2", "succeeded": false, "errorCode": 4004, "errorMessage": "No such certificate" }
+    { "requestContext": "opaque-id-1", "succeeded": true,  "errorCode": "0",    "errorMessage": null },
+    { "requestContext": "opaque-id-2", "succeeded": false, "errorCode": "4004", "errorMessage": "No such certificate" }
   ]
 }
 ```
@@ -214,16 +214,16 @@ api-version: 5019-05-05
   - `0` None;
   - non-retryable: `4000` NonRetryableServiceException, `4001` DataSerializationError, `4002` ParameterDataInvalidError, `4003` CryptographyError, `4004` CertificateNotFoundError, `4005` ConflictError, `4006` NotSupportedError, `4007` PayloadTooLargeError;
   - retryable: `4100` RetryableServiceException, `4101` ServiceUnavailableException, `4102` ServiceTooBusyException, `4103` AuthenticationException.
-- **Encoding.** The Java library sends the code as a numeric string (`"4004"`); the C# library sends the enum name (`"CertificateNotFoundError"`). Since both are Microsoft's, the service evidently accepts either.
+- **Encoding.** The example shows the Java library's form, the code as a numeric string (`"4004"`, from `CARequestErrorCodes.Value`). The C# library sends the enum name instead (`"CertificateNotFoundError"`, via `StringEnumConverter` in `CARevocationResult.cs`). Both are Microsoft's, so the service presumably accepts either (an inference; confirm in ticket 05).
 - **`succeeded: true`** must carry code `0` and no message.
 
 Polling:
 
 - **Cool-down.** Intune enforces a **60-minute cool-down** after each download [MS-API, excerpt].
-- **One poll per credential.** Poll once an hour per distinct Entra credential (tenant and app). The queue is per tenant, and several Enrollment Profiles may share one tenant.
+- **One poll per credential.** Poll once an hour per distinct Entra app (tenant ID and app ID). The queue is per tenant, and several Enrollment Profiles may share one tenant.
 - **No `issuerName` filter.** Leave it out and match each request by serial (and `issuerName` when present) among the Organization's Device Certificates. The filter's exact string format is not documented. It is most likely the `issuingCertificateAuthority` we sent, but that is an inference.
 - **Results.**
-  - An already-revoked certificate counts as success.
+  - An already-revoked Device Certificate counts as success.
   - An unknown serial gets `4004`.
   - Only upload results once the Revocation has committed.
 - **Draining.** A full page (500) means more are queued, but the cool-down means the next page is an hour away. Revocation latency is therefore up to an hour, plus however long Intune takes to queue the request.
@@ -270,7 +270,7 @@ Updated in the same change:
 1. **CMS library.** `pkijs` with `@peculiar/x509` is replaced by **ts-scep**, for the reasons in section 8.
 2. **The Intune validator sends only the CSR.** The challenge travels inside it. The seam's `validate(request)` still carries the CSR, challenge and transaction ID, since a static-challenge kind needs the challenge on its own.
 3. **Device ID comes from the CSR.** The Intune device ID is read from the CSR's `IntuneDeviceId://` URI SAN when present, because Intune's API never returns one.
-4. **Revocation is pulled.** The revocation feed is a poll, once an hour per Entra credential, of `downloadRevocationRequests`, matched by serial and issuer. Results go back with `uploadRevocationResults`. The seam's "optional revocation feed" fits as written; the feed must also report each result back to the kind.
+4. **Revocation is pulled.** The revocation feed is a poll, once an hour per Entra app, of `downloadRevocationRequests`, matched by serial and issuer. Results go back with `uploadRevocationResults`. The seam's "optional revocation feed" fits as written; the feed must also report each result back to the kind.
 5. **Envelopes.**
    - Accept single DES-CBC content encryption besides AES and 3DES, without advertising it. Without DES the spec's own interop client, micromdm's `scepclient`, cannot enroll.
    - Accept SHA-1-signed requests, which Windows and micromdm send.
@@ -283,6 +283,8 @@ Updated in the same change:
 
 ## Open questions for ticket 04 / 05
 
-- Confirm the [MS-API] excerpts against the live page: the permission names, the 60-minute cool-down, and whether revocation needs another permission.
+- Confirm the [MS-API] excerpts against the live page: the permission names and the 60-minute cool-down (ticket 04), and whether revocation needs another permission (ticket 05).
+- Confirm the `IntuneDeviceId://` URI SAN convention (ticket 04).
+- iOS/macOS padding is inferred, not observed. Both paddings are accepted, so this too is informational.
 - Confirm the `issuerName` string format against a real tenant before relying on the filter.
 - Android's padding: answered once a real Android device enrolls. Both paddings are accepted, so this is informational.
