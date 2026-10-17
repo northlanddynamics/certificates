@@ -4,8 +4,8 @@
 
 **Blocked by:** 05
 
-**Status:** ready-for-agent
+**Status:** done
 
-- [ ] The client, given the profile's Shared Challenge, gets a Device Certificate that chains to the root.
-- [ ] After a rotation, the client enrolls with both the current and the previous challenge.
-- [ ] A wrong challenge gets a FAILURE the client reports.
+- [x] The client, given the profile's Shared Challenge, gets a Device Certificate that chains to the root.
+- [x] After a rotation, the client enrolls with both the current and the previous challenge.
+- [x] A wrong challenge gets a FAILURE the client reports.
