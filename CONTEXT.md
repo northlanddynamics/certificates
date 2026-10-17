@@ -195,15 +195,19 @@ A protocol-neutral template under which devices obtain client Certificates in bu
 _Avoid_: SCEP profile, template
 
 **Enrollment Validator**:
-The pluggable integration an Enrollment Profile names, which decides whether an enrollment request may be issued, is told the outcome, and may feed Revocations. It declares whether it vouches for the names in a request; a profile whose validator does not carries name rules that the platform enforces instead. Its credentials are Secrets. Intune is the first kind.
-_Avoid_: MDM integration (network gear is not an MDM), challenge provider
+The pluggable integration an Enrollment Profile names, which decides whether an enrollment request may be issued, is told the outcome, and may feed Revocations. It declares whether it vouches for the names in a request; a profile whose validator does not may carry Name Rules that the platform enforces instead, and otherwise issues the names a device asks for, within its Issuing CA's Permitted Name Rules. Its credentials are Secrets. Intune is the first kind; the Shared Challenge kind, which does not vouch for names and is how Iru and network gear enroll, is the next.
+_Avoid_: MDM integration (network gear is not an MDM), challenge provider, Iru or Kandji validator (Iru uses the Shared Challenge kind)
+
+**Shared Challenge**:
+The one secret every device enrolling under an Enrollment Profile presents, for the Shared Challenge kind of Enrollment Validator, used where the device's manager (such as Iru) can give no per-device challenge. The platform makes it and shows it once; a profile holds at most two, the current one and, while a rotation is under way, the previous one, until an Organization Administrator retires it or it expires. Anyone who holds it can enroll, bounded only by its profile's Name Rules, if it has any, and its Issuing CA's Permitted Name Rules.
+_Avoid_: static challenge, PSK, challenge password (the CSR field that carries it)
 
 **Name Rules**:
-What an Enrollment Profile whose Enrollment Validator does not vouch for names lets a device put in its subject and subject alternative names: required subject attributes, allowed SAN types, and wildcard patterns. Anything they do not name is refused. Not to be confused with an Issuing CA's Permitted Name Rules, which still apply on top.
+Optional limits an Organization Administrator may give an Enrollment Profile whose Enrollment Validator does not vouch for names, on what a device puts in its subject and subject alternative names: required subject attributes, allowed SAN types, and wildcard patterns. Anything they do not name is refused. Not to be confused with an Issuing CA's Permitted Name Rules, which still apply on top.
 _Avoid_: subject policy, SAN rules
 
 **Device Certificate**:
-A Certificate issued under an Enrollment Profile. It belongs to the profile, not to a Managed Certificate, has no Owners, never appears among Managed Certificates, and is renewed by the device enrolling again, or, where its Enrollment Validator allows it, by a SCEP RenewalReq signed with it; neither is a Renewal, which is a Managed Certificate's. It carries the device's ID as its Enrollment Validator knows it (such as Intune's device ID), when the request says.
+A Certificate issued under an Enrollment Profile. It belongs to the profile, not to a Managed Certificate, has no Owners, never appears among Managed Certificates, and is renewed by the device enrolling again, or, where its Enrollment Validator allows it, by a SCEP RenewalReq signed with it, which revokes it as superseded once its replacement is issued; neither is a Renewal, which is a Managed Certificate's. It carries the device's ID as its Enrollment Validator knows it (such as Intune's device ID), when the request says.
 _Avoid_: client cert, device cert record
 
 ### Discovery (future)
