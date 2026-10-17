@@ -569,8 +569,11 @@ export const enrollmentProfile = pgTable(
     validatorKind: text("validator_kind").notNull(),
     validatorSettings: jsonb("validator_settings").$type<Record<string, unknown>>().notNull().default({}),
     validatorSecretId: uuid("validator_secret_id"),
-    /** What a device's names must keep (name-rules.ts): present exactly when its validator does not vouch for names. */
+    /** What a device's names must keep (name-rules.ts); only when its validator does not vouch for names, which may then have none. */
     nameRules: jsonb("name_rules").$type<NameRules>(),
+    /** Its Shared Challenge (shared-challenge.ts), by id and the SHA-256 of it, never the challenge: present exactly when its validator's kind uses one. */
+    sharedChallengeId: uuid("shared_challenge_id"),
+    sharedChallengeHash: text("shared_challenge_hash"),
     /** Its RA certificate (PEM), and the Secret holding the RA's private key (PKCS #8 PEM). */
     raCertificatePem: text("ra_certificate_pem").notNull(),
     raKeySecretId: uuid("ra_key_secret_id").notNull(),
@@ -590,6 +593,7 @@ export const enrollmentProfile = pgTable(
     unique("enrollment_profile_id_organization_unique").on(t.id, t.organizationId),
     check("enrollment_profile_validity", sql`${t.validityDays} >= 1`),
     check("enrollment_profile_retention", sql`${t.retentionDays} >= 0`),
+    check("enrollment_profile_shared_challenge", sql`(${t.sharedChallengeId} is null) = (${t.sharedChallengeHash} is null)`),
   ],
 );
 

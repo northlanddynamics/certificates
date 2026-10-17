@@ -1,6 +1,7 @@
 import { useParams } from "@tanstack/react-router";
-import { CheckIcon, CopyIcon, DownloadIcon } from "lucide-react";
+import { DownloadIcon } from "lucide-react";
 import { useState, type ReactNode } from "react";
+import { CopyButton } from "@/components/copy-button";
 import { DownloadDialog } from "@/components/download-dialog";
 import { Badge } from "@/components/ui/badge";
 import { Button } from "@/components/ui/button";
@@ -21,28 +22,6 @@ function stateOf(c: Certificate, isCurrent: boolean): CertificateState {
   if (c.revocation) return { label: "Revoked", variant: "destructive" };
   if (Date.parse(c.notAfter) <= Date.now()) return { label: "Expired", variant: "outline" };
   return isCurrent ? { label: "Current", variant: "default" } : { label: "Superseded", variant: "secondary" };
-}
-
-function CopyButton({ text, label }: { text: string; label: string }) {
-  const [copied, setCopied] = useState(false);
-  return (
-    <Button
-      variant="ghost"
-      size="icon"
-      className="size-7"
-      aria-label={label}
-      onClick={async (e) => {
-        // The row opens the side sheet; copying is not opening.
-        e.stopPropagation();
-        await navigator.clipboard.writeText(text).then(
-          () => setCopied(true),
-          () => setCopied(false),
-        );
-      }}
-    >
-      {copied ? <CheckIcon /> : <CopyIcon />}
-    </Button>
-  );
 }
 
 /** Every Certificate the Managed Certificate has had, newest first; one opens in a side sheet with its full facts. */

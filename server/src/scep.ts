@@ -1,8 +1,9 @@
 // The SCEP server (RFC 8894): public, unauthenticated routes at each Enrollment Profile's opaque public id, where devices
 // enroll. ts-scep handles the protocol, running as the profile's RA: it opens each request's envelope with the RA key and
 // verifies its signer, and signs the CertRep with the RA key, encrypted to the device. What is issued is decided here,
-// per request: the device's key must be one the profile allows, its names must keep the profile's name rules when its
-// Enrollment Validator does not vouch for names, the validator must allow the request, and then the Issuing CA signs a
+// per request: a PKCSReq must present the profile's Shared Challenge when it has one (shared-challenge.ts), the
+// device's key must be one the profile allows, its names must keep the profile's name rules when it has them, the
+// Enrollment Validator must allow the request, and then the Issuing CA signs a
 // Device Certificate through the Private CA module, which is stored with its Audit Event in one Unit of Work; for a
 // RenewalReq, that Unit of Work also revokes the Device Certificate it was signed with as superseded. A device is
 // always answered SUCCESS with its certificate or FAILURE with a failInfo, never PENDING; a refusal is an Audit Event.
@@ -24,6 +25,7 @@ import { findIssuingCa, type PrivateCas } from "./private-ca";
 import { nameRulesRefusal } from "./name-rules";
 import type { ScepAnswer, ScepClaim, ScepTransactions } from "./scep-transactions";
 import type { Secrets } from "./secrets";
+import { isSharedChallenge } from "./shared-challenge";
 import type { Change, UnitOfWork } from "./unit-of-work";
 
 type ProfileRow = typeof enrollmentProfile.$inferSelect;
@@ -206,6 +208,13 @@ export function registerScep(ctx: {
       const renewal = await renewalRefusal(profile, request);
       if ("refusal" in renewal) return refused(renewal.refusal);
       renewalOf = renewal.renewalOf;
+    } else if (profile.sharedChallengeHash !== null) {
+      // First of all, so that a device without it learns nothing of the profile. Released rather than kept as the
+      // transaction's answer, so that whoever does not hold the challenge cannot settle a device's transaction for it.
+      const presented = request.csr.challengePassword;
+      if (!isSharedChallenge(presented, profile.sharedChallengeHash)) {
+        return refused(presented === undefined ? "the request has no challengePassword: present the Enrollment Profile's Shared Challenge" : "the request's challengePassword is not the Enrollment Profile's Shared Challenge", false, true);
+      }
     }
     const keyType = keyTypeOf(request);
     if (!keyType || !profile.allowedKeyTypes.includes(keyType)) {

@@ -10,6 +10,7 @@ import {
   DEFAULT_DEVICE_KEY_USAGES,
   DEFAULT_DEVICE_RETENTION_DAYS,
   DEFAULT_DEVICE_VALIDITY_DAYS,
+  DEFAULT_SHARED_CHALLENGE_VALIDITY_DAYS,
   DEVICE_EXTENDED_KEY_USAGE_NAMES,
   DEVICE_KEY_TYPE_LABELS,
   DEVICE_KEY_TYPES,
@@ -22,6 +23,7 @@ import {
   type DeviceKeyUsage,
 } from "../../../server/src/enrollment-profile-kinds";
 import { ConfirmDialog } from "@/components/confirm-dialog";
+import { CopyButton } from "@/components/copy-button";
 import { Alert, AlertDescription, AlertTitle } from "@/components/ui/alert";
 import { DataTable } from "@/components/data-table/data-table";
 import { Badge } from "@/components/ui/badge";
@@ -34,7 +36,7 @@ import { Field, FieldDescription, FieldError, FieldGroup, FieldLabel, FieldLegen
 import { Input } from "@/components/ui/input";
 import { Select, SelectContent, SelectItem, SelectTrigger, SelectValue } from "@/components/ui/select";
 import { Sidebar, SidebarContent, SidebarGroup, SidebarGroupContent, SidebarMenu, SidebarMenuButton, SidebarMenuItem, SidebarProvider } from "@/components/ui/sidebar";
-import { api, can, type EnrollmentProfile } from "@/lib/api";
+import { api, can, type CreatedEnrollmentProfile, type EnrollmentProfile } from "@/lib/api";
 import { daysLabel, findIssuingCa, issuingCaTitle, isValidityDays } from "@/lib/private-ca";
 import { useAction } from "@/lib/use-action";
 import { EMPTY_NAME_RULES, NameRulesEditor, draftOf, nameRulesSummary, rulesOf, takesNameRules as kindTakesNameRules } from "./name-rules-editor";
@@ -68,8 +70,12 @@ type StepId = (typeof STEPS)[number]["id"];
 // or a domain of it) and an app ID. The server checks them too (server/src/intune.ts).
 const GUID = /^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/i;
 const TENANT = /^([0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}|([a-z0-9]([a-z0-9-]{0,61}[a-z0-9])?\.)+[a-z]{2,63})$/i;
-const VALIDATOR_LABEL: Record<string, string> = { intune: "Microsoft Intune" };
+const VALIDATOR_LABEL: Record<string, string> = { intune: "Microsoft Intune", shared_challenge: "Shared Challenge" };
 const validatorLabel = (kind: string) => VALIDATOR_LABEL[kind] ?? kind;
+const VALIDATOR_DESCRIPTION: Record<string, string> = {
+  intune: "Intune gives each device its own challenge, and checks it and the names the device asks for.",
+  shared_challenge: "For Iru (formerly Kandji) and network gear, which can give a SCEP profile only a static challenge: every device presents the same Shared Challenge, which the platform makes.",
+};
 
 const KEY_TYPE_LABEL: Record<DeviceKeyType, string> = { ...DEVICE_KEY_TYPE_LABELS, [WEAK_DEVICE_KEY_TYPE]: `${DEVICE_KEY_TYPE_LABELS[WEAK_DEVICE_KEY_TYPE]} (weak)` };
 
@@ -88,7 +94,14 @@ const columns = columnHelper.columns([
   }),
   columnHelper.accessor("scepUrl", {
     header: "SCEP URL",
-    cell: ({ cell }) => <span className="break-all font-mono text-xs">{cell.getValue()}</span>,
+    cell: ({ row }) => (
+      <span className="flex flex-col gap-1">
+        <span className="break-all font-mono text-xs">{row.original.scepUrl}</span>
+        <span className="break-all font-mono text-xs text-muted-foreground" title="The SHA-256 fingerprint of the CA certificate the SCEP URL serves">
+          CA fingerprint (SHA-256) {row.original.caFingerprint}
+        </span>
+      </span>
+    ),
   }),
   columnHelper.display({
     id: "issues",
@@ -209,6 +222,7 @@ function ProfileActions({ profile }: { profile: EnrollmentProfile }) {
               </Link>
             </DropdownMenuItem>
             <DropdownMenuItem onSelect={() => void navigator.clipboard.writeText(profile.scepUrl)}>Copy SCEP URL</DropdownMenuItem>
+            <DropdownMenuItem onSelect={() => void navigator.clipboard.writeText(profile.caFingerprint)}>Copy CA fingerprint</DropdownMenuItem>
             <DropdownMenuItem asChild>
               <a href={api.enrollmentProfileCaCertificateUrl(orgId, profile.id, "root")} download>
                 Download root certificate
@@ -510,21 +524,102 @@ function DisableDialog({ profile, open, onOpenChange }: ProfileDialogProps) {
 
 function NewProfileDialog({ orgId }: { orgId: string }) {
   const [open, setOpen] = useState(false);
+  // A profile just created with a Shared Challenge, shown once, until the dialog closes.
+  const [created, setCreated] = useState<CreatedEnrollmentProfile | null>(null);
   return (
-    <Dialog open={open} onOpenChange={setOpen}>
+    <Dialog
+      open={open}
+      onOpenChange={(next) => {
+        setOpen(next);
+        if (!next) setCreated(null);
+      }}
+    >
       <DialogTrigger asChild>
         <Button>
           <PlusIcon />
           New profile
         </Button>
       </DialogTrigger>
-      <DialogContent className="gap-0 overflow-hidden p-0 sm:max-w-[calc(100%-2rem)] md:max-w-[760px] lg:max-w-[860px]">
-        <DialogTitle className="sr-only">New Enrollment Profile</DialogTitle>
-        <DialogDescription className="sr-only">The platform makes the profile's SCEP RA key, which it keeps, and has the Issuing CA sign its certificate.</DialogDescription>
-        {/* Only mounted while open, so each opening starts from a clean form. */}
-        {open && <NewProfileForm orgId={orgId} onDone={() => setOpen(false)} />}
-      </DialogContent>
+      {created?.sharedChallenge ? (
+        // Not closed by a click outside it: the Shared Challenge is not shown again.
+        <DialogContent className="sm:max-w-2xl" onInteractOutside={(e) => e.preventDefault()}>
+          <SharedChallengePanel profile={created} challenge={created.sharedChallenge.challenge} onDone={() => setOpen(false)} />
+        </DialogContent>
+      ) : (
+        <DialogContent className="gap-0 overflow-hidden p-0 sm:max-w-[calc(100%-2rem)] md:max-w-[760px] lg:max-w-[860px]">
+          <DialogTitle className="sr-only">New Enrollment Profile</DialogTitle>
+          <DialogDescription className="sr-only">The platform makes the profile's SCEP RA key, which it keeps, and has the Issuing CA sign its certificate.</DialogDescription>
+          {/* Only mounted while open, so each opening starts from a clean form. */}
+          {open && <NewProfileForm orgId={orgId} onDone={(profile) => (profile.sharedChallenge ? setCreated(profile) : setOpen(false))} />}
+        </DialogContent>
+      )}
     </Dialog>
+  );
+}
+
+/** A value to paste into the device management platform, with a button that copies it. */
+function CopyableValue({ label, value }: { label: string; value: string }) {
+  return (
+    <div className="flex flex-col gap-1">
+      <span className="text-sm font-medium">{label}</span>
+      <div className="flex items-center gap-2 rounded-md border bg-muted/50 px-3 py-1.5">
+        <span className="min-w-0 flex-1 break-all font-mono text-xs">{value}</span>
+        <CopyButton text={value} label={`Copy the ${label}`} />
+      </div>
+    </div>
+  );
+}
+
+/**
+ * Shown once, right after a profile with a Shared Challenge is created: the challenge (which the platform does not keep,
+ * so it is never shown again), the SCEP URL and the CA fingerprint, and where each goes in Iru's SCEP Library Item.
+ */
+function SharedChallengePanel({ profile, challenge, onDone }: { profile: CreatedEnrollmentProfile; challenge: string; onDone: () => void }) {
+  return (
+    <div className="flex flex-col gap-4">
+      <DialogHeader>
+        <DialogTitle>{profile.name} is ready for its devices</DialogTitle>
+        <DialogDescription>Fill in your device management platform's SCEP profile with these values, such as Iru's SCEP Library Item.</DialogDescription>
+      </DialogHeader>
+      <Alert>
+        <TriangleAlertIcon />
+        <AlertTitle>Copy the Shared Challenge now</AlertTitle>
+        <AlertDescription>It is shown only this once: the platform keeps only what it needs to check it. Anyone who holds it can enroll, so keep it where only your device management platform reads it.</AlertDescription>
+      </Alert>
+      <CopyableValue label="SCEP URL" value={profile.scepUrl} />
+      <CopyableValue label="Shared Challenge" value={challenge} />
+      <CopyableValue label="CA fingerprint (SHA-256)" value={profile.caFingerprint} />
+      <div className="flex flex-col gap-2 text-sm">
+        <span className="font-medium">In Iru (formerly Kandji), add a SCEP Library Item:</span>
+        <ol className="flex list-decimal flex-col gap-1 pl-5 text-muted-foreground">
+          <li>
+            <span className="text-foreground">URL</span>: the SCEP URL.
+          </li>
+          <li>
+            <span className="text-foreground">Challenge</span>: the Shared Challenge, as a static challenge.
+          </li>
+          <li>
+            <span className="text-foreground">Fingerprint</span>: the CA fingerprint, so that Macs check they reached this CA.
+          </li>
+          <li>
+            <span className="text-foreground">Subject and subject alternative names</span>: what your Wi-Fi or VPN needs, from Iru's variables. The platform issues them as they come, within the Issuing CA's permitted names
+            {profile.nameRules ? " and this profile's Name Rules" : ""}.
+          </li>
+          <li>
+            <span className="text-foreground">Key size</span>: 2048 or more. Apple's default, 1024, is refused unless the profile allows it.
+          </li>
+          <li>
+            <span className="text-foreground">Automatic profile redistribution</span>: on, so that Macs renew before their certificates end, {daysLabel(profile.validityDays)} after they are issued.
+          </li>
+        </ol>
+        <span className="text-muted-foreground">Also deploy the root certificate (from the profile's actions) as a Certificate Library Item, so that Macs trust what they are issued.</span>
+      </div>
+      <DialogFooter>
+        <Button type="button" onClick={onDone}>
+          I have copied the Shared Challenge
+        </Button>
+      </DialogFooter>
+    </div>
   );
 }
 
@@ -572,7 +667,7 @@ function KeyTypeChoices({ id, chosen, onChange }: { id: string; chosen: DeviceKe
 }
 
 // Every step's state lives in the form, so moving between steps never loses what was entered.
-function NewProfileForm({ orgId, onDone }: { orgId: string; onDone: () => void }) {
+function NewProfileForm({ orgId, onDone }: { orgId: string; onDone: (created: CreatedEnrollmentProfile) => void }) {
   const [step, setStep] = useState<StepId>("issuer");
   const privateCas = useQuery({ queryKey: ["private-cas", orgId], queryFn: () => api.privateCas(orgId) });
   const kinds = useQuery({ queryKey: ["enrollment-validator-kinds", orgId], queryFn: () => api.enrollmentValidatorKinds(orgId) });
@@ -580,7 +675,8 @@ function NewProfileForm({ orgId, onDone }: { orgId: string; onDone: () => void }
   const issuingCas = (privateCas.data?.items ?? []).flatMap((ca) => (ca.status === "active" ? ca.issuingCas.filter((i) => i.status === "active").map((i) => ({ id: i.id, title: issuingCaTitle(ca.name, i.subject) })) : []));
   const [name, setName] = useState("");
   const [issuingCaId, setIssuingCaId] = useState("");
-  const [validityDays, setValidityDays] = useState(String(DEFAULT_DEVICE_VALIDITY_DAYS));
+  // None until the administrator sets one: the default then follows the validator chosen.
+  const [chosenValidityDays, setValidityDays] = useState<string | null>(null);
   const [retentionDays, setRetentionDays] = useState(String(DEFAULT_DEVICE_RETENTION_DAYS));
   const [extendedKeyUsage, setExtendedKeyUsage] = useState<DeviceExtendedKeyUsage[]>(DEFAULT_DEVICE_EXTENDED_KEY_USAGES);
   const [keyUsage, setKeyUsage] = useState<DeviceKeyUsage[]>(DEFAULT_DEVICE_KEY_USAGES);
@@ -591,6 +687,8 @@ function NewProfileForm({ orgId, onDone }: { orgId: string; onDone: () => void }
   const [appId, setAppId] = useState("");
   const [appSecret, setAppSecret] = useState("");
   const intune = kind === "intune";
+  const usesSharedChallenge = kinds.data?.items.find((k) => k.kind === kind)?.usesSharedChallenge === true;
+  const validityDays = chosenValidityDays ?? String(usesSharedChallenge ? DEFAULT_SHARED_CHALLENGE_VALIDITY_DAYS : DEFAULT_DEVICE_VALIDITY_DAYS);
   // Only a validator that does not vouch for names takes Name Rules, and they stay optional.
   const takesNameRules = kindTakesNameRules(kinds.data?.items, kind);
   const [nameRulesDraft, setNameRulesDraft] = useState(EMPTY_NAME_RULES);
@@ -702,7 +800,10 @@ function NewProfileForm({ orgId, onDone }: { orgId: string; onDone: () => void }
               <Field data-invalid={!validityOk}>
                 <FieldLabel htmlFor="profile-validity">Validity (days)</FieldLabel>
                 <Input id="profile-validity" inputMode="numeric" autoFocus value={validityDays} onChange={(e) => setValidityDays(e.target.value)} aria-invalid={!validityOk} />
-                <FieldDescription>Up to {daysLabel(MAX_DEVICE_VALIDITY_DAYS)}, and never past the Issuing CA's end.</FieldDescription>
+                <FieldDescription>
+                  Up to {daysLabel(MAX_DEVICE_VALIDITY_DAYS)}, and never past the Issuing CA's end. Unless you set it, {daysLabel(DEFAULT_DEVICE_VALIDITY_DAYS)}, or {daysLabel(DEFAULT_SHARED_CHALLENGE_VALIDITY_DAYS)} with a
+                  Shared Challenge.
+                </FieldDescription>
               </Field>
               <Field data-invalid={!retentionOk}>
                 <FieldLabel htmlFor="profile-retention">Retention (days)</FieldLabel>
@@ -743,7 +844,26 @@ function NewProfileForm({ orgId, onDone }: { orgId: string; onDone: () => void }
                     </SelectContent>
                   </Select>
                 )}
+                {VALIDATOR_DESCRIPTION[kind] && <FieldDescription>{VALIDATOR_DESCRIPTION[kind]}</FieldDescription>}
               </Field>
+              {usesSharedChallenge && (
+                <Alert>
+                  <TriangleAlertIcon />
+                  <AlertTitle>Anyone who holds the Shared Challenge can enroll</AlertTitle>
+                  <AlertDescription>
+                    <p>
+                      It sits in the SCEP profile on every device, so whoever copies it from one can enroll under any names. The platform cannot tie a certificate to a device. What they can get is still bounded:
+                    </p>
+                    <ul className="list-disc pl-5">
+                      <li>by the Issuing CA's permitted names, which keep DNS and email names to your Organization's zones;</li>
+                      <li>by Name Rules, if you add them below;</li>
+                      <li>by a short validity, {daysLabel(DEFAULT_SHARED_CHALLENGE_VALIDITY_DAYS)} unless you set another under Certificate, since nothing revokes these certificates automatically;</li>
+                      <li>and by revoking a lost device's certificate by hand.</li>
+                    </ul>
+                    <p>The platform makes the Shared Challenge and shows it once, when the profile is created.</p>
+                  </AlertDescription>
+                </Alert>
+              )}
               {intune && (
                 <FieldSet>
                   <FieldLegend variant="label">Entra app</FieldLegend>

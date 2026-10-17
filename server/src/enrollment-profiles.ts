@@ -8,7 +8,7 @@
 import { OpenAPIHono, createRoute, z } from "@hono/zod-openapi";
 import * as x509 from "@peculiar/x509";
 import { and, asc, eq } from "drizzle-orm";
-import { generateKeyPairSync, randomBytes } from "node:crypto";
+import { createHash, generateKeyPairSync, randomBytes } from "node:crypto";
 import { isDeepStrictEqual } from "node:util";
 import type { Authorizer } from "./authorization";
 import type { Db, Tx } from "./db/client";
@@ -18,6 +18,7 @@ import {
   DEFAULT_DEVICE_RETENTION_DAYS,
   DEFAULT_DEVICE_KEY_USAGES,
   DEFAULT_DEVICE_VALIDITY_DAYS,
+  DEFAULT_SHARED_CHALLENGE_VALIDITY_DAYS,
   DEVICE_EXTENDED_KEY_USAGE_NAMES,
   DEFAULT_DEVICE_KEY_TYPES,
   DEVICE_KEY_TYPES,
@@ -32,6 +33,7 @@ import { IssuanceFailure } from "./issuance-failure";
 import { NameRules } from "./name-rules";
 import { findIssuingCa, issuingRefusal, type IssuingCaOf, type PrivateCas } from "./private-ca";
 import type { Secrets } from "./secrets";
+import { newSharedChallenge } from "./shared-challenge";
 import type { Actor, UnitOfWork } from "./unit-of-work";
 
 type ProfileRow = typeof enrollmentProfile.$inferSelect;
@@ -59,6 +61,7 @@ export const EnrollmentProfile = z.object({
   name: z.string(),
   publicId: z.string().openapi({ description: "The opaque id its SCEP URL is under, which says nothing else about it or the Organization." }),
   scepUrl: z.string().openapi({ description: "Where devices enroll over SCEP: paste it into the device management platform's SCEP profile." }),
+  caFingerprint: z.string().openapi({ description: "The SHA-256 fingerprint (lower-case hex) of the CA certificate GetCACert serves, its Issuing CA's, which a SCEP profile can be told to expect." }),
   issuingCaId: z.string(),
   privateCaId: z.string(),
   validityDays: z.number().int().openapi({ description: "How long its Device Certificates are valid for, though never past the Issuing CA's end." }),
@@ -69,30 +72,45 @@ export const EnrollmentProfile = z.object({
     .object({ kind: z.string(), settings: z.record(z.string(), z.unknown()), hasSecret: z.boolean().openapi({ description: "Whether it holds a secret, which is never shown." }) })
     .openapi({ description: "The Enrollment Validator that decides each request." }),
   nameRules: NameRules.nullable().openapi({ description: "What a device's names must keep; none when the validator vouches for names, or when the profile issues the names a device asks for within its Issuing CA's permitted name rules." }),
+  sharedChallenge: z
+    .object({ id: z.string() })
+    .nullable()
+    .openapi({ description: "Its Shared Challenge, by id only: the challenge is shown once, when it is made, and never again. None when its validator's kind uses none." }),
   raCertificate: z.object({ subject: z.string(), serial: z.string(), notAfter: z.string() }).openapi({ description: "The RA certificate devices encrypt their requests to, which signs the platform's answers." }),
   enabled: z.boolean().openapi({ description: "Whether it takes enrollment requests; a disabled profile refuses every one, and keeps the Device Certificates it issued." }),
   retentionDays: z.number().int().openapi({ description: "How many days after it ends a Device Certificate it issued is pruned; its Audit Events are kept." }),
   createdAt: z.string(),
 });
 
+/** A profile as its create response shows it: with the Shared Challenge itself, which is shown only then. */
+const CreatedEnrollmentProfile = EnrollmentProfile.extend({
+  sharedChallenge: z
+    .object({ id: z.string(), challenge: z.string().openapi({ description: "The Shared Challenge, which every device presents as its CSR's challengePassword. Shown only here: the platform keeps only its hash." }) })
+    .nullable(),
+});
+
 /** The SCEP URL of the profile with this public id, on the platform's base URL. */
 export const scepUrlOf = (baseURL: string, publicId: string) => `${baseURL.replace(/\/+$/, "")}/scep/${publicId}`;
 
-function toProfile(row: ProfileRow, privateCaId: string, baseURL: string): z.infer<typeof EnrollmentProfile> {
+function toProfile(row: ProfileRow, of: IssuingCaOf, baseURL: string): z.infer<typeof EnrollmentProfile> {
   const ra = new x509.X509Certificate(row.raCertificatePem);
+  // A profile is made only on an Issuing CA that has its certificate, which it then keeps.
+  const caFingerprint = createHash("sha256").update(new Uint8Array(new x509.X509Certificate(of.issuing.certificatePem!).rawData)).digest("hex");
   return {
     id: row.id,
     name: row.name,
     publicId: row.publicId,
     scepUrl: scepUrlOf(baseURL, row.publicId),
+    caFingerprint,
     issuingCaId: row.issuingCaId,
-    privateCaId,
+    privateCaId: of.ca.id,
     validityDays: row.validityDays,
     keyUsage: row.keyUsage,
     extendedKeyUsage: row.extendedKeyUsage,
     allowedKeyTypes: row.allowedKeyTypes,
     validator: { kind: row.validatorKind, settings: row.validatorSettings, hasSecret: row.validatorSecretId !== null },
     nameRules: row.nameRules,
+    sharedChallenge: row.sharedChallengeId === null ? null : { id: row.sharedChallengeId },
     raCertificate: { subject: ra.subject, serial: ra.serialNumber.toUpperCase(), notAfter: ra.notAfter.toISOString() },
     enabled: row.enabled,
     retentionDays: row.retentionDays,
@@ -168,14 +186,14 @@ export function registerEnrollmentProfiles(ctx: {
       summary: "The Enrollment Validator kinds an Enrollment Profile can name",
       description:
         "Those the platform runs. With none, no Enrollment Profile can be created. `vouchesForNames` says whether it checks the names a device asks for; a profile whose validator does not may carry name rules, and otherwise issues the names a device asks for within its Issuing CA's permitted name rules. " +
-        "`takesSecret` whether it is configured with a secret, and `allowsRenewal` whether a device may renew with a SCEP RenewalReq rather than enroll again. Only Organization Administrators may ask.",
+        "`takesSecret` whether it is configured with a secret, and `allowsRenewal` whether a device may renew with a SCEP RenewalReq rather than enroll again, and `usesSharedChallenge` whether a device enrolls by presenting the profile's Shared Challenge, which the platform makes. Only Organization Administrators may ask.",
       request: { params: OrgParam },
-      responses: { 200: json(z.object({ items: z.array(z.object({ kind: z.string(), vouchesForNames: z.boolean(), takesSecret: z.boolean(), allowsRenewal: z.boolean() })) })), ...errors(401, 403, 404) },
+      responses: { 200: json(z.object({ items: z.array(z.object({ kind: z.string(), vouchesForNames: z.boolean(), takesSecret: z.boolean(), allowsRenewal: z.boolean(), usesSharedChallenge: z.boolean() })) })), ...errors(401, 403, 404) },
     }),
     async (c) => {
       const { orgId } = c.req.valid("param");
       await authorize(await requireUser(c), orgId, { enrollmentProfile: ["read"] });
-      return c.json({ items: Object.entries(kinds).map(([kind, of]) => ({ kind, vouchesForNames: of.vouchesForNames, takesSecret: of.secret !== undefined, allowsRenewal: of.allowsRenewal === true })) }, 200);
+      return c.json({ items: Object.entries(kinds).map(([kind, of]) => ({ kind, vouchesForNames: of.vouchesForNames, takesSecret: of.secret !== undefined, allowsRenewal: of.allowsRenewal === true, usesSharedChallenge: of.usesSharedChallenge === true })) }, 200);
     },
   );
 
@@ -193,7 +211,7 @@ export function registerEnrollmentProfiles(ctx: {
       const { orgId } = c.req.valid("param");
       await authorize(await requireUser(c), orgId, { enrollmentProfile: ["read"] });
       const rows = await db.select().from(enrollmentProfile).where(eq(enrollmentProfile.organizationId, orgId)).orderBy(asc(enrollmentProfile.createdAt), asc(enrollmentProfile.id));
-      const items = await Promise.all(rows.map(async (row) => toProfile(row, (await findIssuingCa(db, orgId, row.issuingCaId))!.ca.id, baseURL)));
+      const items = await Promise.all(rows.map(async (row) => toProfile(row, (await findIssuingCa(db, orgId, row.issuingCaId))!, baseURL)));
       return c.json({ items }, 200);
     },
   );
@@ -207,7 +225,8 @@ export function registerEnrollmentProfiles(ctx: {
       description:
         "`issuingCaId` must be an active Issuing CA of one of the Organization's Private CAs, under an active root (422 otherwise). `validator.kind` must be one the platform runs (`.../enrollment-validator-kinds`; 422 otherwise), with the `settings` its kind takes and, when it takes one, its `secret`, which is stored as a Secret and never shown (400 otherwise). " +
         "A profile whose validator does not vouch for names may carry `nameRules`, which a device's names must keep; without them it issues the names a device asks for, within the Issuing CA's permitted name rules. One whose validator vouches for names must have none (422 otherwise). " +
-        "Device Certificates are valid for `validityDays` (365 unless given), never past the Issuing CA's end, with `keyUsage` (digitalSignature and keyEncipherment unless given) and `extendedKeyUsage` (clientAuth unless given), " +
+        "When its validator's kind uses a Shared Challenge, the platform makes one and returns it, as `sharedChallenge.challenge`, in this response only: it keeps only its hash, so it is never shown again. Every device presents it as its CSR's challengePassword. " +
+        "Device Certificates are valid for `validityDays` (365 unless given, or 90 when its validator's kind uses a Shared Challenge, since nothing revokes those automatically), never past the Issuing CA's end, with `keyUsage` (digitalSignature and keyEncipherment unless given) and `extendedKeyUsage` (clientAuth unless given), " +
         "and the subject and subject alternative names of the device's CSR; nothing else a CSR asks for. A device key not in `allowedKeyTypes` (RSA 2048, 3072 and 4096 unless given) is refused; `rsa-1024`, which can be broken, is allowed only when given. " +
         "A Device Certificate is pruned `retentionDays` (365 unless given) after it ends. " +
         "The platform makes the profile's RA: a software RSA key, held as a Secret, and a certificate the Issuing CA signs for it. The profile is given an opaque public id, under which its SCEP URL is. " +
@@ -220,7 +239,7 @@ export function registerEnrollmentProfiles(ctx: {
               schema: z.object({
                 name: z.string().trim().min(1).max(100),
                 issuingCaId: z.string(),
-                validityDays: z.number().int().min(1).max(MAX_DEVICE_VALIDITY_DAYS).default(DEFAULT_DEVICE_VALIDITY_DAYS),
+                validityDays: z.number().int().min(1).max(MAX_DEVICE_VALIDITY_DAYS).optional(),
                 keyUsage: nonEmptyUnique(z.enum(DEVICE_KEY_USAGES)).default(DEFAULT_DEVICE_KEY_USAGES),
                 extendedKeyUsage: nonEmptyUnique(z.enum(DEVICE_EXTENDED_KEY_USAGE_NAMES)).default(DEFAULT_DEVICE_EXTENDED_KEY_USAGES),
                 allowedKeyTypes: nonEmptyUnique(z.enum(DEVICE_KEY_TYPES)).default(DEFAULT_DEVICE_KEY_TYPES),
@@ -232,7 +251,7 @@ export function registerEnrollmentProfiles(ctx: {
           },
         },
       },
-      responses: { 201: json(EnrollmentProfile, "Created"), ...errors(400, 401, 403, 404, 409, 422) },
+      responses: { 201: json(CreatedEnrollmentProfile, "Created"), ...errors(400, 401, 403, 404, 409, 422) },
     }),
     async (c) => {
       const { orgId } = c.req.valid("param");
@@ -261,6 +280,8 @@ export function registerEnrollmentProfiles(ctx: {
       const publicId = randomBytes(16).toString("hex");
       const ra = await makeRa(orgId, of.issuing.id, publicId);
       const raCertificate = ra.certificate;
+      const shared = kind.usesSharedChallenge ? newSharedChallenge() : undefined;
+      const validityDays = body.validityDays ?? (shared ? DEFAULT_SHARED_CHALLENGE_VALIDITY_DAYS : DEFAULT_DEVICE_VALIDITY_DAYS);
 
       try {
         const row = await unitOfWork.run(actor, async (tx, change) => {
@@ -273,7 +294,7 @@ export function registerEnrollmentProfiles(ctx: {
               name: body.name,
               publicId,
               issuingCaId: of.issuing.id,
-              validityDays: body.validityDays,
+              validityDays,
               keyUsage: body.keyUsage,
               extendedKeyUsage: body.extendedKeyUsage,
               allowedKeyTypes: body.allowedKeyTypes,
@@ -281,6 +302,8 @@ export function registerEnrollmentProfiles(ctx: {
               validatorSettings: settings,
               validatorSecretId,
               nameRules: body.nameRules ?? null,
+              sharedChallengeId: shared?.id ?? null,
+              sharedChallengeHash: shared?.hash ?? null,
               retentionDays: body.retentionDays,
               raCertificatePem: raCertificate.toString("pem"),
               raKeySecretId,
@@ -293,19 +316,20 @@ export function registerEnrollmentProfiles(ctx: {
             detail: {
               name: body.name,
               issuingCa: { id: of.issuing.id, subject: of.issuing.subject },
-              validityDays: body.validityDays,
+              validityDays,
               keyUsage: body.keyUsage,
               extendedKeyUsage: body.extendedKeyUsage,
               allowedKeyTypes: body.allowedKeyTypes,
               validator: { kind: body.validator.kind, settings },
               nameRules: body.nameRules ?? null,
+              ...(shared && { sharedChallenge: { id: shared.id } }),
               retentionDays: body.retentionDays,
               raCertificate: raOf(raCertificate),
             },
           });
           return row!;
         });
-        return c.json(toProfile(row, of.ca.id, baseURL), 201);
+        return c.json({ ...toProfile(row, of, baseURL), sharedChallenge: shared ? { id: shared.id, challenge: shared.challenge } : null }, 201);
       } catch (err) {
         if (isUniqueViolation(err)) throw taken();
         throw err;
@@ -325,7 +349,7 @@ export function registerEnrollmentProfiles(ctx: {
       const { orgId, id } = c.req.valid("param");
       await authorize(await requireUser(c), orgId, { enrollmentProfile: ["read"] });
       const { row, of } = await findProfile(orgId, id);
-      return c.json(toProfile(row, of.ca.id, baseURL), 200);
+      return c.json(toProfile(row, of, baseURL), 200);
     },
   );
 
@@ -419,7 +443,7 @@ export function registerEnrollmentProfiles(ctx: {
         await change.audit({ organizationId: orgId, action: "enrollment_profile.disabled", target: { type: "enrollment_profile", id }, detail: { name: current.name } });
         return row!;
       });
-      return c.json(toProfile(row, of.ca.id, baseURL), 200);
+      return c.json(toProfile(row, of, baseURL), 200);
     },
   );
 
@@ -467,7 +491,7 @@ export function registerEnrollmentProfiles(ctx: {
       }
       const changingNameRules = body.nameRules !== undefined && !isDeepStrictEqual(body.nameRules, found.row.nameRules);
       const changingKeyTypes = body.allowedKeyTypes !== undefined && !isDeepStrictEqual(body.allowedKeyTypes, found.row.allowedKeyTypes);
-      if (!to && !retaining && !changingNameRules && !changingKeyTypes) return c.json(toProfile(found.row, found.of.ca.id, baseURL), 200);
+      if (!to && !retaining && !changingNameRules && !changingKeyTypes) return c.json(toProfile(found.row, found.of, baseURL), 200);
 
       const row = await unitOfWork.run(actor, async (tx, change) => {
         const current = await locked(tx, found.row);
@@ -494,7 +518,7 @@ export function registerEnrollmentProfiles(ctx: {
         });
         return row!;
       });
-      return c.json(toProfile(row, (to?.of ?? found.of).ca.id, baseURL), 200);
+      return c.json(toProfile(row, to?.of ?? found.of, baseURL), 200);
     },
   );
 
@@ -530,7 +554,7 @@ export function registerEnrollmentProfiles(ctx: {
         });
         return row!;
       });
-      return c.json(toProfile(row, found.of.ca.id, baseURL), 200);
+      return c.json(toProfile(row, found.of, baseURL), 200);
     },
   );
 }

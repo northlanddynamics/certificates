@@ -2,5 +2,6 @@
 // and an entry here. Tests give the app their own kinds instead (`AppDeps.enrollmentValidators`).
 import type { EnrollmentValidators } from "./enrollment-validator";
 import { intune } from "./intune";
+import { sharedChallenge } from "./shared-challenge";
 
-export const ENROLLMENT_VALIDATOR_KINDS: EnrollmentValidators = { intune };
+export const ENROLLMENT_VALIDATOR_KINDS: EnrollmentValidators = { intune, shared_challenge: sharedChallenge };

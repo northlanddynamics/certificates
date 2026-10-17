@@ -36,6 +36,8 @@ export const DEVICE_KEY_TYPE_LABELS: Record<DeviceKeyType, string> = { "rsa-1024
 /** How long a Device Certificate is valid for unless the profile says otherwise, and at most, in days. */
 export const DEFAULT_DEVICE_VALIDITY_DAYS = 365;
 export const MAX_DEVICE_VALIDITY_DAYS = 1825;
+/** The default when the profile's validator's kind uses a Shared Challenge: nothing revokes those certificates automatically (ADR 0008). */
+export const DEFAULT_SHARED_CHALLENGE_VALIDITY_DAYS = 90;
 
 /** How many days after its end a Device Certificate is pruned unless the profile says otherwise, and at most. */
 export const DEFAULT_DEVICE_RETENTION_DAYS = 365;

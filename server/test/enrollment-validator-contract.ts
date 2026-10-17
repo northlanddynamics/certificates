@@ -3,7 +3,8 @@
 // when its service cannot be reached (an EnrollmentValidatorError, which never quotes its secret), tells its service of each outcome and throws when it could not (so that the
 // platform tells it again), tests its connection without validating anything, and, when it has a revocation feed, hands
 // over the Revocations its service asks for and reports their outcomes. Each kind runs it against a double of its
-// service: the test kind in enrollment-validator-seam.test.ts, Intune against the Intune double.
+// service: the test kind in enrollment-validator-seam.test.ts, Intune against the Intune double. A kind with no service
+// to reach (the Shared Challenge kind) allows every request, is told outcomes without failing, and tests without failing.
 import { describe, expect, test } from "bun:test";
 import * as x509 from "@peculiar/x509";
 import { createCsr, generateRsaKeyPair } from "ts-scep";
@@ -46,7 +47,8 @@ export interface ValidatorUnderContract<Settings> {
   secret: string;
   /** A secret the service refuses (kinds that take one only). */
   wrongSecret?: string;
-  service: ValidatorServiceDouble;
+  /** None for a kind with no service to reach, which allows every request and has no revocation feed. */
+  service?: ValidatorServiceDouble;
 }
 
 /** A request as a device would send it, with a fresh key, and a certificate as the platform would issue it for it. */
@@ -74,8 +76,8 @@ export function enrollmentValidatorContract<Settings>(name: string, setup: () =>
   describe(`${name}: the Enrollment Validator contract`, () => {
     const open = async () => {
       const under = await setup();
-      under.service.allow();
-      under.service.setUnreachable(false);
+      under.service?.allow();
+      under.service?.setUnreachable(false);
       return { ...under, validator: under.kind.create(under.kind.settings.parse(under.settings), under.secret) };
     };
 
@@ -90,6 +92,7 @@ export function enrollmentValidatorContract<Settings>(name: string, setup: () =>
       const { validator, service } = await open();
       const allowed = await aRequest("contract-allowed");
       expect(await validator.validate(allowed.request)).toEqual({ allowed: true });
+      if (!service) return;
 
       service.refuse();
       const refused = await aRequest("contract-refused");
@@ -101,6 +104,7 @@ export function enrollmentValidatorContract<Settings>(name: string, setup: () =>
 
     test("throws an EnrollmentValidatorError that does not quote its secret, rather than allowing, when its service cannot be reached", async () => {
       const { validator, service, secret } = await open();
+      if (!service) return;
       service.setUnreachable(true);
       await failsSafely(validator.validate((await aRequest("contract-unreachable")).request), secret);
     });
@@ -111,6 +115,7 @@ export function enrollmentValidatorContract<Settings>(name: string, setup: () =>
       await validator.issued(issued.decided, issued.certificate);
       const failed = await aRequest("contract-failed");
       await validator.failed(failed.decided, "the Enrollment Profile does not allow a rsa-1024 key");
+      if (!service) return;
       expect(service.issued()).toEqual([{ transactionId: "contract-issued", serial: "5B0E7A" }]);
       expect(service.failed()).toEqual(["contract-failed"]);
 
@@ -122,6 +127,7 @@ export function enrollmentValidatorContract<Settings>(name: string, setup: () =>
     test("tests its connection without validating anything, and fails the test when its service cannot be reached or refuses its secret", async () => {
       const under = await open();
       await under.validator.test();
+      if (!under.service) return;
       expect(under.service.validated()).toEqual([]);
 
       if (under.wrongSecret !== undefined) {
@@ -133,7 +139,8 @@ export function enrollmentValidatorContract<Settings>(name: string, setup: () =>
 
     test("when it has a revocation feed, hands over what its service asks to revoke, once, and reports the outcomes", async () => {
       const { kind, validator, service, secret } = await open();
-      if (!kind.revocationFeed) {
+      if (!kind.revocationFeed || !service) {
+        expect(kind.revocationFeed).toBeUndefined();
         expect(validator.revocations).toBeUndefined();
         return;
       }
