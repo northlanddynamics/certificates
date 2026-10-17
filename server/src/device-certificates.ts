@@ -28,6 +28,10 @@ export const DeviceCertificate = z.object({
   subjectAltNames: z.array(z.object({ type: z.string(), value: z.string() })),
   deviceId: z.string().nullable().openapi({ description: "The device as its Enrollment Validator knows it, such as Intune's device ID; none when the request did not say." }),
   keyType: z.enum(DEVICE_KEY_TYPES).openapi({ description: "The device's key. `rsa-1024` is weak: it can be broken." }),
+  sharedChallenge: z
+    .object({ id: z.string() })
+    .nullable()
+    .openapi({ description: "The Shared Challenge its request presented, by id, which tells whether it was issued under its profile's current or previous one; none for a renewal, or when its profile's validator's kind uses none." }),
   issuer: z.string().openapi({ description: "The Issuing CA's subject." }),
   notBefore: z.string(),
   notAfter: z.string(),
@@ -86,6 +90,7 @@ function toDeviceCertificate({ certificate: row, issuer }: Row, now: Date): z.in
     subjectAltNames: row.subjectAltNames,
     deviceId: row.deviceId,
     keyType: row.keyType,
+    sharedChallenge: row.sharedChallengeId === null ? null : { id: row.sharedChallengeId },
     issuer,
     notBefore: row.notBefore.toISOString(),
     notAfter: row.notAfter.toISOString(),

@@ -23,6 +23,7 @@ import { createCrls, registerPkiRoutes } from "./crl";
 import { createDb } from "./db/client";
 import { registerDeviceCertificates } from "./device-certificates";
 import { createDeviceCertificatePruning } from "./device-certificate-pruning";
+import { createSharedChallengeExpiry } from "./shared-challenge-expiry";
 import { registerEnrollmentProfiles } from "./enrollment-profiles";
 import type { EnrollmentValidators } from "./enrollment-validator";
 import { ENROLLMENT_VALIDATOR_KINDS } from "./enrollment-validator-kinds";
@@ -310,7 +311,8 @@ export function createApp(deps: AppDeps) {
   const privateCas = createPrivateCas({ kms: deps.kms, clock, crls, pkiBaseURL });
   const validatorKinds = deps.enrollmentValidators ?? ENROLLMENT_VALIDATOR_KINDS;
   const enrollmentValidators = createEnrollmentValidatorRuns({ db, unitOfWork, secrets, privateCas, kinds: validatorKinds, clock });
-  registerEnrollmentProfiles({ app, db, requireUser, authorize, unitOfWork, secrets, privateCas, kinds: validatorKinds, validators: enrollmentValidators, baseURL: deps.baseURL });
+  const sharedChallengeExpiry = createSharedChallengeExpiry({ db, unitOfWork, clock });
+  registerEnrollmentProfiles({ app, db, requireUser, authorize, unitOfWork, secrets, privateCas, kinds: validatorKinds, validators: enrollmentValidators, sharedChallengeExpiry, baseURL: deps.baseURL, clock });
   registerDeviceCertificates({ app, db, requireUser, authorize, unitOfWork, privateCas, clock });
   const deviceCertificatePruning = createDeviceCertificatePruning({ db, unitOfWork, clock });
   const scep = registerScep({ app, db, unitOfWork, secrets, privateCas, kinds: validatorKinds, validators: enrollmentValidators, transactions: createScepTransactions({ db, clock }), clock, config: deps.scep });
@@ -380,5 +382,5 @@ export function createApp(deps: AppDeps) {
     }),
   );
 
-  return { app, auth, db, unitOfWork, issuances, renewals, notifications, auditForwarding, crls, enrollmentValidators, deviceCertificatePruning, scep };
+  return { app, auth, db, unitOfWork, issuances, renewals, notifications, auditForwarding, crls, enrollmentValidators, deviceCertificatePruning, sharedChallengeExpiry, scep };
 }

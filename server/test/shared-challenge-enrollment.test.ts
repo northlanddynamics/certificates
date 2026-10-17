@@ -231,3 +231,179 @@ describe("every Enrollment Profile", () => {
     expect(fetched.body.caFingerprint).not.toBe(profile.caFingerprint);
   });
 });
+
+const rotate = (profileId: string, previousExpiresAt: string | undefined, cookie = org.cookie) =>
+  h.api(`${profiles()}/${profileId}/shared-challenge/rotation`, { cookie, body: previousExpiresAt === undefined ? {} : { previousExpiresAt } });
+const retire = (profileId: string, cookie = org.cookie) => h.api(`${profiles()}/${profileId}/shared-challenge/previous/retirement`, { cookie, method: "POST", body: {} });
+const at = (days: number) => new Date(START + days * DAY_MS).toISOString();
+
+describe("rotating a Shared Challenge", () => {
+  test("returns a new Shared Challenge once, and both it and the previous one enroll until the previous one expires", async () => {
+    const { profile } = await createProfile();
+    const res = await rotate(profile.id, at(14));
+    expect(res.status).toBe(200);
+    const { id, challenge } = res.body.sharedChallenge as { id: string; challenge: string };
+    expect(challenge).toMatch(/^[0-9a-f]{32,}$/);
+    expect(challenge).not.toBe(profile.sharedChallenge.challenge);
+    expect(id).not.toBe(profile.sharedChallenge.id);
+    expect(res.body.previousSharedChallenge).toEqual({ id: profile.sharedChallenge.id, expiresAt: at(14) });
+
+    const fetched = await h.api(`${profiles()}/${profile.id}`, { cookie: org.cookie });
+    expect(fetched.body.sharedChallenge).toEqual({ id });
+    expect(fetched.body.previousSharedChallenge).toEqual({ id: profile.sharedChallenge.id, expiresAt: at(14) });
+    expect(JSON.stringify(fetched.body)).not.toContain(challenge);
+
+    const device = scepDevice(h, profile.scepUrl);
+    await device.enroll({ subject: "CN=mac-30", challengePassword: challenge });
+    await device.enroll({ subject: "CN=mac-31", challengePassword: profile.sharedChallenge.challenge });
+
+    h.setNow(new Date(START + 14 * DAY_MS));
+    const expired = await device.enroll({ subject: "CN=mac-32", challengePassword: profile.sharedChallenge.challenge }).catch((err) => err);
+    expect(expired).toBeInstanceOf(ScepFailureError);
+    expect(expired.failInfoText).toContain("Shared Challenge");
+    await device.enroll({ subject: "CN=mac-33", challengePassword: challenge });
+    expect((await h.api(`${profiles()}/${profile.id}`, { cookie: org.cookie })).body.previousSharedChallenge).toBeNull();
+  });
+
+  test("is refused while a previous Shared Challenge is still valid, and allowed once it has expired", async () => {
+    const { profile } = await createProfile();
+    expect((await rotate(profile.id, at(7))).status).toBe(200);
+    const again = await rotate(profile.id, at(7));
+    expect(again.status).toBe(409);
+    expect(again.body.sharedChallenge).toBeUndefined();
+
+    h.setNow(new Date(START + 7 * DAY_MS));
+    expect((await rotate(profile.id, at(14))).status).toBe(200);
+  });
+
+  test("needs the previous Shared Challenge's expiry, in the future", async () => {
+    const { profile } = await createProfile();
+    expect((await rotate(profile.id, undefined)).status).toBe(400);
+    expect((await rotate(profile.id, "next week")).status).toBe(400);
+    expect((await rotate(profile.id, at(0))).status).toBe(422);
+  });
+
+  test("is refused for a profile whose validator's kind uses no Shared Challenge", async () => {
+    const ca = await createCa(org, "Intune devices");
+    const other = await h.api(profiles(), { cookie: org.cookie, body: { name: "Intune", issuingCaId: ca.issuing.id, validator: { kind: "test_allow" } } });
+    expect((await rotate(other.body.id, at(7))).status).toBe(422);
+    expect(other.body.previousSharedChallenge).toBeNull();
+  });
+});
+
+describe("retiring a previous Shared Challenge", () => {
+  test("refuses the previous Shared Challenge at once, while the current one still enrolls", async () => {
+    const { profile } = await createProfile();
+    const rotated = (await rotate(profile.id, at(30))).body.sharedChallenge as { id: string; challenge: string };
+    const res = await retire(profile.id);
+    expect(res.status).toBe(200);
+    expect(res.body.previousSharedChallenge).toBeNull();
+    expect(res.body.sharedChallenge).toEqual({ id: rotated.id });
+
+    const device = scepDevice(h, profile.scepUrl);
+    const refused = await device.enroll({ subject: "CN=mac-40", challengePassword: profile.sharedChallenge.challenge }).catch((err) => err);
+    expect(refused).toBeInstanceOf(ScepFailureError);
+    await device.enroll({ subject: "CN=mac-41", challengePassword: rotated.challenge });
+
+    expect((await retire(profile.id)).status).toBe(409);
+    // With none left valid, it may rotate again.
+    expect((await rotate(profile.id, at(30))).status).toBe(200);
+  });
+
+  test("is refused when there is no previous Shared Challenge", async () => {
+    const { profile } = await createProfile();
+    expect((await retire(profile.id)).status).toBe(409);
+  });
+});
+
+describe("the Audit Events of a Shared Challenge's rotation", () => {
+  test("record the rotation, the retirement by an administrator and the expiry with no actor, never with a Shared Challenge in them", async () => {
+    const { profile } = await createProfile();
+    const first = (await rotate(profile.id, at(10))).body.sharedChallenge as { id: string; challenge: string };
+    h.setNow(new Date(START + 1 * DAY_MS));
+    await retire(profile.id);
+    h.setNow(new Date(START + 2 * DAY_MS));
+    const second = (await rotate(profile.id, at(5))).body.sharedChallenge as { id: string; challenge: string };
+
+    // Not yet expired: the pass clears nothing.
+    expect(await h.expireSharedChallenges()).toBe(0);
+    h.setNow(new Date(START + 5 * DAY_MS));
+    expect(await h.expireSharedChallenges()).toBe(1);
+    expect(await h.expireSharedChallenges()).toBe(0);
+
+    const events = (await auditOf()).filter((e) => e.target.id === profile.id && e.action.startsWith("enrollment_profile.shared_challenge_"));
+    expect(events.map((e) => [e.action, e.actor?.email ?? null, e.detail])).toEqual([
+      ["enrollment_profile.shared_challenge_rotated", "admin@acme.test", { name: "Macs", sharedChallenge: { id: first.id }, previous: { id: profile.sharedChallenge.id, expiresAt: at(10) } }],
+      ["enrollment_profile.shared_challenge_retired", "admin@acme.test", { name: "Macs", sharedChallenge: { id: profile.sharedChallenge.id }, expired: false }],
+      ["enrollment_profile.shared_challenge_rotated", "admin@acme.test", { name: "Macs", sharedChallenge: { id: second.id }, previous: { id: first.id, expiresAt: at(5) } }],
+      ["enrollment_profile.shared_challenge_retired", null, { name: "Macs", sharedChallenge: { id: first.id }, expired: true }],
+    ]);
+    const all = JSON.stringify(await auditOf());
+    for (const challenge of [profile.sharedChallenge.challenge, first.challenge, second.challenge]) expect(all).not.toContain(challenge);
+  });
+
+  test("record the expiry of a previous Shared Challenge the pass has not reached before a rotation replaces it", async () => {
+    const { profile } = await createProfile();
+    const first = (await rotate(profile.id, at(5))).body.sharedChallenge as { id: string };
+    h.setNow(new Date(START + 6 * DAY_MS));
+    expect((await rotate(profile.id, at(20))).status).toBe(200);
+
+    const retired = (await auditOf()).filter((e) => e.action === "enrollment_profile.shared_challenge_retired");
+    expect(retired.map((e) => [e.actor?.email ?? null, e.detail.sharedChallenge])).toEqual([[null, { id: profile.sharedChallenge.id }]]);
+    expect(first.id).not.toBe(profile.sharedChallenge.id);
+  });
+});
+
+describe("rotating and retiring a Shared Challenge", () => {
+  test("are only for Organization Administrators", async () => {
+    const { profile } = await createProfile();
+    expect((await rotate(profile.id, at(7))).status).toBe(200);
+    for (const role of ["member", "approver"]) {
+      const email = `${role}@acme.test`;
+      const invited = await h.api("/api/auth/organization/invite-member", { cookie: org.cookie, body: { email, role, organizationId: org.orgId } });
+      const cookie = await h.signUp(email, PASSWORD);
+      await h.api("/api/auth/organization/accept-invitation", { cookie, body: { invitationId: invited.body.id } });
+      const signedIn = await h.signIn(email, PASSWORD);
+      expect((await retire(profile.id, signedIn)).status).toBe(403);
+      expect((await rotate(profile.id, at(8), signedIn)).status).toBe(403);
+    }
+    expect((await h.api(`${profiles()}/${profile.id}`, { cookie: org.cookie })).body.previousSharedChallenge).not.toBeNull();
+  });
+});
+
+describe("the Shared Challenge a Device Certificate was issued under", () => {
+  test("is recorded for each, current or previous, and none for a renewal, in its details and its device_certificate.issued Audit Event", async () => {
+    const { profile } = await createProfile();
+    const device = scepDevice(h, profile.scepUrl);
+    const underFirst = await device.enroll({ subject: "CN=mac-50", challengePassword: profile.sharedChallenge.challenge });
+    const rotated = (await rotate(profile.id, at(30))).body.sharedChallenge as { id: string; challenge: string };
+    const underPrevious = await device.enroll({ subject: "CN=mac-51", challengePassword: profile.sharedChallenge.challenge });
+    const underCurrent = await device.enroll({ subject: "CN=mac-52", challengePassword: rotated.challenge });
+    h.setNow(new Date(START + 1 * DAY_MS));
+    const renewed = await device.renew({ subject: "CN=mac-52" }, underCurrent);
+
+    const expected = new Map([
+      [underFirst.certificate.serialNumber.toUpperCase(), { id: profile.sharedChallenge.id }],
+      [underPrevious.certificate.serialNumber.toUpperCase(), { id: profile.sharedChallenge.id }],
+      [underCurrent.certificate.serialNumber.toUpperCase(), { id: rotated.id }],
+      [renewed.certificate.serialNumber.toUpperCase(), null],
+    ]);
+    const listed = (await h.api(`${profiles()}/${profile.id}/device-certificates`, { cookie: org.cookie })).body.items as { id: string; serial: string; sharedChallenge: { id: string } | null }[];
+    expect(new Map(listed.map((c) => [c.serial, c.sharedChallenge]))).toEqual(expected);
+    for (const { id, serial } of listed) {
+      const details = await h.api(`${profiles()}/${profile.id}/device-certificates/${id}`, { cookie: org.cookie });
+      expect(details.body.sharedChallenge).toEqual(expected.get(serial)!);
+    }
+    const issued = (await auditOf()).filter((e) => e.action === "device_certificate.issued");
+    expect(new Map(issued.map((e) => [e.detail.serial, e.detail.sharedChallenge]))).toEqual(expected);
+  });
+
+  test("is none for a profile whose validator's kind uses no Shared Challenge", async () => {
+    const ca = await createCa(org, "Intune devices");
+    const other = await h.api(profiles(), { cookie: org.cookie, body: { name: "Intune", issuingCaId: ca.issuing.id, validator: { kind: "test_allow" } } });
+    await scepDevice(h, other.body.scepUrl).enroll({ subject: "CN=device-01" });
+    const listed = (await h.api(`${profiles()}/${other.body.id}/device-certificates`, { cookie: org.cookie })).body.items as { sharedChallenge: unknown }[];
+    expect(listed.map((c) => c.sharedChallenge)).toEqual([null]);
+    expect((await auditOf()).find((e) => e.action === "device_certificate.issued")!.detail.sharedChallenge).toBeNull();
+  });
+});

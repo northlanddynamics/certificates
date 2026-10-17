@@ -24,7 +24,7 @@ import { findIssuingCa, type PrivateCas } from "./private-ca";
 import { nameRulesRefusal } from "./name-rules";
 import type { ScepAnswer, ScepClaim, ScepTransactions } from "./scep-transactions";
 import type { Secrets } from "./secrets";
-import { isSharedChallenge } from "./shared-challenge";
+import { presentedSharedChallenge } from "./shared-challenge";
 import type { Change, UnitOfWork } from "./unit-of-work";
 import { fingerprintOf } from "./fingerprint";
 
@@ -209,6 +209,8 @@ export function registerScep(ctx: {
     const refused = (reason: string, validatorAsked = false, retryable = false) => ({ reason, validatorAsked, retryable });
     if (!profile.enabled) return refused("the Enrollment Profile is disabled, so it issues nothing");
     let renewalOf: Renewed | undefined;
+    // The id of the Shared Challenge a PKCSReq presented, which its Device Certificate records.
+    let sharedChallengeId: string | null = null;
     if (request.renewal) {
       const renewal = await renewalRefusal(profile, request);
       if ("refusal" in renewal) return refused(renewal.refusal);
@@ -217,9 +219,11 @@ export function registerScep(ctx: {
       // First of all, so that a device without it learns nothing of the profile. Released rather than kept as the
       // transaction's answer, so that whoever does not hold the challenge cannot settle a device's transaction for it.
       const presented = request.csr.challengePassword;
-      if (!isSharedChallenge(presented, profile.sharedChallengeHash)) {
+      const id = presentedSharedChallenge(presented, profile, clock());
+      if (!id) {
         return refused(presented === undefined ? "the request has no challengePassword: present the Enrollment Profile's Shared Challenge" : "the request's challengePassword is not the Enrollment Profile's Shared Challenge", false, true);
       }
+      sharedChallengeId = id;
     }
     const keyType = keyTypeOf(request);
     if (!keyType || !profile.allowedKeyTypes.includes(keyType)) {
@@ -285,6 +289,7 @@ export function registerScep(ctx: {
             certificatePem: certificate.toString("pem"),
             deviceId,
             keyType,
+            sharedChallengeId,
             transactionId: request.transactionId,
             createdAt: change.occurredAt,
           })
@@ -300,6 +305,7 @@ export function registerScep(ctx: {
             subjectAltNames,
             deviceId,
             keyType,
+            sharedChallenge: sharedChallengeId === null ? null : { id: sharedChallengeId },
             notAfter: certificate.notAfter.toISOString(),
             transactionId: request.transactionId,
           },

@@ -338,6 +338,8 @@ export interface EnrollmentProfile {
   nameRules: NameRules | null;
   /** Its Shared Challenge, by id only, when its validator's kind uses one: the challenge itself is shown once, when it is made. */
   sharedChallenge: { id: string } | null;
+  /** The Shared Challenge it held before its last rotation, which devices may still present until `expiresAt`; none when there is none still valid. */
+  previousSharedChallenge: { id: string; expiresAt: string } | null;
   raCertificate: { subject: string; serial: string; notAfter: string };
   /** Whether it takes enrollment requests; a disabled profile refuses every one, and is never enabled again. */
   enabled: boolean;
@@ -345,7 +347,7 @@ export interface EnrollmentProfile {
   retentionDays: number;
   createdAt: string;
 }
-/** An Enrollment Profile as it is created: with its Shared Challenge, which is shown only then. */
+/** An Enrollment Profile as it is created, or its Shared Challenge rotated: with its Shared Challenge, which is shown only then. */
 export type CreatedEnrollmentProfile = Omit<EnrollmentProfile, "sharedChallenge"> & { sharedChallenge: { id: string; challenge: string } | null };
 /** A Certificate an Enrollment Profile issued to a device. */
 export interface DeviceCertificate {
@@ -359,6 +361,8 @@ export interface DeviceCertificate {
   deviceId: string | null;
   /** The device's key; `rsa-1024` is weak, one that can be broken. */
   keyType: DeviceKeyType;
+  /** The Shared Challenge its request presented, its profile's current or previous one; none for a renewal, or when the profile uses none. */
+  sharedChallenge: { id: string } | null;
   /** The Issuing CA's subject. */
   issuer: string;
   notBefore: string;
@@ -777,6 +781,12 @@ export const api = {
   disableEnrollmentProfile: (orgId: string, id: string) => call<EnrollmentProfile>(`/api/organizations/${orgId}/enrollment-profiles/${id}/disable`, { method: "POST", body: {} }),
   /** Replaces a profile's RA certificate and key, signed by its Issuing CA. */
   rotateEnrollmentProfileRa: (orgId: string, id: string) => call<EnrollmentProfile>(`/api/organizations/${orgId}/enrollment-profiles/${id}/ra-rotation`, { method: "POST", body: {} }),
+  /** Makes a profile a new Shared Challenge, returned only now; the old one stays valid as the previous until `previousExpiresAt` or until it is retired. */
+  rotateSharedChallenge: (orgId: string, id: string, previousExpiresAt: string) =>
+    call<CreatedEnrollmentProfile>(`/api/organizations/${orgId}/enrollment-profiles/${id}/shared-challenge/rotation`, { body: { previousExpiresAt } }),
+  /** Ends a profile's previous Shared Challenge at once. */
+  retirePreviousSharedChallenge: (orgId: string, id: string) =>
+    call<EnrollmentProfile>(`/api/organizations/${orgId}/enrollment-profiles/${id}/shared-challenge/previous/retirement`, { method: "POST", body: {} }),
   /** The Enrollment Validator kinds the platform runs, one of which a profile must name. */
   enrollmentValidatorKinds: (orgId: string) => call<{ items: { kind: string; vouchesForNames: boolean; takesSecret: boolean; allowsRenewal: boolean; usesSharedChallenge: boolean }[] }>(`/api/organizations/${orgId}/enrollment-validator-kinds`),
   /** Whether the profile's Enrollment Validator can reach its service; `note` says what the test could not prove. */

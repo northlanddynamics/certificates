@@ -574,6 +574,13 @@ export const enrollmentProfile = pgTable(
     /** Its Shared Challenge (shared-challenge.ts), by id and the SHA-256 of it, never the challenge: present exactly when its validator's kind uses one. */
     sharedChallengeId: uuid("shared_challenge_id"),
     sharedChallengeHash: text("shared_challenge_hash"),
+    /**
+     * The Shared Challenge it held before its last rotation, by id and hash, which devices may still present until it
+     * expires (`previousSharedChallengeExpiresAt`) or is retired, when all three are cleared.
+     */
+    previousSharedChallengeId: uuid("previous_shared_challenge_id"),
+    previousSharedChallengeHash: text("previous_shared_challenge_hash"),
+    previousSharedChallengeExpiresAt: timestamp("previous_shared_challenge_expires_at", { withTimezone: true }),
     /** Its RA certificate (PEM), and the Secret holding the RA's private key (PKCS #8 PEM). */
     raCertificatePem: text("ra_certificate_pem").notNull(),
     raKeySecretId: uuid("ra_key_secret_id").notNull(),
@@ -594,6 +601,10 @@ export const enrollmentProfile = pgTable(
     check("enrollment_profile_validity", sql`${t.validityDays} >= 1`),
     check("enrollment_profile_retention", sql`${t.retentionDays} >= 0`),
     check("enrollment_profile_shared_challenge", sql`(${t.sharedChallengeId} is null) = (${t.sharedChallengeHash} is null)`),
+    check(
+      "enrollment_profile_previous_shared_challenge",
+      sql`(${t.previousSharedChallengeId} is null) = (${t.previousSharedChallengeHash} is null) and (${t.previousSharedChallengeId} is null) = (${t.previousSharedChallengeExpiresAt} is null) and (${t.previousSharedChallengeId} is null or ${t.sharedChallengeId} is not null)`,
+    ),
   ],
 );
 
@@ -624,6 +635,8 @@ export const deviceCertificate = pgTable(
     deviceId: text("device_id"),
     /** The device's key, such as "rsa-2048", which the profile allowed. */
     keyType: text("key_type").$type<DeviceKeyType>().notNull(),
+    /** The id of the Shared Challenge its PKCSReq presented; none for a renewal, or when its profile's validator's kind uses none. */
+    sharedChallengeId: uuid("shared_challenge_id"),
     /** The SCEP transaction ID of the request it answered. */
     transactionId: text("transaction_id").notNull(),
     /** When it was revoked and why, which puts it on its Issuing CA's CRL until it expires; none while it is not. */
