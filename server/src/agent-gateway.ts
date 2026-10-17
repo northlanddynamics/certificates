@@ -4,7 +4,7 @@
 //    heartbeat and carries the version and brings the Agent its work items, and rotating the credential before it ends.
 // Only the credential's SHA-256 is kept, so the platform cannot be made to reveal one.
 import { OpenAPIHono, createRoute, z } from "@hono/zod-openapi";
-import { createHash, randomBytes } from "node:crypto";
+import { randomBytes } from "node:crypto";
 import { and, eq, gt, isNull, or } from "drizzle-orm";
 import type { Context } from "hono";
 import { AGENT_ARCHES, AGENT_OSES, LATEST_AGENT_VERSION } from "./agent-kinds";
@@ -15,6 +15,7 @@ import { OUTPUT_LIMIT_BYTES } from "./deployments";
 import { HttpError, errors, json } from "./http";
 import type { UnitOfWork } from "./unit-of-work";
 import type { WorkItems } from "./work-items";
+import { sha256Hex } from "./sha256";
 
 export interface AgentGatewayConfig {
   /** The newest Agent version the platform knows of; older ones are flagged. */
@@ -46,7 +47,7 @@ export const DEFAULT_AGENT_GATEWAY: AgentGatewayConfig = {
 const LONG_POLL_CHECK_MS = 250;
 export const REGISTRATION_TOKEN_PREFIX = "agt_";
 export const AGENT_CREDENTIAL_PREFIX = "agk_";
-export const hashToken = (token: string) => createHash("sha256").update(token).digest("hex");
+export const hashToken = (token: string) => sha256Hex(token);
 export const newRegistrationToken = () => REGISTRATION_TOKEN_PREFIX + randomBytes(32).toString("base64url");
 const newCredential = () => AGENT_CREDENTIAL_PREFIX + randomBytes(32).toString("base64url");
 

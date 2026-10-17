@@ -2,7 +2,8 @@
 // signed, and each certificate of the chain, leaf first. A stored Certificate never changes, so these are
 // read from it when asked for rather than stored beside it.
 import * as x509 from "@peculiar/x509";
-import { createHash, webcrypto } from "node:crypto";
+import { webcrypto } from "node:crypto";
+import { fingerprintOf } from "./fingerprint";
 
 x509.cryptoProvider.set(webcrypto as unknown as Crypto);
 
@@ -27,7 +28,7 @@ export function certificateFacts(chainPem: string) {
       subject: cert.subject,
       issuer: cert.issuer,
       serial: cert.serialNumber.toUpperCase(),
-      fingerprint: createHash("sha256").update(new Uint8Array(cert.rawData)).digest("hex"),
+      fingerprint: fingerprintOf(cert.rawData),
       notBefore: cert.notBefore.toISOString(),
       notAfter: cert.notAfter.toISOString(),
     })),

@@ -12,7 +12,6 @@ import type { OpenAPIHono } from "@hono/zod-openapi";
 import { and, eq } from "drizzle-orm";
 import type { Context } from "hono";
 import { getConnInfo } from "hono/bun";
-import { createHash } from "node:crypto";
 import { FailInfo, ScepServer, type EnrollmentRequest as ScepEnrollmentRequest, type ScepResult } from "ts-scep";
 import { subjectAltNamesOf } from "./ca-certificates";
 import type { Db, Tx } from "./db/client";
@@ -27,6 +26,7 @@ import type { ScepAnswer, ScepClaim, ScepTransactions } from "./scep-transaction
 import type { Secrets } from "./secrets";
 import { isSharedChallenge } from "./shared-challenge";
 import type { Change, UnitOfWork } from "./unit-of-work";
+import { fingerprintOf } from "./fingerprint";
 
 type ProfileRow = typeof enrollmentProfile.$inferSelect;
 /** The Device Certificate a RenewalReq was signed with, which its replacement supersedes. */
@@ -127,7 +127,7 @@ export function registerScep(ctx: {
    */
   async function renewalRefusal(profile: ProfileRow, request: ScepEnrollmentRequest): Promise<{ refusal: string } | { renewalOf: Renewed }> {
     if (!allowsRenewal(profile)) return { refusal: "RenewalReq is not supported: enroll again with PKCSReq" };
-    const fingerprint = createHash("sha256").update(new Uint8Array(request.signerCertificate.raw)).digest("hex");
+    const fingerprint = fingerprintOf(request.signerCertificate.raw);
     const [current] = await db
       .select({ id: deviceCertificate.id, serial: deviceCertificate.serial, subject: deviceCertificate.subject, issuingCaId: deviceCertificate.issuingCaId, revokedAt: deviceCertificate.revokedAt, notAfter: deviceCertificate.notAfter })
       .from(deviceCertificate)
@@ -277,7 +277,7 @@ export function registerScep(ctx: {
             enrollmentProfileId: profile.id,
             issuingCaId: profile.issuingCaId,
             serial,
-            fingerprint: createHash("sha256").update(new Uint8Array(certificate.rawData)).digest("hex"),
+            fingerprint: fingerprintOf(certificate.rawData),
             subject: certificate.subject,
             subjectAltNames,
             notBefore: certificate.notBefore,

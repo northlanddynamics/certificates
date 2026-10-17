@@ -5,7 +5,7 @@
 // of its failure. Either end is one audited change.
 // A Renewal of a Managed Certificate whose key an Agent holds begins by waiting: the Agent is asked for a new key and its
 // CSR (deployments.ts), and the Issuance runs once it is sent, however long the Agent is away.
-import { X509Certificate, createHash } from "node:crypto";
+import { X509Certificate } from "node:crypto";
 import { and, desc, eq, inArray, isNull, ne } from "drizzle-orm";
 import { CertificateAuthorityError } from "./certificate-authority";
 import { parseCsr } from "./csr";
@@ -16,6 +16,7 @@ import { sameNames } from "./names";
 import { IssuanceFailure, type IssuanceFailureCode } from "./issuance-failure";
 import { certificateIssuerColumns, issuerDetail, issuerOf, type Issued, type Issuer, type Issuers } from "./issuer";
 import type { Actor, Change, UnitOfWork } from "./unit-of-work";
+import { fingerprintOf } from "./fingerprint";
 
 /**
  * What an Issuance is asked for as: `issue` is for a Managed Certificate's Issuance by creation, Approval or a person
@@ -141,7 +142,7 @@ function readLeaf(chainPem: string) {
   if (!leafPem) throw new IssuanceFailure("ca_rejected", "the CA served no certificate");
   const leaf = new X509Certificate(leafPem);
   return {
-    fingerprint: createHash("sha256").update(leaf.raw).digest("hex"),
+    fingerprint: fingerprintOf(leaf.raw),
     serial: leaf.serialNumber,
     notBefore: new Date(leaf.validFrom),
     notAfter: new Date(leaf.validTo),

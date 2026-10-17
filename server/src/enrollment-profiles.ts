@@ -8,7 +8,7 @@
 import { OpenAPIHono, createRoute, z } from "@hono/zod-openapi";
 import * as x509 from "@peculiar/x509";
 import { and, asc, eq } from "drizzle-orm";
-import { createHash, generateKeyPairSync, randomBytes } from "node:crypto";
+import { generateKeyPairSync, randomBytes } from "node:crypto";
 import { isDeepStrictEqual } from "node:util";
 import type { Authorizer } from "./authorization";
 import type { Db, Tx } from "./db/client";
@@ -35,6 +35,7 @@ import { findIssuingCa, issuingRefusal, type IssuingCaOf, type PrivateCas } from
 import type { Secrets } from "./secrets";
 import { newSharedChallenge } from "./shared-challenge";
 import type { Actor, UnitOfWork } from "./unit-of-work";
+import { fingerprintOf } from "./fingerprint";
 
 type ProfileRow = typeof enrollmentProfile.$inferSelect;
 
@@ -95,7 +96,7 @@ export const scepUrlOf = (baseURL: string, publicId: string) => `${baseURL.repla
 function toProfile(row: ProfileRow, of: IssuingCaOf, baseURL: string): z.infer<typeof EnrollmentProfile> {
   const ra = new x509.X509Certificate(row.raCertificatePem);
   // A profile is made only on an Issuing CA that has its certificate, which it then keeps.
-  const caFingerprint = createHash("sha256").update(new Uint8Array(new x509.X509Certificate(of.issuing.certificatePem!).rawData)).digest("hex");
+  const caFingerprint = fingerprintOf(new x509.X509Certificate(of.issuing.certificatePem!).rawData);
   return {
     id: row.id,
     name: row.name,

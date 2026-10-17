@@ -10,8 +10,9 @@
 // revocation feed or device ID, so what a holder of the challenge gets is bounded by the profile's Name Rules, if any,
 // and its Issuing CA's Permitted Name Rules.
 import { z } from "@hono/zod-openapi";
-import { createHash, randomBytes, randomUUID, timingSafeEqual } from "node:crypto";
+import { randomBytes, randomUUID, timingSafeEqual } from "node:crypto";
 import type { EnrollmentValidatorKind } from "./enrollment-validator";
+import { sha256Hex } from "./sha256";
 
 /**
  * A new Shared Challenge, with its id and the hash that is kept of it: 192 bits of randomness as lower-case hex, which
@@ -19,15 +20,13 @@ import type { EnrollmentValidatorKind } from "./enrollment-validator";
  */
 export function newSharedChallenge() {
   const challenge = randomBytes(24).toString("hex");
-  return { id: randomUUID(), challenge, hash: hashOf(challenge) };
+  return { id: randomUUID(), challenge, hash: sha256Hex(challenge) };
 }
-
-const hashOf = (challenge: string) => createHash("sha256").update(challenge).digest("hex");
 
 /** Whether the challenge a device presented is the one `hash` was kept of, compared in constant time; never when there is no hash. */
 export function isSharedChallenge(presented: string | undefined, hash: string | null): boolean {
   if (presented === undefined || hash === null) return false;
-  return timingSafeEqual(Buffer.from(hashOf(presented), "hex"), Buffer.from(hash, "hex"));
+  return timingSafeEqual(Buffer.from(sha256Hex(presented), "hex"), Buffer.from(hash, "hex"));
 }
 
 export const sharedChallenge: EnrollmentValidatorKind<Record<string, never>> = {

@@ -5,17 +5,17 @@
 // which is what an Agent checks before it runs one.
 import { OpenAPIHono, createRoute, z } from "@hono/zod-openapi";
 import { and, asc, desc, eq, inArray, max } from "drizzle-orm";
-import { createHash } from "node:crypto";
 import type { Authorizer } from "./authorization";
 import type { Db, Tx } from "./db/client";
 import { deploymentScript, deploymentScriptVersion } from "./db/schema";
 import { SCRIPT_INTERPRETERS } from "./deployment-script-kinds";
 import { HttpError, OrgParam, PageQuery, anyOf, errors, isUniqueViolation, json, pageOf } from "./http";
 import type { Actor, Change, UnitOfWork } from "./unit-of-work";
+import { sha256Hex } from "./sha256";
 
 
 /** The hash that identifies a version: SHA-256 of the content's UTF-8 bytes, lower-case hex. */
-export const scriptHash = (content: string) => createHash("sha256").update(content, "utf8").digest("hex");
+export const scriptHash = (content: string) => sha256Hex(content);
 
 type VersionRow = typeof deploymentScriptVersion.$inferSelect;
 type ScriptRow = typeof deploymentScript.$inferSelect;
