@@ -618,6 +618,8 @@ export const deviceCertificate = pgTable(
     certificatePem: text("certificate_pem").notNull(),
     /** The device as its Enrollment Validator knows it, such as Intune's device ID; none when the request did not say. */
     deviceId: text("device_id"),
+    /** The device's key, such as "rsa-2048", which the profile allowed. */
+    keyType: text("key_type").$type<DeviceKeyType>().notNull(),
     /** The SCEP transaction ID of the request it answered. */
     transactionId: text("transaction_id").notNull(),
     /** When it was revoked and why, which puts it on its Issuing CA's CRL until it expires; none while it is not. */
@@ -633,6 +635,8 @@ export const deviceCertificate = pgTable(
     index("device_certificate_serial_idx").on(t.organizationId, t.serial),
     // What pruning looks for: a profile's Device Certificates that ended before its retention period.
     index("device_certificate_expiry_idx").on(t.enrollmentProfileId, t.notAfter),
+    // What the weak-key filter looks for (WEAK_DEVICE_KEY_TYPE), a few among many.
+    index("device_certificate_weak_key_idx").on(t.enrollmentProfileId).where(sql`${t.keyType} = 'rsa-1024'`),
     index("device_certificate_revoked_idx").on(t.issuingCaId).where(sql`${t.revokedAt} is not null`),
     check("device_certificate_revocation", sql`(${t.revokedAt} is null) = (${t.revocationReason} is null)`),
     check("device_certificate_revocation_reason", sql`${t.revocationReason} in ('unspecified', 'keyCompromise', 'affiliationChanged', 'superseded', 'cessationOfOperation', 'privilegeWithdrawn')`),

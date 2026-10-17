@@ -166,6 +166,26 @@ describe("a device enrolling over SCEP", () => {
     expect(read(certificate).subject).toBe("CN=device-04");
   });
 
+  test("is refused a 1024-bit key unless the profile allows rsa-1024, with a reason naming the key's size and what is allowed", async () => {
+    const ca = await createCa();
+    const strict = await createProfile(ca.issuing.id);
+    const failure = await scepDevice(h, strict.scepUrl).enroll({ subject: "CN=mac-01", keyBits: 1024 }).catch((err) => err);
+    expect(failure).toBeInstanceOf(ScepFailureError);
+    expect(failure.failInfo).toBe(FailInfo.badRequest);
+    expect(failure.failInfoText).toBe("the Enrollment Profile does not allow a 1024-bit RSA key (rsa-1024); it allows rsa-2048, rsa-3072, rsa-4096");
+    const refusals = (await auditOf()).filter((e) => e.action === "enrollment.refused");
+    expect(refusals.map((e) => e.detail.reason)).toEqual([failure.failInfoText]);
+
+    const weak = await createProfile(ca.issuing.id, { name: "Macs", allowedKeyTypes: ["rsa-1024", "rsa-2048"] });
+    expect(weak).toMatchObject({ allowedKeyTypes: ["rsa-1024", "rsa-2048"] });
+    const created = (await auditOf()).find((e) => e.action === "enrollment_profile.created" && e.target.id === weak.id);
+    expect(created!.detail.allowedKeyTypes).toEqual(["rsa-1024", "rsa-2048"]);
+    const { certificate } = await scepDevice(h, weak.scepUrl).enroll({ subject: "CN=mac-01", keyBits: 1024 });
+    expect(certificate.publicKey.asymmetricKeyDetails?.modulusLength).toBe(1024);
+    const issued = (await auditOf()).filter((e) => e.action === "device_certificate.issued");
+    expect(issued.map((e) => e.detail.keyType)).toEqual(["rsa-1024"]);
+  });
+
   test("is refused a DNS name outside its Issuing CA's permitted names", async () => {
     const ca = await createCa();
     const profile = await createProfile(ca.issuing.id);
@@ -641,6 +661,7 @@ describe("a profile's Device Certificates", () => {
         { type: "url", value: "IntuneDeviceId://5b1e4f0e-8b2c-4a57-9a1d-0c6f3e2a7b11" },
       ],
       deviceId: "5b1e4f0e-8b2c-4a57-9a1d-0c6f3e2a7b11",
+      keyType: "rsa-2048",
       issuer: first.issuer,
       notBefore: new Date(START).toISOString(),
       notAfter: new Date(START + 365 * DAY_MS).toISOString(),
@@ -683,6 +704,27 @@ describe("a profile's Device Certificates", () => {
     expect(await serialsFor("?status=revoked")).toEqual([]);
     expect(await serialsFor("?status=expired&q=phone")).toEqual([phone]);
     expect((await certificatesOf(profile.id, "?status=lost")).status).toBe(400);
+  });
+
+  test("with 1024-bit keys are found by the weak-key filter, which combines with the others", async () => {
+    const ca = await createCa();
+    const profile = await createProfile(ca.issuing.id, { allowedKeyTypes: ["rsa-1024", "rsa-2048", "rsa-4096"] });
+    const device = scepDevice(h, profile.scepUrl);
+    const enroll = async (subject: string, keyBits: number) => read((await device.enroll({ subject, keyBits })).certificate).serialNumber.toUpperCase();
+    const weakMac = await enroll("CN=mac-old", 1024);
+    const strongMac = await enroll("CN=mac-new", 4096);
+    const weakPhone = await enroll("CN=phone-old", 1024);
+    const keyTypesFor = async (query: string) => {
+      const res = await certificatesOf(profile.id, query);
+      expect(res.status).toBe(200);
+      expect(res.body.total).toBe(res.body.items.length);
+      return Object.fromEntries(res.body.items.map((c: { serial: string; keyType: string }) => [c.serial, c.keyType]));
+    };
+
+    expect(await keyTypesFor("")).toEqual({ [weakMac]: "rsa-1024", [strongMac]: "rsa-4096", [weakPhone]: "rsa-1024" });
+    expect(await keyTypesFor("?weakKey=true")).toEqual({ [weakMac]: "rsa-1024", [weakPhone]: "rsa-1024" });
+    expect(await keyTypesFor("?weakKey=true&q=mac")).toEqual({ [weakMac]: "rsa-1024" });
+    expect((await certificatesOf(profile.id, "?weakKey=yes")).status).toBe(400);
   });
 
   test("are paged on the server", async () => {

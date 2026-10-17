@@ -302,6 +302,13 @@
       "when": 1792184077018,
       "tag": "0042_enrollment_profile_lifecycle",
       "breakpoints": true
+    },
+    {
+      "idx": 43,
+      "version": "7",
+      "when": 1792252594498,
+      "tag": "0043_device_certificate_key_type",
+      "breakpoints": true
     }
   ]
 }

@@ -351,6 +351,8 @@ export interface DeviceCertificate {
   subjectAltNames: { type: string; value: string }[];
   /** The device as its Enrollment Validator knows it, such as Intune's device ID. */
   deviceId: string | null;
+  /** The device's key; `rsa-1024` is weak, one that can be broken. */
+  keyType: DeviceKeyType;
   /** The Issuing CA's subject. */
   issuer: string;
   notBefore: string;
@@ -749,10 +751,11 @@ export const api = {
   enrollmentProfiles: (orgId: string) => call<{ items: EnrollmentProfile[] }>(`/api/organizations/${orgId}/enrollment-profiles`),
   enrollmentProfile: (orgId: string, id: string) => call<EnrollmentProfile>(`/api/organizations/${orgId}/enrollment-profiles/${id}`),
   /** A page of the Device Certificates a profile issued, newest first: `q` searches subject, names, serial and device ID. */
-  deviceCertificates: (orgId: string, profileId: string, search: { q?: string; status?: DeviceCertificateStatus }, paging: { page: number; pageSize: number }) => {
+  deviceCertificates: (orgId: string, profileId: string, search: { q?: string; status?: DeviceCertificateStatus; weakKey?: boolean }, paging: { page: number; pageSize: number }) => {
     const query = new URLSearchParams({ page: String(paging.page), pageSize: String(paging.pageSize) });
     if (search.q) query.set("q", search.q);
     if (search.status) query.set("status", search.status);
+    if (search.weakKey) query.set("weakKey", "true");
     return call<Page<DeviceCertificate>>(`/api/organizations/${orgId}/enrollment-profiles/${profileId}/device-certificates?${query}`);
   },
   /** Revokes a Device Certificate, which its Issuing CA's CRL lists at once. */
@@ -761,8 +764,8 @@ export const api = {
   /** Where a Device Certificate downloads from, PEM. */
   deviceCertificateUrl: (orgId: string, profileId: string, id: string) => `/api/organizations/${orgId}/enrollment-profiles/${profileId}/device-certificates/${id}/certificate`,
   createEnrollmentProfile: (orgId: string, body: NewEnrollmentProfile) => call<EnrollmentProfile>(`/api/organizations/${orgId}/enrollment-profiles`, { body }),
-  /** Points a profile at another Issuing CA, which signs it a new RA certificate, or changes its retention period or Name Rules (null removes them). */
-  updateEnrollmentProfile: (orgId: string, id: string, body: { issuingCaId?: string; retentionDays?: number; nameRules?: NameRules | null }) =>
+  /** Points a profile at another Issuing CA, which signs it a new RA certificate, or changes its retention period, Name Rules (null removes them) or allowed device keys. */
+  updateEnrollmentProfile: (orgId: string, id: string, body: { issuingCaId?: string; retentionDays?: number; nameRules?: NameRules | null; allowedKeyTypes?: DeviceKeyType[] }) =>
     call<EnrollmentProfile>(`/api/organizations/${orgId}/enrollment-profiles/${id}`, { method: "PATCH", body }),
   /** Disables a profile: it refuses all enrollment from then on, and keeps its Device Certificates. */
   disableEnrollmentProfile: (orgId: string, id: string) => call<EnrollmentProfile>(`/api/organizations/${orgId}/enrollment-profiles/${id}/disable`, { method: "POST", body: {} }),
