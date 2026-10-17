@@ -43,7 +43,9 @@ async function createProfile(validator: { kind: string }) {
   expect(ca.status).toBe(201);
   const profile = await h.api(profiles(), { cookie: org.cookie, body: { name: "Wi-Fi", issuingCaId: ca.body.issuingCas[0].id, validator } });
   expect(profile.status).toBe(201);
+  // Its chain: the Issuing CA, then the root.
   const chain = await h.app.request(`http://localhost/api/organizations/${org.orgId}/private-cas/${ca.body.id}/issuing-cas/${ca.body.issuingCas[0].id}/chain`, { headers: { cookie: org.cookie } });
+  expect(chain.status).toBe(200);
   const [issuing, root] = ((await chain.text()).match(/-----BEGIN CERTIFICATE-----[^-]+-----END CERTIFICATE-----/g) ?? []).map((pem) => new x509.X509Certificate(pem));
   return { profile: profile.body, scepUrl: `http://host.docker.internal:${server.port}/scep/${profile.body.publicId}`, issuing: issuing!, root: root! };
 }
@@ -83,9 +85,10 @@ describe("micromdm's scepclient under a Shared Challenge profile", () => {
   }, 120_000);
 
   test("enrolls with both the current and the previous Shared Challenge after a rotation", async () => {
+    h.setNow(new Date("2026-01-01T00:00:00Z"));
     const { profile, scepUrl } = await createProfile({ kind: "shared_challenge" });
     const previous = profile.sharedChallenge as { id: string; challenge: string };
-    const rotated = await h.api(`${profiles()}/${profile.id}/shared-challenge/rotation`, { cookie: org.cookie, body: { previousExpiresAt: "2026-01-15T00:00:00.000Z" } });
+    const rotated = await h.api(`${profiles()}/${profile.id}/shared-challenge/rotation`, { cookie: org.cookie, body: { previousExpiresAt: "2026-01-15T00:00:00Z" } });
     expect(rotated.status).toBe(200);
     const current = rotated.body.sharedChallenge as { id: string; challenge: string };
 
