@@ -3,7 +3,8 @@
 // give no per-device challenge (ADR 0008). It belongs to the profile, not to a validator: the platform makes it when the
 // profile is created, shows it once, keeps only its hash (as it does an Agent's credential), and checks a PKCSReq's
 // challengePassword against it, in constant time, before the validator is asked (scep.ts). A RenewalReq is not checked:
-// its signature by the device's current Device Certificate is the proof.
+// its signature by the device's current Device Certificate is the proof. Nor is the validator told of outcomes, which
+// would keep the CSR, and so the challenge, in the platform's database.
 //
 // The kind itself checks nothing more: it does not vouch for names, allows renewal, and has no settings, secret,
 // revocation feed or device ID, so what a holder of the challenge gets is bounded by the profile's Name Rules, if any,
@@ -23,9 +24,9 @@ export function newSharedChallenge() {
 
 const hashOf = (challenge: string) => createHash("sha256").update(challenge).digest("hex");
 
-/** Whether the challenge a device presented is the one `hash` was kept of, compared in constant time. */
-export function isSharedChallenge(presented: string | undefined, hash: string): boolean {
-  if (presented === undefined) return false;
+/** Whether the challenge a device presented is the one `hash` was kept of, compared in constant time; never when there is no hash. */
+export function isSharedChallenge(presented: string | undefined, hash: string | null): boolean {
+  if (presented === undefined || hash === null) return false;
   return timingSafeEqual(Buffer.from(hashOf(presented), "hex"), Buffer.from(hash, "hex"));
 }
 

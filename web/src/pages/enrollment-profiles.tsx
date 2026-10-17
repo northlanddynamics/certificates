@@ -74,7 +74,7 @@ const VALIDATOR_LABEL: Record<string, string> = { intune: "Microsoft Intune", sh
 const validatorLabel = (kind: string) => VALIDATOR_LABEL[kind] ?? kind;
 const VALIDATOR_DESCRIPTION: Record<string, string> = {
   intune: "Intune gives each device its own challenge, and checks it and the names the device asks for.",
-  shared_challenge: "For Iru (formerly Kandji) and network gear, which can give a SCEP profile only a static challenge: every device presents the same Shared Challenge, which the platform makes.",
+  shared_challenge: "For Iru (formerly Kandji) and network gear, which can give no per-device challenge: every device presents the same Shared Challenge, which the platform makes.",
 };
 
 const KEY_TYPE_LABEL: Record<DeviceKeyType, string> = { ...DEVICE_KEY_TYPE_LABELS, [WEAK_DEVICE_KEY_TYPE]: `${DEVICE_KEY_TYPE_LABELS[WEAK_DEVICE_KEY_TYPE]} (weak)` };
@@ -541,8 +541,8 @@ function NewProfileDialog({ orgId }: { orgId: string }) {
         </Button>
       </DialogTrigger>
       {created?.sharedChallenge ? (
-        // Not closed by a click outside it: the Shared Challenge is not shown again.
-        <DialogContent className="sm:max-w-2xl" onInteractOutside={(e) => e.preventDefault()}>
+        // Closed only by its own button, not by Escape or a click outside it: the Shared Challenge is not shown again.
+        <DialogContent className="sm:max-w-2xl" showCloseButton={false} onInteractOutside={(e) => e.preventDefault()} onEscapeKeyDown={(e) => e.preventDefault()}>
           <SharedChallengePanel profile={created} challenge={created.sharedChallenge.challenge} onDone={() => setOpen(false)} />
         </DialogContent>
       ) : (
@@ -596,7 +596,7 @@ function SharedChallengePanel({ profile, challenge, onDone }: { profile: Created
             <span className="text-foreground">URL</span>: the SCEP URL.
           </li>
           <li>
-            <span className="text-foreground">Challenge</span>: the Shared Challenge, as a static challenge.
+            <span className="text-foreground">Challenge</span>: the Shared Challenge.
           </li>
           <li>
             <span className="text-foreground">Fingerprint</span>: the CA fingerprint, so that Macs check they reached this CA.
@@ -676,7 +676,7 @@ function NewProfileForm({ orgId, onDone }: { orgId: string; onDone: (created: Cr
   const [name, setName] = useState("");
   const [issuingCaId, setIssuingCaId] = useState("");
   // None until the administrator sets one: the default then follows the validator chosen.
-  const [chosenValidityDays, setValidityDays] = useState<string | null>(null);
+  const [chosenValidityDays, setChosenValidityDays] = useState<string | null>(null);
   const [retentionDays, setRetentionDays] = useState(String(DEFAULT_DEVICE_RETENTION_DAYS));
   const [extendedKeyUsage, setExtendedKeyUsage] = useState<DeviceExtendedKeyUsage[]>(DEFAULT_DEVICE_EXTENDED_KEY_USAGES);
   const [keyUsage, setKeyUsage] = useState<DeviceKeyUsage[]>(DEFAULT_DEVICE_KEY_USAGES);
@@ -799,7 +799,7 @@ function NewProfileForm({ orgId, onDone }: { orgId: string; onDone: (created: Cr
             <FieldGroup>
               <Field data-invalid={!validityOk}>
                 <FieldLabel htmlFor="profile-validity">Validity (days)</FieldLabel>
-                <Input id="profile-validity" inputMode="numeric" autoFocus value={validityDays} onChange={(e) => setValidityDays(e.target.value)} aria-invalid={!validityOk} />
+                <Input id="profile-validity" inputMode="numeric" autoFocus value={validityDays} onChange={(e) => setChosenValidityDays(e.target.value)} aria-invalid={!validityOk} />
                 <FieldDescription>
                   Up to {daysLabel(MAX_DEVICE_VALIDITY_DAYS)}, and never past the Issuing CA's end. Unless you set it, {daysLabel(DEFAULT_DEVICE_VALIDITY_DAYS)}, or {daysLabel(DEFAULT_SHARED_CHALLENGE_VALIDITY_DAYS)} with a
                   Shared Challenge.

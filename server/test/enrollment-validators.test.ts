@@ -159,14 +159,15 @@ describe("configuring a profile's Enrollment Validator", () => {
     expect((await create(DOUBLE)).status).toBe(201);
   });
 
-  test("lists the kinds the platform runs, with whether each vouches for names, takes a secret and allows renewal", async () => {
+  test("lists the kinds the platform runs, with whether each vouches for names, takes a secret, allows renewal and uses a Shared Challenge", async () => {
     const kinds = (await h.api(`/api/organizations/${org.orgId}/enrollment-validator-kinds`, { cookie: org.cookie })).body.items;
     expect(kinds).toEqual([
-      { kind: "test_allow", vouchesForNames: true, takesSecret: false, allowsRenewal: false },
-      { kind: "test_names", vouchesForNames: false, takesSecret: false, allowsRenewal: false },
-      { kind: "test_renewal", vouchesForNames: true, takesSecret: false, allowsRenewal: true },
-      { kind: "test_double", vouchesForNames: true, takesSecret: true, allowsRenewal: false },
-      { kind: "intune", vouchesForNames: true, takesSecret: true, allowsRenewal: false },
+      { kind: "test_allow", vouchesForNames: true, takesSecret: false, allowsRenewal: false, usesSharedChallenge: false },
+      { kind: "test_names", vouchesForNames: false, takesSecret: false, allowsRenewal: false, usesSharedChallenge: false },
+      { kind: "test_renewal", vouchesForNames: true, takesSecret: false, allowsRenewal: true, usesSharedChallenge: false },
+      { kind: "test_double", vouchesForNames: true, takesSecret: true, allowsRenewal: false, usesSharedChallenge: false },
+      { kind: "intune", vouchesForNames: true, takesSecret: true, allowsRenewal: false, usesSharedChallenge: false },
+      { kind: "shared_challenge", vouchesForNames: false, takesSecret: false, allowsRenewal: true, usesSharedChallenge: true },
     ]);
   });
 });

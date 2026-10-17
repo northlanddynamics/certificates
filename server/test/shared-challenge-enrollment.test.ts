@@ -116,6 +116,12 @@ describe("a device enrolling with a Shared Challenge", () => {
     expect(JSON.stringify(await auditOf())).not.toContain(profile.sharedChallenge.challenge);
   });
 
+  test("queues nothing to tell its validator, so that the CSR carrying the Shared Challenge is not kept", async () => {
+    const { profile } = await createProfile();
+    await scepDevice(h, profile.scepUrl).enroll({ subject: "CN=mac-04", challengePassword: profile.sharedChallenge.challenge });
+    expect(await h.deliverEnrollmentNotifications()).toBe(0);
+  });
+
   test("is refused, FAILURE badRequest with enrollment.refused, without the Shared Challenge or with a wrong one, and the reason never quotes what was sent", async () => {
     const { profile } = await createProfile();
     const device = scepDevice(h, profile.scepUrl);

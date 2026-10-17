@@ -1,13 +1,13 @@
 // The SCEP server (RFC 8894): public, unauthenticated routes at each Enrollment Profile's opaque public id, where devices
 // enroll. ts-scep handles the protocol, running as the profile's RA: it opens each request's envelope with the RA key and
 // verifies its signer, and signs the CertRep with the RA key, encrypted to the device. What is issued is decided here,
-// per request: a PKCSReq must present the profile's Shared Challenge when it has one (shared-challenge.ts), the
-// device's key must be one the profile allows, its names must keep the profile's name rules when it has them, the
-// Enrollment Validator must allow the request, and then the Issuing CA signs a
-// Device Certificate through the Private CA module, which is stored with its Audit Event in one Unit of Work; for a
-// RenewalReq, that Unit of Work also revokes the Device Certificate it was signed with as superseded. A device is
-// always answered SUCCESS with its certificate or FAILURE with a failInfo, never PENDING; a refusal is an Audit Event.
-// The validator is told the outcome afterwards, in the background (enrollment-validators.ts).
+// per request: a PKCSReq must present the profile's Shared Challenge when its validator's kind uses one
+// (shared-challenge.ts), the device's key must be one the profile allows, its names must keep the profile's name rules
+// when it has them, the Enrollment Validator must allow the request, and then the Issuing CA signs a Device Certificate
+// through the Private CA module, which is stored with its Audit Event in one Unit of Work; for a RenewalReq, that Unit
+// of Work also revokes the Device Certificate it was signed with as superseded. A device is always answered SUCCESS with
+// its certificate or FAILURE with a failInfo, never PENDING; a refusal is an Audit Event. The validator is told the
+// outcome afterwards, in the background (enrollment-validators.ts), unless its kind uses a Shared Challenge.
 import type { OpenAPIHono } from "@hono/zod-openapi";
 import { and, eq } from "drizzle-orm";
 import type { Context } from "hono";
@@ -115,6 +115,11 @@ export function registerScep(ctx: {
   const config = () => ({ ...SCEP_DEFAULTS, ...ctx.config });
   const limiter = createRateLimiter(clock);
   const allowsRenewal = (profile: ProfileRow) => Object.hasOwn(kinds, profile.validatorKind) && kinds[profile.validatorKind]!.allowsRenewal === true;
+  /**
+   * Whether the profile's validator's kind uses a Shared Challenge. Its validator is then told nothing: what it would be
+   * told holds the CSR, whose challengePassword is the Shared Challenge, which the platform never keeps.
+   */
+  const usesSharedChallenge = (profile: ProfileRow) => Object.hasOwn(kinds, profile.validatorKind) && kinds[profile.validatorKind]!.usesSharedChallenge === true;
 
   /**
    * Why the profile does not take this RenewalReq, if it does not; otherwise the Device Certificate it renews, which
@@ -179,7 +184,7 @@ export function registerScep(ctx: {
           target: { type: "enrollment_profile", id: profile.id },
           detail: { enrollmentProfile: { id: profile.id, name: profile.name }, reason, validator: { kind: profile.validatorKind }, transactionId: request.transactionId },
         });
-        if (validatorAsked) await validators.tellFailed(tx, change, profile, decidedOf(request), reason);
+        if (validatorAsked && !usesSharedChallenge(profile)) await validators.tellFailed(tx, change, profile, decidedOf(request), reason);
         if (retryable) await transactions.release(tx, claim);
         else await transactions.refused(tx, claim, reason);
       });
@@ -208,7 +213,7 @@ export function registerScep(ctx: {
       const renewal = await renewalRefusal(profile, request);
       if ("refusal" in renewal) return refused(renewal.refusal);
       renewalOf = renewal.renewalOf;
-    } else if (profile.sharedChallengeHash !== null) {
+    } else if (usesSharedChallenge(profile)) {
       // First of all, so that a device without it learns nothing of the profile. Released rather than kept as the
       // transaction's answer, so that whoever does not hold the challenge cannot settle a device's transaction for it.
       const presented = request.csr.challengePassword;
@@ -301,7 +306,7 @@ export function registerScep(ctx: {
         });
         if (renewalOf) await supersede(tx, change, profile, renewalOf, serial);
         await transactions.issued(tx, claim, row!.id);
-        await validators.tellIssued(tx, change, profile, decidedOf(request), { pem: certificate.toString("pem"), serial, notAfter: certificate.notAfter, issuer: certificate.issuer });
+        if (!usesSharedChallenge(profile)) await validators.tellIssued(tx, change, profile, decidedOf(request), { pem: certificate.toString("pem"), serial, notAfter: certificate.notAfter, issuer: certificate.issuer });
       });
     } catch (err) {
       // Signed but not stored: it is answered as refused, so no device holds a Device Certificate the platform does not know of.
