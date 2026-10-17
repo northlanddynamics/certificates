@@ -73,7 +73,7 @@ Soft deletion of a Managed Certificate by an Organization Administrator, not eve
 _Avoid_: delete, remove, decommission
 
 **Revocation**:
-Telling the Certificate Authority to distrust one Certificate, with an RFC 5280 reason, which an Owner of its Managed Certificate or an Organization Administrator may do, even once it is archived; a Device Certificate is also revoked when its Enrollment Validator's revocation feed asks. The platform records it only once the CA has revoked the Certificate, and nothing else revokes: not Archive, not a name change, not removing a user. It issues no replacement. A Private CA revokes by putting the Certificate on its Issuing CA's CRL in the same change, and offers two reasons an ACME CA does not take: `affiliationChanged` and `privilegeWithdrawn`.
+Telling the Certificate Authority to distrust one Certificate, with an RFC 5280 reason, which an Owner of its Managed Certificate or an Organization Administrator may do, even once it is archived; a Device Certificate is also revoked when its Enrollment Validator's revocation feed asks, and as `superseded` once the replacement a RenewalReq signed with it asked for is issued. The platform records it only once the CA has revoked the Certificate, and nothing else revokes: not Archive, not a name change, not removing a user. It issues no replacement. A Private CA revokes by putting the Certificate on its Issuing CA's CRL in the same change, and offers two reasons an ACME CA does not take: `affiliationChanged` and `privilegeWithdrawn`.
 _Avoid_: cancel, kill, invalidate
 
 **Renewal**:

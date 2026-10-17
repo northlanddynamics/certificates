@@ -3,7 +3,8 @@
 // verifies its signer, and signs the CertRep with the RA key, encrypted to the device. What is issued is decided here,
 // per request: the device's key must be one the profile allows, its names must keep the profile's name rules when its
 // Enrollment Validator does not vouch for names, the validator must allow the request, and then the Issuing CA signs a
-// Device Certificate through the Private CA module, which is stored with its Audit Event in one Unit of Work. A device is
+// Device Certificate through the Private CA module, which is stored with its Audit Event in one Unit of Work; for a
+// RenewalReq, that Unit of Work also revokes the Device Certificate it was signed with as superseded. A device is
 // always answered SUCCESS with its certificate or FAILURE with a failInfo, never PENDING; a refusal is an Audit Event.
 // The validator is told the outcome afterwards, in the background (enrollment-validators.ts).
 import type { OpenAPIHono } from "@hono/zod-openapi";
@@ -13,7 +14,7 @@ import { getConnInfo } from "hono/bun";
 import { createHash } from "node:crypto";
 import { FailInfo, ScepServer, type EnrollmentRequest as ScepEnrollmentRequest, type ScepResult } from "ts-scep";
 import { subjectAltNamesOf } from "./ca-certificates";
-import type { Db } from "./db/client";
+import type { Db, Tx } from "./db/client";
 import { deviceCertificate, enrollmentProfile } from "./db/schema";
 import { DEVICE_EXTENDED_KEY_USAGES, DEVICE_KEY_TYPES, type DeviceKeyType } from "./enrollment-profile-kinds";
 import { describeValidatorError, type EnrollmentValidator, type EnrollmentValidators } from "./enrollment-validator";
@@ -23,9 +24,14 @@ import { findIssuingCa, type PrivateCas } from "./private-ca";
 import { nameRulesRefusal } from "./name-rules";
 import type { ScepAnswer, ScepClaim, ScepTransactions } from "./scep-transactions";
 import type { Secrets } from "./secrets";
-import type { UnitOfWork } from "./unit-of-work";
+import type { Change, UnitOfWork } from "./unit-of-work";
 
 type ProfileRow = typeof enrollmentProfile.$inferSelect;
+/** The Device Certificate a RenewalReq was signed with, which its replacement supersedes. */
+type Renewed = Pick<typeof deviceCertificate.$inferSelect, "id" | "serial" | "subject" | "issuingCaId">;
+
+/** The Device Certificate a RenewalReq was signed with was revoked after the request was checked, so it renews nothing. */
+class RevokedMeanwhile extends Error {}
 
 /**
  * How the SCEP routes are rate limited, so that a flood of requests cannot exhaust the platform or a validator's service:
@@ -102,20 +108,39 @@ export function registerScep(ctx: {
   const allowsRenewal = (profile: ProfileRow) => Object.hasOwn(kinds, profile.validatorKind) && kinds[profile.validatorKind]!.allowsRenewal === true;
 
   /**
-   * Why the profile does not take this RenewalReq, if it does not; otherwise the serial of the Device Certificate it
-   * renews. ts-scep has already checked that its signer was issued by the profile's Issuing CA.
+   * Why the profile does not take this RenewalReq, if it does not; otherwise the Device Certificate it renews, which
+   * issuing its replacement supersedes. ts-scep has already checked that its signer was issued by the profile's Issuing CA.
    */
-  async function renewalRefusal(profile: ProfileRow, request: ScepEnrollmentRequest): Promise<{ refusal: string } | { renewalOf: string }> {
+  async function renewalRefusal(profile: ProfileRow, request: ScepEnrollmentRequest): Promise<{ refusal: string } | { renewalOf: Renewed }> {
     if (!allowsRenewal(profile)) return { refusal: "RenewalReq is not supported: enroll again with PKCSReq" };
     const fingerprint = createHash("sha256").update(new Uint8Array(request.signerCertificate.raw)).digest("hex");
     const [current] = await db
-      .select({ serial: deviceCertificate.serial, revokedAt: deviceCertificate.revokedAt, notAfter: deviceCertificate.notAfter })
+      .select({ id: deviceCertificate.id, serial: deviceCertificate.serial, subject: deviceCertificate.subject, issuingCaId: deviceCertificate.issuingCaId, revokedAt: deviceCertificate.revokedAt, notAfter: deviceCertificate.notAfter })
       .from(deviceCertificate)
       .where(and(eq(deviceCertificate.enrollmentProfileId, profile.id), eq(deviceCertificate.fingerprint, fingerprint)));
     if (!current) return { refusal: "the RenewalReq is not signed with a Device Certificate of this Enrollment Profile" };
     if (current.revokedAt) return { refusal: `the Device Certificate the RenewalReq is signed with (${current.serial}) is revoked` };
     if (current.notAfter <= clock()) return { refusal: `the Device Certificate the RenewalReq is signed with (${current.serial}) has expired` };
-    return { renewalOf: current.serial };
+    return { renewalOf: current };
+  }
+
+  /**
+   * Revokes the Device Certificate a RenewalReq replaced as `superseded`, on the change that stores its replacement, and
+   * reissues its Issuing CA's CRL there: a renewed device holds one valid certificate.
+   */
+  async function supersede(tx: Tx, change: Change, profile: ProfileRow, renewed: Renewed, replacementSerial: string) {
+    // Locked as an administrator and the feed lock it: revoked since it was checked (by them, or by another RenewalReq
+    // signed with it), it is not renewed, so that no revocation is undone by a replacement.
+    const [row] = await tx.select({ revokedAt: deviceCertificate.revokedAt }).from(deviceCertificate).where(eq(deviceCertificate.id, renewed.id)).for("update");
+    if (row!.revokedAt) throw new RevokedMeanwhile();
+    await tx.update(deviceCertificate).set({ revokedAt: change.occurredAt, revocationReason: "superseded" }).where(eq(deviceCertificate.id, renewed.id));
+    await change.audit({
+      organizationId: profile.organizationId,
+      action: "device_certificate.revoked",
+      target: { type: "device_certificate", id: renewed.id },
+      detail: { enrollmentProfile: { id: profile.id, name: profile.name }, serial: renewed.serial, subject: renewed.subject, reason: "superseded", by: { renewal: { serial: replacementSerial } } },
+    });
+    await privateCas.publishRevocation(tx, change, profile.organizationId, renewed.issuingCaId);
   }
 
   /** A transaction's answer, as the device is sent it: its Device Certificate with `chain` (the Issuing CA's and those above it), or FAILURE. */
@@ -169,7 +194,7 @@ export function registerScep(ctx: {
   ): Promise<{ certificate: string; certificates: string[] } | { reason: string; validatorAsked: boolean; retryable: boolean }> {
     const refused = (reason: string, validatorAsked = false, retryable = false) => ({ reason, validatorAsked, retryable });
     if (!profile.enabled) return refused("the Enrollment Profile is disabled, so it issues nothing");
-    let renewalOf: string | undefined;
+    let renewalOf: Renewed | undefined;
     if (request.renewal) {
       const renewal = await renewalRefusal(profile, request);
       if ("refusal" in renewal) return refused(renewal.refusal);
@@ -195,7 +220,7 @@ export function registerScep(ctx: {
       return refused(`the Enrollment Validator ${profile.validatorKind} is not available`, false, true);
     }
     let retryable = false;
-    const decision = await validator.validate({ csr: request.csr.der, challengePassword: request.csr.challengePassword, transactionId: request.transactionId, ...(renewalOf && { renewalOf }) }).then(
+    const decision = await validator.validate({ csr: request.csr.der, challengePassword: request.csr.challengePassword, transactionId: request.transactionId, ...(renewalOf && { renewalOf: renewalOf.serial }) }).then(
       (decision) => (decision.allowed ? decision : { allowed: false as const, reason: `the Enrollment Validator refused the request: ${decision.reason}` }),
       (err: unknown) => {
         console.error("the Enrollment Validator could not be asked:", describeValidatorError(err));
@@ -257,11 +282,13 @@ export function registerScep(ctx: {
             transactionId: request.transactionId,
           },
         });
+        if (renewalOf) await supersede(tx, change, profile, renewalOf, serial);
         await transactions.issued(tx, claim, row!.id);
         await validators.tellIssued(tx, change, profile, decidedOf(request), { pem: certificate.toString("pem"), serial, notAfter: certificate.notAfter, issuer: certificate.issuer });
       });
     } catch (err) {
       // Signed but not stored: it is answered as refused, so no device holds a Device Certificate the platform does not know of.
+      if (err instanceof RevokedMeanwhile) return refused(`the Device Certificate the RenewalReq is signed with (${renewalOf!.serial}) is revoked`, true);
       console.error("could not store a Device Certificate", err);
       return refused("the platform could not issue the Device Certificate; enroll again", true, true);
     }
