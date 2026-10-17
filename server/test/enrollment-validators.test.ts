@@ -1,6 +1,6 @@
 // The Enrollment Validator seam, as the platform runs it: a profile names a validator kind, configured with settings and a
 // write-only secret, which decides each SCEP request and is told the outcome in the background; a profile whose validator
-// does not vouch for names carries name rules the platform enforces; and a validator's revocation feed revokes Device
+// does not vouch for names may carry name rules the platform enforces; and a validator's revocation feed revokes Device
 // Certificates. Validators are the harness's test-only kinds; `test_double` is backed by the validator double.
 import { afterAll, beforeAll, beforeEach, describe, expect, test } from "bun:test";
 import * as x509 from "@peculiar/x509";
@@ -179,17 +179,20 @@ describe("name rules", () => {
     sanPatterns: { dns: ["*.devices.acme"] },
   };
 
-  test("a profile whose validator does not vouch for names must have them, and one whose validator does may not", async () => {
+  test("a profile whose validator does not vouch for names may have them, and one whose validator does may not", async () => {
     const issuing = await createIssuingCa();
     const create = (body: Record<string, unknown>) => h.api(profiles(), { cookie: org.cookie, body: { name: "Kiosks", issuingCaId: issuing.id, ...body } });
 
-    expect((await create({ validator: { kind: "test_names" } })).status).toBe(422);
+    const without = await h.api(profiles(), { cookie: org.cookie, body: { name: "Macs", issuingCaId: issuing.id, validator: { kind: "test_names" } } });
+    expect(without.status).toBe(201);
+    expect(without.body.nameRules).toBeNull();
+    expect((await auditOf()).find((e) => e.action === "enrollment_profile.created" && e.target.id === without.body.id)!.detail.nameRules).toBeNull();
     expect((await create({ validator: DOUBLE, nameRules: RULES })).status).toBe(422);
     expect((await create({ validator: { kind: "test_names" }, nameRules: { ...RULES, sanPatterns: { email: ["*@acme.test"] } } })).status).toBe(400);
     const created = await create({ validator: { kind: "test_names" }, nameRules: RULES });
     expect(created.status).toBe(201);
     expect(created.body.nameRules).toEqual({ ...RULES, requiredSubjectAttributes: ["CN"], subjectPatterns: { CN: ["kiosk-*"], O: ["Acme"] } });
-    expect((await auditOf()).find((e) => e.action === "enrollment_profile.created")!.detail.nameRules).toEqual(created.body.nameRules);
+    expect((await auditOf()).find((e) => e.action === "enrollment_profile.created" && e.target.id === created.body.id)!.detail.nameRules).toEqual(created.body.nameRules);
   });
 
   test("refuse a request that breaks them, before its validator is asked, and issue one that keeps them", async () => {
@@ -219,6 +222,70 @@ describe("name rules", () => {
     })) as { certificate: { raw: Buffer } };
     expect(new x509.X509Certificate(new Uint8Array(certificate.raw)).subject).toBe("O=Acme, CN=KIOSK-01");
     expect(h.enrollmentValidations).toHaveLength(1);
+  });
+
+  test("when a profile has none, its devices get the subject and SANs they ask for, within the Issuing CA's permitted name rules", async () => {
+    const profile = await createProfile({ kind: "test_names" });
+
+    const { certificate } = (await enroll(profile.scepUrl, {
+      subject: "CN=mac-01.devices.acme, OU=Laptops, O=Acme",
+      subjectAltNames: { dns: ["mac-01.devices.acme"], email: ["mac-01@acme.test"], uri: ["urn:mac:01"] },
+    })) as { certificate: { raw: Buffer } };
+    const issued = new x509.X509Certificate(new Uint8Array(certificate.raw));
+    expect(issued.subject).toBe("O=Acme, OU=Laptops, CN=mac-01.devices.acme");
+    const sans = issued.getExtension(x509.SubjectAlternativeNameExtension)!.names.toJSON();
+    expect(sans).toEqual([
+      { type: "dns", value: "mac-01.devices.acme" },
+      { type: "email", value: "mac-01@acme.test" },
+      { type: "url", value: "urn:mac:01" },
+    ]);
+
+    const outside = await enroll(profile.scepUrl, { subject: "CN=mac-02", subjectAltNames: { dns: ["mac-02.elsewhere.test"] } });
+    expect(outside).toBeInstanceOf(ScepFailureError);
+    expect((outside as ScepFailureError).failInfoText).toContain("mac-02.elsewhere.test");
+    expect(h.enrollmentValidations).toHaveLength(1);
+  });
+
+  test("are added, changed and removed by updating the profile, for its next request, and audited", async () => {
+    const profile = await createProfile({ kind: "test_names" });
+    const update = (body: Record<string, unknown>) => h.api(`${profiles()}/${profile.id}`, { cookie: org.cookie, method: "PATCH", body });
+    const updates = async () => (await auditOf()).filter((e) => e.action === "enrollment_profile.updated").map((e) => e.detail.changes.nameRules);
+    const lobby = { subject: "CN=lobby-01", subjectAltNames: { dns: ["lobby-01.devices.acme"] } };
+    const kiosk = { subject: "CN=kiosk-01", subjectAltNames: { dns: ["kiosk-01.devices.acme"] } };
+
+    const added = await update({ nameRules: RULES });
+    expect(added.status).toBe(200);
+    expect(added.body.nameRules.subjectPatterns).toEqual({ CN: ["kiosk-*"], O: ["Acme"] });
+    expect(await enroll(profile.scepUrl, lobby)).toBeInstanceOf(ScepFailureError);
+    expect(await enroll(profile.scepUrl, kiosk)).not.toBeInstanceOf(ScepFailureError);
+
+    const LOBBY_RULES = { ...RULES, subjectPatterns: { CN: ["lobby-*"] } };
+    const changed = await update({ nameRules: LOBBY_RULES });
+    expect(changed.body.nameRules.subjectPatterns).toEqual({ CN: ["lobby-*"] });
+    expect(await enroll(profile.scepUrl, kiosk)).toBeInstanceOf(ScepFailureError);
+    expect(await enroll(profile.scepUrl, lobby)).not.toBeInstanceOf(ScepFailureError);
+
+    // The same rules again change nothing, and are not audited.
+    expect((await update({ nameRules: LOBBY_RULES })).status).toBe(200);
+    const removed = await update({ nameRules: null });
+    expect(removed.body.nameRules).toBeNull();
+    expect(await enroll(profile.scepUrl, kiosk)).not.toBeInstanceOf(ScepFailureError);
+    expect((await h.api(`${profiles()}/${profile.id}`, { cookie: org.cookie })).body.nameRules).toBeNull();
+
+    const shown = { ...RULES, requiredSubjectAttributes: ["CN"] };
+    expect(await updates()).toEqual([
+      { from: null, to: { ...shown, subjectPatterns: { CN: ["kiosk-*"], O: ["Acme"] } } },
+      { from: { ...shown, subjectPatterns: { CN: ["kiosk-*"], O: ["Acme"] } }, to: { ...shown, subjectPatterns: { CN: ["lobby-*"] } } },
+      { from: { ...shown, subjectPatterns: { CN: ["lobby-*"] } }, to: null },
+    ]);
+  });
+
+  test("are refused by updating a profile whose validator vouches for names", async () => {
+    const profile = await createProfile();
+    const res = await h.api(`${profiles()}/${profile.id}`, { cookie: org.cookie, method: "PATCH", body: { nameRules: RULES } });
+    expect(res.status).toBe(422);
+    expect((await h.api(`${profiles()}/${profile.id}`, { cookie: org.cookie, method: "PATCH", body: { nameRules: null } })).status).toBe(200);
+    expect((await auditOf()).filter((e) => e.action === "enrollment_profile.updated")).toEqual([]);
   });
 
   test("are not checked for a validator that vouches for names", async () => {

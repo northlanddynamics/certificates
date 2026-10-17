@@ -332,7 +332,7 @@ export interface EnrollmentProfile {
   allowedKeyTypes: DeviceKeyType[];
   /** Its settings are shown; its secret, if it has one, never is. */
   validator: { kind: string; settings: Record<string, unknown>; hasSecret: boolean };
-  /** What a device's names must keep; none when the validator vouches for names. */
+  /** What a device's names must keep; none when the validator vouches for names, or when the profile issues the names a device asks for. */
   nameRules: NameRules | null;
   raCertificate: { subject: string; serial: string; notAfter: string };
   /** Whether it takes enrollment requests; a disabled profile refuses every one, and is never enabled again. */
@@ -762,7 +762,7 @@ export const api = {
   deviceCertificateUrl: (orgId: string, profileId: string, id: string) => `/api/organizations/${orgId}/enrollment-profiles/${profileId}/device-certificates/${id}/certificate`,
   createEnrollmentProfile: (orgId: string, body: NewEnrollmentProfile) => call<EnrollmentProfile>(`/api/organizations/${orgId}/enrollment-profiles`, { body }),
   /** Points a profile at another Issuing CA, which signs it a new RA certificate, or changes its retention period. */
-  updateEnrollmentProfile: (orgId: string, id: string, body: { issuingCaId?: string; retentionDays?: number }) =>
+  updateEnrollmentProfile: (orgId: string, id: string, body: { issuingCaId?: string; retentionDays?: number; nameRules?: NameRules | null }) =>
     call<EnrollmentProfile>(`/api/organizations/${orgId}/enrollment-profiles/${id}`, { method: "PATCH", body }),
   /** Disables a profile: it refuses all enrollment from then on, and keeps its Device Certificates. */
   disableEnrollmentProfile: (orgId: string, id: string) => call<EnrollmentProfile>(`/api/organizations/${orgId}/enrollment-profiles/${id}/disable`, { method: "POST", body: {} }),

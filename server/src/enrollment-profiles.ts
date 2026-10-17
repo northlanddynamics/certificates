@@ -2,13 +2,14 @@
 // Private CAs' Issuing CAs, with no Approval and no Owners. A profile fixes the Issuing CA, the validity, key usage and
 // extended key usages of what it issues and the device keys it certifies, and names the Enrollment Validator
 // (enrollment-validator.ts) that decides each request: its kind, its settings and its write-only secret. A profile whose
-// validator does not vouch for names carries name rules (name-rules.ts) instead. Devices enroll at its SCEP URL (scep.ts), under an opaque public
+// validator does not vouch for names may carry name rules (name-rules.ts) instead. Devices enroll at its SCEP URL (scep.ts), under an opaque public
 // id. The platform makes each profile an RA: a software RSA key, held as a Secret, and a certificate the Issuing CA signs
 // for it, which open SCEP requests and sign SCEP responses (ADR 0007). Only Organization Administrators see or change them.
 import { OpenAPIHono, createRoute, z } from "@hono/zod-openapi";
 import * as x509 from "@peculiar/x509";
 import { and, asc, eq } from "drizzle-orm";
 import { generateKeyPairSync, randomBytes } from "node:crypto";
+import { isDeepStrictEqual } from "node:util";
 import type { Authorizer } from "./authorization";
 import type { Db, Tx } from "./db/client";
 import { enrollmentProfile } from "./db/schema";
@@ -66,7 +67,7 @@ export const EnrollmentProfile = z.object({
   validator: z
     .object({ kind: z.string(), settings: z.record(z.string(), z.unknown()), hasSecret: z.boolean().openapi({ description: "Whether it holds a secret, which is never shown." }) })
     .openapi({ description: "The Enrollment Validator that decides each request." }),
-  nameRules: NameRules.nullable().openapi({ description: "What a device's names must keep; none when the validator vouches for names." }),
+  nameRules: NameRules.nullable().openapi({ description: "What a device's names must keep; none when the validator vouches for names, or when the profile issues the names a device asks for within its Issuing CA's permitted name rules." }),
   raCertificate: z.object({ subject: z.string(), serial: z.string(), notAfter: z.string() }).openapi({ description: "The RA certificate devices encrypt their requests to, which signs the platform's answers." }),
   enabled: z.boolean().openapi({ description: "Whether it takes enrollment requests; a disabled profile refuses every one, and keeps the Device Certificates it issued." }),
   retentionDays: z.number().int().openapi({ description: "How many days after it ends a Device Certificate it issued is pruned; its Audit Events are kept." }),
@@ -165,7 +166,7 @@ export function registerEnrollmentProfiles(ctx: {
       tags: ["Enrollment Profiles"],
       summary: "The Enrollment Validator kinds an Enrollment Profile can name",
       description:
-        "Those the platform runs. With none, no Enrollment Profile can be created. `vouchesForNames` says whether it checks the names a device asks for; a profile whose validator does not must carry name rules. " +
+        "Those the platform runs. With none, no Enrollment Profile can be created. `vouchesForNames` says whether it checks the names a device asks for; a profile whose validator does not may carry name rules, and otherwise issues the names a device asks for within its Issuing CA's permitted name rules. " +
         "`takesSecret` whether it is configured with a secret, and `allowsRenewal` whether a device may renew with a SCEP RenewalReq rather than enroll again. Only Organization Administrators may ask.",
       request: { params: OrgParam },
       responses: { 200: json(z.object({ items: z.array(z.object({ kind: z.string(), vouchesForNames: z.boolean(), takesSecret: z.boolean(), allowsRenewal: z.boolean() })) })), ...errors(401, 403, 404) },
@@ -204,7 +205,7 @@ export function registerEnrollmentProfiles(ctx: {
       summary: "Create an Enrollment Profile on an Issuing CA",
       description:
         "`issuingCaId` must be an active Issuing CA of one of the Organization's Private CAs, under an active root (422 otherwise). `validator.kind` must be one the platform runs (`.../enrollment-validator-kinds`; 422 otherwise), with the `settings` its kind takes and, when it takes one, its `secret`, which is stored as a Secret and never shown (400 otherwise). " +
-        "A profile whose validator does not vouch for names must have `nameRules`, and one whose validator does must have none (422 otherwise). " +
+        "A profile whose validator does not vouch for names may have `nameRules`, which a device's names must keep; without them it issues the names a device asks for, within the Issuing CA's permitted name rules. One whose validator vouches for names must have none (422 otherwise). " +
         "Device Certificates are valid for `validityDays` (365 unless given), never past the Issuing CA's end, with `keyUsage` (digitalSignature and keyEncipherment unless given) and `extendedKeyUsage` (clientAuth unless given), " +
         "and the subject and subject alternative names of the device's CSR; nothing else a CSR asks for. A device key not in `allowedKeyTypes` (every RSA size unless given) is refused. " +
         "A Device Certificate is pruned `retentionDays` (365 unless given) after it ends. " +
@@ -244,7 +245,6 @@ export function registerEnrollmentProfiles(ctx: {
       if (!kind.secret && body.validator.secret !== undefined) throw new HttpError(400, `validator.secret: an Enrollment Validator of the kind ${body.validator.kind} takes none`);
       const validatorSecret = kind.secret ? refuse("validator.secret", kind.secret, body.validator.secret) : undefined;
       if (kind.vouchesForNames && body.nameRules) throw new HttpError(422, `an Enrollment Validator of the kind ${body.validator.kind} vouches for the names a device asks for, so the profile takes no name rules`);
-      if (!kind.vouchesForNames && !body.nameRules) throw new HttpError(422, `an Enrollment Validator of the kind ${body.validator.kind} does not vouch for the names a device asks for, so the profile must have name rules`);
       const of = isId(body.issuingCaId) ? await findIssuingCa(db, orgId, body.issuingCaId) : undefined;
       if (!of) throw new HttpError(422, "the Organization has no such Issuing CA");
       const refusal = issuingRefusal(of);
@@ -427,15 +427,16 @@ export function registerEnrollmentProfiles(ctx: {
       method: "patch",
       path: "/api/organizations/{orgId}/enrollment-profiles/{id}",
       tags: ["Enrollment Profiles"],
-      summary: "Point an Enrollment Profile at another Issuing CA, or change its retention period",
+      summary: "Point an Enrollment Profile at another Issuing CA, or change its retention period or name rules",
       description:
         "`issuingCaId` must be an active Issuing CA of one of the Organization's Private CAs, under an active root (422 otherwise): the way on once the profile's Issuing CA is retired, which refuses enrollment until then. " +
         "The new Issuing CA signs a new RA certificate for a new RA key, which `GetCACert` serves from then on with the new chain, so redeploy the trusted certificate profile in the device management platform when the root changes. " +
         "Device Certificates already issued stay their Issuing CA's, on its CRL once revoked. `retentionDays` is how many days after it ends a Device Certificate is pruned. " +
+        "`nameRules` replaces the name rules of a profile whose validator does not vouch for names, from its next request on, and null removes them, so that it issues the names a device asks for within its Issuing CA's permitted name rules; a profile whose validator vouches for names takes none (422). " +
         "What is not given is left as it is; a change that changes nothing is not audited. Only Organization Administrators may.",
       request: {
         params: ProfileParams,
-        body: { content: { "application/json": { schema: z.object({ issuingCaId: z.string().optional(), retentionDays: RetentionDays.optional() }) } } },
+        body: { content: { "application/json": { schema: z.object({ issuingCaId: z.string().optional(), retentionDays: RetentionDays.optional(), nameRules: NameRules.nullable().optional() }) } } },
       },
       responses: { 200: json(EnrollmentProfile, "Updated"), ...errors(400, 401, 403, 404, 409, 422) },
     }),
@@ -457,14 +458,18 @@ export function registerEnrollmentProfiles(ctx: {
         to = { of, ra: await makeRa(orgId, of.issuing.id, found.row.publicId) };
       }
       const retaining = body.retentionDays !== undefined && body.retentionDays !== found.row.retentionDays;
-      if (!to && !retaining) return c.json(toProfile(found.row, found.of.ca.id, baseURL), 200);
+      if (body.nameRules && (!Object.hasOwn(kinds, found.row.validatorKind) || kinds[found.row.validatorKind]!.vouchesForNames)) {
+        throw new HttpError(422, `an Enrollment Validator of the kind ${found.row.validatorKind} vouches for the names a device asks for, so the profile takes no name rules`);
+      }
+      const renaming = body.nameRules !== undefined && !isDeepStrictEqual(body.nameRules, found.row.nameRules);
+      if (!to && !retaining && !renaming) return c.json(toProfile(found.row, found.of.ca.id, baseURL), 200);
 
       const row = await unitOfWork.run(actor, async (tx, change) => {
         const current = await locked(tx, found.row);
         if (to) await secrets.replace(tx, orgId, current.raKeySecretId, to.ra.privateKeyPem);
         const [row] = await tx
           .update(enrollmentProfile)
-          .set({ ...(to && { issuingCaId: to.of.issuing.id, raCertificatePem: to.ra.certificate.toString("pem") }), ...(retaining && { retentionDays: body.retentionDays }) })
+          .set({ ...(to && { issuingCaId: to.of.issuing.id, raCertificatePem: to.ra.certificate.toString("pem") }), ...(retaining && { retentionDays: body.retentionDays }), ...(renaming && { nameRules: body.nameRules }) })
           .where(eq(enrollmentProfile.id, id))
           .returning();
         await change.audit({
@@ -476,6 +481,7 @@ export function registerEnrollmentProfiles(ctx: {
             changes: {
               ...(to && { issuingCa: { from: { id: found.of.issuing.id, subject: found.of.issuing.subject }, to: { id: to.of.issuing.id, subject: to.of.issuing.subject } } }),
               ...(retaining && { retentionDays: { from: current.retentionDays, to: body.retentionDays } }),
+              ...(renaming && { nameRules: { from: current.nameRules, to: body.nameRules } }),
             },
             ...(to && { raCertificate: raOf(to.ra.certificate) }),
           },

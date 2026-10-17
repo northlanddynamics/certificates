@@ -33,6 +33,7 @@ import { Sidebar, SidebarContent, SidebarGroup, SidebarGroupContent, SidebarMenu
 import { api, can, type EnrollmentProfile } from "@/lib/api";
 import { daysLabel, findIssuingCa, issuingCaTitle, isValidityDays } from "@/lib/private-ca";
 import { useAction } from "@/lib/use-action";
+import { EMPTY_NAME_RULES, NameRulesEditor, draftOf, nameRulesSummary, rulesOf } from "./name-rules-editor";
 
 const ROUTE = "/app/organizations/$orgId/enrollment-profiles";
 
@@ -164,7 +165,7 @@ function DeviceCertificatesLink({ profile }: { profile: EnrollmentProfile }) {
 /**
  * A profile's actions: test its Enrollment Validator's connection, and a menu of its Device Certificates, its SCEP URL
  * and the certificates devices must trust, and, for those who may change it, pointing it at another Issuing CA, its
- * retention period, rotating its RA certificate and disabling it. A test that works is a toast, with what it could not
+ * retention period, its Name Rules (when its validator does not vouch for names), rotating its RA certificate and disabling it. A test that works is a toast, with what it could not
  * prove; one that fails stays by the buttons, where its reason can be read.
  */
 function ProfileActions({ profile }: { profile: EnrollmentProfile }) {
@@ -172,7 +173,9 @@ function ProfileActions({ profile }: { profile: EnrollmentProfile }) {
   const org = useQuery({ queryKey: ["me"], queryFn: api.me, select: (me) => me.organizations.find((o) => o.id === orgId) }).data;
   const mayUpdate = org ? can(org, "enrollmentProfile", "update") : false;
   const mayDisable = org ? can(org, "enrollmentProfile", "disable") && profile.enabled : false;
-  const [editing, setEditing] = useState<"issuing-ca" | "retention" | "rotate" | "disable" | null>(null);
+  const kinds = useQuery({ queryKey: ["enrollment-validator-kinds", orgId], queryFn: () => api.enrollmentValidatorKinds(orgId), enabled: mayUpdate });
+  const takesNameRules = kinds.data?.items.find((k) => k.kind === profile.validator.kind)?.vouchesForNames === false;
+  const [editing, setEditing] = useState<"issuing-ca" | "retention" | "name-rules" | "rotate" | "disable" | null>(null);
   const openOne = (which: NonNullable<typeof editing>) => (open: boolean) => setEditing(open ? which : null);
   const test = useMutation({
     mutationFn: () => api.testEnrollmentValidator(orgId, profile.id),
@@ -214,6 +217,7 @@ function ProfileActions({ profile }: { profile: EnrollmentProfile }) {
             {(mayUpdate || mayDisable) && <DropdownMenuSeparator />}
             {mayUpdate && <DropdownMenuItem onSelect={() => setEditing("issuing-ca")}>Change Issuing CA…</DropdownMenuItem>}
             {mayUpdate && <DropdownMenuItem onSelect={() => setEditing("retention")}>Retention period…</DropdownMenuItem>}
+            {mayUpdate && takesNameRules && <DropdownMenuItem onSelect={() => setEditing("name-rules")}>Name Rules…</DropdownMenuItem>}
             {mayUpdate && <DropdownMenuItem onSelect={() => setEditing("rotate")}>Rotate RA certificate…</DropdownMenuItem>}
             {mayDisable && (
               <DropdownMenuItem variant="destructive" onSelect={() => setEditing("disable")}>
@@ -225,6 +229,7 @@ function ProfileActions({ profile }: { profile: EnrollmentProfile }) {
       </div>
       {mayUpdate && <IssuingCaDialog profile={profile} open={editing === "issuing-ca"} onOpenChange={openOne("issuing-ca")} />}
       {mayUpdate && <RetentionDialog profile={profile} open={editing === "retention"} onOpenChange={openOne("retention")} />}
+      {mayUpdate && takesNameRules && <NameRulesDialog profile={profile} open={editing === "name-rules"} onOpenChange={openOne("name-rules")} />}
       {mayUpdate && <RotateRaDialog profile={profile} open={editing === "rotate"} onOpenChange={openOne("rotate")} />}
       {mayDisable && <DisableDialog profile={profile} open={editing === "disable"} onOpenChange={openOne("disable")} />}
       {test.data && !test.data.ok && <span role="alert" className="max-w-72 whitespace-normal break-words text-right text-sm text-destructive">{test.data.error}</span>}
@@ -354,6 +359,55 @@ function RetentionDialog({ profile, open, onOpenChange }: ProfileDialogProps) {
   );
 }
 
+/** Adds, changes or removes the Name Rules of a profile whose validator does not vouch for names, for its next request. */
+function NameRulesDialog({ profile, open, onOpenChange }: ProfileDialogProps) {
+  const { orgId } = useParams({ from: ROUTE });
+  const [draft, setDraft] = useState(() => draftOf(profile.nameRules));
+  const parsed = rulesOf(draft);
+  const save = useAction(
+    () => api.updateEnrollmentProfile(orgId, profile.id, { nameRules: "rules" in parsed ? parsed.rules : null }),
+    ["enrollment-profiles"],
+    () => onOpenChange(false),
+  );
+  return (
+    <Dialog
+      open={open}
+      onOpenChange={(next) => {
+        if (next) {
+          save.reset();
+          setDraft(draftOf(profile.nameRules));
+        }
+        onOpenChange(next);
+      }}
+    >
+      <DialogContent className="sm:max-w-xl">
+        <form
+          className="flex flex-col gap-4"
+          onSubmit={(e: FormEvent) => {
+            e.preventDefault();
+            if ("rules" in parsed) save.mutate(undefined);
+          }}
+        >
+          <DialogHeader>
+            <DialogTitle>Name Rules of {profile.name}</DialogTitle>
+            <DialogDescription>They apply from the next request on. Device Certificates already issued are kept.</DialogDescription>
+          </DialogHeader>
+          <NameRulesEditor id={`profile-${profile.id}-name-rules`} draft={draft} onChange={setDraft} />
+          {save.error && <FieldError>{save.error.message}</FieldError>}
+          <DialogFooter>
+            <Button type="button" variant="outline" onClick={() => onOpenChange(false)}>
+              Cancel
+            </Button>
+            <Button type="submit" disabled={!("rules" in parsed) || save.isPending}>
+              Save
+            </Button>
+          </DialogFooter>
+        </form>
+      </DialogContent>
+    </Dialog>
+  );
+}
+
 /** Has the profile's Issuing CA sign it a new RA certificate for a new key, which devices are given from then on. */
 function RotateRaDialog({ profile, open, onOpenChange }: ProfileDialogProps) {
   const { orgId } = useParams({ from: ROUTE });
@@ -467,10 +521,14 @@ function NewProfileForm({ orgId, onDone }: { orgId: string; onDone: () => void }
   const [appId, setAppId] = useState("");
   const [appSecret, setAppSecret] = useState("");
   const intune = kind === "intune";
+  // Only a validator that does not vouch for names takes Name Rules, and they stay optional.
+  const takesNameRules = kinds.data?.items.find((k) => k.kind === kind)?.vouchesForNames === false;
+  const [nameRulesDraft, setNameRulesDraft] = useState(EMPTY_NAME_RULES);
+  const nameRules = takesNameRules ? rulesOf(nameRulesDraft) : { rules: null };
   const intuneOk = TENANT.test(tenantId.trim()) && GUID.test(appId.trim()) && appSecret !== "";
   const validator = intune ? { kind, settings: { tenantId: tenantId.trim(), appId: appId.trim() }, secret: appSecret } : { kind };
   const create = useAction(
-    () => api.createEnrollmentProfile(orgId, { name: name.trim(), issuingCaId, validityDays: Number(validityDays), retentionDays: Number(retentionDays), keyUsage, extendedKeyUsage, allowedKeyTypes, validator }),
+    () => api.createEnrollmentProfile(orgId, { name: name.trim(), issuingCaId, validityDays: Number(validityDays), retentionDays: Number(retentionDays), keyUsage, extendedKeyUsage, allowedKeyTypes, validator, ...("rules" in nameRules && nameRules.rules && { nameRules: nameRules.rules }) }),
     ["enrollment-profiles"],
     onDone,
   );
@@ -482,7 +540,7 @@ function NewProfileForm({ orgId, onDone }: { orgId: string; onDone: () => void }
     issuer: name.trim() !== "" && issuingCaId !== "",
     certificate: validityOk && retentionOk && extendedKeyUsage.length > 0 && keyUsage.length > 0,
     keys: allowedKeyTypes.length > 0,
-    validator: kind !== "" && (!intune || intuneOk),
+    validator: kind !== "" && (!intune || intuneOk) && "rules" in nameRules,
     review: true,
   };
   const index = STEPS.findIndex((s) => s.id === step);
@@ -641,6 +699,7 @@ function NewProfileForm({ orgId, onDone }: { orgId: string; onDone: () => void }
                   </FieldGroup>
                 </FieldSet>
               )}
+              {takesNameRules && <NameRulesEditor id="profile-name-rules" draft={nameRulesDraft} onChange={setNameRulesDraft} />}
             </FieldGroup>
           )}
 
@@ -660,6 +719,7 @@ function NewProfileForm({ orgId, onDone }: { orgId: string; onDone: () => void }
                     { label: "Device keys", value: allowedKeyTypes.map((t) => KEY_TYPE_LABEL[t]).join(", ") },
                     { label: "Validator", value: validatorLabel(kind) },
                     ...(intune ? [{ label: "Entra tenant", value: tenantId.trim() }, { label: "Entra app", value: appId.trim() }] : []),
+                    ...(takesNameRules && "rules" in nameRules ? [{ label: "Name Rules", value: nameRulesSummary(nameRules.rules) }] : []),
                   ]}
                 />
               </FieldSet>
