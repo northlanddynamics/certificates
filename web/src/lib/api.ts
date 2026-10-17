@@ -761,7 +761,7 @@ export const api = {
   /** Where a Device Certificate downloads from, PEM. */
   deviceCertificateUrl: (orgId: string, profileId: string, id: string) => `/api/organizations/${orgId}/enrollment-profiles/${profileId}/device-certificates/${id}/certificate`,
   createEnrollmentProfile: (orgId: string, body: NewEnrollmentProfile) => call<EnrollmentProfile>(`/api/organizations/${orgId}/enrollment-profiles`, { body }),
-  /** Points a profile at another Issuing CA, which signs it a new RA certificate, or changes its retention period. */
+  /** Points a profile at another Issuing CA, which signs it a new RA certificate, or changes its retention period or Name Rules (null removes them). */
   updateEnrollmentProfile: (orgId: string, id: string, body: { issuingCaId?: string; retentionDays?: number; nameRules?: NameRules | null }) =>
     call<EnrollmentProfile>(`/api/organizations/${orgId}/enrollment-profiles/${id}`, { method: "PATCH", body }),
   /** Disables a profile: it refuses all enrollment from then on, and keeps its Device Certificates. */

@@ -66,7 +66,7 @@ export function NameRulesEditor({ id, draft, onChange }: { id: string; draft: Na
     <FieldSet>
       <FieldLegend variant="label">Name Rules (optional)</FieldLegend>
       <FieldDescription>
-        This validator does not check the names a device asks for. Leave these empty to issue the subject and names of each device's request, within the Issuing CA's permitted names. Once any is given, a
+        This validator does not check the names a device asks for. Leave these empty to issue the subject and names of each device's request, within the Issuing CA's Permitted Name Rules. Once any is given, a
         subject attribute or name type they do not allow is refused. A pattern matches the whole value, ignoring case, and * stands for anything.
       </FieldDescription>
       <FieldGroup>
@@ -116,9 +116,12 @@ export function NameRulesEditor({ id, draft, onChange }: { id: string; draft: Na
   );
 }
 
+/** Whether a profile whose validator is of this kind takes Name Rules: only when the kind does not vouch for names. */
+export const takesNameRules = (kinds: { kind: string; vouchesForNames: boolean }[] | undefined, kind: string) => kinds?.find((k) => k.kind === kind)?.vouchesForNames === false;
+
 /** The rules as one line for a summary. */
 export function nameRulesSummary(rules: NameRules | null) {
-  if (!rules) return "None: the names each device asks for, within the Issuing CA's permitted names";
+  if (!rules) return "None: the names each device asks for, within the Issuing CA's Permitted Name Rules";
   const subject = [...new Set([...rules.requiredSubjectAttributes, ...Object.keys(rules.subjectPatterns)])].map((a) => (rules.subjectPatterns[a] ? `${a} ${rules.subjectPatterns[a]!.join(" or ")}` : a));
   const sans = rules.allowedSanTypes.map((t) => (rules.sanPatterns[t] ? `${SAN_LABEL[t]} ${rules.sanPatterns[t]!.join(" or ")}` : SAN_LABEL[t]));
   return `Subject: ${subject.join(", ") || "nothing"}. Alternative names: ${sans.join(", ") || "none"}.`;

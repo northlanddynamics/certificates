@@ -205,7 +205,7 @@ export function registerEnrollmentProfiles(ctx: {
       summary: "Create an Enrollment Profile on an Issuing CA",
       description:
         "`issuingCaId` must be an active Issuing CA of one of the Organization's Private CAs, under an active root (422 otherwise). `validator.kind` must be one the platform runs (`.../enrollment-validator-kinds`; 422 otherwise), with the `settings` its kind takes and, when it takes one, its `secret`, which is stored as a Secret and never shown (400 otherwise). " +
-        "A profile whose validator does not vouch for names may have `nameRules`, which a device's names must keep; without them it issues the names a device asks for, within the Issuing CA's permitted name rules. One whose validator vouches for names must have none (422 otherwise). " +
+        "A profile whose validator does not vouch for names may carry `nameRules`, which a device's names must keep; without them it issues the names a device asks for, within the Issuing CA's permitted name rules. One whose validator vouches for names must have none (422 otherwise). " +
         "Device Certificates are valid for `validityDays` (365 unless given), never past the Issuing CA's end, with `keyUsage` (digitalSignature and keyEncipherment unless given) and `extendedKeyUsage` (clientAuth unless given), " +
         "and the subject and subject alternative names of the device's CSR; nothing else a CSR asks for. A device key not in `allowedKeyTypes` (every RSA size unless given) is refused. " +
         "A Device Certificate is pruned `retentionDays` (365 unless given) after it ends. " +
@@ -458,18 +458,20 @@ export function registerEnrollmentProfiles(ctx: {
         to = { of, ra: await makeRa(orgId, of.issuing.id, found.row.publicId) };
       }
       const retaining = body.retentionDays !== undefined && body.retentionDays !== found.row.retentionDays;
-      if (body.nameRules && (!Object.hasOwn(kinds, found.row.validatorKind) || kinds[found.row.validatorKind]!.vouchesForNames)) {
-        throw new HttpError(422, `an Enrollment Validator of the kind ${found.row.validatorKind} vouches for the names a device asks for, so the profile takes no name rules`);
+      if (body.nameRules) {
+        const kind = Object.hasOwn(kinds, found.row.validatorKind) ? kinds[found.row.validatorKind]! : undefined;
+        if (!kind) throw new HttpError(422, `the platform runs no Enrollment Validator of the kind ${found.row.validatorKind}`);
+        if (kind.vouchesForNames) throw new HttpError(422, `an Enrollment Validator of the kind ${found.row.validatorKind} vouches for the names a device asks for, so the profile takes no name rules`);
       }
-      const renaming = body.nameRules !== undefined && !isDeepStrictEqual(body.nameRules, found.row.nameRules);
-      if (!to && !retaining && !renaming) return c.json(toProfile(found.row, found.of.ca.id, baseURL), 200);
+      const changingNameRules = body.nameRules !== undefined && !isDeepStrictEqual(body.nameRules, found.row.nameRules);
+      if (!to && !retaining && !changingNameRules) return c.json(toProfile(found.row, found.of.ca.id, baseURL), 200);
 
       const row = await unitOfWork.run(actor, async (tx, change) => {
         const current = await locked(tx, found.row);
         if (to) await secrets.replace(tx, orgId, current.raKeySecretId, to.ra.privateKeyPem);
         const [row] = await tx
           .update(enrollmentProfile)
-          .set({ ...(to && { issuingCaId: to.of.issuing.id, raCertificatePem: to.ra.certificate.toString("pem") }), ...(retaining && { retentionDays: body.retentionDays }), ...(renaming && { nameRules: body.nameRules }) })
+          .set({ ...(to && { issuingCaId: to.of.issuing.id, raCertificatePem: to.ra.certificate.toString("pem") }), ...(retaining && { retentionDays: body.retentionDays }), ...(changingNameRules && { nameRules: body.nameRules }) })
           .where(eq(enrollmentProfile.id, id))
           .returning();
         await change.audit({
@@ -481,7 +483,7 @@ export function registerEnrollmentProfiles(ctx: {
             changes: {
               ...(to && { issuingCa: { from: { id: found.of.issuing.id, subject: found.of.issuing.subject }, to: { id: to.of.issuing.id, subject: to.of.issuing.subject } } }),
               ...(retaining && { retentionDays: { from: current.retentionDays, to: body.retentionDays } }),
-              ...(renaming && { nameRules: { from: current.nameRules, to: body.nameRules } }),
+              ...(changingNameRules && { nameRules: { from: current.nameRules, to: body.nameRules } }),
             },
             ...(to && { raCertificate: raOf(to.ra.certificate) }),
           },
