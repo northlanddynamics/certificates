@@ -9,9 +9,11 @@ import { ExpandButton } from "@/components/data-table/expand-button";
 import { Badge } from "@/components/ui/badge";
 import { Button } from "@/components/ui/button";
 import { Dialog, DialogContent, DialogDescription, DialogFooter, DialogHeader, DialogTitle, DialogTrigger } from "@/components/ui/dialog";
+import { Checkbox } from "@/components/ui/checkbox";
 import { Field, FieldLabel } from "@/components/ui/field";
 import { InputGroup, InputGroupAddon, InputGroupInput } from "@/components/ui/input-group";
 import { Select, SelectContent, SelectItem, SelectTrigger, SelectValue } from "@/components/ui/select";
+import { DEVICE_KEY_TYPE_LABELS, WEAK_DEVICE_KEY_TYPE } from "../../../server/src/enrollment-profile-kinds";
 import { DEVICE_CERTIFICATE_STATUSES, api, can, revocationReasonLabel, revocationReasonsOf, type DeviceCertificate, type DeviceCertificateStatus, type Me } from "@/lib/api";
 
 const ROUTE = "/app/organizations/$orgId/enrollment-profiles/$id/device-certificates";
@@ -22,6 +24,13 @@ const SEARCH_DELAY_MS = 300;
 const STATUS_LABEL: Record<DeviceCertificateStatus, string> = { active: "Active", expired: "Expired", revoked: "Revoked" };
 const STATUS_VARIANT: Record<DeviceCertificateStatus, "default" | "secondary" | "destructive"> = { active: "default", expired: "secondary", revoked: "destructive" };
 const ANY_STATUS = "any";
+const isWeak = (c: DeviceCertificate) => c.keyType === WEAK_DEVICE_KEY_TYPE;
+/** Marks a Device Certificate whose key can be broken, to be found and replaced. */
+const WeakKeyBadge = () => (
+  <Badge variant="outline" className="border-destructive text-destructive" title="A 1024-bit RSA key, which can be broken">
+    Weak key
+  </Badge>
+);
 
 // Paging, searching and ordering are the server's (Page<DeviceCertificate>): a profile can have thousands. A row opens to its details.
 const features = tableFeatures({ rowPaginationFeature, rowExpandingFeature });
@@ -32,7 +41,15 @@ const columns = columnHelper.columns([
     header: () => <span className="sr-only">Details</span>,
     cell: ({ row }) => <ExpandButton open={row.getIsExpanded()} what={row.original.subject} onToggle={() => row.toggleExpanded()} />,
   }),
-  columnHelper.accessor("subject", { header: "Subject", cell: ({ cell }) => <span className="font-medium">{cell.getValue()}</span> }),
+  columnHelper.accessor("subject", {
+    header: "Subject",
+    cell: ({ row, cell }) => (
+      <span className="flex flex-wrap items-center gap-2">
+        <span className="font-medium">{cell.getValue()}</span>
+        {isWeak(row.original) && <WeakKeyBadge />}
+      </span>
+    ),
+  }),
   columnHelper.accessor((c) => c.deviceId ?? "—", { id: "deviceId", header: "Device ID", cell: ({ cell }) => <span className="font-mono text-xs">{cell.getValue()}</span> }),
   columnHelper.accessor("serial", { header: "Serial", cell: ({ cell }) => <span className="block max-w-40 truncate font-mono text-xs" title={cell.getValue()}>{cell.getValue()}</span> }),
   columnHelper.accessor("status", { header: "Status", cell: ({ cell }) => <Badge variant={STATUS_VARIANT[cell.getValue()]}>{STATUS_LABEL[cell.getValue()]}</Badge> }),
@@ -52,6 +69,7 @@ export function DeviceCertificatesPage() {
   const [typed, setTyped] = useState("");
   const [q, setQ] = useState("");
   const [status, setStatus] = useState<DeviceCertificateStatus | undefined>();
+  const [weakKey, setWeakKey] = useState(false);
   const [pagination, setPagination] = useState<PaginationState>({ pageIndex: 0, pageSize: 25 });
   // A new search starts again from the first page, sent once typing pauses.
   useEffect(() => {
@@ -63,13 +81,18 @@ export function DeviceCertificatesPage() {
     }, SEARCH_DELAY_MS);
     return () => clearTimeout(timer);
   }, [typed, q]);
-  const narrowStatus = (next: DeviceCertificateStatus | undefined) => {
-    setStatus(next);
-    setPagination({ ...pagination, pageIndex: 0 });
-  };
+  // A narrower list starts again from the first page.
+  const narrowing =
+    <T,>(set: (next: T) => void) =>
+    (next: T) => {
+      set(next);
+      setPagination({ ...pagination, pageIndex: 0 });
+    };
+  const narrowStatus = narrowing(setStatus);
+  const narrowWeakKey = narrowing(setWeakKey);
   const certificates = useQuery({
-    queryKey: ["device-certificates", orgId, id, q, status, pagination],
-    queryFn: () => api.deviceCertificates(orgId, id, { q, status }, { page: pagination.pageIndex + 1, pageSize: pagination.pageSize }),
+    queryKey: ["device-certificates", orgId, id, q, status, weakKey, pagination],
+    queryFn: () => api.deviceCertificates(orgId, id, { q, status, weakKey }, { page: pagination.pageIndex + 1, pageSize: pagination.pageSize }),
     placeholderData: keepPreviousData,
     enabled: allowed,
   });
@@ -84,7 +107,7 @@ export function DeviceCertificatesPage() {
     getRowId: (c) => c.id,
     getRowCanExpand: () => true,
   });
-  const narrowed = q !== "" || status !== undefined;
+  const narrowed = q !== "" || status !== undefined || weakKey;
 
   return (
     <div className="flex flex-col gap-6">
@@ -121,6 +144,12 @@ export function DeviceCertificatesPage() {
                 ))}
               </SelectContent>
             </Select>
+            <Field orientation="horizontal" className="w-auto">
+              <Checkbox id="device-certificates-weak-key" checked={weakKey} onCheckedChange={(on) => narrowWeakKey(on === true)} />
+              <FieldLabel htmlFor="device-certificates-weak-key" className="font-normal">
+                Weak keys only
+              </FieldLabel>
+            </Field>
             {narrowed && (
               <Button
                 variant="ghost"
@@ -128,6 +157,7 @@ export function DeviceCertificatesPage() {
                 onClick={() => {
                   setTyped("");
                   setQ("");
+                  setWeakKey(false);
                   narrowStatus(undefined);
                 }}
               >
@@ -160,6 +190,13 @@ function CertificateDetails({ org, certificate }: { org: Me["organizations"][num
     ["Subject", certificate.subject],
     ["Subject alternative names", certificate.subjectAltNames.length === 0 ? "None" : certificate.subjectAltNames.map((n) => `${n.type.toUpperCase()}: ${n.value}`).join(", ")],
     ["Device ID", certificate.deviceId ?? "None"],
+    [
+      "Key",
+      <span className="flex flex-wrap items-center gap-2">
+        {DEVICE_KEY_TYPE_LABELS[certificate.keyType]}
+        {isWeak(certificate) && <WeakKeyBadge />}
+      </span>,
+    ],
     ["Serial", <span className="break-all font-mono text-xs">{certificate.serial}</span>],
     ["Issuer", certificate.issuer],
     ["Valid", `${new Date(certificate.notBefore).toLocaleString()} – ${new Date(certificate.notAfter).toLocaleString()}`],

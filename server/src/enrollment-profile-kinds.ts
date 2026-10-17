@@ -22,10 +22,16 @@ export const DEFAULT_DEVICE_EXTENDED_KEY_USAGES: DeviceExtendedKeyUsage[] = ["cl
 
 /**
  * The device keys a profile may certify. Only RSA: SCEP encrypts its response to the device's key, which only RSA
- * can do. The names are those of the platform's key algorithms (csr.ts).
+ * can do. The names are those of the platform's key algorithms (csr.ts), and rsa-1024, which Apple's SCEP payload
+ * makes unless told otherwise.
  */
-export const DEVICE_KEY_TYPES = ["rsa-2048", "rsa-3072", "rsa-4096"] as const;
+export const DEVICE_KEY_TYPES = ["rsa-1024", "rsa-2048", "rsa-3072", "rsa-4096"] as const;
 export type DeviceKeyType = (typeof DEVICE_KEY_TYPES)[number];
+/** The weak key: one that can be broken. A profile allows it only when told to, and its Device Certificates are marked. */
+export const WEAK_DEVICE_KEY_TYPE = "rsa-1024" satisfies DeviceKeyType;
+/** What a profile allows unless told otherwise: every key that is not weak. */
+export const DEFAULT_DEVICE_KEY_TYPES: DeviceKeyType[] = DEVICE_KEY_TYPES.filter((type) => type !== WEAK_DEVICE_KEY_TYPE);
+export const DEVICE_KEY_TYPE_LABELS: Record<DeviceKeyType, string> = { "rsa-1024": "RSA 1024", "rsa-2048": "RSA 2048", "rsa-3072": "RSA 3072", "rsa-4096": "RSA 4096" };
 
 /** How long a Device Certificate is valid for unless the profile says otherwise, and at most, in days. */
 export const DEFAULT_DEVICE_VALIDITY_DAYS = 365;

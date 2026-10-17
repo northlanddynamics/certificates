@@ -19,6 +19,7 @@ import {
   DEFAULT_DEVICE_KEY_USAGES,
   DEFAULT_DEVICE_VALIDITY_DAYS,
   DEVICE_EXTENDED_KEY_USAGE_NAMES,
+  DEFAULT_DEVICE_KEY_TYPES,
   DEVICE_KEY_TYPES,
   DEVICE_KEY_USAGES,
   MAX_DEVICE_RETENTION_DAYS,
@@ -207,7 +208,7 @@ export function registerEnrollmentProfiles(ctx: {
         "`issuingCaId` must be an active Issuing CA of one of the Organization's Private CAs, under an active root (422 otherwise). `validator.kind` must be one the platform runs (`.../enrollment-validator-kinds`; 422 otherwise), with the `settings` its kind takes and, when it takes one, its `secret`, which is stored as a Secret and never shown (400 otherwise). " +
         "A profile whose validator does not vouch for names may carry `nameRules`, which a device's names must keep; without them it issues the names a device asks for, within the Issuing CA's permitted name rules. One whose validator vouches for names must have none (422 otherwise). " +
         "Device Certificates are valid for `validityDays` (365 unless given), never past the Issuing CA's end, with `keyUsage` (digitalSignature and keyEncipherment unless given) and `extendedKeyUsage` (clientAuth unless given), " +
-        "and the subject and subject alternative names of the device's CSR; nothing else a CSR asks for. A device key not in `allowedKeyTypes` (every RSA size unless given) is refused. " +
+        "and the subject and subject alternative names of the device's CSR; nothing else a CSR asks for. A device key not in `allowedKeyTypes` (RSA 2048, 3072 and 4096 unless given) is refused; `rsa-1024`, which can be broken, is allowed only when given. " +
         "A Device Certificate is pruned `retentionDays` (365 unless given) after it ends. " +
         "The platform makes the profile's RA: a software RSA key, held as a Secret, and a certificate the Issuing CA signs for it. The profile is given an opaque public id, under which its SCEP URL is. " +
         "Names are unique within the Organization (409). Only Organization Administrators may.",
@@ -222,7 +223,7 @@ export function registerEnrollmentProfiles(ctx: {
                 validityDays: z.number().int().min(1).max(MAX_DEVICE_VALIDITY_DAYS).default(DEFAULT_DEVICE_VALIDITY_DAYS),
                 keyUsage: nonEmptyUnique(z.enum(DEVICE_KEY_USAGES)).default(DEFAULT_DEVICE_KEY_USAGES),
                 extendedKeyUsage: nonEmptyUnique(z.enum(DEVICE_EXTENDED_KEY_USAGE_NAMES)).default(DEFAULT_DEVICE_EXTENDED_KEY_USAGES),
-                allowedKeyTypes: nonEmptyUnique(z.enum(DEVICE_KEY_TYPES)).default([...DEVICE_KEY_TYPES]),
+                allowedKeyTypes: nonEmptyUnique(z.enum(DEVICE_KEY_TYPES)).default(DEFAULT_DEVICE_KEY_TYPES),
                 validator: z.object({ kind: z.string(), settings: z.record(z.string(), z.unknown()).default({}), secret: z.string().optional() }),
                 nameRules: NameRules.optional(),
                 retentionDays: RetentionDays.default(DEFAULT_DEVICE_RETENTION_DAYS),
@@ -427,16 +428,17 @@ export function registerEnrollmentProfiles(ctx: {
       method: "patch",
       path: "/api/organizations/{orgId}/enrollment-profiles/{id}",
       tags: ["Enrollment Profiles"],
-      summary: "Point an Enrollment Profile at another Issuing CA, or change its retention period or name rules",
+      summary: "Point an Enrollment Profile at another Issuing CA, or change its retention period, name rules or allowed device keys",
       description:
         "`issuingCaId` must be an active Issuing CA of one of the Organization's Private CAs, under an active root (422 otherwise): the way on once the profile's Issuing CA is retired, which refuses enrollment until then. " +
         "The new Issuing CA signs a new RA certificate for a new RA key, which `GetCACert` serves from then on with the new chain, so redeploy the trusted certificate profile in the device management platform when the root changes. " +
         "Device Certificates already issued stay their Issuing CA's, on its CRL once revoked. `retentionDays` is how many days after it ends a Device Certificate is pruned. " +
         "`nameRules` replaces the name rules of a profile whose validator does not vouch for names, from its next request on, and null removes them, so that it issues the names a device asks for within its Issuing CA's permitted name rules; a profile whose validator vouches for names takes none (422). " +
+        "`allowedKeyTypes` replaces the device keys it certifies, from its next request on; Device Certificates already issued stay. " +
         "What is not given is left as it is; a change that changes nothing is not audited. Only Organization Administrators may.",
       request: {
         params: ProfileParams,
-        body: { content: { "application/json": { schema: z.object({ issuingCaId: z.string().optional(), retentionDays: RetentionDays.optional(), nameRules: NameRules.nullable().optional() }) } } },
+        body: { content: { "application/json": { schema: z.object({ issuingCaId: z.string().optional(), retentionDays: RetentionDays.optional(), nameRules: NameRules.nullable().optional(), allowedKeyTypes: nonEmptyUnique(z.enum(DEVICE_KEY_TYPES)).optional() }) } } },
       },
       responses: { 200: json(EnrollmentProfile, "Updated"), ...errors(400, 401, 403, 404, 409, 422) },
     }),
@@ -464,14 +466,15 @@ export function registerEnrollmentProfiles(ctx: {
         if (kind.vouchesForNames) throw new HttpError(422, `an Enrollment Validator of the kind ${found.row.validatorKind} vouches for the names a device asks for, so the profile takes no name rules`);
       }
       const changingNameRules = body.nameRules !== undefined && !isDeepStrictEqual(body.nameRules, found.row.nameRules);
-      if (!to && !retaining && !changingNameRules) return c.json(toProfile(found.row, found.of.ca.id, baseURL), 200);
+      const changingKeyTypes = body.allowedKeyTypes !== undefined && !isDeepStrictEqual(body.allowedKeyTypes, found.row.allowedKeyTypes);
+      if (!to && !retaining && !changingNameRules && !changingKeyTypes) return c.json(toProfile(found.row, found.of.ca.id, baseURL), 200);
 
       const row = await unitOfWork.run(actor, async (tx, change) => {
         const current = await locked(tx, found.row);
         if (to) await secrets.replace(tx, orgId, current.raKeySecretId, to.ra.privateKeyPem);
         const [row] = await tx
           .update(enrollmentProfile)
-          .set({ ...(to && { issuingCaId: to.of.issuing.id, raCertificatePem: to.ra.certificate.toString("pem") }), ...(retaining && { retentionDays: body.retentionDays }), ...(changingNameRules && { nameRules: body.nameRules }) })
+          .set({ ...(to && { issuingCaId: to.of.issuing.id, raCertificatePem: to.ra.certificate.toString("pem") }), ...(retaining && { retentionDays: body.retentionDays }), ...(changingNameRules && { nameRules: body.nameRules }), ...(changingKeyTypes && { allowedKeyTypes: body.allowedKeyTypes }) })
           .where(eq(enrollmentProfile.id, id))
           .returning();
         await change.audit({
@@ -484,6 +487,7 @@ export function registerEnrollmentProfiles(ctx: {
               ...(to && { issuingCa: { from: { id: found.of.issuing.id, subject: found.of.issuing.subject }, to: { id: to.of.issuing.id, subject: to.of.issuing.subject } } }),
               ...(retaining && { retentionDays: { from: current.retentionDays, to: body.retentionDays } }),
               ...(changingNameRules && { nameRules: { from: current.nameRules, to: body.nameRules } }),
+              ...(changingKeyTypes && { allowedKeyTypes: { from: current.allowedKeyTypes, to: body.allowedKeyTypes } }),
             },
             ...(to && { raCertificate: raOf(to.ra.certificate) }),
           },

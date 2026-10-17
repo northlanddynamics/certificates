@@ -1,24 +1,28 @@
 import { useMutation, useQuery } from "@tanstack/react-query";
 import { Link, useParams } from "@tanstack/react-router";
 import { createColumnHelper, tableFeatures, useTable } from "@tanstack/react-table";
-import { CheckIcon, ClipboardCheckIcon, KeyRoundIcon, LandmarkIcon, MoreHorizontalIcon, PlusIcon, ScrollTextIcon, ShieldCheckIcon, type LucideIcon } from "lucide-react";
+import { CheckIcon, ClipboardCheckIcon, KeyRoundIcon, TriangleAlertIcon, LandmarkIcon, MoreHorizontalIcon, PlusIcon, ScrollTextIcon, ShieldCheckIcon, type LucideIcon } from "lucide-react";
 import { useState, type FormEvent } from "react";
 import { toast } from "sonner";
 import {
   DEFAULT_DEVICE_EXTENDED_KEY_USAGES,
+  DEFAULT_DEVICE_KEY_TYPES,
   DEFAULT_DEVICE_KEY_USAGES,
   DEFAULT_DEVICE_RETENTION_DAYS,
   DEFAULT_DEVICE_VALIDITY_DAYS,
   DEVICE_EXTENDED_KEY_USAGE_NAMES,
+  DEVICE_KEY_TYPE_LABELS,
   DEVICE_KEY_TYPES,
   DEVICE_KEY_USAGES,
   MAX_DEVICE_RETENTION_DAYS,
   MAX_DEVICE_VALIDITY_DAYS,
+  WEAK_DEVICE_KEY_TYPE,
   type DeviceExtendedKeyUsage,
   type DeviceKeyType,
   type DeviceKeyUsage,
 } from "../../../server/src/enrollment-profile-kinds";
 import { ConfirmDialog } from "@/components/confirm-dialog";
+import { Alert, AlertDescription, AlertTitle } from "@/components/ui/alert";
 import { DataTable } from "@/components/data-table/data-table";
 import { Badge } from "@/components/ui/badge";
 import { Breadcrumb, BreadcrumbItem, BreadcrumbList, BreadcrumbPage, BreadcrumbSeparator } from "@/components/ui/breadcrumb";
@@ -67,7 +71,7 @@ const TENANT = /^([0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}|(
 const VALIDATOR_LABEL: Record<string, string> = { intune: "Microsoft Intune" };
 const validatorLabel = (kind: string) => VALIDATOR_LABEL[kind] ?? kind;
 
-const KEY_TYPE_LABEL: Record<DeviceKeyType, string> = { "rsa-2048": "RSA 2048", "rsa-3072": "RSA 3072", "rsa-4096": "RSA 4096" };
+const KEY_TYPE_LABEL: Record<DeviceKeyType, string> = { ...DEVICE_KEY_TYPE_LABELS, [WEAK_DEVICE_KEY_TYPE]: `${DEVICE_KEY_TYPE_LABELS[WEAK_DEVICE_KEY_TYPE]} (weak)` };
 
 // The server lists every profile; an Organization has a handful.
 const features = tableFeatures({});
@@ -176,7 +180,7 @@ function ProfileActions({ profile }: { profile: EnrollmentProfile }) {
   const mayDisable = org ? can(org, "enrollmentProfile", "disable") && profile.enabled : false;
   const kinds = useQuery({ queryKey: ["enrollment-validator-kinds", orgId], queryFn: () => api.enrollmentValidatorKinds(orgId), enabled: mayUpdate });
   const takesNameRules = kindTakesNameRules(kinds.data?.items, profile.validator.kind);
-  const [editing, setEditing] = useState<"issuing-ca" | "retention" | "name-rules" | "rotate" | "disable" | null>(null);
+  const [editing, setEditing] = useState<"issuing-ca" | "retention" | "name-rules" | "key-types" | "rotate" | "disable" | null>(null);
   const openOne = (which: NonNullable<typeof editing>) => (open: boolean) => setEditing(open ? which : null);
   const test = useMutation({
     mutationFn: () => api.testEnrollmentValidator(orgId, profile.id),
@@ -219,6 +223,7 @@ function ProfileActions({ profile }: { profile: EnrollmentProfile }) {
             {mayUpdate && <DropdownMenuItem onSelect={() => setEditing("issuing-ca")}>Change Issuing CA…</DropdownMenuItem>}
             {mayUpdate && <DropdownMenuItem onSelect={() => setEditing("retention")}>Retention period…</DropdownMenuItem>}
             {mayUpdate && takesNameRules && <DropdownMenuItem onSelect={() => setEditing("name-rules")}>Name Rules…</DropdownMenuItem>}
+            {mayUpdate && <DropdownMenuItem onSelect={() => setEditing("key-types")}>Device keys…</DropdownMenuItem>}
             {mayUpdate && <DropdownMenuItem onSelect={() => setEditing("rotate")}>Rotate RA certificate…</DropdownMenuItem>}
             {mayDisable && (
               <DropdownMenuItem variant="destructive" onSelect={() => setEditing("disable")}>
@@ -231,6 +236,7 @@ function ProfileActions({ profile }: { profile: EnrollmentProfile }) {
       {mayUpdate && <IssuingCaDialog profile={profile} open={editing === "issuing-ca"} onOpenChange={openOne("issuing-ca")} />}
       {mayUpdate && <RetentionDialog profile={profile} open={editing === "retention"} onOpenChange={openOne("retention")} />}
       {mayUpdate && takesNameRules && <NameRulesDialog profile={profile} open={editing === "name-rules"} onOpenChange={openOne("name-rules")} />}
+      {mayUpdate && <AllowedKeyTypesDialog profile={profile} open={editing === "key-types"} onOpenChange={openOne("key-types")} />}
       {mayUpdate && <RotateRaDialog profile={profile} open={editing === "rotate"} onOpenChange={openOne("rotate")} />}
       {mayDisable && <DisableDialog profile={profile} open={editing === "disable"} onOpenChange={openOne("disable")} />}
       {test.data && !test.data.ok && <span role="alert" className="max-w-72 whitespace-normal break-words text-right text-sm text-destructive">{test.data.error}</span>}
@@ -409,6 +415,50 @@ function NameRulesDialog({ profile, open, onOpenChange }: ProfileDialogProps) {
   );
 }
 
+/** Changes the device keys the profile allows, for its next request. */
+function AllowedKeyTypesDialog({ profile, open, onOpenChange }: ProfileDialogProps) {
+  const { orgId } = useParams({ from: ROUTE });
+  const [chosen, setChosen] = useState(profile.allowedKeyTypes);
+  const save = useAction(() => api.updateEnrollmentProfile(orgId, profile.id, { allowedKeyTypes: chosen }), ["enrollment-profiles"], () => onOpenChange(false));
+  return (
+    <Dialog
+      open={open}
+      onOpenChange={(next) => {
+        if (next) {
+          save.reset();
+          setChosen(profile.allowedKeyTypes);
+        }
+        onOpenChange(next);
+      }}
+    >
+      <DialogContent>
+        <form
+          className="flex flex-col gap-4"
+          onSubmit={(e: FormEvent) => {
+            e.preventDefault();
+            if (chosen.length > 0) save.mutate(undefined);
+          }}
+        >
+          <DialogHeader>
+            <DialogTitle>Device keys of {profile.name}</DialogTitle>
+            <DialogDescription>They apply from the next request on; a device whose request is for any other kind of key is refused. Device Certificates already issued are kept.</DialogDescription>
+          </DialogHeader>
+          <KeyTypeChoices id={`profile-${profile.id}-keys`} chosen={chosen} onChange={setChosen} />
+          {save.error && <FieldError>{save.error.message}</FieldError>}
+          <DialogFooter>
+            <Button type="button" variant="outline" onClick={() => onOpenChange(false)}>
+              Cancel
+            </Button>
+            <Button type="submit" disabled={chosen.length === 0 || save.isPending}>
+              Save
+            </Button>
+          </DialogFooter>
+        </form>
+      </DialogContent>
+    </Dialog>
+  );
+}
+
 /** Has the profile's Issuing CA sign it a new RA certificate for a new key, which devices are given from then on. */
 function RotateRaDialog({ profile, open, onOpenChange }: ProfileDialogProps) {
   const { orgId } = useParams({ from: ROUTE });
@@ -502,6 +552,25 @@ function Choices<T extends string>({ legend, id, values, labels, chosen, onChang
   );
 }
 
+/** The device keys a profile allows, with a warning when a weak one is among them. */
+function KeyTypeChoices({ id, chosen, onChange }: { id: string; chosen: DeviceKeyType[]; onChange: (chosen: DeviceKeyType[]) => void }) {
+  return (
+    <>
+      <Choices legend="Device keys allowed" id={id} values={DEVICE_KEY_TYPES} labels={KEY_TYPE_LABEL} chosen={chosen} onChange={onChange} />
+      {chosen.includes(WEAK_DEVICE_KEY_TYPE) && (
+        <Alert variant="destructive">
+          <TriangleAlertIcon />
+          <AlertTitle>1024-bit keys can be broken</AlertTitle>
+          <AlertDescription>
+            Someone with enough computing power can work out a 1024-bit key's private key and pose as the device. Some RADIUS servers and VPN gateways also reject them. Allow them only for devices that cannot
+            make a larger key, such as Macs left on Apple's default key size; their Device Certificates are marked "Weak key".
+          </AlertDescription>
+        </Alert>
+      )}
+    </>
+  );
+}
+
 // Every step's state lives in the form, so moving between steps never loses what was entered.
 function NewProfileForm({ orgId, onDone }: { orgId: string; onDone: () => void }) {
   const [step, setStep] = useState<StepId>("issuer");
@@ -515,7 +584,7 @@ function NewProfileForm({ orgId, onDone }: { orgId: string; onDone: () => void }
   const [retentionDays, setRetentionDays] = useState(String(DEFAULT_DEVICE_RETENTION_DAYS));
   const [extendedKeyUsage, setExtendedKeyUsage] = useState<DeviceExtendedKeyUsage[]>(DEFAULT_DEVICE_EXTENDED_KEY_USAGES);
   const [keyUsage, setKeyUsage] = useState<DeviceKeyUsage[]>(DEFAULT_DEVICE_KEY_USAGES);
-  const [allowedKeyTypes, setAllowedKeyTypes] = useState<DeviceKeyType[]>([...DEVICE_KEY_TYPES]);
+  const [allowedKeyTypes, setAllowedKeyTypes] = useState<DeviceKeyType[]>(DEFAULT_DEVICE_KEY_TYPES);
   const [validatorKind, setValidatorKind] = useState("");
   const kind = validatorKind || kinds.data?.items[0]?.kind || "";
   const [tenantId, setTenantId] = useState("");
@@ -650,7 +719,7 @@ function NewProfileForm({ orgId, onDone }: { orgId: string; onDone: () => void }
           {step === "keys" && (
             <FieldGroup>
               <FieldDescription>A device whose request is for any other kind of key is refused.</FieldDescription>
-              <Choices legend="Device keys allowed" id="profile-keys" values={DEVICE_KEY_TYPES} labels={KEY_TYPE_LABEL} chosen={allowedKeyTypes} onChange={setAllowedKeyTypes} />
+              <KeyTypeChoices id="profile-keys" chosen={allowedKeyTypes} onChange={setAllowedKeyTypes} />
             </FieldGroup>
           )}
 

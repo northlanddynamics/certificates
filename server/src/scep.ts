@@ -89,6 +89,13 @@ function keyTypeOf(request: ScepEnrollmentRequest): DeviceKeyType | undefined {
   return key.asymmetricKeyType === "rsa" && (DEVICE_KEY_TYPES as readonly string[]).includes(type) ? (type as DeviceKeyType) : undefined;
 }
 
+/** The device's key as a refusal names it: its algorithm and size, and its type (`keyTypeOf`) where a profile could allow it. */
+function describeKey(request: ScepEnrollmentRequest, type: DeviceKeyType | undefined): string {
+  const key = request.csr.publicKey;
+  if (key.asymmetricKeyType !== "rsa") return `an ${key.asymmetricKeyType?.toUpperCase() ?? "unknown"} key${key.asymmetricKeyDetails?.namedCurve ? ` (${key.asymmetricKeyDetails.namedCurve})` : ""}`;
+  return `a ${key.asymmetricKeyDetails?.modulusLength}-bit RSA key${type ? ` (${type})` : ""}`;
+}
+
 export function registerScep(ctx: {
   app: OpenAPIHono;
   db: Db;
@@ -202,8 +209,7 @@ export function registerScep(ctx: {
     }
     const keyType = keyTypeOf(request);
     if (!keyType || !profile.allowedKeyTypes.includes(keyType)) {
-      const asked = request.csr.publicKey.asymmetricKeyType === "rsa" ? `rsa-${request.csr.publicKey.asymmetricKeyDetails?.modulusLength}` : request.csr.publicKey.asymmetricKeyType;
-      return refused(`the Enrollment Profile does not allow a ${asked} key; it allows ${profile.allowedKeyTypes.join(", ")}`);
+      return refused(`the Enrollment Profile does not allow ${describeKey(request, keyType)}; it allows ${profile.allowedKeyTypes.join(", ")}`);
     }
     // These before the validator is asked, so that a request that would be refused anyway does not use up a one-time challenge.
     if (profile.nameRules) {
@@ -264,6 +270,7 @@ export function registerScep(ctx: {
             notAfter: certificate.notAfter,
             certificatePem: certificate.toString("pem"),
             deviceId,
+            keyType,
             transactionId: request.transactionId,
             createdAt: change.occurredAt,
           })
@@ -278,6 +285,7 @@ export function registerScep(ctx: {
             subject: certificate.subject,
             subjectAltNames,
             deviceId,
+            keyType,
             notAfter: certificate.notAfter.toISOString(),
             transactionId: request.transactionId,
           },

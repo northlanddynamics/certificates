@@ -201,6 +201,35 @@ describe("pointing an Enrollment Profile at another Issuing CA", () => {
   });
 });
 
+describe("changing the device keys an Enrollment Profile allows", () => {
+  test("allowing rsa-1024 issues to a 1024-bit key from then on, and is audited, in the profile's created and updated Audit Events alike", async () => {
+    const ca = await createCa();
+    const profile = await createProfile(ca.issuing.id);
+    const device = scepDevice(h, profile.scepUrl);
+    expect(await device.enroll({ subject: "CN=mac-01", keyBits: 1024 }).catch((err) => err)).toBeInstanceOf(ScepFailureError);
+
+    const res = await update(profile.id, { allowedKeyTypes: ["rsa-1024", "rsa-2048", "rsa-3072", "rsa-4096"] });
+    expect(res.status).toBe(200);
+    expect(res.body.allowedKeyTypes).toEqual(["rsa-1024", "rsa-2048", "rsa-3072", "rsa-4096"]);
+    expect((await device.enroll({ subject: "CN=mac-01", keyBits: 1024 })).certificate.publicKey.asymmetricKeyDetails?.modulusLength).toBe(1024);
+
+    expect((await update(profile.id, { allowedKeyTypes: ["rsa-2048"] })).status).toBe(200);
+    expect(await device.enroll({ subject: "CN=mac-02", keyBits: 1024 }).catch((err) => err)).toBeInstanceOf(ScepFailureError);
+    // Nothing that changes nothing is audited; no key type at all, or one no profile takes, is refused.
+    expect((await update(profile.id, { allowedKeyTypes: ["rsa-2048"] })).status).toBe(200);
+    expect((await update(profile.id, { allowedKeyTypes: [] })).status).toBe(400);
+    expect((await update(profile.id, { allowedKeyTypes: ["ecdsa-p256"] })).status).toBe(400);
+
+    const created = (await auditOf()).find((e) => e.action === "enrollment_profile.created");
+    expect(created!.detail.allowedKeyTypes).toEqual(["rsa-2048", "rsa-3072", "rsa-4096"]);
+    const updated = (await auditOf()).filter((e) => e.action === "enrollment_profile.updated");
+    expect(updated.map((e) => e.detail)).toEqual([
+      { name: "Wi-Fi", changes: { allowedKeyTypes: { from: ["rsa-2048", "rsa-3072", "rsa-4096"], to: ["rsa-1024", "rsa-2048", "rsa-3072", "rsa-4096"] } } },
+      { name: "Wi-Fi", changes: { allowedKeyTypes: { from: ["rsa-1024", "rsa-2048", "rsa-3072", "rsa-4096"], to: ["rsa-2048"] } } },
+    ]);
+  });
+});
+
 describe("rotating an Enrollment Profile's RA certificate", () => {
   test("issues a new RA certificate and key from its Issuing CA, which GetCACert serves from then on and devices enroll with", async () => {
     const ca = await createCa();

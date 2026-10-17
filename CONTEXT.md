@@ -207,7 +207,7 @@ Optional limits an Organization Administrator may give an Enrollment Profile who
 _Avoid_: subject policy, SAN rules
 
 **Device Certificate**:
-A Certificate issued under an Enrollment Profile. It belongs to the profile, not to a Managed Certificate, has no Owners, never appears among Managed Certificates, and is renewed by the device enrolling again, or, where its Enrollment Validator allows it, by a SCEP RenewalReq signed with it, which revokes it as superseded once its replacement is issued; neither is a Renewal, which is a Managed Certificate's. It carries the device's ID as its Enrollment Validator knows it (such as Intune's device ID), when the request says.
+A Certificate issued under an Enrollment Profile. It belongs to the profile, not to a Managed Certificate, has no Owners, never appears among Managed Certificates, and is renewed by the device enrolling again, or, where its Enrollment Validator allows it, by a SCEP RenewalReq signed with it, which revokes it as superseded once its replacement is issued; neither is a Renewal, which is a Managed Certificate's. It carries the device's ID as its Enrollment Validator knows it (such as Intune's device ID), when the request says. It records the device's key type; one for a weak key (1024-bit RSA, which can be broken, and which an Enrollment Profile allows only when an Organization Administrator chooses it) is marked as such, to be found and replaced.
 _Avoid_: client cert, device cert record
 
 ### Discovery (future)

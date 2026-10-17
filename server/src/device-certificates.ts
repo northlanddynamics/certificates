@@ -9,6 +9,7 @@ import type { Authorizer } from "./authorization";
 import { CertificateAuthorityError } from "./certificate-authority";
 import type { Db } from "./db/client";
 import { deviceCertificate, enrollmentProfile, issuingCa } from "./db/schema";
+import { DEVICE_KEY_TYPES, WEAK_DEVICE_KEY_TYPE } from "./enrollment-profile-kinds";
 import { HttpError, OrgParam, PageQuery, errors, json, pageOf } from "./http";
 import type { PrivateCas } from "./private-ca";
 import { REVOCATION_REASONS_OF } from "./revocation-reasons";
@@ -26,6 +27,7 @@ export const DeviceCertificate = z.object({
   subject: z.string(),
   subjectAltNames: z.array(z.object({ type: z.string(), value: z.string() })),
   deviceId: z.string().nullable().openapi({ description: "The device as its Enrollment Validator knows it, such as Intune's device ID; none when the request did not say." }),
+  keyType: z.enum(DEVICE_KEY_TYPES).openapi({ description: "The device's key. `rsa-1024` is weak: it can be broken." }),
   issuer: z.string().openapi({ description: "The Issuing CA's subject." }),
   notBefore: z.string(),
   notAfter: z.string(),
@@ -45,6 +47,7 @@ const DeviceCertificateQuery = PageQuery.extend({
     .optional()
     .openapi({ description: "Matches part of the subject, a subject alternative name, the serial (hex, of any case, with or without colons) or the device ID, ignoring case." }),
   status: z.enum(DEVICE_CERTIFICATE_STATUSES).optional(),
+  weakKey: z.literal("true").optional().meta({ description: "Only those for a weak key, one that can be broken (`rsa-1024`)." }),
 });
 
 const isId = (id: string) => z.uuid().safeParse(id).success;
@@ -82,6 +85,7 @@ function toDeviceCertificate({ certificate: row, issuer }: Row, now: Date): z.in
     subject: row.subject,
     subjectAltNames: row.subjectAltNames,
     deviceId: row.deviceId,
+    keyType: row.keyType,
     issuer,
     notBefore: row.notBefore.toISOString(),
     notAfter: row.notAfter.toISOString(),
@@ -138,7 +142,7 @@ export function registerDeviceCertificates(ctx: {
       tags: ["Device Certificates"],
       summary: "The Device Certificates an Enrollment Profile issued, newest first",
       description:
-        "A page at a time; `total` is how many match, whatever the page. `q` searches the subject, subject alternative names, serial and device ID; `status` keeps those `active`, `expired` or `revoked`. Both combine. " +
+        "A page at a time; `total` is how many match, whatever the page. `q` searches the subject, subject alternative names, serial and device ID; `status` keeps those `active`, `expired` or `revoked`; `weakKey` those for a weak key. They combine. " +
         "Only Organization Administrators may ask.",
       request: { params: ProfileParams, query: DeviceCertificateQuery },
       responses: { 200: json(pageOf(DeviceCertificate)), ...errors(400, 401, 403, 404) },
@@ -149,7 +153,7 @@ export function registerDeviceCertificates(ctx: {
       await authorize(await requireUser(c), orgId, { deviceCertificate: ["read"] });
       await requireProfile(orgId, id);
       const now = clock();
-      const where = and(ofProfile(orgId, id), query.q ? matching(query.q) : undefined, query.status ? inStatus(query.status, now) : undefined);
+      const where = and(ofProfile(orgId, id), query.q ? matching(query.q) : undefined, query.status ? inStatus(query.status, now) : undefined, query.weakKey ? eq(deviceCertificate.keyType, WEAK_DEVICE_KEY_TYPE) : undefined);
       const [total, rows] = await Promise.all([
         db.$count(deviceCertificate, where),
         db
