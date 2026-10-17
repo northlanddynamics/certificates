@@ -662,6 +662,7 @@ describe("a profile's Device Certificates", () => {
       ],
       deviceId: "5b1e4f0e-8b2c-4a57-9a1d-0c6f3e2a7b11",
       keyType: "rsa-2048",
+      sharedChallenge: null,
       issuer: first.issuer,
       notBefore: new Date(START).toISOString(),
       notAfter: new Date(START + 365 * DAY_MS).toISOString(),
