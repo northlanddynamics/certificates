@@ -61,6 +61,14 @@ async function chainOf(ca: { id: string; issuing: { id: string } }) {
 /** The certificate as @peculiar/x509 reads it, to look at its extensions. */
 const read = (cert: { raw: Buffer }) => new x509.X509Certificate(new Uint8Array(cert.raw));
 
+/** The CRL a certificate's CRL Distribution Point names, fetched from there as a relying party would. */
+async function crlFor(cert: x509.X509Certificate) {
+  const cdp = cert.getExtension(x509.CRLDistributionPointsExtension)!;
+  const res = await h.app.request(cdp.distributionPoints[0]!.distributionPoint!.fullName![0]!.uniformResourceIdentifier!);
+  expect(res.status).toBe(200);
+  return new x509.X509Crl(new Uint8Array(await res.arrayBuffer()));
+}
+
 describe("a device enrolling over SCEP", () => {
   test("gets a Device Certificate that follows the profile: its EKU, key usage and validity, the CSR's subject and SANs, a chain to the root and the CDP", async () => {
     const ca = await createCa();
@@ -363,6 +371,71 @@ describe("RenewalReq", () => {
     expect((await auditOf()).filter((e) => e.action === "device_certificate.issued")).toHaveLength(2);
   });
 
+  test("supersedes the Device Certificate it was signed with: revoked as superseded, on the CRL, and audited as the renewal's, so the device holds one valid certificate", async () => {
+    const ca = await createCa();
+    const profile = await createProfile(ca.issuing.id, { validator: { kind: "test_renewal" } });
+    const device = scepDevice(h, profile.scepUrl);
+    const first = await device.enroll({ subject: "CN=device-33" });
+    const firstSerial = first.certificate.serialNumber.toUpperCase();
+    h.setNow(new Date(START + DAY_MS));
+
+    const renewed = await device.renew({ subject: "CN=device-33" }, first);
+    const renewedSerial = renewed.certificate.serialNumber.toUpperCase();
+
+    const listed = (await h.api(`${profiles()}/${profile.id}/device-certificates`, { cookie: org.cookie })).body.items as { id: string; serial: string; status: string; revocation?: unknown }[];
+    expect(listed.map((c) => [c.serial, c.status])).toEqual([
+      [renewedSerial, "active"],
+      [firstSerial, "revoked"],
+    ]);
+    expect(listed[1]!.revocation).toMatchObject({ reason: "superseded", revokedAt: new Date(START + DAY_MS).toISOString() });
+
+    const crl = await crlFor(read(renewed.certificate));
+    expect(crl.entries.map((e) => [e.serialNumber.toUpperCase(), e.reason, e.revocationDate.getTime()])).toEqual([[firstSerial, x509.X509CrlReason.superseded, START + DAY_MS]]);
+
+    const revoked = (await auditOf()).filter((e) => e.action === "device_certificate.revoked");
+    expect(revoked).toHaveLength(1);
+    expect(revoked[0]!.actor).toEqual({ id: null, email: null });
+    expect(revoked[0]!.target).toEqual({ type: "device_certificate", id: listed[1]!.id });
+    expect(revoked[0]!.detail).toEqual({
+      enrollmentProfile: { id: profile.id, name: "Wi-Fi" },
+      serial: firstSerial,
+      subject: "CN=device-33",
+      reason: "superseded",
+      by: { renewal: { serial: renewedSerial } },
+    });
+  });
+
+  test("revokes nothing when refused", async () => {
+    const ca = await createCa();
+    const profile = await createProfile(ca.issuing.id, { validator: { kind: "test_renewal" } });
+    const device = scepDevice(h, profile.scepUrl);
+    const first = await device.enroll({ subject: "CN=device-34.devices.acme" });
+
+    // Outside the Issuing CA's Permitted Name Rules, so refused after the renewal itself was accepted.
+    const failure = await device.renew({ subject: "CN=device-34", subjectAltNames: { dns: ["device-34.elsewhere.test"] } }, first).catch((err) => err);
+    expect(failure).toBeInstanceOf(ScepFailureError);
+    expect(failure.failInfoText).toContain("outside the permitted names");
+
+    const listed = (await h.api(`${profiles()}/${profile.id}/device-certificates`, { cookie: org.cookie })).body.items as { status: string }[];
+    expect(listed.map((c) => c.status)).toEqual(["active"]);
+    expect((await crlFor(read(first.certificate))).entries).toEqual([]);
+    expect((await auditOf()).some((e) => e.action === "device_certificate.revoked")).toBe(false);
+  });
+
+  test("a PKCSReq for the same subject as a Device Certificate the device holds revokes nothing", async () => {
+    const ca = await createCa();
+    const profile = await createProfile(ca.issuing.id, { validator: { kind: "test_renewal" } });
+    const device = scepDevice(h, profile.scepUrl);
+    const first = await device.enroll({ subject: "CN=device-35" });
+    h.setNow(new Date(START + DAY_MS));
+    await device.enroll({ subject: "CN=device-35" });
+
+    const listed = (await h.api(`${profiles()}/${profile.id}/device-certificates`, { cookie: org.cookie })).body.items as { status: string }[];
+    expect(listed.map((c) => c.status)).toEqual(["active", "active"]);
+    expect((await crlFor(read(first.certificate))).entries).toEqual([]);
+    expect((await auditOf()).some((e) => e.action === "device_certificate.revoked")).toBe(false);
+  });
+
   test("is refused, without asking the validator, where the profile's validator does not allow it", async () => {
     const ca = await createCa();
     const profile = await createProfile(ca.issuing.id);
@@ -640,13 +713,6 @@ describe("a profile's Device Certificates", () => {
     expect(listed).toMatchObject({ serial: cert.serialNumber.toUpperCase(), status: "revoked", revocation: { reason: "cessationOfOperation", revokedAt: new Date(START + DAY_MS).toISOString() } });
   });
 
-  /** The CRL a certificate's CRL Distribution Point names, fetched from there as a relying party would. */
-  async function crlFor(cert: x509.X509Certificate) {
-    const cdp = cert.getExtension(x509.CRLDistributionPointsExtension)!;
-    const res = await h.app.request(cdp.distributionPoints[0]!.distributionPoint!.fullName![0]!.uniformResourceIdentifier!);
-    expect(res.status).toBe(200);
-    return new x509.X509Crl(new Uint8Array(await res.arrayBuffer()));
-  }
   const revoke = (profileId: string, certificateId: string, body: unknown, cookie = org.cookie) =>
     h.api(`${profiles()}/${profileId}/device-certificates/${certificateId}/revocation`, { cookie, body });
 
