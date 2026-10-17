@@ -10,4 +10,4 @@ We did not require the token, because some Organizations will not hand one over 
 ## Consequences
 
 - A holder of the Shared Challenge can enroll under a real Mac's serial number. Enrolling therefore never revokes another Device Certificate; only a RenewalReq, signed with the certificate it replaces, supersedes it.
-- Revoking the certificates of Macs removed from Iru is a per-profile switch, off by default, available only with a token. It revokes a device only after it is missing from two polls in a row, and pauses, revoking nothing, when more than 5% of a profile's active devices go missing at once, so that a faulty or partial answer from Iru cannot revoke a fleet.
+- Revoking the certificates of Macs removed from Iru is a per-profile switch, off by default, available only with a token. It revokes a device only after it is missing from two polls in a row, so that one faulty or partial answer from Iru revokes nothing. There is no limit on how many it revokes at once: an answer that drops many devices twice in a row revokes them all, which the Organization accepts by turning the switch on.
