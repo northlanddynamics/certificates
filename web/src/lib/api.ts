@@ -324,6 +324,8 @@ export interface EnrollmentProfile {
   publicId: string;
   /** Where devices enroll: pasted into the device management platform's SCEP profile. */
   scepUrl: string;
+  /** The SHA-256 fingerprint (lower-case hex) of the CA certificate GetCACert serves, which a SCEP profile can be told to expect. */
+  caFingerprint: string;
   issuingCaId: string;
   privateCaId: string;
   validityDays: number;
@@ -334,6 +336,8 @@ export interface EnrollmentProfile {
   validator: { kind: string; settings: Record<string, unknown>; hasSecret: boolean };
   /** What a device's names must keep; none when the validator vouches for names, or when the profile issues the names a device asks for. */
   nameRules: NameRules | null;
+  /** Its Shared Challenge, by id only, when its validator's kind uses one: the challenge itself is shown once, when it is made. */
+  sharedChallenge: { id: string } | null;
   raCertificate: { subject: string; serial: string; notAfter: string };
   /** Whether it takes enrollment requests; a disabled profile refuses every one, and is never enabled again. */
   enabled: boolean;
@@ -341,6 +345,8 @@ export interface EnrollmentProfile {
   retentionDays: number;
   createdAt: string;
 }
+/** An Enrollment Profile as it is created: with its Shared Challenge, which is shown only then. */
+export type CreatedEnrollmentProfile = Omit<EnrollmentProfile, "sharedChallenge"> & { sharedChallenge: { id: string; challenge: string } | null };
 /** A Certificate an Enrollment Profile issued to a device. */
 export interface DeviceCertificate {
   id: string;
@@ -763,7 +769,7 @@ export const api = {
     call<DeviceCertificate>(`/api/organizations/${orgId}/enrollment-profiles/${profileId}/device-certificates/${id}/revocation`, { body: { reason } }),
   /** Where a Device Certificate downloads from, PEM. */
   deviceCertificateUrl: (orgId: string, profileId: string, id: string) => `/api/organizations/${orgId}/enrollment-profiles/${profileId}/device-certificates/${id}/certificate`,
-  createEnrollmentProfile: (orgId: string, body: NewEnrollmentProfile) => call<EnrollmentProfile>(`/api/organizations/${orgId}/enrollment-profiles`, { body }),
+  createEnrollmentProfile: (orgId: string, body: NewEnrollmentProfile) => call<CreatedEnrollmentProfile>(`/api/organizations/${orgId}/enrollment-profiles`, { body }),
   /** Points a profile at another Issuing CA, which signs it a new RA certificate, or changes its retention period, Name Rules (null removes them) or allowed device keys. */
   updateEnrollmentProfile: (orgId: string, id: string, body: { issuingCaId?: string; retentionDays?: number; nameRules?: NameRules | null; allowedKeyTypes?: DeviceKeyType[] }) =>
     call<EnrollmentProfile>(`/api/organizations/${orgId}/enrollment-profiles/${id}`, { method: "PATCH", body }),
@@ -772,7 +778,7 @@ export const api = {
   /** Replaces a profile's RA certificate and key, signed by its Issuing CA. */
   rotateEnrollmentProfileRa: (orgId: string, id: string) => call<EnrollmentProfile>(`/api/organizations/${orgId}/enrollment-profiles/${id}/ra-rotation`, { method: "POST", body: {} }),
   /** The Enrollment Validator kinds the platform runs, one of which a profile must name. */
-  enrollmentValidatorKinds: (orgId: string) => call<{ items: { kind: string; vouchesForNames: boolean; takesSecret: boolean; allowsRenewal: boolean }[] }>(`/api/organizations/${orgId}/enrollment-validator-kinds`),
+  enrollmentValidatorKinds: (orgId: string) => call<{ items: { kind: string; vouchesForNames: boolean; takesSecret: boolean; allowsRenewal: boolean; usesSharedChallenge: boolean }[] }>(`/api/organizations/${orgId}/enrollment-validator-kinds`),
   /** Whether the profile's Enrollment Validator can reach its service; `note` says what the test could not prove. */
   testEnrollmentValidator: (orgId: string, id: string) =>
     call<{ ok: boolean; error?: string; note?: string }>(`/api/organizations/${orgId}/enrollment-profiles/${id}/validator/test`, { method: "POST", body: {} }),

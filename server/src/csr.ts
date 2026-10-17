@@ -1,8 +1,9 @@
 // What the platform checks in a CSR before anything is issued from it: that it is one (signed with the key it
 // carries, so whoever submitted it holds that key), which key algorithm it is for, and which names it asks for.
 import * as x509 from "@peculiar/x509";
-import { createHash, createPublicKey, webcrypto } from "node:crypto";
+import { createPublicKey, webcrypto } from "node:crypto";
 import { normalizeName } from "./names";
+import { fingerprintOf } from "./fingerprint";
 
 x509.cryptoProvider.set(webcrypto as unknown as Crypto);
 
@@ -75,6 +76,6 @@ export async function parseCsr(pem: string): Promise<ParsedCsr> {
     keyAlgorithm,
     names: [...names],
     publicKey: Buffer.from(csr.publicKey.rawData),
-    fingerprint: createHash("sha256").update(Buffer.from(csr.rawData)).digest("hex"),
+    fingerprint: fingerprintOf(csr.rawData),
   };
 }

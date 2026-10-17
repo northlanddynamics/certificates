@@ -309,6 +309,13 @@
       "when": 1792252594498,
       "tag": "0043_device_certificate_key_type",
       "breakpoints": true
+    },
+    {
+      "idx": 44,
+      "version": "7",
+      "when": 1792259791705,
+      "tag": "0044_enrollment_profile_shared_challenge",
+      "breakpoints": true
     }
   ]
 }

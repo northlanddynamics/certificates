@@ -21,6 +21,7 @@ import { bootstrapPlatformOperator } from "../src/operator";
 import type { UnitOfWork } from "../src/unit-of-work";
 import { createIntuneKind } from "../src/intune";
 import { IntuneDouble } from "./intune-double";
+import { sharedChallenge } from "../src/shared-challenge";
 import { SCEP_DEFAULTS, type ScepConfig } from "../src/scep";
 
 export const TEST_DATABASE_URL =
@@ -246,8 +247,9 @@ export async function createHarness(overrides: Partial<AppDeps> = {}, { database
     pkiBaseURL: PKI_BASE_URL,
     secret: "test-secret-test-secret-test-secret-1234",
     // Test-only Enrollment Validator kinds: three that allow every request (one vouching for names, one not, and one also
-    // allowing RenewalReq), and one backed by the validator double; and the platform's Intune kind, reaching the Intune double.
-    enrollmentValidators: { test_allow: allowing(true), test_names: allowing(false), test_renewal: allowing(true, true), test_double: validatorDouble.kind(), intune: createIntuneKind({ fetch: intune.fetch }) },
+    // allowing RenewalReq), and one backed by the validator double; the platform's Intune kind, reaching the Intune double,
+    // and its Shared Challenge kind, which reaches nothing.
+    enrollmentValidators: { test_allow: allowing(true), test_names: allowing(false), test_renewal: allowing(true, true), test_double: validatorDouble.kind(), intune: createIntuneKind({ fetch: intune.fetch }), shared_challenge: sharedChallenge },
     ...overrides,
   };
   const { app, auth, db, unitOfWork, issuances, renewals, notifications, auditForwarding, crls, enrollmentValidators, deviceCertificatePruning, scep: scepRoutes } = createApp(deps);

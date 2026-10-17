@@ -17,6 +17,7 @@ import { z } from "@hono/zod-openapi";
 import { createHash, randomUUID } from "node:crypto";
 import * as x509 from "@peculiar/x509";
 import { EnrollmentValidatorError, type EnrollmentValidator, type EnrollmentValidatorKind, type RevocationOutcome, type RevocationRequest } from "./enrollment-validator";
+import { sha256Hex } from "./sha256";
 
 /** What the platform tells Intune it is, as `callerInfo` and `UserAgent`. */
 export const INTUNE_CALLER_INFO = "northland-certificates/1.0";
@@ -144,7 +145,7 @@ export function createIntuneKind(options: IntuneOptions = {}): EnrollmentValidat
 
     create({ tenantId, appId }, secret): EnrollmentValidator {
       const app = `${tenantId.toLowerCase()} ${appId.toLowerCase()}`;
-      const secretHash = createHash("sha256").update(secret).digest("hex");
+      const secretHash = sha256Hex(secret);
       const tokenKey = (scope: string) => `${app} ${secretHash} ${scope}`;
       /** What Entra said, with the secret taken out should it ever be quoted. */
       const said = (text: unknown, max?: number) => short(text, max).split(secret).join("[secret]");

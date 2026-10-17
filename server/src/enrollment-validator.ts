@@ -99,7 +99,7 @@ export interface EnrollmentValidatorKind<Settings = any> {
   /** The write-only credential, as the string the Organization supplies; none for a kind that needs none. */
   secret?: z.ZodType<string>;
   /**
-   * Whether it checks the subject and SANs a device asks for, as Intune does. A profile whose validator does not must
+   * Whether it checks the subject and SANs a device asks for, as Intune does. A profile whose validator does not may
    * carry name rules (name-rules.ts), which the platform checks instead.
    */
   vouchesForNames: boolean;
@@ -108,6 +108,11 @@ export interface EnrollmentValidatorKind<Settings = any> {
    * otherwise a device re-enrolls with PKCSReq. Intune does not renew.
    */
   allowsRenewal?: boolean;
+  /**
+   * Whether a device enrolls by presenting its profile's Shared Challenge (shared-challenge.ts): the platform makes one
+   * when such a profile is created, and checks a PKCSReq's challengePassword against it before the validator is asked.
+   */
+  usesSharedChallenge?: boolean;
   /**
    * That it feeds Revocations: profiles whose settings give the same `sourceOf` share one feed, which is pulled once,
    * at most once every `intervalMs`, for all of them.
