@@ -14,7 +14,7 @@ import { Field, FieldLabel } from "@/components/ui/field";
 import { InputGroup, InputGroupAddon, InputGroupInput } from "@/components/ui/input-group";
 import { Select, SelectContent, SelectItem, SelectTrigger, SelectValue } from "@/components/ui/select";
 import { DEVICE_KEY_TYPE_LABELS, WEAK_DEVICE_KEY_TYPE } from "../../../server/src/enrollment-profile-kinds";
-import { DEVICE_CERTIFICATE_STATUSES, api, can, revocationReasonLabel, revocationReasonsOf, type DeviceCertificate, type DeviceCertificateStatus, type Me } from "@/lib/api";
+import { DEVICE_CERTIFICATE_STATUSES, api, can, revocationReasonLabel, revocationReasonsOf, type DeviceCertificate, type DeviceCertificateStatus, type EnrollmentProfile, type Me } from "@/lib/api";
 
 const ROUTE = "/app/organizations/$orgId/enrollment-profiles/$id/device-certificates";
 
@@ -169,7 +169,7 @@ export function DeviceCertificatesPage() {
           <DataTable
             table={table}
             empty={certificates.isPending ? "Loading…" : narrowed ? "No Device Certificates match." : "No device has enrolled under this profile yet."}
-            details={(certificate) => <CertificateDetails org={org!} certificate={certificate} />}
+            details={(certificate) => <CertificateDetails org={org!} certificate={certificate} profile={profile.data} />}
           />
           <DataTablePagination
             pageIndex={pagination.pageIndex}
@@ -185,7 +185,20 @@ export function DeviceCertificatesPage() {
   );
 }
 
-function CertificateDetails({ org, certificate }: { org: Me["organizations"][number]; certificate: DeviceCertificate }) {
+/**
+ * Which of its profile's Shared Challenges a Device Certificate was issued under: the current one, the previous one
+ * (still valid or not), or one retired before that; none for a renewal. Nothing when its profile uses none.
+ */
+function sharedChallengeFact(certificate: DeviceCertificate, profile: EnrollmentProfile | undefined): [string, string][] {
+  if (!profile?.sharedChallenge) return [];
+  const id = certificate.sharedChallenge?.id;
+  if (!id) return [["Shared Challenge", "None: renewed with its previous certificate"]];
+  if (id === profile.sharedChallenge.id) return [["Shared Challenge", "Current"]];
+  if (id === profile.previousSharedChallenge?.id) return [["Shared Challenge", `Previous, which works until ${new Date(profile.previousSharedChallenge.expiresAt).toLocaleString()}`]];
+  return [["Shared Challenge", "An earlier one, no longer valid"]];
+}
+
+function CertificateDetails({ org, certificate, profile }: { org: Me["organizations"][number]; certificate: DeviceCertificate; profile: EnrollmentProfile | undefined }) {
   const facts: [string, React.ReactNode][] = [
     ["Subject", certificate.subject],
     ["Subject alternative names", certificate.subjectAltNames.length === 0 ? "None" : certificate.subjectAltNames.map((n) => `${n.type.toUpperCase()}: ${n.value}`).join(", ")],
@@ -197,6 +210,7 @@ function CertificateDetails({ org, certificate }: { org: Me["organizations"][num
         {isWeak(certificate) && <WeakKeyBadge />}
       </span>,
     ],
+    ...sharedChallengeFact(certificate, profile),
     ["Serial", <span className="break-all font-mono text-xs">{certificate.serial}</span>],
     ["Issuer", certificate.issuer],
     ["Valid", `${new Date(certificate.notBefore).toLocaleString()} – ${new Date(certificate.notAfter).toLocaleString()}`],

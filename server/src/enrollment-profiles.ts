@@ -33,7 +33,8 @@ import { IssuanceFailure } from "./issuance-failure";
 import { NameRules } from "./name-rules";
 import { findIssuingCa, issuingRefusal, type IssuingCaOf, type PrivateCas } from "./private-ca";
 import type { Secrets } from "./secrets";
-import { newSharedChallenge } from "./shared-challenge";
+import { NO_PREVIOUS_SHARED_CHALLENGE, holdsValidPrevious, newSharedChallenge } from "./shared-challenge";
+import type { SharedChallengeExpiry } from "./shared-challenge-expiry";
 import type { Actor, UnitOfWork } from "./unit-of-work";
 import { fingerprintOf } from "./fingerprint";
 
@@ -77,13 +78,17 @@ export const EnrollmentProfile = z.object({
     .object({ id: z.string() })
     .nullable()
     .openapi({ description: "Its Shared Challenge, by id only: the challenge is shown once, when it is made, and never again. None when its validator's kind uses none." }),
+  previousSharedChallenge: z
+    .object({ id: z.string(), expiresAt: z.string() })
+    .nullable()
+    .openapi({ description: "The Shared Challenge it held before its last rotation, by id, which devices may still present until `expiresAt` unless it is retired first. None when there is none still valid." }),
   raCertificate: z.object({ subject: z.string(), serial: z.string(), notAfter: z.string() }).openapi({ description: "The RA certificate devices encrypt their requests to, which signs the platform's answers." }),
   enabled: z.boolean().openapi({ description: "Whether it takes enrollment requests; a disabled profile refuses every one, and keeps the Device Certificates it issued." }),
   retentionDays: z.number().int().openapi({ description: "How many days after it ends a Device Certificate it issued is pruned; its Audit Events are kept." }),
   createdAt: z.string(),
 });
 
-/** A profile as its create response shows it: with the Shared Challenge itself, which is shown only then. */
+/** A profile as its create and Shared Challenge rotation responses show it: with the Shared Challenge itself, which is shown only then. */
 const CreatedEnrollmentProfile = EnrollmentProfile.extend({
   sharedChallenge: z
     .object({ id: z.string(), challenge: z.string().openapi({ description: "The Shared Challenge, which every device presents as its CSR's challengePassword. Shown only here: the platform keeps only its hash." }) })
@@ -93,7 +98,7 @@ const CreatedEnrollmentProfile = EnrollmentProfile.extend({
 /** The SCEP URL of the profile with this public id, on the platform's base URL. */
 export const scepUrlOf = (baseURL: string, publicId: string) => `${baseURL.replace(/\/+$/, "")}/scep/${publicId}`;
 
-function toProfile(row: ProfileRow, of: IssuingCaOf, baseURL: string): z.infer<typeof EnrollmentProfile> {
+function toProfile(row: ProfileRow, of: IssuingCaOf, baseURL: string, now: Date): z.infer<typeof EnrollmentProfile> {
   const ra = new x509.X509Certificate(row.raCertificatePem);
   // A profile is made only on an Issuing CA that has its certificate, which it then keeps.
   const caFingerprint = fingerprintOf(new x509.X509Certificate(of.issuing.certificatePem!).rawData);
@@ -112,6 +117,7 @@ function toProfile(row: ProfileRow, of: IssuingCaOf, baseURL: string): z.infer<t
     validator: { kind: row.validatorKind, settings: row.validatorSettings, hasSecret: row.validatorSecretId !== null },
     nameRules: row.nameRules,
     sharedChallenge: row.sharedChallengeId === null ? null : { id: row.sharedChallengeId },
+    previousSharedChallenge: holdsValidPrevious(row, now) ? { id: row.previousSharedChallengeId!, expiresAt: row.previousSharedChallengeExpiresAt!.toISOString() } : null,
     raCertificate: { subject: ra.subject, serial: ra.serialNumber.toUpperCase(), notAfter: ra.notAfter.toISOString() },
     enabled: row.enabled,
     retentionDays: row.retentionDays,
@@ -139,10 +145,12 @@ export function registerEnrollmentProfiles(ctx: {
   /** The validator kinds the platform runs, and how it runs a profile's. */
   kinds: EnrollmentValidators;
   validators: EnrollmentValidatorRuns;
+  sharedChallengeExpiry: SharedChallengeExpiry;
   /** Where the platform is served, which SCEP URLs are under. */
   baseURL: string;
+  clock: () => Date;
 }) {
-  const { app, db, requireUser, authorize, unitOfWork, secrets, privateCas, kinds, validators, baseURL } = ctx;
+  const { app, db, requireUser, authorize, unitOfWork, secrets, privateCas, kinds, validators, sharedChallengeExpiry, baseURL, clock } = ctx;
 
   /** The Organization's profile with its Issuing CA and Private CA; a 404 when it has none such. */
   async function findProfile(orgId: string, id: string) {
@@ -212,7 +220,7 @@ export function registerEnrollmentProfiles(ctx: {
       const { orgId } = c.req.valid("param");
       await authorize(await requireUser(c), orgId, { enrollmentProfile: ["read"] });
       const rows = await db.select().from(enrollmentProfile).where(eq(enrollmentProfile.organizationId, orgId)).orderBy(asc(enrollmentProfile.createdAt), asc(enrollmentProfile.id));
-      const items = await Promise.all(rows.map(async (row) => toProfile(row, (await findIssuingCa(db, orgId, row.issuingCaId))!, baseURL)));
+      const items = await Promise.all(rows.map(async (row) => toProfile(row, (await findIssuingCa(db, orgId, row.issuingCaId))!, baseURL, clock())));
       return c.json({ items }, 200);
     },
   );
@@ -330,7 +338,7 @@ export function registerEnrollmentProfiles(ctx: {
           });
           return row!;
         });
-        return c.json({ ...toProfile(row, of, baseURL), sharedChallenge: shared ? { id: shared.id, challenge: shared.challenge } : null }, 201);
+        return c.json({ ...toProfile(row, of, baseURL, clock()), sharedChallenge: shared ? { id: shared.id, challenge: shared.challenge } : null }, 201);
       } catch (err) {
         if (isUniqueViolation(err)) throw taken();
         throw err;
@@ -350,7 +358,7 @@ export function registerEnrollmentProfiles(ctx: {
       const { orgId, id } = c.req.valid("param");
       await authorize(await requireUser(c), orgId, { enrollmentProfile: ["read"] });
       const { row, of } = await findProfile(orgId, id);
-      return c.json(toProfile(row, of, baseURL), 200);
+      return c.json(toProfile(row, of, baseURL, clock()), 200);
     },
   );
 
@@ -444,7 +452,7 @@ export function registerEnrollmentProfiles(ctx: {
         await change.audit({ organizationId: orgId, action: "enrollment_profile.disabled", target: { type: "enrollment_profile", id }, detail: { name: current.name } });
         return row!;
       });
-      return c.json(toProfile(row, of, baseURL), 200);
+      return c.json(toProfile(row, of, baseURL, clock()), 200);
     },
   );
 
@@ -492,7 +500,7 @@ export function registerEnrollmentProfiles(ctx: {
       }
       const changingNameRules = body.nameRules !== undefined && !isDeepStrictEqual(body.nameRules, found.row.nameRules);
       const changingKeyTypes = body.allowedKeyTypes !== undefined && !isDeepStrictEqual(body.allowedKeyTypes, found.row.allowedKeyTypes);
-      if (!to && !retaining && !changingNameRules && !changingKeyTypes) return c.json(toProfile(found.row, found.of, baseURL), 200);
+      if (!to && !retaining && !changingNameRules && !changingKeyTypes) return c.json(toProfile(found.row, found.of, baseURL, clock()), 200);
 
       const row = await unitOfWork.run(actor, async (tx, change) => {
         const current = await locked(tx, found.row);
@@ -519,7 +527,7 @@ export function registerEnrollmentProfiles(ctx: {
         });
         return row!;
       });
-      return c.json(toProfile(row, to?.of ?? found.of, baseURL), 200);
+      return c.json(toProfile(row, to?.of ?? found.of, baseURL, clock()), 200);
     },
   );
 
@@ -555,7 +563,94 @@ export function registerEnrollmentProfiles(ctx: {
         });
         return row!;
       });
-      return c.json(toProfile(row, found.of, baseURL), 200);
+      return c.json(toProfile(row, found.of, baseURL, clock()), 200);
+    },
+  );
+
+  app.openapi(
+    createRoute({
+      method: "post",
+      path: "/api/organizations/{orgId}/enrollment-profiles/{id}/shared-challenge/rotation",
+      tags: ["Enrollment Profiles"],
+      summary: "Rotate an Enrollment Profile's Shared Challenge, keeping the old one as the previous until it expires",
+      description:
+        "The platform makes a new Shared Challenge and returns it, as `sharedChallenge.challenge`, in this response only: it keeps only its hash. Devices may present either it or the previous one, its old Shared Challenge, until `previousExpiresAt` (required, in the future; 422 otherwise) or until the previous one is retired, so that devices the device management platform has not yet reached keep enrolling. " +
+        "Refused (409) while the profile still holds a previous Shared Challenge that has not expired: retire it first. A profile whose validator's kind uses no Shared Challenge has none to rotate (422). Only Organization Administrators may.",
+      request: { params: ProfileParams, body: { content: { "application/json": { schema: z.object({ previousExpiresAt: z.iso.datetime({ offset: true }).openapi({ description: "When the previous Shared Challenge stops being accepted." }) }) } } } },
+      responses: { 200: json(CreatedEnrollmentProfile, "Rotated"), ...errors(400, 401, 403, 404, 409, 422) },
+    }),
+    async (c) => {
+      const { orgId, id } = c.req.valid("param");
+      const previousExpiresAt = new Date(c.req.valid("json").previousExpiresAt);
+      const actor = await requireUser(c);
+      await authorize(actor, orgId, { enrollmentProfile: ["update"] });
+      let found = await findProfile(orgId, id);
+      if (found.row.sharedChallengeId === null) throw new HttpError(422, `an Enrollment Validator of the kind ${found.row.validatorKind} uses no Shared Challenge`);
+      if (previousExpiresAt <= clock()) throw new HttpError(422, "previousExpiresAt must be in the future");
+      const stillValid = () => new HttpError(409, "the Enrollment Profile still holds a previous Shared Challenge that has not expired: retire it first");
+      if (holdsValidPrevious(found.row, clock())) throw stillValid();
+      // One that has expired is recorded as such, with no actor, before it is replaced.
+      if (found.row.previousSharedChallengeId !== null) {
+        await sharedChallengeExpiry.expire(id);
+        found = await findProfile(orgId, id);
+      }
+      const shared = newSharedChallenge();
+      const row = await unitOfWork.run(actor, async (tx, change) => {
+        const current = await locked(tx, found.row);
+        if (holdsValidPrevious(current, change.occurredAt)) throw stillValid();
+        if (current.previousSharedChallengeId !== null || current.sharedChallengeId !== found.row.sharedChallengeId) throw new HttpError(409, "the Enrollment Profile was changed meanwhile; ask again");
+        const [row] = await tx
+          .update(enrollmentProfile)
+          .set({ sharedChallengeId: shared.id, sharedChallengeHash: shared.hash, previousSharedChallengeId: current.sharedChallengeId, previousSharedChallengeHash: current.sharedChallengeHash, previousSharedChallengeExpiresAt: previousExpiresAt })
+          .where(eq(enrollmentProfile.id, id))
+          .returning();
+        await change.audit({
+          organizationId: orgId,
+          action: "enrollment_profile.shared_challenge_rotated",
+          target: { type: "enrollment_profile", id },
+          detail: { name: current.name, sharedChallenge: { id: shared.id }, previous: { id: current.sharedChallengeId, expiresAt: previousExpiresAt.toISOString() } },
+        });
+        return row!;
+      });
+      return c.json({ ...toProfile(row, found.of, baseURL, clock()), sharedChallenge: { id: shared.id, challenge: shared.challenge } }, 200);
+    },
+  );
+
+  app.openapi(
+    createRoute({
+      method: "post",
+      path: "/api/organizations/{orgId}/enrollment-profiles/{id}/shared-challenge/previous/retirement",
+      tags: ["Enrollment Profiles"],
+      summary: "Retire an Enrollment Profile's previous Shared Challenge at once",
+      description:
+        "Devices presenting the previous Shared Challenge are refused from now on, before its expiry; Device Certificates issued under it are kept. 409 when the profile holds no previous Shared Challenge that has not expired. Only Organization Administrators may.",
+      request: { params: ProfileParams },
+      responses: { 200: json(EnrollmentProfile, "Retired"), ...errors(401, 403, 404, 409) },
+    }),
+    async (c) => {
+      const { orgId, id } = c.req.valid("param");
+      const actor = await requireUser(c);
+      await authorize(actor, orgId, { enrollmentProfile: ["update"] });
+      const found = await findProfile(orgId, id);
+      const none = () => new HttpError(409, "the Enrollment Profile holds no previous Shared Challenge that has not expired");
+      if (!holdsValidPrevious(found.row, clock())) throw none();
+      const row = await unitOfWork.run(actor, async (tx, change) => {
+        const current = await locked(tx, found.row);
+        if (!holdsValidPrevious(current, change.occurredAt)) throw none();
+        const [row] = await tx
+          .update(enrollmentProfile)
+          .set(NO_PREVIOUS_SHARED_CHALLENGE)
+          .where(eq(enrollmentProfile.id, id))
+          .returning();
+        await change.audit({
+          organizationId: orgId,
+          action: "enrollment_profile.shared_challenge_retired",
+          target: { type: "enrollment_profile", id },
+          detail: { name: current.name, sharedChallenge: { id: current.previousSharedChallengeId }, expired: false },
+        });
+        return row!;
+      });
+      return c.json(toProfile(row, found.of, baseURL, clock()), 200);
     },
   );
 }

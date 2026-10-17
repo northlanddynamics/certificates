@@ -54,6 +54,8 @@ export const AUDIT_ACTIONS = [
   "enrollment_profile.updated",
   "enrollment_profile.disabled",
   "enrollment_profile.ra_rotated",
+  "enrollment_profile.shared_challenge_rotated",
+  "enrollment_profile.shared_challenge_retired",
   "device_certificate.issued",
   "enrollment.refused",
   "enrollment_validator.tested",

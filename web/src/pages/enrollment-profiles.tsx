@@ -100,6 +100,9 @@ const columns = columnHelper.columns([
         <span className="break-all font-mono text-xs text-muted-foreground" title="The SHA-256 fingerprint of the CA certificate the SCEP URL serves">
           CA fingerprint (SHA-256) {row.original.caFingerprint}
         </span>
+        {row.original.previousSharedChallenge && (
+          <span className="text-xs text-muted-foreground">Previous Shared Challenge works until {new Date(row.original.previousSharedChallenge.expiresAt).toLocaleString()}</span>
+        )}
       </span>
     ),
   }),
@@ -182,8 +185,8 @@ function DeviceCertificatesLink({ profile }: { profile: EnrollmentProfile }) {
 /**
  * A profile's actions: test its Enrollment Validator's connection, and a menu of its Device Certificates, its SCEP URL
  * and the certificates devices must trust, and, for those who may change it, pointing it at another Issuing CA, its
- * retention period, its Name Rules (when its validator does not vouch for names), rotating its RA certificate and
- * disabling it. A test that works is a toast, with what it could not
+ * retention period, its Name Rules (when its validator does not vouch for names), rotating its RA certificate, rotating
+ * its Shared Challenge and retiring the previous one (when it has one), and disabling it. A test that works is a toast, with what it could not
  * prove; one that fails stays by the buttons, where its reason can be read.
  */
 function ProfileActions({ profile }: { profile: EnrollmentProfile }) {
@@ -193,7 +196,8 @@ function ProfileActions({ profile }: { profile: EnrollmentProfile }) {
   const mayDisable = org ? can(org, "enrollmentProfile", "disable") && profile.enabled : false;
   const kinds = useQuery({ queryKey: ["enrollment-validator-kinds", orgId], queryFn: () => api.enrollmentValidatorKinds(orgId), enabled: mayUpdate });
   const takesNameRules = kindTakesNameRules(kinds.data?.items, profile.validator.kind);
-  const [editing, setEditing] = useState<"issuing-ca" | "retention" | "name-rules" | "key-types" | "rotate" | "disable" | null>(null);
+  const [editing, setEditing] = useState<"issuing-ca" | "retention" | "name-rules" | "key-types" | "rotate-ra" | "rotate-challenge" | "retire-challenge" | "disable" | null>(null);
+  const hasSharedChallenge = profile.sharedChallenge !== null;
   const openOne = (which: NonNullable<typeof editing>) => (open: boolean) => setEditing(open ? which : null);
   const test = useMutation({
     mutationFn: () => api.testEnrollmentValidator(orgId, profile.id),
@@ -238,7 +242,13 @@ function ProfileActions({ profile }: { profile: EnrollmentProfile }) {
             {mayUpdate && <DropdownMenuItem onSelect={() => setEditing("retention")}>Retention period…</DropdownMenuItem>}
             {mayUpdate && takesNameRules && <DropdownMenuItem onSelect={() => setEditing("name-rules")}>Name Rules…</DropdownMenuItem>}
             {mayUpdate && <DropdownMenuItem onSelect={() => setEditing("key-types")}>Device keys…</DropdownMenuItem>}
-            {mayUpdate && <DropdownMenuItem onSelect={() => setEditing("rotate")}>Rotate RA certificate…</DropdownMenuItem>}
+            {mayUpdate && <DropdownMenuItem onSelect={() => setEditing("rotate-ra")}>Rotate RA certificate…</DropdownMenuItem>}
+            {mayUpdate && hasSharedChallenge && (
+              <DropdownMenuItem disabled={profile.previousSharedChallenge !== null} onSelect={() => setEditing("rotate-challenge")}>
+                Rotate Shared Challenge…
+              </DropdownMenuItem>
+            )}
+            {mayUpdate && profile.previousSharedChallenge && <DropdownMenuItem onSelect={() => setEditing("retire-challenge")}>Retire previous challenge…</DropdownMenuItem>}
             {mayDisable && (
               <DropdownMenuItem variant="destructive" onSelect={() => setEditing("disable")}>
                 Disable…
@@ -251,7 +261,9 @@ function ProfileActions({ profile }: { profile: EnrollmentProfile }) {
       {mayUpdate && <RetentionDialog profile={profile} open={editing === "retention"} onOpenChange={openOne("retention")} />}
       {mayUpdate && takesNameRules && <NameRulesDialog profile={profile} open={editing === "name-rules"} onOpenChange={openOne("name-rules")} />}
       {mayUpdate && <AllowedKeyTypesDialog profile={profile} open={editing === "key-types"} onOpenChange={openOne("key-types")} />}
-      {mayUpdate && <RotateRaDialog profile={profile} open={editing === "rotate"} onOpenChange={openOne("rotate")} />}
+      {mayUpdate && <RotateRaDialog profile={profile} open={editing === "rotate-ra"} onOpenChange={openOne("rotate-ra")} />}
+      {mayUpdate && hasSharedChallenge && <RotateSharedChallengeDialog profile={profile} open={editing === "rotate-challenge"} onOpenChange={openOne("rotate-challenge")} />}
+      {mayUpdate && profile.previousSharedChallenge && <RetirePreviousSharedChallengeDialog profile={profile} open={editing === "retire-challenge"} onOpenChange={openOne("retire-challenge")} />}
       {mayDisable && <DisableDialog profile={profile} open={editing === "disable"} onOpenChange={openOne("disable")} />}
       {test.data && !test.data.ok && <span role="alert" className="max-w-72 whitespace-normal break-words text-right text-sm text-destructive">{test.data.error}</span>}
       {test.error && <span role="alert" className="max-w-72 whitespace-normal break-words text-right text-sm text-destructive">{test.error.message}</span>}
@@ -501,6 +513,128 @@ function RotateRaDialog({ profile, open, onOpenChange }: ProfileDialogProps) {
   );
 }
 
+/** How long the previous Shared Challenge stays valid after a rotation unless the administrator says otherwise. */
+const DEFAULT_PREVIOUS_CHALLENGE_DAYS = 14;
+
+/** The local date `days` from today, as a date input holds it (yyyy-mm-dd). */
+function localDateIn(days: number) {
+  const date = new Date();
+  date.setDate(date.getDate() + days);
+  return `${date.getFullYear()}-${String(date.getMonth() + 1).padStart(2, "0")}-${String(date.getDate()).padStart(2, "0")}`;
+}
+
+/** The end of the local day `date` (yyyy-mm-dd) names, which is when a previous Shared Challenge chosen to expire "on" it stops working. */
+function endOfLocalDay(date: string) {
+  const [year, month, day] = date.split("-").map(Number);
+  return new Date(year!, month! - 1, day! + 1);
+}
+
+/**
+ * Rotates the profile's Shared Challenge: asks until when the previous one keeps working, then shows the new one once,
+ * which the platform does not keep.
+ */
+function RotateSharedChallengeDialog({ profile, open, onOpenChange }: ProfileDialogProps) {
+  const { orgId } = useParams({ from: ROUTE });
+  const [expiresOn, setExpiresOn] = useState(() => localDateIn(DEFAULT_PREVIOUS_CHALLENGE_DAYS));
+  // The new Shared Challenge, shown once, until the dialog closes.
+  const [challenge, setChallenge] = useState<string | null>(null);
+  const ok = /^\d{4}-\d{2}-\d{2}$/.test(expiresOn) && endOfLocalDay(expiresOn) > new Date();
+  const rotate = useAction(
+    () => api.rotateSharedChallenge(orgId, profile.id, endOfLocalDay(expiresOn).toISOString()),
+    ["enrollment-profiles"],
+    (rotated) => setChallenge(rotated.sharedChallenge!.challenge),
+  );
+  return (
+    <Dialog
+      open={open}
+      onOpenChange={(next) => {
+        if (next) {
+          rotate.reset();
+          setExpiresOn(localDateIn(DEFAULT_PREVIOUS_CHALLENGE_DAYS));
+        } else setChallenge(null);
+        onOpenChange(next);
+      }}
+    >
+      <DialogContent>
+        {challenge ? (
+          <div className="flex flex-col gap-4">
+            <DialogHeader>
+              <DialogTitle>The new Shared Challenge of {profile.name}</DialogTitle>
+              <DialogDescription>
+                Put it in your device management platform's SCEP profile, such as Iru's SCEP Library Item. The previous one keeps working until the end of {new Date(`${expiresOn}T00:00`).toLocaleDateString()}, or until you retire it once every device has the new one.
+              </DialogDescription>
+            </DialogHeader>
+            <ShownOnceSharedChallenge challenge={challenge} />
+            <DialogFooter>
+              <Button type="button" onClick={() => onOpenChange(false)}>
+                I have copied the Shared Challenge
+              </Button>
+            </DialogFooter>
+          </div>
+        ) : (
+          <form
+            className="flex flex-col gap-4"
+            onSubmit={(e: FormEvent) => {
+              e.preventDefault();
+              if (ok) rotate.mutate(undefined);
+            }}
+          >
+            <DialogHeader>
+              <DialogTitle>Rotate the Shared Challenge of {profile.name}</DialogTitle>
+              <DialogDescription>
+                The platform makes a new Shared Challenge, shown once. The current one becomes the previous and keeps working until the day you choose, so that devices your device management platform has not yet reached keep enrolling. Once
+                you rotate, you cannot rotate again until the previous one expires or you retire it.
+              </DialogDescription>
+            </DialogHeader>
+            <Field data-invalid={!ok}>
+              <FieldLabel htmlFor={`profile-${profile.id}-previous-expiry`}>Previous Shared Challenge works until the end of</FieldLabel>
+              <Input id={`profile-${profile.id}-previous-expiry`} type="date" min={localDateIn(0)} required autoFocus value={expiresOn} onChange={(e) => setExpiresOn(e.target.value)} aria-invalid={!ok} />
+              <FieldDescription>Long enough for every device to get the new one; you can retire the previous one sooner.</FieldDescription>
+            </Field>
+            {rotate.error && <FieldError>{rotate.error.message}</FieldError>}
+            <DialogFooter>
+              <Button type="button" variant="outline" onClick={() => onOpenChange(false)}>
+                Cancel
+              </Button>
+              <Button type="submit" disabled={!ok || rotate.isPending}>
+                Rotate
+              </Button>
+            </DialogFooter>
+          </form>
+        )}
+      </DialogContent>
+    </Dialog>
+  );
+}
+
+/** Retires the profile's previous Shared Challenge at once: devices presenting it are refused from then on. */
+function RetirePreviousSharedChallengeDialog({ profile, open, onOpenChange }: ProfileDialogProps) {
+  const { orgId } = useParams({ from: ROUTE });
+  const retire = useAction(
+    () => api.retirePreviousSharedChallenge(orgId, profile.id),
+    ["enrollment-profiles"],
+    () => {
+      onOpenChange(false);
+      toast.success(`${profile.name}: the previous Shared Challenge was retired`);
+    },
+  );
+  return (
+    <ConfirmDialog
+      open={open}
+      onOpenChange={(next) => {
+        if (next) retire.reset();
+        onOpenChange(next);
+      }}
+      title={`Retire the previous Shared Challenge of ${profile.name}?`}
+      description={`Devices presenting it are refused from now on, rather than from ${new Date(profile.previousSharedChallenge?.expiresAt ?? Date.now()).toLocaleString()}. Device Certificates issued under it are kept. Retire it once your device management platform has given every device the new one: the Device Certificates list shows which challenge each was issued under.`}
+      confirmLabel="Retire"
+      pending={retire.isPending}
+      error={retire.error}
+      onConfirm={() => retire.mutate(undefined)}
+    />
+  );
+}
+
 /** Disables the profile for good: it refuses every device, and keeps its Device Certificates. */
 function DisableDialog({ profile, open, onOpenChange }: ProfileDialogProps) {
   const { orgId } = useParams({ from: ROUTE });
@@ -570,6 +704,20 @@ function CopyableValue({ label, value }: { label: string; value: string }) {
   );
 }
 
+/** A Shared Challenge just made, with the warning that it is shown only this once. */
+function ShownOnceSharedChallenge({ challenge }: { challenge: string }) {
+  return (
+    <>
+      <Alert>
+        <TriangleAlertIcon />
+        <AlertTitle>Copy the Shared Challenge now</AlertTitle>
+        <AlertDescription>It is shown only this once: the platform keeps only what it needs to check it. Anyone who holds it can enroll, so keep it where only your device management platform reads it.</AlertDescription>
+      </Alert>
+      <CopyableValue label="Shared Challenge" value={challenge} />
+    </>
+  );
+}
+
 /**
  * Shown once, right after a profile with a Shared Challenge is created: the challenge (which the platform does not keep,
  * so it is never shown again), the SCEP URL and the CA fingerprint, and where each goes in Iru's SCEP Library Item.
@@ -581,13 +729,8 @@ function SharedChallengePanel({ profile, challenge, onDone }: { profile: Created
         <DialogTitle>{profile.name} is ready for its devices</DialogTitle>
         <DialogDescription>Fill in your device management platform's SCEP profile with these values, such as Iru's SCEP Library Item.</DialogDescription>
       </DialogHeader>
-      <Alert>
-        <TriangleAlertIcon />
-        <AlertTitle>Copy the Shared Challenge now</AlertTitle>
-        <AlertDescription>It is shown only this once: the platform keeps only what it needs to check it. Anyone who holds it can enroll, so keep it where only your device management platform reads it.</AlertDescription>
-      </Alert>
       <CopyableValue label="SCEP URL" value={profile.scepUrl} />
-      <CopyableValue label="Shared Challenge" value={challenge} />
+      <ShownOnceSharedChallenge challenge={challenge} />
       <CopyableValue label="CA fingerprint (SHA-256)" value={profile.caFingerprint} />
       <div className="flex flex-col gap-2 text-sm">
         <span className="font-medium">In Iru (formerly Kandji), add a SCEP Library Item:</span>
