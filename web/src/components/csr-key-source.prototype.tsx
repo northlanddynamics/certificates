@@ -1,12 +1,25 @@
 // PROTOTYPE (branch prototype/csr-ux): throwaway. The pieces the CSR prototypes share: where the CSR comes from
-// (generated here, pasted, or made with openssl), a live check of a pasted CSR against the names and key algorithm,
-// and the "save your key" checkpoint.
-import { CheckIcon, CircleAlertIcon, CopyIcon, DownloadIcon, EyeIcon, EyeOffIcon, KeyRoundIcon, LoaderIcon, ClipboardPasteIcon, TerminalIcon, XIcon } from "lucide-react";
-import { useEffect, useState } from "react";
+// (generated here, pasted, made with openssl, or for a Proposal, after approval), a live check of a pasted CSR against
+// the names and key algorithm, and the "save your key" checkpoint.
+import {
+  CheckIcon,
+  CircleAlertIcon,
+  ClipboardPasteIcon,
+  ClockIcon,
+  CopyIcon,
+  DownloadIcon,
+  EyeIcon,
+  EyeOffIcon,
+  KeyRoundIcon,
+  LoaderIcon,
+  TerminalIcon,
+  XIcon,
+} from "lucide-react";
+import { useEffect, useState, type ReactNode } from "react";
 import { CsrSignatureWarning } from "@/components/csr-signature-warning";
 import { Button } from "@/components/ui/button";
 import { Checkbox } from "@/components/ui/checkbox";
-import { Field, FieldContent, FieldDescription, FieldLabel, FieldTitle } from "@/components/ui/field";
+import { Field, FieldContent, FieldDescription, FieldLabel, FieldLegend, FieldSet, FieldTitle } from "@/components/ui/field";
 import { RadioGroup, RadioGroupItem } from "@/components/ui/radio-group";
 import { Textarea } from "@/components/ui/textarea";
 import { KEY_ALGORITHMS, KEY_ALGORITHM_LABELS, MAX_COMMON_NAME_LENGTH, generateCsr, type KeyAlgorithm } from "@/lib/csr-generator";
@@ -14,7 +27,8 @@ import { normalizedNames } from "@/lib/csr-names";
 import { fileBase, inspectCsr, matchCsr, opensslCommand, type CsrFacts } from "@/lib/csr-inspect.prototype";
 import { cn } from "@/lib/utils";
 
-export type KeyMode = "generate" | "paste" | "command";
+/** `later`: a Proposal goes to an Approver without a CSR, and its Owner gives one once the names are approved (needs a server change). */
+export type KeyMode = "generate" | "paste" | "command" | "later";
 
 export interface GeneratedKey {
   keyPem: string;
@@ -41,12 +55,23 @@ export const madeFor = (names: string[], keyAlgorithm: KeyAlgorithm) => `${names
 
 /** The CSR this state would submit, if any, for these names and this key algorithm. */
 export function csrOf(state: KeyState, names: string[], keyAlgorithm: KeyAlgorithm): string {
+  if (state.mode === "later") return "";
   if (state.mode !== "generate") return state.pasted;
   return state.generated && state.generated.madeFor === madeFor(names, keyAlgorithm) ? state.generated.csrPem : "";
 }
 
 /** An unsaved generated key: closing would lose it. */
 export const keyAtRisk = (state: KeyState) => state.mode === "generate" && state.generated !== null && !state.keySaved;
+
+/** Asks before the page is left while a generated key exists nowhere else. */
+export function useUnloadGuard(atRisk: boolean) {
+  useEffect(() => {
+    if (!atRisk) return;
+    const warn = (e: BeforeUnloadEvent) => e.preventDefault();
+    window.addEventListener("beforeunload", warn);
+    return () => window.removeEventListener("beforeunload", warn);
+  }, [atRisk]);
+}
 
 export async function makeKey(names: string[], keyAlgorithm: KeyAlgorithm): Promise<GeneratedKey> {
   const distinct = normalizedNames(names);
@@ -66,9 +91,12 @@ export function useCsrFacts(pem: string) {
   return facts;
 }
 
+const pastedOf = (state: KeyState) => (state.mode === "paste" || state.mode === "command" ? state.pasted : "");
+
 /** Whether the state holds a CSR the server will take for these names and key algorithm (and, for a generated one, a saved key). */
 export function useKeyReady(state: KeyState, names: string[], keyAlgorithm: KeyAlgorithm, { needConfirmation = false } = {}) {
-  const facts = useCsrFacts(state.mode === "generate" ? "" : state.pasted);
+  const facts = useCsrFacts(pastedOf(state));
+  if (state.mode === "later") return true;
   if (state.mode === "generate") return csrOf(state, names, keyAlgorithm) !== "" && state.keySaved && (!needConfirmation || state.confirmed);
   return typeof facts === "object" && facts !== null && matchCsr(facts, names, keyAlgorithm).ok;
 }
@@ -81,30 +109,45 @@ export const KEY_ALGORITHM_HINTS: Record<KeyAlgorithm, string> = {
   "rsa-4096": "The largest RSA key; slower to make and to use.",
 };
 
-/** The five key algorithms as radio cards, each with when to choose it. */
+/** The five key algorithms as radio cards, each with when to choose it; `compact` is a row of chips and the chosen one's hint. */
 export function KeyAlgorithmCards({ value, onChange, idPrefix, compact = false }: { value: KeyAlgorithm; onChange: (v: KeyAlgorithm) => void; idPrefix: string; compact?: boolean }) {
   return (
     <>
-    <RadioGroup value={value} onValueChange={(v) => onChange(v as KeyAlgorithm)} className={cn(compact ? "flex flex-wrap gap-2" : "grid gap-2 sm:grid-cols-2")}>
-      {KEY_ALGORITHMS.map((alg) => (
-        <FieldLabel key={alg} htmlFor={`${idPrefix}-${alg}`} className={compact ? "w-auto! flex-none whitespace-nowrap" : undefined}>
-          <Field orientation="horizontal" className={compact ? "gap-3 py-2!" : undefined}>
-            <FieldContent>
-              <FieldTitle>{KEY_ALGORITHM_LABELS[alg]}</FieldTitle>
-              {!compact && <FieldDescription>{KEY_ALGORITHM_HINTS[alg]}</FieldDescription>}
-            </FieldContent>
-            <RadioGroupItem value={alg} id={`${idPrefix}-${alg}`} />
-          </Field>
-        </FieldLabel>
-      ))}
-    </RadioGroup>
-    {compact && <FieldDescription>{KEY_ALGORITHM_HINTS[value]}</FieldDescription>}
+      <RadioGroup value={value} onValueChange={(v) => onChange(v as KeyAlgorithm)} className={cn(compact ? "flex flex-wrap gap-2" : "grid gap-2 sm:grid-cols-2")}>
+        {KEY_ALGORITHMS.map((alg) => (
+          <FieldLabel key={alg} htmlFor={`${idPrefix}-${alg}`} className={compact ? "w-auto! flex-none whitespace-nowrap" : undefined}>
+            <Field orientation="horizontal" className={compact ? "gap-3 py-2!" : undefined}>
+              <FieldContent>
+                <FieldTitle>{KEY_ALGORITHM_LABELS[alg]}</FieldTitle>
+                {!compact && <FieldDescription>{KEY_ALGORITHM_HINTS[alg]}</FieldDescription>}
+              </FieldContent>
+              <RadioGroupItem value={alg} id={`${idPrefix}-${alg}`} />
+            </Field>
+          </FieldLabel>
+        ))}
+      </RadioGroup>
+      {compact && <FieldDescription>{KEY_ALGORITHM_HINTS[value]}</FieldDescription>}
     </>
   );
 }
 
-/** What the pasted CSR is, and whether it matches: shown as soon as something is pasted. */
-export function CsrCheck({ pem, names, keyAlgorithm }: { pem: string; names: string[]; keyAlgorithm: KeyAlgorithm | null }) {
+/**
+ * What the pasted CSR is, and whether it matches: shown as soon as something is pasted. Where the form lets the CSR
+ * decide, its key type has already been taken (`keyTypeFromCsr`) and its names can be (`onUseNames`).
+ */
+export function CsrCheck({
+  pem,
+  names,
+  keyAlgorithm,
+  keyTypeFromCsr = false,
+  onUseNames,
+}: {
+  pem: string;
+  names: string[];
+  keyAlgorithm: KeyAlgorithm | null;
+  keyTypeFromCsr?: boolean;
+  onUseNames?: (names: string[]) => void;
+}) {
   const facts = useCsrFacts(pem);
   if (facts === null) return null;
   if (typeof facts === "string")
@@ -115,14 +158,17 @@ export function CsrCheck({ pem, names, keyAlgorithm }: { pem: string; names: str
       </p>
     );
   const match = matchCsr(facts, names, keyAlgorithm);
+  const namesOk = match.missing.length === 0 && match.extra.length === 0;
   return (
     <div className={cn("flex flex-col gap-1 rounded-md border p-3 text-sm", match.ok ? "border-emerald-600/40 bg-emerald-600/5" : "border-destructive/40 bg-destructive/5")}>
       <Line ok={match.algorithmOk}>
-        {facts.keyLabel} key{!match.algorithmOk && keyAlgorithm && `, but this certificate is ${KEY_ALGORITHM_LABELS[keyAlgorithm]}`}
+        {facts.keyLabel} key
+        {match.algorithmOk && keyTypeFromCsr && <span className="text-muted-foreground"> — the key type is taken from the CSR</span>}
+        {!match.algorithmOk && keyAlgorithm && `, but this certificate is ${KEY_ALGORITHM_LABELS[keyAlgorithm]}`}
       </Line>
-      <Line ok={match.missing.length === 0 && match.extra.length === 0}>
+      <Line ok={namesOk}>
         {facts.names.length} {facts.names.length === 1 ? "name" : "names"}
-        {match.missing.length === 0 && match.extra.length === 0 ? " — exactly the ones asked for" : ""}
+        {namesOk ? " — exactly the ones asked for" : ""}
       </Line>
       {match.missing.map((n) => (
         <span key={n} className="pl-6 font-mono text-xs text-destructive">
@@ -134,17 +180,24 @@ export function CsrCheck({ pem, names, keyAlgorithm }: { pem: string; names: str
           + not asked for {n}
         </span>
       ))}
+      {!namesOk && onUseNames && (
+        <span className="pl-6">
+          <Button type="button" variant="outline" size="sm" className="mt-1" onClick={() => onUseNames(facts.names)}>
+            Use the CSR's {facts.names.length === 1 ? "name" : `${facts.names.length} names`} instead
+          </Button>
+        </span>
+      )}
       <span className="pl-6 font-mono text-xs text-muted-foreground">CSR {facts.fingerprint}</span>
       <CsrSignatureWarning pem={pem} />
     </div>
   );
 }
 
-function Line({ ok, children }: { ok: boolean; children: React.ReactNode }) {
+function Line({ ok, children }: { ok: boolean; children: ReactNode }) {
   return (
     <span className="flex items-center gap-2">
-      {ok ? <CheckIcon className="size-4 text-emerald-600" /> : <XIcon className="size-4 text-destructive" />}
-      {children}
+      {ok ? <CheckIcon className="size-4 shrink-0 text-emerald-600" /> : <XIcon className="size-4 shrink-0 text-destructive" />}
+      <span>{children}</span>
     </span>
   );
 }
@@ -159,6 +212,7 @@ function download(filename: string, text: string) {
 export function SaveKey({ state, onChange, confirm = true, showCsr = true }: { state: KeyState; onChange: (s: KeyState) => void; confirm?: boolean; showCsr?: boolean }) {
   const [showKey, setShowKey] = useState(false);
   const [csrOpen, setCsrOpen] = useState(false);
+  useUnloadGuard(keyAtRisk(state));
   const g = state.generated;
   if (!g) return null;
   const saved = () => onChange({ ...state, keySaved: true });
@@ -203,7 +257,7 @@ export function SaveKey({ state, onChange, confirm = true, showCsr = true }: { s
           <Field orientation="horizontal">
             <Checkbox id="prototype-key-confirm" disabled={!state.keySaved} checked={state.confirmed} onCheckedChange={(c) => onChange({ ...state, confirmed: c === true })} />
             <FieldLabel htmlFor="prototype-key-confirm" className="font-normal">
-              I have put the key where the server that will use this certificate can read it, or somewhere safe.
+              I've stored the key somewhere safe.
             </FieldLabel>
           </Field>
         )}
@@ -225,33 +279,56 @@ export function SaveKey({ state, onChange, confirm = true, showCsr = true }: { s
 
 const MODES: { mode: KeyMode; title: string; description: string; icon: typeof KeyRoundIcon; recommended?: boolean }[] = [
   { mode: "generate", title: "Generate here", description: "In this browser. The key never reaches the platform.", icon: KeyRoundIcon, recommended: true },
-  { mode: "paste", title: "Paste a CSR", description: "Made with your own tools.", icon: ClipboardPasteIcon },
-  { mode: "command", title: "Run a command", description: "openssl on your server; the key never touches a browser.", icon: TerminalIcon },
+  { mode: "command", title: "Run a command", description: "openssl where the key is to live; it never touches a browser.", icon: TerminalIcon },
+  { mode: "paste", title: "Paste a CSR", description: "Made with your own tools. Its key type and names are read from it.", icon: ClipboardPasteIcon },
+  { mode: "later", title: "After approval", description: "No key until an Approver says yes; you are asked for the CSR then.", icon: ClockIcon },
 ];
 
 /**
- * Where the CSR comes from, for names and a key algorithm the form fixes. `saveInline` puts the save-your-key panel
- * under the Generate button; otherwise the form shows it as a step of its own.
+ * Where the CSR comes from. The form fixes the names; it fixes the key algorithm too unless it passes
+ * `onKeyAlgorithmChange`, in which case the key type is chosen here (and, for a pasted CSR, taken from it).
+ * `onNamesChange` lets a pasted CSR's names replace the form's. `saveInline` puts the save-your-key panel under the
+ * Generate button; otherwise the form shows it as a step of its own.
  */
 export function KeySource({
   names,
   keyAlgorithm,
+  onKeyAlgorithmChange,
+  onNamesChange,
   state,
   onChange,
   saveInline = true,
+  allowLater = false,
+  modes,
   idPrefix,
 }: {
   names: string[];
   keyAlgorithm: KeyAlgorithm;
+  onKeyAlgorithmChange?: (alg: KeyAlgorithm) => void;
+  onNamesChange?: (names: string[]) => void;
   state: KeyState;
   onChange: (s: KeyState) => void;
   saveInline?: boolean;
+  /** For a Proposal: offer giving the CSR once the names are approved. */
+  allowLater?: boolean;
+  /** Only these ways, in this order; all of them otherwise. */
+  modes?: KeyMode[];
   idPrefix: string;
 }) {
   const [working, setWorking] = useState(false);
   const [error, setError] = useState<string | null>(null);
+  useUnloadGuard(keyAtRisk(state));
+  const offered = MODES.filter((m) => (modes ?? MODES.map((x) => x.mode)).includes(m.mode) && (m.mode !== "later" || allowLater));
   const stale = state.generated !== null && state.generated.madeFor !== madeFor(names, keyAlgorithm);
   const command = opensslCommand(normalizedNames(names), keyAlgorithm);
+  const pasted = pastedOf(state);
+  const facts = useCsrFacts(pasted);
+
+  // A pasted CSR says what kind of key it is for: where the form lets it, that settles the key type.
+  const fromCsr = typeof facts === "object" && facts !== null ? facts.keyAlgorithm : null;
+  useEffect(() => {
+    if (onKeyAlgorithmChange && fromCsr && fromCsr !== keyAlgorithm) onKeyAlgorithmChange(fromCsr);
+  }, [fromCsr, keyAlgorithm, onKeyAlgorithmChange]);
 
   async function generate() {
     setWorking(true);
@@ -265,10 +342,16 @@ export function KeySource({
     }
   }
 
+  const chooseKeyType = onKeyAlgorithmChange && (state.mode === "generate" || state.mode === "command");
+
   return (
-    <div className="flex flex-col gap-4">
-      <RadioGroup value={state.mode} onValueChange={(m) => onChange({ ...state, mode: m as KeyMode })} className="grid gap-2 sm:grid-cols-3">
-        {MODES.map(({ mode, title, description, icon: Icon, recommended }) => (
+    <div className="flex flex-col gap-5">
+      <RadioGroup
+        value={state.mode}
+        onValueChange={(m) => onChange({ ...state, mode: m as KeyMode })}
+        className={cn("grid gap-2", offered.length === 4 ? "sm:grid-cols-2" : offered.length === 3 ? "sm:grid-cols-3" : "sm:grid-cols-2")}
+      >
+        {offered.map(({ mode, title, description, icon: Icon, recommended }) => (
           <FieldLabel key={mode} htmlFor={`${idPrefix}-mode-${mode}`}>
             <Field orientation="horizontal">
               <FieldContent>
@@ -287,31 +370,36 @@ export function KeySource({
         ))}
       </RadioGroup>
 
+      {chooseKeyType && (
+        <FieldSet>
+          <FieldLegend variant="label">Key type</FieldLegend>
+          <KeyAlgorithmCards value={keyAlgorithm} onChange={onKeyAlgorithmChange} idPrefix={`${idPrefix}-alg`} compact />
+        </FieldSet>
+      )}
+
       {state.mode === "generate" && (
         <div className="flex flex-col gap-3">
           {stale && (
             <p className="flex items-start gap-2 rounded-md border border-amber-500/60 bg-amber-500/5 p-3 text-sm">
               <CircleAlertIcon className="mt-0.5 size-4 shrink-0 text-amber-600" />
-              The names or key algorithm changed since this key was made, so its CSR no longer fits. Generate a new one.
+              The names or key type changed since this key was made, so its CSR no longer fits. Generate a new one.
             </p>
           )}
           {(!state.generated || stale) && (
-            <div className="flex flex-col gap-2">
-              <p className="text-sm text-muted-foreground">
-                A {KEY_ALGORITHM_LABELS[keyAlgorithm]} key and a CSR for {names.length === 1 ? names[0] : `these ${names.length} names`}.
-              </p>
-              <div>
-                <Button type="button" disabled={working || names.length === 0} onClick={generate}>
-                  {working ? <LoaderIcon className="animate-spin" /> : <KeyRoundIcon />}
-                  {working ? "Generating…" : "Generate key and CSR"}
-                </Button>
-              </div>
+            <div className="flex flex-wrap items-center gap-3">
+              <Button type="button" disabled={working || names.length === 0} onClick={generate}>
+                {working ? <LoaderIcon className="animate-spin" /> : <KeyRoundIcon />}
+                {working ? "Generating…" : "Generate key and CSR"}
+              </Button>
+              <span className="text-sm text-muted-foreground">
+                {KEY_ALGORITHM_LABELS[keyAlgorithm]}, for {names.length === 1 ? names[0] : `these ${names.length} names`}.
+              </span>
             </div>
           )}
           {state.generated && !stale && saveInline && <SaveKey state={state} onChange={onChange} confirm={false} />}
           {state.generated && !stale && !saveInline && (
             <p className="flex items-center gap-2 text-sm text-emerald-700 dark:text-emerald-400">
-              <CheckIcon className="size-4" /> Key and CSR made. You will save the key in the next step.
+              <CheckIcon className="size-4" /> {KEY_ALGORITHM_LABELS[keyAlgorithm]} key and CSR made. You save the key next.
             </p>
           )}
           {error && <p className="text-sm text-destructive">{error}</p>}
@@ -330,7 +418,7 @@ export function KeySource({
         </div>
       )}
 
-      {state.mode !== "generate" && (
+      {(state.mode === "paste" || state.mode === "command") && (
         <Field>
           <FieldLabel htmlFor={`${idPrefix}-pasted`}>{state.mode === "command" ? "Paste the .csr.pem it wrote" : "CSR (PEM)"}</FieldLabel>
           <Textarea
@@ -341,8 +429,31 @@ export function KeySource({
             value={state.pasted}
             onChange={(e) => onChange({ ...state, pasted: e.target.value })}
           />
-          <CsrCheck pem={state.pasted} names={names} keyAlgorithm={keyAlgorithm} />
+          <CsrCheck
+            pem={state.pasted}
+            names={names}
+            keyAlgorithm={keyAlgorithm}
+            keyTypeFromCsr={!!onKeyAlgorithmChange}
+            onUseNames={onNamesChange}
+          />
         </Field>
+      )}
+
+      {state.mode === "later" && (
+        <div className="flex flex-col gap-2 rounded-md border border-dashed p-4 text-sm">
+          <span className="font-medium">Nothing to make now</span>
+          <span className="text-muted-foreground">
+            The proposal goes to an Approver with just its names. If they approve, the Owners are asked for a CSR, and Issuance starts once one is given. If
+            they reject it, no key was made for nothing.
+          </span>
+          <span className="text-xs text-muted-foreground">PROTOTYPE: needs the platform to accept a Proposal without a CSR.</span>
+          {onKeyAlgorithmChange && (
+            <FieldSet className="pt-2">
+              <FieldLegend variant="label">Key type to ask for</FieldLegend>
+              <KeyAlgorithmCards value={keyAlgorithm} onChange={onKeyAlgorithmChange} idPrefix={`${idPrefix}-later-alg`} compact />
+            </FieldSet>
+          )}
+        </div>
       )}
     </div>
   );

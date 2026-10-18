@@ -6,6 +6,7 @@
 import { ArrowRightIcon, ClipboardCheckIcon, GlobeIcon, KeyRoundIcon, PencilIcon, RefreshCwIcon, ShieldCheckIcon } from "lucide-react";
 import { useState, type ReactNode } from "react";
 import { ConfirmDialog } from "@/components/confirm-dialog";
+import { Checkbox } from "@/components/ui/checkbox";
 import { KeySource, SaveKey, csrOf, emptyKey, keyAtRisk, useKeyReady, type KeyState } from "@/components/csr-key-source.prototype";
 import { isPrototypeSwitcher } from "@/components/prototype-switcher";
 import { Button } from "@/components/ui/button";
@@ -171,6 +172,7 @@ function SheetBody({ org, m, action, onAtRisk, onDone }: { org: Org; m: ManagedC
   const [names, setNames] = useState(m.names.join("\n"));
   const [key, setKeyState] = useState<KeyState>(emptyKey());
   const [sent, setSent] = useState(false);
+  const [renewNow, setRenewNow] = useState(true);
   const setKey = (k: KeyState) => {
     setKeyState(k);
     onAtRisk(keyAtRisk(k));
@@ -187,7 +189,7 @@ function SheetBody({ org, m, action, onAtRisk, onDone }: { org: Org; m: ManagedC
     return (
       <WouldSend
         what={action === "rotate" ? "upload the CSR for the next Renewal" : direct(org) ? "change the names and start an Issuance" : "propose the name change"}
-        body={action === "rotate" ? { csr: trimCsr(csrOf(key, parsed, keyAlgorithm)) } : { names: normal, csr: trimCsr(csrOf(key, parsed, keyAlgorithm)) }}
+        body={action === "rotate" ? { csr: trimCsr(csrOf(key, parsed, keyAlgorithm)), thenRenewNow: renewNow } : { names: normal, csr: trimCsr(csrOf(key, parsed, keyAlgorithm)) }}
         onDone={() => {
           onAtRisk(false);
           onDone();
@@ -200,7 +202,9 @@ function SheetBody({ org, m, action, onAtRisk, onDone }: { org: Org; m: ManagedC
         <SheetTitle>{title}</SheetTitle>
         <SheetDescription>
           {action === "rotate"
-            ? "A new key and CSR for the same names. The next Renewal uses it; the current Certificate keeps working until then."
+            ? renewNow && m.currentCertificate
+              ? "A new key and CSR for the same names, and a Renewal with it straight away. The current Certificate keeps working until it expires."
+              : "A new key and CSR for the same names. The next Renewal uses it; the current Certificate keeps working until then."
             : direct(org)
               ? "An Issuance of the new names starts at once."
               : "An Approver must approve it. Until then Renewal continues with the current names and key."}
@@ -224,10 +228,11 @@ function SheetBody({ org, m, action, onAtRisk, onDone }: { org: Org; m: ManagedC
           <FieldDescription>{KEY_ALGORITHM_LABELS[keyAlgorithm]}, the same as now.</FieldDescription>
           <KeySource names={parsed} keyAlgorithm={keyAlgorithm} state={key} onChange={setKey} idPrefix="proto-sheet" />
         </FieldSet>
+        {action === "rotate" && m.currentCertificate && <RenewNowChoice checked={renewNow} onChange={setRenewNow} id="proto-sheet-renew" />}
       </div>
       <SheetFooter>
         <Button disabled={!changed || !ready} onClick={() => setSent(true)}>
-          {action === "rotate" ? "Use this CSR from the next Renewal" : direct(org) ? "Change names" : "Propose"}
+          {action === "rotate" ? (renewNow && m.currentCertificate ? "Use this CSR and renew now" : "Use this CSR from the next Renewal") : direct(org) ? "Change names" : "Propose"}
         </Button>
       </SheetFooter>
     </>
@@ -292,6 +297,7 @@ function GuidedChange({ org, m, action, onAtRisk, onDone }: { org: Org; m: Manag
   const [names, setNames] = useState(m.names.join("\n"));
   const [key, setKeyState] = useState<KeyState>(emptyKey());
   const [sent, setSent] = useState(false);
+  const [renewNow, setRenewNow] = useState(true);
   const setKey = (k: KeyState) => {
     setKeyState(k);
     onAtRisk(keyAtRisk(k));
@@ -308,7 +314,7 @@ function GuidedChange({ org, m, action, onAtRisk, onDone }: { org: Org; m: Manag
     return (
       <WouldSend
         what={action === "rotate" ? "upload the CSR for the next Renewal" : "change or propose the names"}
-        body={{ ...(action === "names" && { names: normal }), csr: trimCsr(csrOf(key, parsed, keyAlgorithm)) }}
+        body={{ ...(action === "names" && { names: normal }), csr: trimCsr(csrOf(key, parsed, keyAlgorithm)), ...(action === "rotate" && { thenRenewNow: renewNow }) }}
         onDone={() => {
           onAtRisk(false);
           onDone();
@@ -377,22 +383,45 @@ function GuidedChange({ org, m, action, onAtRisk, onDone }: { org: Org; m: Manag
       title: "What happens next",
       icon: ClipboardCheckIcon,
       complete: true,
-      body: <WhatNext org={org} m={m} action={action} />,
+      body: (
+        <div className="flex flex-col gap-6">
+          <WhatNext org={org} m={m} action={action} renewNow={renewNow && !!m.currentCertificate} />
+          {action === "rotate" && m.currentCertificate && <RenewNowChoice checked={renewNow} onChange={setRenewNow} id="proto-guided-renew" />}
+        </div>
+      ),
     },
   ];
   return (
     <Wizard
       steps={steps}
       title={action === "rotate" ? "Rotate the key" : direct(org) ? "Change names" : "Propose a name change"}
-      finishLabel={action === "rotate" ? "Use from the next Renewal" : direct(org) ? "Change names" : "Propose"}
+      finishLabel={action === "rotate" ? (renewNow && m.currentCertificate ? "Use it and renew now" : "Use from the next Renewal") : direct(org) ? "Change names" : "Propose"}
       onFinish={() => setSent(true)}
     />
   );
 }
 
-function WhatNext({ org, m, action }: { org: Org; m: ManagedCertificate; action: Action }) {
+function RenewNowChoice({ checked, onChange, id }: { checked: boolean; onChange: (on: boolean) => void; id: string }) {
+  return (
+    <Field orientation="horizontal" className="rounded-md border p-3">
+      <Checkbox id={id} checked={checked} onCheckedChange={(on) => onChange(on === true)} />
+      <FieldLabel htmlFor={id} className="flex-col items-start gap-0.5 font-normal">
+        <span className="font-medium">Renew now with the new key</span>
+        <span className="text-muted-foreground">Otherwise the old key stays in use until the next Renewal is due.</span>
+      </FieldLabel>
+    </Field>
+  );
+}
+
+function WhatNext({ org, m, action, renewNow }: { org: Org; m: ManagedCertificate; action: Action; renewNow: boolean }) {
   const lines =
-    action === "rotate"
+    action === "rotate" && renewNow
+      ? [
+          "The platform keeps the new CSR, and a Renewal starts at once.",
+          "Install the new key with the Certificate it produces; the old Certificate keeps working until it expires.",
+          "Later Renewals reuse the new key.",
+        ]
+      : action === "rotate"
       ? [
           "The platform keeps the new CSR; the current Certificate is untouched.",
           m.renewal.dueAt ? `The next Renewal, from ${new Date(m.renewal.dueAt).toLocaleDateString()}, is issued for the new key.` : "The next Renewal is issued for the new key.",

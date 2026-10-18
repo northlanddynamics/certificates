@@ -139,14 +139,16 @@ function Summary({ c, keyLine }: { c: Common; keyLine: ReactNode }) {
 }
 
 const keySummary = (c: Common) =>
-  c.key.mode === "generate"
+  c.key.mode === "later"
+    ? `${KEY_ALGORITHM_LABELS[c.keyAlgorithm]}; the Owners give the CSR once the names are approved`
+    : c.key.mode === "generate"
     ? `${KEY_ALGORITHM_LABELS[c.keyAlgorithm]}, made in this browser${c.key.generated ? `; saved as ${c.key.generated.fileBase}.key.pem` : ""}`
     : `${KEY_ALGORITHM_LABELS[c.keyAlgorithm]}, your own CSR (${c.key.mode === "command" ? "openssl" : "pasted"})`;
 
 /** What would have been sent: the prototype's end. */
 function WouldSend({ c, direct, onDone }: { c: Common; direct: boolean; onDone: () => void }) {
   const csr = csrOf(c.key, c.parsedNames, c.keyAlgorithm);
-  const body = { names: c.parsedNames, keyAlgorithm: c.keyAlgorithm, csr: csr ? `${csr.slice(0, 64)}…` : "(none)", ...c.choice.request, owners: c.owners };
+  const body = { names: c.parsedNames, keyAlgorithm: c.keyAlgorithm, csr: c.key.mode === "later" ? "(after approval)" : csr ? `${csr.slice(0, 64)}…` : "(none)", ...c.choice.request, owners: c.owners };
   return (
     <div className="flex flex-1 flex-col gap-4 overflow-y-auto p-6">
       <p className="flex items-center gap-2 font-medium">
@@ -243,20 +245,24 @@ function VariantB({ org, direct, onAtRisk, onDone }: PrototypeFormProps) {
     { id: "names", title: "Domain names", icon: GlobeIcon, complete: c.problems.length === 0, body: <NamesBody c={c} /> },
     {
       id: "key",
-      title: "Key",
+      title: "Key and CSR",
       icon: KeyRoundIcon,
       complete: c.key.mode === "generate" ? generatedFits : keyReady,
       body: (
-        <div className="flex flex-col gap-6">
-          <FieldSet>
-            <FieldLegend variant="label">Key type</FieldLegend>
-            <KeyAlgorithmCards value={c.keyAlgorithm} onChange={c.setKeyAlgorithm} idPrefix="proto-b-alg" compact />
-          </FieldSet>
-          <FieldSet>
-            <FieldLegend variant="label">How will you provide the CSR?</FieldLegend>
-            <KeySource names={c.parsedNames} keyAlgorithm={c.keyAlgorithm} state={c.key} onChange={c.setKey} saveInline={false} idPrefix="proto-b" />
-          </FieldSet>
-        </div>
+        <FieldSet>
+          <FieldLegend>How will you provide the CSR?</FieldLegend>
+          <KeySource
+            names={c.parsedNames}
+            keyAlgorithm={c.keyAlgorithm}
+            onKeyAlgorithmChange={c.setKeyAlgorithm}
+            onNamesChange={(names) => c.setNames(names.join("\n"))}
+            allowLater={!direct}
+            state={c.key}
+            onChange={c.setKey}
+            saveInline={false}
+            idPrefix="proto-b"
+          />
+        </FieldSet>
       ),
     },
     ...(c.key.mode === "generate"
@@ -338,20 +344,32 @@ function VariantC({ org, direct, onAtRisk, onDone }: PrototypeFormProps) {
       complete: !own || ownReady,
       body: (
         <div className="flex flex-col gap-6">
-          <FieldSet>
-            <FieldLegend>What kind of key?</FieldLegend>
-            <FieldDescription>
-              {own ? "Your CSR must be for this kind of key." : "The key is made in this browser when you finish, so changing anything before then costs nothing."}
-            </FieldDescription>
-            <KeyAlgorithmCards value={c.keyAlgorithm} onChange={c.setKeyAlgorithm} idPrefix="proto-c-alg" />
-          </FieldSet>
+          {!own && (
+            <FieldSet>
+              <FieldLegend>What kind of key?</FieldLegend>
+              <FieldDescription>The key is made in this browser when you finish, so changing anything before then costs nothing.</FieldDescription>
+              <KeyAlgorithmCards value={c.keyAlgorithm} onChange={c.setKeyAlgorithm} idPrefix="proto-c-alg" />
+            </FieldSet>
+          )}
           <Field orientation="horizontal">
-            <Checkbox id="proto-c-own" checked={own} onCheckedChange={(on) => c.setKey(emptyKey(on === true ? "paste" : "generate"))} />
+            <Checkbox id="proto-c-own" checked={own} onCheckedChange={(on) => c.setKey(emptyKey(on === true ? "command" : "generate"))} />
             <FieldLabel htmlFor="proto-c-own" className="font-normal">
-              I'll bring my own CSR (pasted, or made with openssl)
+              {direct ? "I'll make the key myself (openssl, or a CSR I already have)" : "I'll make the key myself, or give the CSR after approval"}
             </FieldLabel>
           </Field>
-          {own && <KeySource names={c.parsedNames} keyAlgorithm={c.keyAlgorithm} state={c.key} onChange={c.setKey} idPrefix="proto-c" />}
+          {own && (
+            <KeySource
+              names={c.parsedNames}
+              keyAlgorithm={c.keyAlgorithm}
+              onKeyAlgorithmChange={c.setKeyAlgorithm}
+              onNamesChange={(names) => c.setNames(names.join("\n"))}
+              modes={["command", "paste", "later"]}
+              allowLater={!direct}
+              state={c.key}
+              onChange={c.setKey}
+              idPrefix="proto-c"
+            />
+          )}
         </div>
       ),
     },
@@ -425,9 +443,17 @@ function VariantD({ org, direct, onAtRisk, onDone }: PrototypeFormProps) {
             <FieldSet>
               <FieldLegend>Key and CSR</FieldLegend>
               {!namesOk && <FieldDescription>Enter the names first: the CSR is made for exactly them.</FieldDescription>}
-              <KeyAlgorithmCards value={c.keyAlgorithm} onChange={c.setKeyAlgorithm} idPrefix="proto-d-alg" compact />
             </FieldSet>
-            <KeySource names={c.parsedNames} keyAlgorithm={c.keyAlgorithm} state={c.key} onChange={c.setKey} idPrefix="proto-d" />
+            <KeySource
+              names={c.parsedNames}
+              keyAlgorithm={c.keyAlgorithm}
+              onKeyAlgorithmChange={c.setKeyAlgorithm}
+              onNamesChange={(names) => c.setNames(names.join("\n"))}
+              allowLater={!direct}
+              state={c.key}
+              onChange={c.setKey}
+              idPrefix="proto-d"
+            />
           </section>
           <section id="proto-d-owners">
             <OwnersBody c={c} org={org} />
@@ -436,7 +462,7 @@ function VariantD({ org, direct, onAtRisk, onDone }: PrototypeFormProps) {
         <footer className="flex shrink-0 items-center justify-between gap-4 border-t bg-muted/50 p-4 text-sm">
           <span className="text-muted-foreground">
             {c.parsedNames.length} {c.parsedNames.length === 1 ? "name" : "names"} · {KEY_ALGORITHM_LABELS[c.keyAlgorithm]} ·{" "}
-            {keyReady ? "CSR ready" : c.key.mode === "generate" && c.key.generated ? "key not saved" : "no CSR yet"}
+            {c.key.mode === "later" ? "CSR after approval" : keyReady ? "CSR ready" : c.key.mode === "generate" && c.key.generated ? "key not saved" : "no CSR yet"}
           </span>
           <Button type="button" disabled={!ready} onClick={() => setDone(true)}>
             {direct ? "Create and issue" : "Propose"}

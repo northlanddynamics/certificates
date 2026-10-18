@@ -1,4 +1,5 @@
 import { useMutation, useQuery } from "@tanstack/react-query";
+import { useRouterState } from "@tanstack/react-router";
 import { CheckIcon, ClipboardCheckIcon, FingerprintIcon, GlobeIcon, LandmarkIcon, PlusIcon, UsersIcon, type LucideIcon } from "lucide-react";
 import { useState, type FormEvent, type ReactNode } from "react";
 import { CsrGenerator } from "@/components/csr-generator";
@@ -36,14 +37,15 @@ export function NewManagedCertificateDialog({ org, onCreated }: { org: Org; onCr
   const [open, setOpen] = useState(false);
   // PROTOTYPE: the variant, and whether closing would lose a generated key nobody has saved.
   const variant = usePrototypeVariant(DIALOG_VARIANTS);
+  const asMember = useRouterState({ select: (st) => new URLSearchParams(st.location.searchStr).has("propose") });
   const [atRisk, setAtRisk] = useState(false);
   const [confirmClose, setConfirmClose] = useState(false);
-  const direct = can(org, "managedCertificate", "create");
+  const direct = can(org, "managedCertificate", "create") && !asMember;
   if (!direct && !can(org, "managedCertificate", "propose")) return null;
 
   return (
     <>
-    <PrototypeSwitcher title="New Managed Certificate dialog" variants={DIALOG_VARIANTS} />
+    <PrototypeSwitcher title="New Managed Certificate dialog" variants={DIALOG_VARIANTS} toggle={{ param: "propose", label: "As a Member (propose)" }} />
     <ConfirmDialog
       open={confirmClose}
       onOpenChange={setConfirmClose}
