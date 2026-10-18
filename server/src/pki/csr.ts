@@ -4,11 +4,14 @@ import * as x509 from "@peculiar/x509";
 import { createPublicKey, webcrypto } from "node:crypto";
 import { normalizeName } from "./names";
 import { fingerprintOf } from "./fingerprint";
+import { KEY_ALGORITHMS, type KeyAlgorithm } from "./key-algorithms";
+
+// The key algorithms live apart so that the KMS can name them without loading the X.509 library; the rest of the
+// platform takes them from here, with the CSR.
+export * from "./key-algorithms";
 
 x509.cryptoProvider.set(webcrypto as unknown as Crypto);
 
-export const KEY_ALGORITHMS = ["ecdsa-p256", "ecdsa-p384", "rsa-2048", "rsa-3072", "rsa-4096"] as const;
-export type KeyAlgorithm = (typeof KEY_ALGORITHMS)[number];
 export const KEY_CUSTODIES = ["owner", "agent"] as const;
 export type KeyCustody = (typeof KEY_CUSTODIES)[number];
 

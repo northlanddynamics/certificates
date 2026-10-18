@@ -4,14 +4,14 @@
 // a CA signs.
 import * as x509 from "@peculiar/x509";
 import { randomBytes, webcrypto } from "node:crypto";
-import type { KeyAlgorithm } from "./csr";
+import { isMlDsa, type ClassicalKeyAlgorithm, type SigningKeyAlgorithm } from "./csr";
 import { SIGNATURE_HASH, type Kms } from "../platform/crypto/kms";
 
 /** A CA key in the KMS: its reference, the context (an Organization's id) it was made for, and its algorithm. */
 export interface CaKey {
   key: string;
   context: string;
-  algorithm: KeyAlgorithm;
+  algorithm: SigningKeyAlgorithm;
 }
 
 /** A CA that signs: its key, and its certificate, whose subject is the issuer of what it signs. */
@@ -20,7 +20,7 @@ export interface Signer extends CaKey {
 }
 
 /** How each key algorithm appears to @peculiar/x509 as a signing key: what tells it how to name the signature. */
-const SIGNING_ALGORITHMS: Record<KeyAlgorithm, Algorithm & { hash: string }> = {
+const SIGNING_ALGORITHMS: Record<ClassicalKeyAlgorithm, Algorithm & { hash: string }> = {
   // The curve tells it how long r and s are.
   "ecdsa-p256": { name: "ECDSA", namedCurve: "P-256", hash: "SHA-256" } as Algorithm & { hash: string },
   "ecdsa-p384": { name: "ECDSA", namedCurve: "P-384", hash: "SHA-384" } as Algorithm & { hash: string },
@@ -35,6 +35,8 @@ const SIGNING_ALGORITHMS: Record<KeyAlgorithm, Algorithm & { hash: string }> = {
  * r ‖ s, as WebCrypto does, which the library encodes for X.509 itself.
  */
 function kmsSigning(kms: Kms, { key, context, algorithm }: CaKey) {
+  // The API makes no ML-DSA Private CA yet, so no ML-DSA key reaches here.
+  if (isMlDsa(algorithm)) throw new Error(`a ${algorithm} CA key cannot sign yet`);
   const hash = SIGNATURE_HASH[algorithm];
   const subtle = {
     // What a CSR is made with asks for the public key this way; the stand-in for it is its DER SubjectPublicKeyInfo.
@@ -46,8 +48,9 @@ function kmsSigning(kms: Kms, { key, context, algorithm }: CaKey) {
     },
   };
   const crypto = { subtle, getRandomValues: <T extends ArrayBufferView>(array: T) => webcrypto.getRandomValues(array as any) as T } as unknown as Crypto;
-  const signingKey = { algorithm: SIGNING_ALGORITHMS[algorithm], type: "private", extractable: false, usages: ["sign"] } as unknown as CryptoKey;
-  return { crypto, signingKey };
+  const signingAlgorithm = SIGNING_ALGORITHMS[algorithm];
+  const signingKey = { algorithm: signingAlgorithm, type: "private", extractable: false, usages: ["sign"] } as unknown as CryptoKey;
+  return { crypto, signingKey, signingAlgorithm };
 }
 
 /**
@@ -288,12 +291,12 @@ export async function makeDeviceCertificate(
 export async function makeCaCsr(kms: Kms, key: CaKey, subject: x509.Name) {
   const spki = new Uint8Array(await kms.publicKey(key.key, key.context)).buffer;
   const publicKey = new x509.PublicKey(spki);
-  const { crypto, signingKey } = kmsSigning(kms, key);
+  const { crypto, signingKey, signingAlgorithm } = kmsSigning(kms, key);
   return x509.Pkcs10CertificateRequestGenerator.create(
     {
       name: subject,
       keys: { privateKey: signingKey, publicKey: { spki } as unknown as CryptoKey },
-      signingAlgorithm: SIGNING_ALGORITHMS[key.algorithm],
+      signingAlgorithm,
       extensions: [...(await caExtensions(publicKey, 0))],
     },
     crypto,
@@ -420,13 +423,13 @@ function derInteger(n: number) {
  * listing `entries`, each with its reason.
  */
 export async function makeCrl(kms: Kms, by: Signer, input: { number: number; thisUpdate: Date; nextUpdate: Date; entries: CrlEntry[] }) {
-  const { crypto, signingKey } = kmsSigning(kms, by);
+  const { crypto, signingKey, signingAlgorithm } = kmsSigning(kms, by);
   return x509.X509CrlGenerator.create(
     {
       issuer: by.certificate.subjectName,
       thisUpdate: input.thisUpdate,
       nextUpdate: input.nextUpdate,
-      signingAlgorithm: SIGNING_ALGORITHMS[by.algorithm],
+      signingAlgorithm,
       signingKey,
       // No reason code for `unspecified` (0), as RFC 5280 (5.3.1) asks.
       entries: input.entries.map((entry) => ({ serialNumber: entry.serial, revocationDate: entry.revokedAt, ...(entry.reason !== 0 && { reason: entry.reason }) })),

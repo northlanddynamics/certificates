@@ -1,6 +1,6 @@
 # Private CA keys are held in a KMS
 
-Amends [0002](0002-platform-never-holds-private-keys.md).
+Amends [0002](0002-platform-never-holds-private-keys.md). Amended by [0009](0009-ml-dsa-ca-keys-sign-through-external-mu.md): an ML-DSA key signs the external μ of the message, not a digest.
 
 A Private CA must sign, so the platform needs a CA signing key, which ADR 0002 says it never holds. It holds one only as a non-exportable key in a KMS or HSM: the platform asks the KMS to sign a digest and gets back a signature, and in production it never has the key's material itself. The `Kms` interface (`server/src/platform/crypto/kms.ts`) makes a signing key of a given algorithm (ECDSA P-256 or P-384, RSA 2048, 3072 or 4096) for a context, gives its public key and signs a digest with it; the platform stores only the opaque reference it returns. A contract test (`server/test/support/kms-signing-contract.ts`) states what every implementation keeps.
 

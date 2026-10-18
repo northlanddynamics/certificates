@@ -6,7 +6,7 @@ import { mkdtempSync, readFileSync, rmSync } from "node:fs";
 import { createPrivateKey } from "node:crypto";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
-import { KEY_ALGORITHMS, parseCsr, type KeyAlgorithm } from "../src/pki/csr";
+import { CLASSICAL_KEY_ALGORITHMS, parseCsr, type ClassicalKeyAlgorithm } from "../src/pki/csr";
 import { MAX_NAMES, normalizeName } from "../src/pki/names";
 import { defaultHash, generateCsr, hashNote, SIGNATURE_HASHES } from "../../web/src/lib/csr-generator";
 import { inspectCsr, matchCsr, opensslCommand, type CsrFacts } from "../../web/src/lib/csr-inspect";
@@ -16,7 +16,7 @@ const NAME_RULES = new URL("../../web/src/lib/csr-names.ts", import.meta.url);
 const INSPECTOR = new URL("../../web/src/lib/csr-inspect.ts", import.meta.url);
 
 describe("generateCsr", () => {
-  for (const keyAlgorithm of KEY_ALGORITHMS) {
+  for (const keyAlgorithm of CLASSICAL_KEY_ALGORITHMS) {
     test(`a ${keyAlgorithm} CSR is accepted by parseCsr with its names and key algorithm`, async () => {
       const { csrPem, keyPem } = await generateCsr({ keyAlgorithm, names: ["example.com", "*.example.com"], commonName: "example.com" });
       const parsed = await parseCsr(csrPem);
@@ -38,7 +38,7 @@ describe("generateCsr", () => {
         await parseCsr(csrPem);
       }
     }
-    const signedWith = async (keyAlgorithm: KeyAlgorithm) =>
+    const signedWith = async (keyAlgorithm: ClassicalKeyAlgorithm) =>
       new x509.Pkcs10CertificateRequest((await generateCsr({ keyAlgorithm, names })).csrPem).signatureAlgorithm.hash.name;
     expect(await signedWith("ecdsa-p256")).toBe("SHA-256");
     expect(await signedWith("ecdsa-p384")).toBe("SHA-384");
@@ -83,12 +83,13 @@ describe("generateCsr", () => {
 
 // What the web reads from a pasted CSR, to say at once whether it fits, must be what parseCsr reads from it.
 describe("inspectCsr", () => {
-  for (const keyAlgorithm of KEY_ALGORITHMS) {
+  for (const keyAlgorithm of CLASSICAL_KEY_ALGORITHMS) {
     test(`reads a ${keyAlgorithm} CSR's key algorithm and names as parseCsr does`, async () => {
       const { csrPem } = await generateCsr({ keyAlgorithm, names: ["www.example.com", "*.example.com"], commonName: "www.example.com" });
       const facts = (await inspectCsr(csrPem)) as CsrFacts;
       const parsed = await parseCsr(csrPem);
-      expect(facts.keyAlgorithm).toBe(parsed.keyAlgorithm);
+      // The parser knows ML-DSA too, the Generator not yet: so the narrower is the expected.
+      expect(parsed.keyAlgorithm).toBe(facts.keyAlgorithm!);
       expect([...facts.names].sort()).toEqual([...parsed.names].sort());
     }, 60_000);
   }
