@@ -1,4 +1,4 @@
-import "reflect-metadata";
+import "reflect-metadata"; // @peculiar/x509 needs a Reflect polyfill loaded before it
 import { Pool } from "pg";
 import { createApp } from "./app";
 import { createLetsEncrypt } from "./issuance/acme/certificate-authority";

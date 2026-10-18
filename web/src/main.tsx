@@ -1,4 +1,4 @@
-import "reflect-metadata";
+import "reflect-metadata"; // @peculiar/x509 needs a Reflect polyfill loaded before it
 import { QueryClient, QueryClientProvider } from "@tanstack/react-query";
 import { RouterProvider } from "@tanstack/react-router";
 import { StrictMode } from "react";

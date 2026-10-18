@@ -4,9 +4,9 @@
 
 **Blocked by:** None (can start immediately)
 
-**Status:** ready-for-agent
+**Status:** done
 
-- [ ] The server and the web app pin the same 2.x version.
-- [ ] The reflection polyfill version 2 needs is loaded before the library everywhere it loads: the server, its tests, and the web app.
-- [ ] The override of the ASN.1 schema package in the root package manifest is kept, changed or removed, with the reason in the commit message.
-- [ ] Typecheck, the server tests and the web build pass unchanged.
+- [x] The server and the web app pin the same 2.x version.
+- [x] The reflection polyfill version 2 needs is loaded before the library everywhere it loads: the server, its tests, and the web app.
+- [x] The override of the ASN.1 schema package in the root package manifest is kept, changed or removed, with the reason in the commit message.
+- [x] Typecheck, the server tests and the web build pass unchanged.
