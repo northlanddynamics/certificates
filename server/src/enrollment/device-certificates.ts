@@ -1,5 +1,5 @@
 // An Enrollment Profile's Device Certificates as Organization Administrators see them: the inventory of what devices
-// enrolled for (scep.ts), kept apart from the Managed Certificates. A fleet has thousands, so the list is paged on the
+// enrolled for (device-enrollment.ts), kept apart from the Managed Certificates. A fleet has thousands, so the list is paged on the
 // server and searched there, by subject, subject alternative name, serial or the device ID its Enrollment Validator
 // knows the device by, and filtered by status. Each can be looked at and its certificate downloaded, and revoked, which
 // puts it on its Issuing CA's CRL in the same change (device-certificate-revocation.ts).

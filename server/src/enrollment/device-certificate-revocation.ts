@@ -1,6 +1,6 @@
 // Device Certificate Revocation: the one place a Device Certificate is revoked, whoever asks for it. An Organization
 // Administrator does (device-certificates.ts), its Enrollment Validator's revocation feed does (enrollment-validators.ts),
-// and a RenewalReq signed with it does once its replacement is issued, as `superseded` (scep.ts). Each is recorded,
+// and a RenewalReq signed with it does once its replacement is issued, as `superseded` (device-enrollment.ts). Each is recorded,
 // audited as `device_certificate.revoked` and put on its Issuing CA's CRL on the caller's change, so all of it commits or
 // none does. The rows are locked first, so that two asking at once take turns and the second finds it revoked: a
 // Revocation is never recorded twice, nor undone.

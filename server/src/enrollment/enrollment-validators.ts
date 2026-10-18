@@ -23,6 +23,8 @@ import {
   type EnrollmentValidator,
   type EnrollmentValidators,
   type IssuedDeviceCertificate,
+  kindOf,
+  kindsOf,
   type RevocationOutcome,
   type RevocationRequest,
 } from "./enrollment-validator";
@@ -81,7 +83,7 @@ export function createEnrollmentValidatorRuns(deps: { db: Db; unitOfWork: UnitOf
   const { db, unitOfWork, secrets, revocations, kinds, clock } = deps;
 
   async function open(db: Db | Tx, profile: ProfileRow) {
-    const kind = Object.hasOwn(kinds, profile.validatorKind) ? kinds[profile.validatorKind]! : undefined;
+    const kind = kindOf(kinds, profile.validatorKind);
     if (!kind) throw new EnrollmentValidatorError(`the platform does not run the Enrollment Validator ${profile.validatorKind}`);
     const settings = kind.settings.safeParse(profile.validatorSettings);
     if (!settings.success) throw new EnrollmentValidatorError(`the Enrollment Validator's stored settings can no longer be used`);
@@ -91,7 +93,7 @@ export function createEnrollmentValidatorRuns(deps: { db: Db; unitOfWork: UnitOf
 
   /** The profiles of the Organization whose validators share the feed of this kind from this source, oldest first. */
   async function sharing(organizationId: string, kindName: string, source: string) {
-    const kind = kinds[kindName];
+    const kind = kindOf(kinds, kindName);
     if (!kind?.revocationFeed) return [];
     const rows = await db
       .select()
@@ -119,7 +121,7 @@ export function createEnrollmentValidatorRuns(deps: { db: Db; unitOfWork: UnitOf
     throw last;
   }
 
-  const usesSharedChallenge = (profile: ProfileRow) => Object.hasOwn(kinds, profile.validatorKind) && kinds[profile.validatorKind]!.usesSharedChallenge === true;
+  const usesSharedChallenge = (profile: ProfileRow) => kindOf(kinds, profile.validatorKind)?.usesSharedChallenge === true;
 
   const queue = async (tx: Tx, change: Change, profile: ProfileRow, type: MessageRow["type"], payload: Record<string, unknown>) => {
     await tx.insert(enrollmentValidatorMessage).values({ organizationId: profile.organizationId, enrollmentProfileId: profile.id, type, payload, nextAttemptAt: change.occurredAt, createdAt: change.occurredAt });
@@ -320,17 +322,17 @@ export function createEnrollmentValidatorRuns(deps: { db: Db; unitOfWork: UnitOf
 
     async pollFeeds() {
       const now = clock();
-      const fed = Object.entries(kinds).filter(([, kind]) => kind.revocationFeed);
+      const fed = kindsOf(kinds).filter((kind) => kind.revocationFeed);
       if (fed.length === 0) return 0;
       // Every Organization's: the pass is the platform's own, and each feed is pulled for its own Organization's profiles only.
       const rows = await db
         .select()
         .from(enrollmentProfile)
-        .where(inArray(enrollmentProfile.validatorKind, fed.map(([name]) => name)))
+        .where(inArray(enrollmentProfile.validatorKind, fed.map((kind) => kind.name)))
         .orderBy(asc(enrollmentProfile.createdAt), asc(enrollmentProfile.id));
       const feeds = new Map<string, Feed>();
       for (const row of rows) {
-        const kind = kinds[row.validatorKind]!;
+        const kind = kindOf(kinds, row.validatorKind)!;
         // A profile whose stored settings can no longer be read feeds nothing.
         const settings = kind.settings.safeParse(row.validatorSettings);
         if (!settings.success) continue;

@@ -26,7 +26,7 @@ import {
   MAX_DEVICE_RETENTION_DAYS,
   MAX_DEVICE_VALIDITY_DAYS,
 } from "./enrollment-profile-kinds";
-import { describeValidatorError, type EnrollmentValidators } from "./enrollment-validator";
+import { describeValidatorError, kindOf, kindsOf, type EnrollmentValidators } from "./enrollment-validator";
 import type { EnrollmentValidatorRuns } from "./enrollment-validators";
 import { HttpError, OrgParam, errors, isUniqueViolation, json } from "../platform/http";
 import { IssuanceFailure } from "../issuance/issuance-failure";
@@ -200,7 +200,7 @@ export function registerEnrollmentProfiles(ctx: {
     async (c) => {
       const { orgId } = c.req.valid("param");
       await authorize(await requireUser(c), orgId, { enrollmentProfile: ["read"] });
-      return c.json({ items: Object.entries(kinds).map(([kind, of]) => ({ kind, vouchesForNames: of.vouchesForNames, takesSecret: of.secret !== undefined, allowsRenewal: of.allowsRenewal === true, usesSharedChallenge: of.usesSharedChallenge === true })) }, 200);
+      return c.json({ items: kindsOf(kinds).map((of) => ({ kind: of.name, vouchesForNames: of.vouchesForNames, takesSecret: of.secret !== undefined, allowsRenewal: of.allowsRenewal, usesSharedChallenge: of.usesSharedChallenge })) }, 200);
     },
   );
 
@@ -265,7 +265,7 @@ export function registerEnrollmentProfiles(ctx: {
       const body = c.req.valid("json");
       const actor = await requireUser(c);
       await authorize(actor, orgId, { enrollmentProfile: ["create"] });
-      const kind = Object.hasOwn(kinds, body.validator.kind) ? kinds[body.validator.kind]! : undefined;
+      const kind = kindOf(kinds, body.validator.kind);
       if (!kind) throw new HttpError(422, `the platform runs no Enrollment Validator of the kind ${body.validator.kind}`);
       const settings = refuse("validator.settings", kind.settings, body.validator.settings) as Record<string, unknown>;
       if (kind.secret && body.validator.secret === undefined) throw new HttpError(400, `validator.secret: an Enrollment Validator of the kind ${body.validator.kind} needs one`);
@@ -491,7 +491,7 @@ export function registerEnrollmentProfiles(ctx: {
       }
       const retaining = body.retentionDays !== undefined && body.retentionDays !== found.row.retentionDays;
       if (body.nameRules) {
-        const kind = Object.hasOwn(kinds, found.row.validatorKind) ? kinds[found.row.validatorKind]! : undefined;
+        const kind = kindOf(kinds, found.row.validatorKind);
         if (!kind) throw new HttpError(422, `the platform runs no Enrollment Validator of the kind ${found.row.validatorKind}`);
         if (kind.vouchesForNames) throw new HttpError(422, `an Enrollment Validator of the kind ${found.row.validatorKind} vouches for the names a device asks for, so the profile takes no name rules`);
       }
