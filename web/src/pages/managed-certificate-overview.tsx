@@ -10,6 +10,8 @@ import { NameChange } from "./name-change-controls";
 import { Owners } from "./owner-controls";
 import { Renewal } from "./renewal-controls";
 import { revokedLine } from "./revocation-controls";
+import { PrototypeSwitcher, usePrototypeVariant } from "@/components/prototype-switcher";
+import { KeyAndCsrCard, KeyBanner, OVERVIEW_VARIANTS } from "./managed-certificate-overview.prototype";
 
 const KEY_CUSTODY_LABELS = { owner: "Owner", agent: "Agent" } as const;
 
@@ -39,11 +41,16 @@ export function ManagedCertificateOverview() {
   const m = certificate.data;
   // What the current Certificate says about itself (its issuer); the rest is on the Managed Certificate already.
   const facts = useCertificateFacts(orgId, id, m?.currentCertificate?.id);
+  // PROTOTYPE: B and C take the CSR out of the Identity and Renewal cards.
+  const variant = usePrototypeVariant(OVERVIEW_VARIANTS);
   if (!org || !m) return null;
+  const ownerKey = !m.archivedAt && m.keyCustody === "owner";
 
   const current = m.currentCertificate;
   return (
     <div className="grid gap-4 lg:grid-cols-2">
+      <PrototypeSwitcher title="Managed Certificate page" variants={OVERVIEW_VARIANTS} />
+      {variant === "C" && ownerKey && <KeyBanner org={org} m={m} />}
       <Card>
         <CardHeader>
           <CardTitle>Identity</CardTitle>
@@ -64,7 +71,7 @@ export function ManagedCertificateOverview() {
             <ProposalStatus m={m} />
           </dl>
           <IssuerControls org={org} m={m} onChanged={refresh} />
-          {!m.archivedAt && m.keyCustody === "owner" && <NameChange org={org} m={m} userId={userId} onChanged={refresh} />}
+          {ownerKey && (variant === "A" || m.pendingNameChange) && <NameChange org={org} m={m} userId={userId} onChanged={refresh} />}
         </CardContent>
       </Card>
 
@@ -105,6 +112,7 @@ export function ManagedCertificateOverview() {
         </CardContent>
       </Card>
 
+      {variant === "B" && ownerKey && <KeyAndCsrCard org={org} m={m} />}
       <Card>
         <CardHeader>
           <CardTitle>Owners</CardTitle>
@@ -120,7 +128,7 @@ export function ManagedCertificateOverview() {
             <CardTitle>Renewal</CardTitle>
           </CardHeader>
           <CardContent className="text-sm">
-            <Renewal org={org} m={m} userId={userId} onChanged={refresh} />
+            <Renewal org={org} m={m} userId={userId} onChanged={refresh} hideCsr={variant !== "A"} />
           </CardContent>
         </Card>
       )}

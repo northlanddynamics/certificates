@@ -40,12 +40,12 @@ export function RenewNowButton({ org, m, userId, onChanged }: { org: Me["organiz
 }
 
 /** A Managed Certificate's Renewal: its policy, how it is going, and for those who may, the means to change the policy and upload a new CSR. */
-export function Renewal({ org, m, userId, onChanged }: { org: Me["organizations"][number]; m: ManagedCertificate; userId?: string; onChanged: () => void }) {
+export function Renewal({ org, m, userId, onChanged, hideCsr = false }: { org: Me["organizations"][number]; m: ManagedCertificate; userId?: string; onChanged: () => void; hideCsr?: boolean }) {
   // The server decides; this only keeps the controls from those who surely may not (a Team's members may, too).
   const owns = isOwner(m, userId);
   const mayPolicy = can(org, "managedCertificate", "setRenewalPolicy") || owns;
   // An Agent makes its own CSRs: only a key the Owner holds has one uploaded.
-  const mayCsr = (can(org, "managedCertificate", "replaceCsr") || owns) && m.keyCustody === "owner";
+  const mayCsr = (can(org, "managedCertificate", "replaceCsr") || owns) && m.keyCustody === "owner" && !hideCsr; // PROTOTYPE: hideCsr
   const settled = m.approval.status !== "pending" && m.approval.status !== "rejected";
 
   const [mode, setMode] = useState<RenewalPolicy["mode"]>(m.renewal.policy.mode);

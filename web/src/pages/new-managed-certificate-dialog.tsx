@@ -2,7 +2,9 @@ import { useMutation, useQuery } from "@tanstack/react-query";
 import { CheckIcon, ClipboardCheckIcon, FingerprintIcon, GlobeIcon, LandmarkIcon, PlusIcon, UsersIcon, type LucideIcon } from "lucide-react";
 import { useState, type FormEvent, type ReactNode } from "react";
 import { CsrGenerator } from "@/components/csr-generator";
+import { ConfirmDialog } from "@/components/confirm-dialog";
 import { CsrSignatureWarning } from "@/components/csr-signature-warning";
+import { PrototypeSwitcher, isPrototypeSwitcher, usePrototypeVariant } from "@/components/prototype-switcher";
 import { IssuerChoiceFields, useIssuerChoice } from "@/components/issuer-choice";
 import { Breadcrumb, BreadcrumbItem, BreadcrumbList, BreadcrumbPage, BreadcrumbSeparator } from "@/components/ui/breadcrumb";
 import { Button } from "@/components/ui/button";
@@ -16,6 +18,7 @@ import { api, can, ownerFromKey, ownerKey, type ManagedCertificate, type Me } fr
 import { KEY_ALGORITHMS, KEY_ALGORITHM_LABELS, type KeyAlgorithm } from "@/lib/csr-generator";
 import { nameProblems, splitNames } from "@/lib/csr-names";
 import { permitsOnlyLabel } from "@/lib/private-ca";
+import { DIALOG_VARIANTS, PrototypeNewManagedCertificateForm } from "./new-managed-certificate-dialog.prototype";
 
 type Org = Me["organizations"][number];
 
@@ -31,32 +34,77 @@ type StepId = (typeof STEPS)[number]["id"];
 /** The button for a new Managed Certificate, and the dialog it opens. Nothing shows for someone who may neither create nor propose one. */
 export function NewManagedCertificateDialog({ org, onCreated }: { org: Org; onCreated: (created: ManagedCertificate) => void }) {
   const [open, setOpen] = useState(false);
+  // PROTOTYPE: the variant, and whether closing would lose a generated key nobody has saved.
+  const variant = usePrototypeVariant(DIALOG_VARIANTS);
+  const [atRisk, setAtRisk] = useState(false);
+  const [confirmClose, setConfirmClose] = useState(false);
   const direct = can(org, "managedCertificate", "create");
   if (!direct && !can(org, "managedCertificate", "propose")) return null;
 
   return (
-    <Dialog open={open} onOpenChange={setOpen}>
+    <>
+    <PrototypeSwitcher title="New Managed Certificate dialog" variants={DIALOG_VARIANTS} />
+    <ConfirmDialog
+      open={confirmClose}
+      onOpenChange={setConfirmClose}
+      title="Discard the key you have not saved?"
+      description="It was made in this browser and exists nowhere else. Closing throws it away; a CSR made from it would be useless."
+      confirmLabel="Discard it and close"
+      dismissLabel="Keep editing"
+      pending={false}
+      error={null}
+      onConfirm={() => {
+        setConfirmClose(false);
+        setAtRisk(false);
+        setOpen(false);
+      }}
+    />
+    <Dialog
+      open={open}
+      onOpenChange={(next) => {
+        if (!next && atRisk) return setConfirmClose(true);
+        setOpen(next);
+      }}
+    >
       <DialogTrigger asChild>
         <Button>
           <PlusIcon />
           New Managed Certificate
         </Button>
       </DialogTrigger>
-      <DialogContent className="gap-0 overflow-hidden p-0 sm:max-w-[calc(100%-2rem)] md:max-w-[760px] lg:max-w-[860px]">
+      <DialogContent
+        className="gap-0 overflow-hidden p-0 sm:max-w-[calc(100%-2rem)] md:max-w-[760px] lg:max-w-[860px]"
+        onInteractOutside={(e) => isPrototypeSwitcher(e.target) && e.preventDefault()}
+      >
         <DialogTitle className="sr-only">{direct ? "New Managed Certificate" : "Propose a Managed Certificate"}</DialogTitle>
         <DialogDescription className="sr-only">
           {direct ? "Issuance starts as soon as it is created." : "An Approver must approve it before any Certificate is issued."}
         </DialogDescription>
-        <NewManagedCertificateForm
-          org={org}
-          direct={direct}
-          onCreated={(created) => {
-            setOpen(false);
-            onCreated(created);
-          }}
-        />
+        {variant === "A" ? (
+          <NewManagedCertificateForm
+            org={org}
+            direct={direct}
+            onCreated={(created) => {
+              setOpen(false);
+              onCreated(created);
+            }}
+          />
+        ) : (
+          <PrototypeNewManagedCertificateForm
+            key={variant}
+            org={org}
+            direct={direct}
+            variant={variant}
+            onAtRisk={setAtRisk}
+            onDone={() => {
+              setAtRisk(false);
+              setOpen(false);
+            }}
+          />
+        )}
       </DialogContent>
     </Dialog>
+    </>
   );
 }
 
