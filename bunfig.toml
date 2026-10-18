@@ -1,0 +1,3 @@
+[test]
+# @peculiar/x509 needs a Reflect polyfill loaded before it; the entry points import it, tests load it here.
+preload = ["reflect-metadata"]

@@ -145,3 +145,5 @@ cd web && bunx --bun shadcn@latest add <component name>
 ```
 
 The root `package.json` pins `express` to 5.2.1 (`overrides`) because the published `express@5.3.0` tarball was missing when this was set up, which broke the CLI's install. Remove the override once 5.3.0 installs again.
+
+It also pins `@peculiar/asn1-schema` so that ts-scep and `@peculiar/x509` share one ASN.1 schema registry; keep the lockfile to a single copy of each `@peculiar/asn1-*` package. `@peculiar/x509` 2.x needs `reflect-metadata` imported before it: the server's entry points and `web/src/main.tsx` import it first, and `bunfig.toml` preloads it for tests.
