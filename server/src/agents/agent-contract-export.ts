@@ -1,4 +1,5 @@
 // Writes the Agent protocol's contract to agent/contract/openapi.json (`bun run contract:export`).
+import "reflect-metadata";
 import { Pool } from "pg";
 import { createApp } from "../app";
 import { agentContract, serializeContract } from "./agent-contract";

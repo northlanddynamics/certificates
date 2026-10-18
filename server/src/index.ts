@@ -1,3 +1,4 @@
+import "reflect-metadata";
 import { Pool } from "pg";
 import { createApp } from "./app";
 import { createLetsEncrypt } from "./issuance/acme/certificate-authority";
