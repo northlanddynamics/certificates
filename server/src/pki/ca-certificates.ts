@@ -4,8 +4,8 @@
 // a CA signs.
 import * as x509 from "@peculiar/x509";
 import { randomBytes, webcrypto } from "node:crypto";
-import { isMlDsa, type ClassicalKeyAlgorithm } from "./key-algorithms";
-import { SIGNATURE_HASH, type Kms, type SigningKeyAlgorithm } from "../platform/crypto/kms";
+import { isMlDsa, type ClassicalKeyAlgorithm, type SigningKeyAlgorithm } from "./csr";
+import { SIGNATURE_HASH, type Kms } from "../platform/crypto/kms";
 
 /** A CA key in the KMS: its reference, the context (an Organization's id) it was made for, and its algorithm. */
 export interface CaKey {

@@ -1,11 +1,11 @@
 // The contract every Kms's signing keys keep: a key made for one context (an Organization's id) gives its public key
 // and signs what WebCrypto verifies (a digest for ECDSA and RSA, the external μ of the message for ML-DSA), and is
-// refused under any other context. The local KMS runs it in kms.test.ts; an AWS KMS, Google Cloud KMS or Azure Key Vault
-// implementation runs it unchanged against its own service.
+// refused under any other context. The local KMS runs it in kms.test.ts; an AWS KMS, Google Cloud KMS or Azure Key
+// Vault implementation runs it unchanged against its own service.
 import { describe, expect, test } from "bun:test";
 import { webcrypto } from "node:crypto";
-import { isMlDsa, type ClassicalKeyAlgorithm } from "../../src/pki/csr";
-import { SIGNATURE_HASH, SIGNING_KEY_ALGORITHMS, externalMu, type Kms, type SigningKeyAlgorithm } from "../../src/platform/crypto/kms";
+import { SIGNING_KEY_ALGORITHMS, isMlDsa, type ClassicalKeyAlgorithm, type SigningKeyAlgorithm } from "../../src/pki/csr";
+import { SIGNATURE_HASH, externalMu, type Kms } from "../../src/platform/crypto/kms";
 
 const IMPORT_PARAMS: Record<SigningKeyAlgorithm, Algorithm> = {
   "ecdsa-p256": { name: "ECDSA", namedCurve: "P-256" } as EcKeyImportParams,

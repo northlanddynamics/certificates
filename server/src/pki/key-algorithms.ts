@@ -9,3 +9,7 @@ export type MlDsaKeyAlgorithm = (typeof ML_DSA_KEY_ALGORITHMS)[number];
 export const KEY_ALGORITHMS = [...CLASSICAL_KEY_ALGORITHMS, ...ML_DSA_KEY_ALGORITHMS] as const;
 export type KeyAlgorithm = (typeof KEY_ALGORITHMS)[number];
 export const isMlDsa = (algorithm: KeyAlgorithm): algorithm is MlDsaKeyAlgorithm => (ML_DSA_KEY_ALGORITHMS as readonly string[]).includes(algorithm);
+/** What a CA key can be, and so what the KMS makes signing keys of: every key algorithm but ML-DSA-44, too weak for a CA key. */
+export const SIGNING_KEY_ALGORITHMS = KEY_ALGORITHMS.filter((algorithm): algorithm is SigningKeyAlgorithm => algorithm !== "ml-dsa-44");
+export type SigningKeyAlgorithm = Exclude<KeyAlgorithm, "ml-dsa-44">;
+export type MlDsaSigningKeyAlgorithm = Extract<SigningKeyAlgorithm, MlDsaKeyAlgorithm>;

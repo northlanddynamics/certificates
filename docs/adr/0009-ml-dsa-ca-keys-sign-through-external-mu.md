@@ -14,7 +14,7 @@ The signature is an ordinary pure ML-DSA signature over the whole message, which
 - **Development and tests.** The local KMS makes the key with Bun's own ML-DSA and keeps it wrapped under its master key, bound to its algorithm and Organization, as ADR 0007 says for every key. Bun exports it in the 32-byte seed form. Node's crypto signs only a whole message, so the local KMS signs μ with `@noble/post-quantum`'s internal signing with an external μ, from that seed.
 - **AWS KMS.** Its `Sign` takes μ as `MessageType: EXTERNAL_MU`, a 64-byte message, with the `ML_DSA_SHAKE_256` signing algorithm, and documents it for messages over 4 KB. `RAW` would limit an ML-DSA message to 4 KB.
 - **Google Cloud KMS.** It has ML-DSA-44, -65 and -87 keys, and signs μ only with a key made for it: the `PQ_SIGN_ML_DSA_65_EXTERNAL_MU` and `PQ_SIGN_ML_DSA_87_EXTERNAL_MU` algorithms. Its implementation makes its ML-DSA keys with those.
-- **Azure Key Vault.** It has no ML-DSA keys (in Key Vault or Managed HSM), so where it is the platform's KMS, ML-DSA is refused for a new Private CA with a reason.
+- **Azure Key Vault.** It has no ML-DSA keys (in Key Vault or Managed HSM), so its implementation makes none, and where it is the platform's KMS, ML-DSA is refused for a new Private CA with a reason.
 
 We chose μ over signing the message in the KMS, which would need no hashing on our side, because the message size limit would stop a large CRL from being reissued, and so stop a Revocation. We chose it over HashML-DSA, which also signs a digest, because HashML-DSA is a different signature algorithm, with its own OIDs, that RFC 9881 does not use for X.509 and that clients verifying pure ML-DSA reject.
 

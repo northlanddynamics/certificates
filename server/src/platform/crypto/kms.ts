@@ -1,15 +1,11 @@
 // The key management service. It wraps each Organization's data key (see secrets.ts), and holds Private CA signing
 // keys, which never leave it (ADR 0007, ADR 0009). The platform holds only wrapped keys and key references, so what
-// opens or signs with them is the KMS: AWS KMS, Google Cloud KMS and Azure Key Vault are meant to plug in behind this interface; the
-// local implementation below is for development and tests.
+// opens or signs with them is the KMS: AWS KMS, Google Cloud KMS and Azure Key Vault are meant to plug in behind this
+// interface; the local implementation below is for development and tests.
 import { constants, createECDH, createHash, createPrivateKey, createPublicKey, generateKeyPairSync, privateEncrypt, randomBytes, type KeyObject } from "node:crypto";
 import { ml_dsa65, ml_dsa87 } from "@noble/post-quantum/ml-dsa.js";
 import { open, seal } from "./aead";
-import { KEY_ALGORITHMS, isMlDsa, type ClassicalKeyAlgorithm, type KeyAlgorithm } from "../../pki/key-algorithms";
-
-/** The key algorithms the KMS makes signing keys of: every one but ML-DSA-44, too weak for a CA key. */
-export type SigningKeyAlgorithm = Exclude<KeyAlgorithm, "ml-dsa-44">;
-export const SIGNING_KEY_ALGORITHMS = KEY_ALGORITHMS.filter((algorithm): algorithm is SigningKeyAlgorithm => algorithm !== "ml-dsa-44");
+import { SIGNING_KEY_ALGORITHMS, isMlDsa, type ClassicalKeyAlgorithm, type MlDsaSigningKeyAlgorithm, type SigningKeyAlgorithm } from "../../pki/key-algorithms";
 
 /** The hash each ECDSA and RSA key algorithm signs with; `sign` takes a digest made with it. */
 export const SIGNATURE_HASH: Record<ClassicalKeyAlgorithm, "SHA-256" | "SHA-384"> = {
@@ -23,7 +19,7 @@ export const SIGNATURE_HASH: Record<ClassicalKeyAlgorithm, "SHA-256" | "SHA-384"
 const HASH_BYTES = { "SHA-256": 32, "SHA-384": 48 };
 
 /** The length of an ML-DSA public key, which ends its DER SubjectPublicKeyInfo (FIPS 204, table 2). */
-const ML_DSA_PUBLIC_KEY_BYTES = { "ml-dsa-65": 1952, "ml-dsa-87": 2592 };
+const ML_DSA_PUBLIC_KEY_BYTES: Record<MlDsaSigningKeyAlgorithm, number> = { "ml-dsa-65": 1952, "ml-dsa-87": 2592 };
 const MU_BYTES = 64;
 
 const shake256 = (...parts: Uint8Array[]) => {
@@ -37,7 +33,7 @@ const shake256 = (...parts: Uint8Array[]) => {
  * ML-DSA key, after which the signature is a pure ML-DSA one, with an empty context, over the whole message (FIPS 204,
  * algorithms 2 and 7). tr = SHAKE256(publicKey), μ = SHAKE256(tr ‖ 0x00 ‖ 0x00 ‖ message), both 64 bytes.
  */
-export function externalMu(algorithm: "ml-dsa-65" | "ml-dsa-87", spki: Uint8Array, message: Uint8Array): Uint8Array {
+export function externalMu(algorithm: MlDsaSigningKeyAlgorithm, spki: Uint8Array, message: Uint8Array): Uint8Array {
   const publicKey = spki.subarray(spki.length - ML_DSA_PUBLIC_KEY_BYTES[algorithm]);
   return shake256(shake256(publicKey), new Uint8Array([0, 0]), message);
 }
@@ -59,7 +55,7 @@ export interface Kms {
    * as WebCrypto gives it: ECDSA as r ‖ s, RSA as PKCS#1 v1.5. With an ML-DSA key it signs the message's `externalMu`
    * and returns the signature raw, as X.509 carries it. Throws when `key` was not made by this KMS for `context`.
    */
-  sign(key: string, context: string, toSign: Uint8Array): Promise<Uint8Array>;
+  sign(key: string, context: string, digestOrMu: Uint8Array): Promise<Uint8Array>;
 }
 
 /** A KMS whose master key is a base64 string of 32 bytes held in the platform's own configuration. */
@@ -91,10 +87,10 @@ export function createLocalKms(masterKeyBase64: string): Kms {
       const { privateKey } = openSigningKey(reference, context);
       return new Uint8Array(createPublicKey(privateKey).export({ format: "der", type: "spki" }));
     },
-    async sign(reference, context, toSign) {
+    async sign(reference, context, digestOrMu) {
       const { algorithm, privateKey } = openSigningKey(reference, context);
-      if (isMlDsa(algorithm)) return signMu(algorithm, privateKey, toSign);
-      return new Uint8Array(signDigest(algorithm, privateKey, Buffer.from(toSign)));
+      if (isMlDsa(algorithm)) return signMu(algorithm, privateKey, digestOrMu);
+      return new Uint8Array(signDigest(algorithm, privateKey, Buffer.from(digestOrMu)));
     },
   };
 }
@@ -108,14 +104,14 @@ function generateKeyPair(algorithm: SigningKeyAlgorithm) {
 
 const RSA_BITS = { "rsa-2048": 2048, "rsa-3072": 3072, "rsa-4096": 4096 };
 
-const NOBLE_ML_DSA = { "ml-dsa-65": ml_dsa65, "ml-dsa-87": ml_dsa87 };
+const NOBLE_ML_DSA: Record<MlDsaSigningKeyAlgorithm, typeof ml_dsa65> = { "ml-dsa-65": ml_dsa65, "ml-dsa-87": ml_dsa87 };
 /** How a seed-form ML-DSA PrivateKeyInfo ends: privateKey as [0] IMPLICIT OCTET STRING of 32 bytes, then the seed. */
 const SEED_TAG = Buffer.from("8020", "hex");
 const SEED_BYTES = 32;
 
 // Node signs only a whole message, and a KMS signs μ (a CRL can outgrow what a KMS takes), so ML-DSA is signed with
 // noble's internal signing, which takes an external μ, from the key's seed.
-function signMu(algorithm: "ml-dsa-65" | "ml-dsa-87", privateKey: KeyObject, mu: Uint8Array): Uint8Array {
+function signMu(algorithm: MlDsaSigningKeyAlgorithm, privateKey: KeyObject, mu: Uint8Array): Uint8Array {
   if (mu.length !== MU_BYTES) throw new Error(`a ${algorithm} key signs a ${MU_BYTES}-byte μ`);
   const pkcs8 = privateKey.export({ format: "der", type: "pkcs8" });
   if (!pkcs8.subarray(-SEED_BYTES - SEED_TAG.length, -SEED_BYTES).equals(SEED_TAG)) throw new Error(`the ${algorithm} key is not in the seed form`);
