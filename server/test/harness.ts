@@ -6,6 +6,7 @@ import { readFileSync } from "node:fs";
 import { createApp, type AppDeps } from "../src/app";
 import { CertificateAuthorityError, createLetsEncrypt, type AcmeEnvironment, type RevocationReason } from "../src/certificate-authority";
 import { createTxtResolver, type TxtResolver } from "../src/dcv";
+import type { DeviceCertificateRevocations } from "../src/device-certificate-revocation";
 import type { Db } from "../src/db/client";
 import { z } from "@hono/zod-openapi";
 import type { EnrollmentRequest, EnrollmentValidatorKind } from "../src/enrollment-validator";
@@ -71,6 +72,8 @@ export interface Harness {
   db: Db;
   /** The platform's own unit of work and Issuances, for tests of the Issuances interface itself. */
   unitOfWork: UnitOfWork;
+  /** The platform's Device Certificate Revocation, for tests of its interface itself. */
+  deviceCertificateRevocations: DeviceCertificateRevocations;
   issuances: Issuances;
   mailer: CapturingMailer;
   /** What webhook notification channels were sent, instead of sending it; `failing` makes every post fail. */
@@ -254,7 +257,7 @@ export async function createHarness(overrides: Partial<AppDeps> = {}, { database
     enrollmentValidators: { test_allow: allowing(true), test_names: allowing(false), test_renewal: allowing(true, true), test_double: validatorDouble.kind(), intune: createIntuneKind({ fetch: intune.fetch }), shared_challenge: sharedChallenge },
     ...overrides,
   };
-  const { app, auth, db, unitOfWork, issuances, renewals, notifications, auditForwarding, crls, enrollmentValidators, deviceCertificatePruning, sharedChallengeExpiry, scep: scepRoutes } = createApp(deps);
+  const { app, auth, db, unitOfWork, issuances, renewals, notifications, auditForwarding, crls, enrollmentValidators, deviceCertificatePruning, sharedChallenges, deviceCertificateRevocations, scep: scepRoutes } = createApp(deps);
   if (migrate) await runMigrations(pool);
   const reset = async () => {
     await issuances.idle();
@@ -295,6 +298,7 @@ export async function createHarness(overrides: Partial<AppDeps> = {}, { database
     pool,
     db,
     unitOfWork,
+    deviceCertificateRevocations,
     issuances,
     mailer,
     webhooks,
@@ -330,7 +334,7 @@ export async function createHarness(overrides: Partial<AppDeps> = {}, { database
     deliverEnrollmentNotifications: () => enrollmentValidators.deliver(),
     pollRevocationFeeds: () => enrollmentValidators.pollFeeds(),
     pruneDeviceCertificates: () => deviceCertificatePruning.prune(),
-    expireSharedChallenges: () => sharedChallengeExpiry.expire(),
+    expireSharedChallenges: () => sharedChallenges.expire(),
     setNow: (d) => {
       now = d;
     },
