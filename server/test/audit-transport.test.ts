@@ -3,7 +3,7 @@
 import { SubjectAlternativeNameExtension, X509CertificateGenerator } from "@peculiar/x509";
 import { afterEach, describe, expect, test } from "bun:test";
 import { createServer, type Server } from "node:tls";
-import { createAuditTransport } from "../src/audit-transport";
+import { createAuditTransport } from "../src/audit/audit-transport";
 
 const certificateFor = async (name: string) => {
   const keys = await crypto.subtle.generateKey({ name: "ECDSA", namedCurve: "P-256" }, true, ["sign", "verify"]);

@@ -21,7 +21,7 @@
 
 Implemented. Notes for the tickets that follow:
 
-- `server/src/private-ca.ts` holds the routes and `createPrivateCas` (what the Private CA kind of issuer signs through); `server/src/ca-certificates.ts` is the CA module (profiles, serials, a KMS-backed signer for `@peculiar/x509`). Tests: `server/test/private-ca.test.ts`.
+- `server/src/private-ca/private-ca.ts` holds the routes and `createPrivateCas` (what the Private CA kind of issuer signs through); `server/src/pki/ca-certificates.ts` is the CA module (profiles, serials, a KMS-backed signer for `@peculiar/x509`). Tests: `server/test/private-ca.test.ts`.
 - A Private CA's `lifetimeYears` applies to both the root and the Issuing CA. A TLS Certificate gets 397 days, clipped to the Issuing CA's `notAfter`; ticket 05 makes this configurable.
 - No CDP or AIA yet (ticket 06). Revoking a Private CA Certificate is refused with 422 until ticket 06.
 - Only Key Custody: Owner is offered a Private CA; Deployments (Agent custody) stay ACME until ticket 08.

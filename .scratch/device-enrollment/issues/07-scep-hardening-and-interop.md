@@ -16,4 +16,4 @@
 
 - micromdm's `scepclient` encrypts to every certificate `GetCACert` returns unless run with `-key-encipherment-selector`, and fails when the Issuing CA's key is not RSA. With the selector it encrypts to the RA certificate alone, so the interop test passes it; the platform needs no change for it.
 - micromdm publishes no image with the client in it, so `docker/scepclient` builds it from source at v2.3.0.
-- Transactions are kept in `scep_transaction` (`server/src/scep-transactions.ts`). Refusals stay there forever for now; ticket 08's pruning should delete them with the profile's retention.
+- Transactions are kept in `scep_transaction` (`server/src/enrollment/scep-transactions.ts`). Refusals stay there forever for now; ticket 08's pruning should delete them with the profile's retention.

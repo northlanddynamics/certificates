@@ -2,7 +2,7 @@
 // ACME client is the real one; the account's key is a secret that no API returns (ADR 0002).
 import { afterAll, beforeAll, beforeEach, describe, expect, test } from "bun:test";
 import acme from "acme-client";
-import { PASSWORD, PEBBLE_DIRECTORY, createHarness, type Harness } from "./harness";
+import { PASSWORD, PEBBLE_DIRECTORY, createHarness, type Harness } from "./support/harness";
 
 let h: Harness;
 let operator: string;

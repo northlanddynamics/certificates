@@ -3,10 +3,10 @@
 // and an Organization can require SSO, after which its members sign in no other way. Every configuration and policy
 // change is an Audit Event. The identity providers are doubles served on local ports (oidc-idp-double.ts, saml-idp-double.ts).
 import { afterAll, beforeAll, beforeEach, describe, expect, setDefaultTimeout, test } from "bun:test";
-import { PASSWORD, cookieFrom, createHarness, type Harness } from "./harness";
-import { createPasskeyDouble } from "./passkey-double";
-import { createOidcIdpDouble, type OidcIdentity, type OidcIdpDouble } from "./oidc-idp-double";
-import { createSamlIdpDouble, type SamlIdpDouble } from "./saml-idp-double";
+import { PASSWORD, cookieFrom, createHarness, type Harness } from "./support/harness";
+import { createPasskeyDouble } from "./support/passkey-double";
+import { createOidcIdpDouble, type OidcIdentity, type OidcIdpDouble } from "./support/oidc-idp-double";
+import { createSamlIdpDouble, type SamlIdpDouble } from "./support/saml-idp-double";
 
 setDefaultTimeout(30_000);
 

@@ -6,7 +6,7 @@ import type { NameRules } from "@/lib/api";
 
 // Name Rules, as an Organization Administrator writes them: optional limits on the names a device may ask for under a
 // profile whose Enrollment Validator does not vouch for names. Left empty, the profile has none and issues the names a
-// device asks for within its Issuing CA's permitted name rules. The server checks them too (server/src/name-rules.ts).
+// device asks for within its Issuing CA's permitted name rules. The server checks them too (server/src/enrollment/name-rules.ts).
 
 type SanType = NameRules["allowedSanTypes"][number];
 const SAN_TYPES = ["dns", "email", "ip", "url", "upn"] as const satisfies readonly SanType[];

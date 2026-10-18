@@ -3,10 +3,10 @@
 // tests can watch.
 import { afterAll, beforeAll, beforeEach, describe, expect, test } from "bun:test";
 import { eq } from "drizzle-orm";
-import { createLocalKms, type Kms } from "../src/kms";
-import { secret } from "../src/db/schema";
-import { createSecrets } from "../src/secrets";
-import { PASSWORD, createHarness, type Harness } from "./harness";
+import { createLocalKms, type Kms } from "../src/platform/crypto/kms";
+import { secret } from "../src/platform/db/schema";
+import { createSecrets } from "../src/platform/crypto/secrets";
+import { PASSWORD, createHarness, type Harness } from "./support/harness";
 
 let h: Harness;
 let operator: string;

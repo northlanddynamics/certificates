@@ -1,10 +1,10 @@
 import { Pool } from "pg";
 import { createApp } from "./app";
-import { createLetsEncrypt } from "./certificate-authority";
-import { createLocalKms } from "./kms";
-import { ConsoleMailer } from "./mailer";
-import { runMigrations } from "./migrate";
-import { bootstrapPlatformOperator } from "./operator";
+import { createLetsEncrypt } from "./issuance/acme/certificate-authority";
+import { createLocalKms } from "./platform/crypto/kms";
+import { ConsoleMailer } from "./platform/mailer";
+import { runMigrations } from "./platform/migrate";
+import { bootstrapPlatformOperator } from "./tenancy/operator";
 
 const databaseUrl = process.env.DATABASE_URL;
 const secret = process.env.AUTH_SECRET;

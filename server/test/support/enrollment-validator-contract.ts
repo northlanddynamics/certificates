@@ -1,0 +1,162 @@
+// The contract every Enrollment Validator kind keeps (enrollment-validator.ts), whatever service it talks to: it takes the
+// settings and secret it is configured with, allows or refuses a request as its service says, throws rather than allows
+// when its service cannot be reached (an EnrollmentValidatorError, which never quotes its secret), tells its service of each outcome and throws when it could not (so that the
+// platform tells it again), tests its connection without validating anything, and, when it has a revocation feed, hands
+// over the Revocations its service asks for and reports their outcomes. Each kind runs it against a double of its
+// service: the test kind in enrollment-validator-seam.test.ts, Intune against the Intune double. A kind with no service
+// to reach (the Shared Challenge kind) allows every request, is told outcomes without failing, and tests without failing.
+import { describe, expect, test } from "bun:test";
+import * as x509 from "@peculiar/x509";
+import { createCsr, generateRsaKeyPair } from "ts-scep";
+import { EnrollmentValidatorError, type DecidedRequest, type EnrollmentRequest, type EnrollmentValidatorKind, type IssuedDeviceCertificate, type RevocationOutcome } from "../../src/enrollment/enrollment-validator";
+
+/** Resolves with what `call` threw, which must be an EnrollmentValidatorError whose message quotes none of `secrets`. */
+async function failsSafely(call: Promise<unknown>, ...secrets: string[]) {
+  const err = await call.then(
+    () => undefined,
+    (thrown: unknown) => thrown,
+  );
+  expect(err).toBeInstanceOf(EnrollmentValidatorError);
+  for (const secret of secrets.filter(Boolean)) expect((err as Error).message).not.toContain(secret);
+}
+
+/** What the contract needs of a kind's service double. */
+export interface ValidatorServiceDouble {
+  /** Has the service allow every request from now on. */
+  allow(): void;
+  /** Has the service refuse every request from now on. */
+  refuse(): void;
+  /** Has no call reach the service, or every call reach it again. */
+  setUnreachable(unreachable: boolean): void;
+  /** The transaction IDs of the requests the service was asked to validate, in order. */
+  validated(): string[];
+  /** The transaction IDs and serials the service was told were issued, in order. */
+  issued(): { transactionId: string; serial: string }[];
+  /** The transaction IDs the service was told failed, in order. */
+  failed(): string[];
+  /** Queues a Revocation of the serial and issuer for the service's feed to hand over (kinds with a feed only). */
+  queueRevocation?(serial: string, issuer: string): void;
+  /** The outcomes the service was told of, in order (kinds with a feed only). */
+  revocationOutcomes?(): RevocationOutcome["outcome"][];
+}
+
+export interface ValidatorUnderContract<Settings> {
+  kind: EnrollmentValidatorKind<Settings>;
+  /** Settings and a secret the service takes. */
+  settings: Settings;
+  secret: string;
+  /** A secret the service refuses (kinds that take one only). */
+  wrongSecret?: string;
+  /** None for a kind with no service to reach, which allows every request and has no revocation feed. */
+  service?: ValidatorServiceDouble;
+}
+
+/** A request as a device would send it, with a fresh key, and a certificate as the platform would issue it for it. */
+async function aRequest(transactionId: string): Promise<{ request: EnrollmentRequest; decided: DecidedRequest; certificate: IssuedDeviceCertificate }> {
+  const { privateKey } = generateRsaKeyPair(2048);
+  const csr = createCsr({ subject: "CN=contract-device", privateKey, challengePassword: "contract-challenge" });
+  const keys = await crypto.subtle.generateKey({ name: "ECDSA", namedCurve: "P-256" }, true, ["sign", "verify"]);
+  const issued = await x509.X509CertificateGenerator.createSelfSigned({
+    serialNumber: "5b0e7a",
+    name: "CN=Contract Issuing CA",
+    notBefore: new Date("2026-01-01T00:00:00Z"),
+    notAfter: new Date("2027-01-01T00:00:00Z"),
+    keys,
+    signingAlgorithm: { name: "ECDSA", hash: "SHA-256" },
+  });
+  const der = new Uint8Array(csr);
+  return {
+    request: { csr: der, challengePassword: "contract-challenge", transactionId },
+    decided: { csr: der, transactionId },
+    certificate: { pem: issued.toString("pem"), serial: "5B0E7A", notAfter: issued.notAfter, issuer: issued.issuer },
+  };
+}
+
+export function enrollmentValidatorContract<Settings>(name: string, setup: () => ValidatorUnderContract<Settings> | Promise<ValidatorUnderContract<Settings>>) {
+  describe(`${name}: the Enrollment Validator contract`, () => {
+    const open = async () => {
+      const under = await setup();
+      under.service?.allow();
+      under.service?.setUnreachable(false);
+      return { ...under, validator: under.kind.create(under.kind.settings.parse(under.settings), under.secret) };
+    };
+
+    test("its configuration is what its kind declares: the settings parse, and the secret too when it takes one", async () => {
+      const { kind, settings, secret } = await setup();
+      expect(kind.settings.safeParse(settings).success).toBe(true);
+      if (kind.secret) expect(kind.secret.safeParse(secret).success).toBe(true);
+      expect(typeof kind.vouchesForNames).toBe("boolean");
+    });
+
+    test("allows a request its service allows, and refuses with a reason one its service refuses", async () => {
+      const { validator, service } = await open();
+      const allowed = await aRequest("contract-allowed");
+      expect(await validator.validate(allowed.request)).toEqual({ allowed: true });
+      if (!service) return;
+
+      service.refuse();
+      const refused = await aRequest("contract-refused");
+      const decision = await validator.validate(refused.request);
+      expect(decision.allowed).toBe(false);
+      expect(decision.allowed ? "" : decision.reason).not.toBe("");
+      expect(service.validated()).toEqual(["contract-allowed", "contract-refused"]);
+    });
+
+    test("throws an EnrollmentValidatorError that does not quote its secret, rather than allowing, when its service cannot be reached", async () => {
+      const { validator, service, secret } = await open();
+      if (!service) return;
+      service.setUnreachable(true);
+      await failsSafely(validator.validate((await aRequest("contract-unreachable")).request), secret);
+    });
+
+    test("tells its service of an issued request and of a failed one, and throws when it could not, so that it is told again", async () => {
+      const { validator, service, secret } = await open();
+      const issued = await aRequest("contract-issued");
+      await validator.issued(issued.decided, issued.certificate);
+      const failed = await aRequest("contract-failed");
+      await validator.failed(failed.decided, "the Enrollment Profile does not allow a rsa-1024 key");
+      if (!service) return;
+      expect(service.issued()).toEqual([{ transactionId: "contract-issued", serial: "5B0E7A" }]);
+      expect(service.failed()).toEqual(["contract-failed"]);
+
+      service.setUnreachable(true);
+      await failsSafely(validator.issued(issued.decided, issued.certificate), secret);
+      await failsSafely(validator.failed(failed.decided, "refused"), secret);
+    });
+
+    test("tests its connection without validating anything, and fails the test when its service cannot be reached or refuses its secret", async () => {
+      const under = await open();
+      await under.validator.test();
+      if (!under.service) return;
+      expect(under.service.validated()).toEqual([]);
+
+      if (under.wrongSecret !== undefined) {
+        await failsSafely(under.kind.create(under.kind.settings.parse(under.settings), under.wrongSecret).test(), under.secret, under.wrongSecret);
+      }
+      under.service.setUnreachable(true);
+      await failsSafely(under.validator.test(), under.secret);
+    });
+
+    test("when it has a revocation feed, hands over what its service asks to revoke, once, and reports the outcomes", async () => {
+      const { kind, validator, service, secret } = await open();
+      if (!kind.revocationFeed || !service) {
+        expect(kind.revocationFeed).toBeUndefined();
+        expect(validator.revocations).toBeUndefined();
+        return;
+      }
+      expect(validator.revocations).toBeDefined();
+      expect(kind.revocationFeed.intervalMs).toBeGreaterThan(0);
+      service.queueRevocation!("5B0E7A", "CN=Contract Issuing CA");
+
+      const pulled = await validator.revocations!.pull();
+      expect(pulled.map((r) => [r.serial.toUpperCase(), r.issuer])).toEqual([["5B0E7A", "CN=Contract Issuing CA"]]);
+      expect(pulled[0]!.ref).not.toBe("");
+      expect(await validator.revocations!.pull()).toEqual([]);
+
+      await validator.revocations!.report([{ ref: pulled[0]!.ref, outcome: "revoked" }]);
+      expect(service.revocationOutcomes!()).toEqual(["revoked"]);
+      service.setUnreachable(true);
+      await failsSafely(validator.revocations!.report([{ ref: pulled[0]!.ref, outcome: "revoked" }]), secret);
+    });
+  });
+}

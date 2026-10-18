@@ -4,7 +4,7 @@
 import { afterAll, beforeAll, beforeEach, describe, expect, test } from "bun:test";
 import * as x509 from "@peculiar/x509";
 import acme from "acme-client";
-import { PASSWORD, PKI_BASE_URL, createHarness, type Harness } from "./harness";
+import { PASSWORD, PKI_BASE_URL, createHarness, type Harness } from "./support/harness";
 
 let h: Harness;
 let operator: string;

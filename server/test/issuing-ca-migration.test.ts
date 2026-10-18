@@ -12,11 +12,11 @@ import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { migrate } from "drizzle-orm/node-postgres/migrator";
 import { Pool } from "pg";
-import { makeIssuingCa, makeRoot, makeTlsServer } from "../src/ca-certificates";
-import { createDb } from "../src/db/client";
-import { createLocalKms } from "../src/kms";
-import { runMigrations } from "../src/migrate";
-import { PASSWORD, TEST_DATABASE_URL, TEST_KMS_KEY, createHarness, type Harness } from "./harness";
+import { makeIssuingCa, makeRoot, makeTlsServer } from "../src/pki/ca-certificates";
+import { createDb } from "../src/platform/db/client";
+import { createLocalKms } from "../src/platform/crypto/kms";
+import { runMigrations } from "../src/platform/migrate";
+import { PASSWORD, TEST_DATABASE_URL, TEST_KMS_KEY, createHarness, type Harness } from "./support/harness";
 
 const DATABASE = "certs_test_issuing_ca_migration";
 const databaseUrl = (() => {

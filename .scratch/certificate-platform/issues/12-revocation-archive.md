@@ -14,7 +14,7 @@
 
 ## Notes from ticket 11
 
-- Archiving must also discard a pending name change of the Managed Certificate: call `discardPendingNameChange(tx, change, managedCertificate, "the Managed Certificate was archived")` (server/src/name-change.ts) in the archive's transaction, after locking the Managed Certificate (`lockManagedCertificate`), and add a scenario for it. `refusalToChangeNames` already refuses new name changes of an archived one.
+- Archiving must also discard a pending name change of the Managed Certificate: call `discardPendingNameChange(tx, change, managedCertificate, "the Managed Certificate was archived")` (server/src/certificates/name-change.ts) in the archive's transaction, after locking the Managed Certificate (`lockManagedCertificate`), and add a scenario for it. `refusalToChangeNames` already refuses new name changes of an archived one.
 
 ## Comments
 

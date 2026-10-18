@@ -12,7 +12,7 @@
 
 ## Comments
 
-Implemented on `main`. Infoblox is a module and an entry (`server/src/infoblox.ts`, `dns-provider-kinds.ts`); the routes, permissions, audit and `DnsProviders.open` are the ones from ticket 04, unchanged.
+Implemented on `main`. Infoblox is a module and an entry (`server/src/issuance/dcv/infoblox.ts`, `dns-provider-kinds.ts`); the routes, permissions, audit and `DnsProviders.open` are the ones from ticket 04, unchanged.
 
 - A provider is `{ name, type: "infoblox", settings: { url, zone, view ("default"), caCertificate? }, secret }`. `url` is the WAPI's including its version (`https://gm.example.com/wapi/v2.12`); https only, no embedded credentials. The secret is the WAPI user's credentials written `user:password` (HTTP Basic), write-only like every Secret. `caCertificate` (PEM) is for a grid whose certificate is not publicly trusted: certificates are always verified, never skipped; without it the system's roots are used.
 - Present searches `record:txt` by name, text and view first and creates only when absent (TTL 60); clean up deletes exactly the matching record(s), so a name shared by two challenges keeps the other. Both are idempotent. Redirects are not followed (the credentials go with each request), and a reference to delete is followed only if it is a `record:txt` one. 401 is reported as refused credentials, other WAPI errors with the WAPI's own text, an unanswered or untrusted connection as "unreachable".

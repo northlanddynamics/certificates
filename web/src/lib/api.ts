@@ -1,6 +1,6 @@
 // The server's own list of the reasons each kind of issuer takes, from a module that imports only types.
-import { ISSUING_CA_REVOCATION_REASONS, REVOCATION_REASONS_OF, type RevocationReason } from "../../../server/src/revocation-reasons";
-import type { DeviceExtendedKeyUsage, DeviceKeyType, DeviceKeyUsage } from "../../../server/src/enrollment-profile-kinds";
+import { ISSUING_CA_REVOCATION_REASONS, REVOCATION_REASONS_OF, type RevocationReason } from "../../../server/src/pki/revocation-reasons";
+import type { DeviceExtendedKeyUsage, DeviceKeyType, DeviceKeyUsage } from "../../../server/src/enrollment/enrollment-profile-kinds";
 
 // The web UI talks only to the platform's HTTP API (described by /api/openapi.json).
 // Sign-in and sign-up go through Better Auth's endpoints, which are mounted on that same API under /api/auth.
@@ -610,7 +610,7 @@ export interface Team {
 }
 
 // The organization endpoints are Better Auth's own, served under /api/auth/organization (see the allowlist in
-// server/src/organization-changes.ts). The one exception is the Teams overview, which Better Auth cannot provide.
+// server/src/tenancy/organization-changes.ts). The one exception is the Teams overview, which Better Auth cannot provide.
 const BA = "/api/auth/organization";
 export const api = {
   me: () => call<Me>("/api/me"),

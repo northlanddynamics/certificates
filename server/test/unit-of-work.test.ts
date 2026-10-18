@@ -2,11 +2,11 @@
 // the change and its Audit Event commit or roll back together, and mail goes out only after the commit.
 import { afterAll, beforeAll, beforeEach, describe, expect, test } from "bun:test";
 import { eq } from "drizzle-orm";
-import { listAudit } from "../src/audit";
-import { team } from "../src/db/schema";
-import type { Mailer } from "../src/mailer";
-import { createUnitOfWork } from "../src/unit-of-work";
-import { PASSWORD, createHarness, type Harness } from "./harness";
+import { listAudit } from "../src/audit/audit";
+import { team } from "../src/platform/db/schema";
+import type { Mailer } from "../src/platform/mailer";
+import { createUnitOfWork } from "../src/platform/unit-of-work";
+import { PASSWORD, createHarness, type Harness } from "./support/harness";
 
 let h: Harness;
 let orgId: string;

@@ -1,6 +1,6 @@
 import { afterAll, beforeAll, beforeEach, describe, expect, test } from "bun:test";
-import { managedCertificate } from "../src/db/schema";
-import { PASSWORD, createHarness, type Harness } from "./harness";
+import { managedCertificate } from "../src/platform/db/schema";
+import { PASSWORD, createHarness, type Harness } from "./support/harness";
 
 let h: Harness;
 beforeAll(async () => {

@@ -4,9 +4,9 @@
 // profile as it is stored, and the Audit Events. Enrolling with it over SCEP is shared-challenge-enrollment.test.ts.
 import { afterAll, beforeAll, beforeEach, expect, test } from "bun:test";
 import { eq } from "drizzle-orm";
-import { enrollmentProfile } from "../src/db/schema";
-import { createSharedChallenges, type SharedChallenges } from "../src/shared-challenge";
-import { PASSWORD, createHarness, type Harness } from "./harness";
+import { enrollmentProfile } from "../src/platform/db/schema";
+import { createSharedChallenges, type SharedChallenges } from "../src/enrollment/shared-challenge";
+import { PASSWORD, createHarness, type Harness } from "./support/harness";
 
 let h: Harness;
 let org: { orgId: string; cookie: string };

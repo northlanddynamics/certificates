@@ -1,6 +1,6 @@
 # 28: Verify email before accepting an invitation
 
-**What to build:** Sign-up verifies the user's email address, and an invitation can be accepted only by a user whose address is verified. Today `/api/invitations/{id}/accept` trusts that the signed-in user's email matches the invitation, and sign-up does not verify email, so anyone holding an invitation link can register the invited address and join the Organization. Better Auth documents this risk and has the option for it (`requireEmailVerificationOnInvitation`), which is left off in `server/src/auth.ts` until verification exists.
+**What to build:** Sign-up verifies the user's email address, and an invitation can be accepted only by a user whose address is verified. Today `/api/invitations/{id}/accept` trusts that the signed-in user's email matches the invitation, and sign-up does not verify email, so anyone holding an invitation link can register the invited address and join the Organization. Better Auth documents this risk and has the option for it (`requireEmailVerificationOnInvitation`), which is left off in `server/src/tenancy/auth.ts` until verification exists.
 
 **Blocked by:** 01 (Walking skeleton)
 

@@ -2,8 +2,8 @@
 // token, an Agent registers with it and is given a credential (ADR 0006), authenticates with that from then on, rotates it
 // before it ends, and is listed with its status until it is revoked. The Agent here is a double (agent-double.ts); the real one runs against a stub of this API in agent/ (Seam B).
 import { afterAll, beforeAll, beforeEach, describe, expect, test } from "bun:test";
-import { PASSWORD, createHarness, type Harness } from "./harness";
-import { TestAgent, asBearer } from "./agent-double";
+import { PASSWORD, createHarness, type Harness } from "./support/harness";
+import { TestAgent, asBearer } from "./support/agent-double";
 
 let h: Harness;
 let operator: string;

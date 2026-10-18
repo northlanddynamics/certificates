@@ -6,8 +6,8 @@ import { afterAll, beforeAll, beforeEach, describe, expect, test } from "bun:tes
 import * as x509 from "@peculiar/x509";
 import { createHash } from "node:crypto";
 import { FailInfo, ScepFailureError } from "ts-scep";
-import { PASSWORD, createHarness, type Harness } from "./harness";
-import { scepDevice } from "./scep-device";
+import { PASSWORD, createHarness, type Harness } from "./support/harness";
+import { scepDevice } from "./support/scep-device";
 
 let h: Harness;
 let operator: string;

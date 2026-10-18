@@ -1,7 +1,7 @@
 // The Enrollment Validator contract, run against the test kind and its service double, so that the contract itself is
 // kept honest; a real kind (Intune) runs it unchanged against its own double.
-import { DOUBLE_SECRET, ValidatorDouble } from "./enrollment-validator-double";
-import { enrollmentValidatorContract } from "./enrollment-validator-contract";
+import { DOUBLE_SECRET, ValidatorDouble } from "./support/enrollment-validator-double";
+import { enrollmentValidatorContract } from "./support/enrollment-validator-contract";
 
 const double = new ValidatorDouble();
 

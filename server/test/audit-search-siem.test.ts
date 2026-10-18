@@ -4,8 +4,8 @@
 // harness's clock.
 import { afterAll, beforeAll, beforeEach, describe, expect, setDefaultTimeout, test } from "bun:test";
 import { readFileSync } from "node:fs";
-import { AUDIT_ACTIONS } from "../src/audit";
-import { PASSWORD, createHarness, type Harness } from "./harness";
+import { AUDIT_ACTIONS } from "../src/audit/audit";
+import { PASSWORD, createHarness, type Harness } from "./support/harness";
 
 setDefaultTimeout(30_000);
 

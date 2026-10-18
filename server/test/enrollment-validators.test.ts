@@ -5,9 +5,9 @@
 import { afterAll, beforeAll, beforeEach, describe, expect, test } from "bun:test";
 import * as x509 from "@peculiar/x509";
 import { FailInfo, ScepFailureError } from "ts-scep";
-import { DOUBLE_SECRET } from "./enrollment-validator-double";
-import { PASSWORD, createHarness, type Harness } from "./harness";
-import { scepDevice, type DeviceRequest } from "./scep-device";
+import { DOUBLE_SECRET } from "./support/enrollment-validator-double";
+import { PASSWORD, createHarness, type Harness } from "./support/harness";
+import { scepDevice, type DeviceRequest } from "./support/scep-device";
 
 let h: Harness;
 let operator: string;

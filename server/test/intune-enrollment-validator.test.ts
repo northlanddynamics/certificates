@@ -4,9 +4,9 @@ import { beforeEach, describe, expect, test } from "bun:test";
 import * as x509 from "@peculiar/x509";
 import { createHash } from "node:crypto";
 import { createCsr, generateRsaKeyPair } from "ts-scep";
-import { createIntuneKind, INTUNE_CALLER_INFO } from "../src/intune";
-import { enrollmentValidatorContract } from "./enrollment-validator-contract";
-import { INTUNE, IntuneDouble } from "./intune-double";
+import { createIntuneKind, INTUNE_CALLER_INFO } from "../src/enrollment/intune";
+import { enrollmentValidatorContract } from "./support/enrollment-validator-contract";
+import { INTUNE, IntuneDouble } from "./support/intune-double";
 
 const double = new IntuneDouble();
 const kind = createIntuneKind({ fetch: double.fetch });

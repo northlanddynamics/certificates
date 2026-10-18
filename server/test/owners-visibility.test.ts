@@ -5,7 +5,7 @@
 import { afterAll, beforeAll, beforeEach, describe, expect, setDefaultTimeout, test } from "bun:test";
 import acme from "acme-client";
 import { randomBytes } from "node:crypto";
-import { BIND, PASSWORD, createHarness, type Harness } from "./harness";
+import { BIND, PASSWORD, createHarness, type Harness } from "./support/harness";
 
 setDefaultTimeout(60_000);
 

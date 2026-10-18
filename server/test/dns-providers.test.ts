@@ -1,7 +1,7 @@
 // An Organization's RFC 2136 DNS Providers: connected, changed and tested through the API, with the TSIG key a
 // write-only secret (ADR 0002). The DNS server is BIND (docker-compose); the provider code is the real one.
 import { afterAll, beforeAll, beforeEach, describe, expect, test } from "bun:test";
-import { BIND, PASSWORD, createHarness, type Harness } from "./harness";
+import { BIND, PASSWORD, createHarness, type Harness } from "./support/harness";
 
 let h: Harness;
 let operator: string;

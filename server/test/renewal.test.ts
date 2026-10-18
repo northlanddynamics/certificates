@@ -5,8 +5,8 @@ import { afterAll, beforeAll, beforeEach, describe, expect, setDefaultTimeout, t
 import { Pkcs10CertificateRequest } from "@peculiar/x509";
 import acme from "acme-client";
 import { X509Certificate, randomBytes } from "node:crypto";
-import { certificateId } from "../src/certificate-authority";
-import { BIND, PASSWORD, PEBBLE_DIRECTORY, createHarness, type Harness } from "./harness";
+import { certificateId } from "../src/issuance/acme/certificate-authority";
+import { BIND, PASSWORD, PEBBLE_DIRECTORY, createHarness, type Harness } from "./support/harness";
 
 setDefaultTimeout(60_000);
 
