@@ -5,9 +5,9 @@
 // (shared-challenge.ts), the device's key must be one the profile allows, its names must keep the profile's name rules
 // when it has them, the Enrollment Validator must allow the request, and then the Issuing CA signs a Device Certificate
 // through the Private CA module, which is stored with its Audit Event in one Unit of Work; for a RenewalReq, that Unit
-// of Work also revokes the Device Certificate it was signed with as superseded. A device is always answered SUCCESS with
-// its certificate or FAILURE with a failInfo, never PENDING; a refusal is an Audit Event. The validator is told the
-// outcome afterwards, in the background (enrollment-validators.ts), unless its kind uses a Shared Challenge.
+// of Work also revokes the Device Certificate it was signed with as superseded (device-certificate-revocation.ts). A
+// device is always answered SUCCESS with its certificate or FAILURE with a failInfo, never PENDING; a refusal is an Audit
+// Event. The validator is told the outcome afterwards, in the background (enrollment-validators.ts).
 import type { OpenAPIHono } from "@hono/zod-openapi";
 import { and, eq } from "drizzle-orm";
 import type { Context } from "hono";
@@ -16,6 +16,7 @@ import { FailInfo, ScepServer, type EnrollmentRequest as ScepEnrollmentRequest, 
 import { subjectAltNamesOf } from "./ca-certificates";
 import type { Db, Tx } from "./db/client";
 import { deviceCertificate, enrollmentProfile } from "./db/schema";
+import type { DeviceCertificateRevocations } from "./device-certificate-revocation";
 import { DEVICE_EXTENDED_KEY_USAGES, DEVICE_KEY_TYPES, type DeviceKeyType } from "./enrollment-profile-kinds";
 import { describeValidatorError, type EnrollmentValidator, type EnrollmentValidators } from "./enrollment-validator";
 import type { EnrollmentValidatorRuns } from "./enrollment-validators";
@@ -24,13 +25,13 @@ import { findIssuingCa, type PrivateCas } from "./private-ca";
 import { nameRulesRefusal } from "./name-rules";
 import type { ScepAnswer, ScepClaim, ScepTransactions } from "./scep-transactions";
 import type { Secrets } from "./secrets";
-import { presentedSharedChallenge } from "./shared-challenge";
+import type { SharedChallenges } from "./shared-challenge";
 import type { Change, UnitOfWork } from "./unit-of-work";
 import { fingerprintOf } from "./fingerprint";
 
 type ProfileRow = typeof enrollmentProfile.$inferSelect;
 /** The Device Certificate a RenewalReq was signed with, which its replacement supersedes. */
-type Renewed = Pick<typeof deviceCertificate.$inferSelect, "id" | "serial" | "subject" | "issuingCaId">;
+type Renewed = Pick<typeof deviceCertificate.$inferSelect, "id" | "serial">;
 
 /** The Device Certificate a RenewalReq was signed with was revoked after the request was checked, so it renews nothing. */
 class RevokedMeanwhile extends Error {}
@@ -104,6 +105,8 @@ export function registerScep(ctx: {
   unitOfWork: UnitOfWork;
   secrets: Secrets;
   privateCas: PrivateCas;
+  revocations: DeviceCertificateRevocations;
+  sharedChallenges: SharedChallenges;
   kinds: EnrollmentValidators;
   validators: EnrollmentValidatorRuns;
   transactions: ScepTransactions;
@@ -111,14 +114,11 @@ export function registerScep(ctx: {
   /** Read on each request, so that it may be changed while the app runs. */
   config?: Partial<ScepConfig>;
 }) {
-  const { app, db, unitOfWork, secrets, privateCas, kinds, validators, transactions, clock } = ctx;
+  const { app, db, unitOfWork, secrets, privateCas, revocations, sharedChallenges, kinds, validators, transactions, clock } = ctx;
   const config = () => ({ ...SCEP_DEFAULTS, ...ctx.config });
   const limiter = createRateLimiter(clock);
   const allowsRenewal = (profile: ProfileRow) => Object.hasOwn(kinds, profile.validatorKind) && kinds[profile.validatorKind]!.allowsRenewal === true;
-  /**
-   * Whether the profile's validator's kind uses a Shared Challenge. Its validator is then told nothing: what it would be
-   * told holds the CSR, whose challengePassword is the Shared Challenge, which the platform never keeps.
-   */
+  /** Whether the profile's validator's kind uses a Shared Challenge, which a PKCSReq must then present. */
   const usesSharedChallenge = (profile: ProfileRow) => Object.hasOwn(kinds, profile.validatorKind) && kinds[profile.validatorKind]!.usesSharedChallenge === true;
 
   /**
@@ -129,7 +129,7 @@ export function registerScep(ctx: {
     if (!allowsRenewal(profile)) return { refusal: "RenewalReq is not supported: enroll again with PKCSReq" };
     const fingerprint = fingerprintOf(request.signerCertificate.raw);
     const [current] = await db
-      .select({ id: deviceCertificate.id, serial: deviceCertificate.serial, subject: deviceCertificate.subject, issuingCaId: deviceCertificate.issuingCaId, revokedAt: deviceCertificate.revokedAt, notAfter: deviceCertificate.notAfter })
+      .select({ id: deviceCertificate.id, serial: deviceCertificate.serial, revokedAt: deviceCertificate.revokedAt, notAfter: deviceCertificate.notAfter })
       .from(deviceCertificate)
       .where(and(eq(deviceCertificate.enrollmentProfileId, profile.id), eq(deviceCertificate.fingerprint, fingerprint)));
     if (!current) return { refusal: "the RenewalReq is not signed with a Device Certificate of this Enrollment Profile" };
@@ -139,22 +139,13 @@ export function registerScep(ctx: {
   }
 
   /**
-   * Revokes the Device Certificate a RenewalReq replaced as `superseded`, on the change that stores its replacement, and
-   * reissues its Issuing CA's CRL there: a renewed device holds one valid certificate.
+   * Revokes the Device Certificate a RenewalReq replaced as `superseded`, on the change that stores its replacement, with
+   * its Issuing CA's CRL: a renewed device holds one valid certificate. Revoked since it was checked (by an administrator,
+   * the feed, or another RenewalReq signed with it), it is not renewed, so that no Revocation is undone by a replacement.
    */
   async function supersede(tx: Tx, change: Change, profile: ProfileRow, renewed: Renewed, replacementSerial: string) {
-    // Locked as an administrator and the feed lock it: revoked since it was checked (by them, or by another RenewalReq
-    // signed with it), it is not renewed, so that no revocation is undone by a replacement.
-    const [row] = await tx.select({ revokedAt: deviceCertificate.revokedAt }).from(deviceCertificate).where(eq(deviceCertificate.id, renewed.id)).for("update");
-    if (row!.revokedAt) throw new RevokedMeanwhile();
-    await tx.update(deviceCertificate).set({ revokedAt: change.occurredAt, revocationReason: "superseded" }).where(eq(deviceCertificate.id, renewed.id));
-    await change.audit({
-      organizationId: profile.organizationId,
-      action: "device_certificate.revoked",
-      target: { type: "device_certificate", id: renewed.id },
-      detail: { enrollmentProfile: { id: profile.id, name: profile.name }, serial: renewed.serial, subject: renewed.subject, reason: "superseded", by: { renewal: { serial: replacementSerial } } },
-    });
-    await privateCas.publishRevocation(tx, change, profile.organizationId, renewed.issuingCaId);
+    const [superseded] = await revocations.revoke(tx, change, profile.organizationId, [{ id: renewed.id, reason: "superseded", by: { renewal: { serial: replacementSerial } } }]);
+    if (!superseded) throw new RevokedMeanwhile();
   }
 
   /** A transaction's answer, as the device is sent it: its Device Certificate with `chain` (the Issuing CA's and those above it), or FAILURE. */
@@ -184,7 +175,7 @@ export function registerScep(ctx: {
           target: { type: "enrollment_profile", id: profile.id },
           detail: { enrollmentProfile: { id: profile.id, name: profile.name }, reason, validator: { kind: profile.validatorKind }, transactionId: request.transactionId },
         });
-        if (validatorAsked && !usesSharedChallenge(profile)) await validators.tellFailed(tx, change, profile, decidedOf(request), reason);
+        if (validatorAsked) await validators.tellFailed(tx, change, profile, decidedOf(request), reason);
         if (retryable) await transactions.release(tx, claim);
         else await transactions.refused(tx, claim, reason);
       });
@@ -218,12 +209,9 @@ export function registerScep(ctx: {
     } else if (usesSharedChallenge(profile)) {
       // First of all, so that a device without it learns nothing of the profile. Released rather than kept as the
       // transaction's answer, so that whoever does not hold the challenge cannot settle a device's transaction for it.
-      const presented = request.csr.challengePassword;
-      const id = presentedSharedChallenge(presented, profile, clock());
-      if (!id) {
-        return refused(presented === undefined ? "the request has no challengePassword: present the Enrollment Profile's Shared Challenge" : "the request's challengePassword is not the Enrollment Profile's Shared Challenge", false, true);
-      }
-      sharedChallengeId = id;
+      const checked = sharedChallenges.check(profile, request.csr.challengePassword);
+      if ("refusal" in checked) return refused(checked.refusal, false, true);
+      sharedChallengeId = checked.id;
     }
     const keyType = keyTypeOf(request);
     if (!keyType || !profile.allowedKeyTypes.includes(keyType)) {
@@ -312,7 +300,7 @@ export function registerScep(ctx: {
         });
         if (renewalOf) await supersede(tx, change, profile, renewalOf, serial);
         await transactions.issued(tx, claim, row!.id);
-        if (!usesSharedChallenge(profile)) await validators.tellIssued(tx, change, profile, decidedOf(request), { pem: certificate.toString("pem"), serial, notAfter: certificate.notAfter, issuer: certificate.issuer });
+        await validators.tellIssued(tx, change, profile, decidedOf(request), { pem: certificate.toString("pem"), serial, notAfter: certificate.notAfter, issuer: certificate.issuer });
       });
     } catch (err) {
       // Signed but not stored: it is answered as refused, so no device holds a Device Certificate the platform does not know of.

@@ -12,7 +12,7 @@ const localKmsKey = process.env.LOCAL_KMS_KEY;
 if (!databaseUrl || !secret || !localKmsKey) throw new Error("DATABASE_URL, AUTH_SECRET and LOCAL_KMS_KEY are required");
 
 const pool = new Pool({ connectionString: databaseUrl });
-const { app, auth, db, issuances, renewals, notifications, auditForwarding, crls, enrollmentValidators, deviceCertificatePruning, sharedChallengeExpiry } = createApp({
+const { app, auth, db, issuances, renewals, notifications, auditForwarding, crls, enrollmentValidators, deviceCertificatePruning, sharedChallenges } = createApp({
   pool,
   mailer: new ConsoleMailer(),
   clock: () => new Date(),
@@ -87,7 +87,7 @@ const PRUNING_PASS_MS = 3_600_000;
 // the one before it. A device presenting one is refused from its expiry on regardless.
 const SHARED_CHALLENGE_EXPIRY_PASS_MS = 60_000;
 (async function expireSharedChallenges() {
-  await sharedChallengeExpiry.expire().catch((err) => console.error("Shared Challenge expiry pass failed", err));
+  await sharedChallenges.expire().catch((err) => console.error("Shared Challenge expiry pass failed", err));
   setTimeout(expireSharedChallenges, SHARED_CHALLENGE_EXPIRY_PASS_MS);
 })();
 

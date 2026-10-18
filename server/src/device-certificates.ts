@@ -2,16 +2,16 @@
 // enrolled for (scep.ts), kept apart from the Managed Certificates. A fleet has thousands, so the list is paged on the
 // server and searched there, by subject, subject alternative name, serial or the device ID its Enrollment Validator
 // knows the device by, and filtered by status. Each can be looked at and its certificate downloaded, and revoked, which
-// puts it on its Issuing CA's CRL in the same change (as its Enrollment Validator's feed does, enrollment-validators.ts).
+// puts it on its Issuing CA's CRL in the same change (device-certificate-revocation.ts).
 import { OpenAPIHono, createRoute, z } from "@hono/zod-openapi";
 import { and, desc, eq, gt, isNotNull, isNull, lte, or, sql, type SQL } from "drizzle-orm";
 import type { Authorizer } from "./authorization";
 import { CertificateAuthorityError } from "./certificate-authority";
 import type { Db } from "./db/client";
 import { deviceCertificate, enrollmentProfile, issuingCa } from "./db/schema";
+import type { DeviceCertificateRevocations } from "./device-certificate-revocation";
 import { DEVICE_KEY_TYPES, WEAK_DEVICE_KEY_TYPE } from "./enrollment-profile-kinds";
 import { HttpError, OrgParam, PageQuery, errors, json, pageOf } from "./http";
-import type { PrivateCas } from "./private-ca";
 import { REVOCATION_REASONS_OF } from "./revocation-reasons";
 import type { Actor, UnitOfWork } from "./unit-of-work";
 
@@ -78,7 +78,6 @@ function inStatus(status: DeviceCertificateStatus, now: Date): SQL {
 }
 
 type Row = { certificate: typeof deviceCertificate.$inferSelect; issuer: string };
-type FoundRow = Row & { profileName: string };
 
 /** The Device Certificate as the API shows it; its status as `inStatus` finds it. */
 function toDeviceCertificate({ certificate: row, issuer }: Row, now: Date): z.infer<typeof DeviceCertificate> {
@@ -106,10 +105,10 @@ export function registerDeviceCertificates(ctx: {
   requireUser(c: any): Promise<Actor>;
   authorize: Authorizer["authorize"];
   unitOfWork: UnitOfWork;
-  privateCas: PrivateCas;
+  revocations: DeviceCertificateRevocations;
   clock: () => Date;
 }) {
-  const { app, db, requireUser, authorize, unitOfWork, privateCas, clock } = ctx;
+  const { app, db, requireUser, authorize, unitOfWork, revocations, clock } = ctx;
 
   /** A 404 unless the Organization has the profile. */
   async function requireProfile(orgId: string, id: string) {
@@ -125,15 +124,14 @@ export function registerDeviceCertificates(ctx: {
   const selection = { certificate: deviceCertificate, issuer: issuingCa.subject };
   const ofProfile = (orgId: string, id: string) => and(eq(deviceCertificate.organizationId, orgId), eq(deviceCertificate.enrollmentProfileId, id));
 
-  /** The profile's Device Certificate, with the profile's name; a 404 when it has none such. */
-  async function findCertificate(orgId: string, id: string, certificateId: string): Promise<FoundRow> {
+  /** The profile's Device Certificate; a 404 when it has none such. */
+  async function findCertificate(orgId: string, id: string, certificateId: string): Promise<Row> {
     await requireProfile(orgId, id);
     const [row] = isId(certificateId)
       ? await db
-          .select({ ...selection, profileName: enrollmentProfile.name })
+          .select(selection)
           .from(deviceCertificate)
           .innerJoin(issuingCa, eq(issuingCa.id, deviceCertificate.issuingCaId))
-          .innerJoin(enrollmentProfile, eq(enrollmentProfile.id, deviceCertificate.enrollmentProfileId))
           .where(and(ofProfile(orgId, id), eq(deviceCertificate.id, certificateId)))
       : [];
     if (!row) throw new HttpError(404, "Device Certificate not found");
@@ -229,26 +227,15 @@ export function registerDeviceCertificates(ctx: {
       const { reason } = c.req.valid("json");
       const actor = await requireUser(c);
       await authorize(actor, orgId, { deviceCertificate: ["revoke"] });
-      const { certificate: found, profileName } = await findCertificate(orgId, id, certificateId);
+      const { certificate: found } = await findCertificate(orgId, id, certificateId);
 
       await unitOfWork.run(actor, async (tx, change) => {
-        // Locked as the feed pass locks it, so an administrator and the feed revoking it at once take turns and the second finds it revoked.
-        const [row] = await tx.select({ revokedAt: deviceCertificate.revokedAt }).from(deviceCertificate).where(eq(deviceCertificate.id, found.id)).for("update");
-        if (row!.revokedAt) throw new HttpError(409, "the Device Certificate is already revoked");
-        await tx.update(deviceCertificate).set({ revokedAt: change.occurredAt, revocationReason: reason }).where(eq(deviceCertificate.id, found.id));
-        await change.audit({
-          organizationId: orgId,
-          action: "device_certificate.revoked",
-          target: { type: "device_certificate", id: found.id },
-          detail: { enrollmentProfile: { id, name: profileName }, serial: found.serial, subject: found.subject, reason },
-        });
-        try {
-          await privateCas.publishRevocation(tx, change, orgId, found.issuingCaId);
-        } catch (err) {
+        const [revoked] = await revocations.revoke(tx, change, orgId, [{ id: found.id, reason }]).catch((err: unknown) => {
           // As when an Issuing CA is revoked: a KMS that does not answer is 502, one that says no 422.
           if (err instanceof CertificateAuthorityError) throw new HttpError(err.kind === "unreachable" ? 502 : 422, err.message);
           throw err;
-        }
+        });
+        if (!revoked) throw new HttpError(409, "the Device Certificate is already revoked");
       });
       return c.json(toDeviceCertificate(await findCertificate(orgId, id, certificateId), clock()), 200);
     },

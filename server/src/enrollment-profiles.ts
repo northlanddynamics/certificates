@@ -33,8 +33,7 @@ import { IssuanceFailure } from "./issuance-failure";
 import { NameRules } from "./name-rules";
 import { findIssuingCa, issuingRefusal, type IssuingCaOf, type PrivateCas } from "./private-ca";
 import type { Secrets } from "./secrets";
-import { NO_PREVIOUS_SHARED_CHALLENGE, holdsValidPrevious, newSharedChallenge } from "./shared-challenge";
-import type { SharedChallengeExpiry } from "./shared-challenge-expiry";
+import { sharedChallengesOf, type SharedChallenges } from "./shared-challenge";
 import type { Actor, UnitOfWork } from "./unit-of-work";
 import { fingerprintOf } from "./fingerprint";
 
@@ -116,8 +115,7 @@ function toProfile(row: ProfileRow, of: IssuingCaOf, baseURL: string, now: Date)
     allowedKeyTypes: row.allowedKeyTypes,
     validator: { kind: row.validatorKind, settings: row.validatorSettings, hasSecret: row.validatorSecretId !== null },
     nameRules: row.nameRules,
-    sharedChallenge: row.sharedChallengeId === null ? null : { id: row.sharedChallengeId },
-    previousSharedChallenge: holdsValidPrevious(row, now) ? { id: row.previousSharedChallengeId!, expiresAt: row.previousSharedChallengeExpiresAt!.toISOString() } : null,
+    ...sharedChallengesOf(row, now),
     raCertificate: { subject: ra.subject, serial: ra.serialNumber.toUpperCase(), notAfter: ra.notAfter.toISOString() },
     enabled: row.enabled,
     retentionDays: row.retentionDays,
@@ -145,12 +143,12 @@ export function registerEnrollmentProfiles(ctx: {
   /** The validator kinds the platform runs, and how it runs a profile's. */
   kinds: EnrollmentValidators;
   validators: EnrollmentValidatorRuns;
-  sharedChallengeExpiry: SharedChallengeExpiry;
+  sharedChallenges: SharedChallenges;
   /** Where the platform is served, which SCEP URLs are under. */
   baseURL: string;
   clock: () => Date;
 }) {
-  const { app, db, requireUser, authorize, unitOfWork, secrets, privateCas, kinds, validators, sharedChallengeExpiry, baseURL, clock } = ctx;
+  const { app, db, requireUser, authorize, unitOfWork, secrets, privateCas, kinds, validators, sharedChallenges, baseURL, clock } = ctx;
 
   /** The Organization's profile with its Issuing CA and Private CA; a 404 when it has none such. */
   async function findProfile(orgId: string, id: string) {
@@ -289,7 +287,7 @@ export function registerEnrollmentProfiles(ctx: {
       const publicId = randomBytes(16).toString("hex");
       const ra = await makeRa(orgId, of.issuing.id, publicId);
       const raCertificate = ra.certificate;
-      const shared = kind.usesSharedChallenge ? newSharedChallenge() : undefined;
+      const shared = kind.usesSharedChallenge ? sharedChallenges.issue() : undefined;
       const validityDays = body.validityDays ?? (shared ? DEFAULT_SHARED_CHALLENGE_VALIDITY_DAYS : DEFAULT_DEVICE_VALIDITY_DAYS);
 
       try {
@@ -311,8 +309,7 @@ export function registerEnrollmentProfiles(ctx: {
               validatorSettings: settings,
               validatorSecretId,
               nameRules: body.nameRules ?? null,
-              sharedChallengeId: shared?.id ?? null,
-              sharedChallengeHash: shared?.hash ?? null,
+              ...shared?.held,
               retentionDays: body.retentionDays,
               raCertificatePem: raCertificate.toString("pem"),
               raKeySecretId,
@@ -331,14 +328,14 @@ export function registerEnrollmentProfiles(ctx: {
               allowedKeyTypes: body.allowedKeyTypes,
               validator: { kind: body.validator.kind, settings },
               nameRules: body.nameRules ?? null,
-              ...(shared && { sharedChallenge: { id: shared.id } }),
+              ...(shared && { sharedChallenge: { id: shared.shown.id } }),
               retentionDays: body.retentionDays,
               raCertificate: raOf(raCertificate),
             },
           });
           return row!;
         });
-        return c.json({ ...toProfile(row, of, baseURL, clock()), sharedChallenge: shared ? { id: shared.id, challenge: shared.challenge } : null }, 201);
+        return c.json({ ...toProfile(row, of, baseURL, clock()), sharedChallenge: shared?.shown ?? null }, 201);
       } catch (err) {
         if (isUniqueViolation(err)) throw taken();
         throw err;
@@ -584,35 +581,9 @@ export function registerEnrollmentProfiles(ctx: {
       const previousExpiresAt = new Date(c.req.valid("json").previousExpiresAt);
       const actor = await requireUser(c);
       await authorize(actor, orgId, { enrollmentProfile: ["update"] });
-      let found = await findProfile(orgId, id);
-      if (found.row.sharedChallengeId === null) throw new HttpError(422, `an Enrollment Validator of the kind ${found.row.validatorKind} uses no Shared Challenge`);
-      if (previousExpiresAt <= clock()) throw new HttpError(422, "previousExpiresAt must be in the future");
-      const stillValid = () => new HttpError(409, "the Enrollment Profile still holds a previous Shared Challenge that has not expired: retire it first");
-      if (holdsValidPrevious(found.row, clock())) throw stillValid();
-      // One that has expired is recorded as such, with no actor, before it is replaced.
-      if (found.row.previousSharedChallengeId !== null) {
-        await sharedChallengeExpiry.expire(id);
-        found = await findProfile(orgId, id);
-      }
-      const shared = newSharedChallenge();
-      const row = await unitOfWork.run(actor, async (tx, change) => {
-        const current = await locked(tx, found.row);
-        if (holdsValidPrevious(current, change.occurredAt)) throw stillValid();
-        if (current.previousSharedChallengeId !== null || current.sharedChallengeId !== found.row.sharedChallengeId) throw new HttpError(409, "the Enrollment Profile was changed meanwhile; ask again");
-        const [row] = await tx
-          .update(enrollmentProfile)
-          .set({ sharedChallengeId: shared.id, sharedChallengeHash: shared.hash, previousSharedChallengeId: current.sharedChallengeId, previousSharedChallengeHash: current.sharedChallengeHash, previousSharedChallengeExpiresAt: previousExpiresAt })
-          .where(eq(enrollmentProfile.id, id))
-          .returning();
-        await change.audit({
-          organizationId: orgId,
-          action: "enrollment_profile.shared_challenge_rotated",
-          target: { type: "enrollment_profile", id },
-          detail: { name: current.name, sharedChallenge: { id: shared.id }, previous: { id: current.sharedChallengeId, expiresAt: previousExpiresAt.toISOString() } },
-        });
-        return row!;
-      });
-      return c.json({ ...toProfile(row, found.of, baseURL, clock()), sharedChallenge: { id: shared.id, challenge: shared.challenge } }, 200);
+      const found = await findProfile(orgId, id);
+      const { row, shown } = await sharedChallenges.rotate(actor, found.row, previousExpiresAt);
+      return c.json({ ...toProfile(row, found.of, baseURL, clock()), sharedChallenge: shown }, 200);
     },
   );
 
@@ -632,24 +603,7 @@ export function registerEnrollmentProfiles(ctx: {
       const actor = await requireUser(c);
       await authorize(actor, orgId, { enrollmentProfile: ["update"] });
       const found = await findProfile(orgId, id);
-      const none = () => new HttpError(409, "the Enrollment Profile holds no previous Shared Challenge that has not expired");
-      if (!holdsValidPrevious(found.row, clock())) throw none();
-      const row = await unitOfWork.run(actor, async (tx, change) => {
-        const current = await locked(tx, found.row);
-        if (!holdsValidPrevious(current, change.occurredAt)) throw none();
-        const [row] = await tx
-          .update(enrollmentProfile)
-          .set(NO_PREVIOUS_SHARED_CHALLENGE)
-          .where(eq(enrollmentProfile.id, id))
-          .returning();
-        await change.audit({
-          organizationId: orgId,
-          action: "enrollment_profile.shared_challenge_retired",
-          target: { type: "enrollment_profile", id },
-          detail: { name: current.name, sharedChallenge: { id: current.previousSharedChallengeId }, expired: false },
-        });
-        return row!;
-      });
+      const row = await sharedChallenges.retire(actor, found.row);
       return c.json(toProfile(row, found.of, baseURL, clock()), 200);
     },
   );

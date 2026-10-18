@@ -7,7 +7,7 @@
 // of a change that rolled back. A revocation feed is pulled by its own pass, at most as often as its kind allows, and what
 // it hands over is stored at once, since it is not handed over again; each stored Revocation is then matched by serial
 // and issuer among the Device Certificates of the profiles that share the feed, revoked with its Issuing CA's CRL
-// published in the same change, and its outcome told back the same way. Profiles that share a feed may hold different
+// published in the same change (device-certificate-revocation.ts), and its outcome told back the same way. Profiles that share a feed may hold different
 // secrets (one rotated, one not yet), so the feed is pulled and told with the first whose validator works.
 //
 // Of an error a validator throws, only what describeValidatorError allows is shown, kept or logged.
@@ -15,6 +15,7 @@ import * as x509 from "@peculiar/x509";
 import { and, asc, eq, inArray, lte, sql } from "drizzle-orm";
 import type { Db, Tx } from "./db/client";
 import { deviceCertificate, enrollmentProfile, enrollmentValidatorFeed, enrollmentValidatorMessage, enrollmentValidatorRevocationRequest, issuingCa } from "./db/schema";
+import type { DeviceCertificateRevocations } from "./device-certificate-revocation";
 import {
   EnrollmentValidatorError,
   describeValidatorError,
@@ -25,7 +26,6 @@ import {
   type RevocationOutcome,
   type RevocationRequest,
 } from "./enrollment-validator";
-import type { PrivateCas } from "./private-ca";
 import type { Secrets } from "./secrets";
 import type { Change, UnitOfWork } from "./unit-of-work";
 
@@ -42,9 +42,13 @@ const REVOCATION_ATTEMPTS = 5;
 export interface EnrollmentValidatorRuns {
   /** The profile's validator, running with its settings and secret. Throws when the platform does not run its kind, or its configuration can no longer be used. */
   open(db: Db | Tx, profile: ProfileRow): Promise<EnrollmentValidator>;
-  /** Queues telling the profile's validator that the request was issued the certificate, on the transaction that stores it. */
+  /**
+   * Queues telling the profile's validator that the request was issued the certificate, on the transaction that stores
+   * it. Nothing is queued for a kind that uses a Shared Challenge (shared-challenge.ts): the request's CSR holds it as its
+   * challengePassword, and the platform never keeps it.
+   */
   tellIssued(tx: Tx, change: Change, profile: ProfileRow, request: DecidedRequest, certificate: IssuedDeviceCertificate): Promise<void>;
-  /** Queues telling the profile's validator that a request it was asked about was refused, on the transaction that records the refusal. */
+  /** Queues telling the profile's validator that a request it was asked about was refused, on the transaction that records the refusal; as `tellIssued`, never for a kind that uses a Shared Challenge. */
   tellFailed(tx: Tx, change: Change, profile: ProfileRow, request: DecidedRequest, reason: string): Promise<void>;
   /** One pass at the clock's time: tells validators what is due. Returns how many messages were told. */
   deliver(): Promise<number>;
@@ -73,8 +77,8 @@ function sameName(a: string, b: string) {
 /** A serial as hex in upper case, without separators or leading zeros, so that the forms validators send compare. */
 const canonicalSerial = (serial: string) => serial.toUpperCase().replace(/[^0-9A-F]/g, "").replace(/^0+(?=.)/, "");
 
-export function createEnrollmentValidatorRuns(deps: { db: Db; unitOfWork: UnitOfWork; secrets: Secrets; privateCas: PrivateCas; kinds: EnrollmentValidators; clock: () => Date }): EnrollmentValidatorRuns {
-  const { db, unitOfWork, secrets, privateCas, kinds, clock } = deps;
+export function createEnrollmentValidatorRuns(deps: { db: Db; unitOfWork: UnitOfWork; secrets: Secrets; revocations: DeviceCertificateRevocations; kinds: EnrollmentValidators; clock: () => Date }): EnrollmentValidatorRuns {
+  const { db, unitOfWork, secrets, revocations, kinds, clock } = deps;
 
   async function open(db: Db | Tx, profile: ProfileRow) {
     const kind = Object.hasOwn(kinds, profile.validatorKind) ? kinds[profile.validatorKind]! : undefined;
@@ -114,6 +118,8 @@ export function createEnrollmentValidatorRuns(deps: { db: Db; unitOfWork: UnitOf
     }
     throw last;
   }
+
+  const usesSharedChallenge = (profile: ProfileRow) => Object.hasOwn(kinds, profile.validatorKind) && kinds[profile.validatorKind]!.usesSharedChallenge === true;
 
   const queue = async (tx: Tx, change: Change, profile: ProfileRow, type: MessageRow["type"], payload: Record<string, unknown>) => {
     await tx.insert(enrollmentValidatorMessage).values({ organizationId: profile.organizationId, enrollmentProfileId: profile.id, type, payload, nextAttemptAt: change.occurredAt, createdAt: change.occurredAt });
@@ -179,17 +185,17 @@ export function createEnrollmentValidatorRuns(deps: { db: Db; unitOfWork: UnitOf
   type StoredRequest = typeof enrollmentValidatorRevocationRequest.$inferSelect;
 
   /**
-   * Revokes what the feed asked for among the Device Certificates of its profiles, publishes the CRL of each Issuing CA
-   * that revoked one, and queues telling the feed each outcome: all on the change's transaction.
+   * Revokes what the feed asked for among the Device Certificates of its profiles, with the CRL of each Issuing CA that
+   * revoked one, and queues telling the feed each outcome: all on the change's transaction.
    */
   async function revoke(tx: Tx, change: Change, feed: Feed, requests: StoredRequest[]) {
     const { organizationId, profiles } = feed;
-    const outcomes: RevocationOutcome[] = [];
-    const published = new Set<string>();
+    // Each request with the Device Certificates it matches by serial and issuer, oldest first.
+    const asked: { ref: string; ids: string[] }[] = [];
     for (const request of requests) {
       const serial = canonicalSerial(request.serial);
       const rows = await tx
-        .select({ certificate: deviceCertificate, issuer: issuingCa.subject })
+        .select({ id: deviceCertificate.id, issuer: issuingCa.subject })
         .from(deviceCertificate)
         .innerJoin(issuingCa, eq(issuingCa.id, deviceCertificate.issuingCaId))
         .where(
@@ -199,35 +205,24 @@ export function createEnrollmentValidatorRuns(deps: { db: Db; unitOfWork: UnitOf
             sql`ltrim(${deviceCertificate.serial}, '0') = ${serial.replace(/^0+/, "")}`,
           ),
         )
-        .orderBy(asc(deviceCertificate.createdAt))
-        .for("update", { of: deviceCertificate });
-      const matching = rows.filter((r) => request.issuer === null || sameName(r.issuer, request.issuer));
-      if (matching.length === 0) {
-        outcomes.push({ ref: request.ref, outcome: "not_found" });
-        continue;
-      }
-      let revoked = false;
-      for (const { certificate } of matching.filter((r) => r.certificate.revokedAt === null)) {
-        await tx.update(deviceCertificate).set({ revokedAt: change.occurredAt, revocationReason: request.reason }).where(eq(deviceCertificate.id, certificate.id));
-        const profile = profiles.find((p) => p.id === certificate.enrollmentProfileId)!;
-        await change.audit({
-          organizationId,
-          action: "device_certificate.revoked",
-          target: { type: "device_certificate", id: certificate.id },
-          detail: {
-            enrollmentProfile: { id: profile.id, name: profile.name },
-            serial: certificate.serial,
-            subject: certificate.subject,
-            reason: request.reason,
-            by: { enrollmentValidator: { kind: profile.validatorKind } },
-          },
-        });
-        published.add(certificate.issuingCaId);
-        revoked = true;
-      }
-      outcomes.push({ ref: request.ref, outcome: revoked ? "revoked" : "already_revoked" });
+        .orderBy(asc(deviceCertificate.createdAt));
+      asked.push({ ref: request.ref, ids: rows.filter((r) => request.issuer === null || sameName(r.issuer, request.issuer)).map((r) => r.id) });
     }
-    for (const issuingCaId of published) await privateCas.publishRevocation(tx, change, organizationId, issuingCaId);
+    const by = { enrollmentValidator: { kind: feed.kindName } };
+    const revoked = await revocations.revoke(
+      tx,
+      change,
+      organizationId,
+      requests.flatMap((request, i) => asked[i]!.ids.map((id) => ({ id, reason: request.reason, by }))),
+    );
+    // `revoked` answers for the requests' Device Certificates in turn.
+    let next = 0;
+    const outcomes: RevocationOutcome[] = asked.map(({ ref, ids }) => {
+      const ofRequest = revoked.slice(next, next + ids.length);
+      next += ids.length;
+      if (ids.length === 0) return { ref, outcome: "not_found" };
+      return { ref, outcome: ofRequest.includes(true) ? "revoked" : "already_revoked" };
+    });
     await queue(tx, change, profiles[0]!, "revocations", { source: feed.source, outcomes });
   }
 
@@ -305,8 +300,14 @@ export function createEnrollmentValidatorRuns(deps: { db: Db; unitOfWork: UnitOf
 
   return {
     open,
-    tellIssued: (tx, change, profile, request, certificate) => queue(tx, change, profile, "issued", { request: requestPayload(request), certificate: { ...certificate, notAfter: certificate.notAfter.toISOString() } }),
-    tellFailed: (tx, change, profile, request, reason) => queue(tx, change, profile, "failed", { request: requestPayload(request), reason }),
+    async tellIssued(tx, change, profile, request, certificate) {
+      if (usesSharedChallenge(profile)) return;
+      await queue(tx, change, profile, "issued", { request: requestPayload(request), certificate: { ...certificate, notAfter: certificate.notAfter.toISOString() } });
+    },
+    async tellFailed(tx, change, profile, request, reason) {
+      if (usesSharedChallenge(profile)) return;
+      await queue(tx, change, profile, "failed", { request: requestPayload(request), reason });
+    },
 
     async deliver() {
       const now = clock();
