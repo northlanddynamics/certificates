@@ -4,9 +4,9 @@
 import { afterAll, beforeAll, beforeEach, describe, expect, setDefaultTimeout, test } from "bun:test";
 import acme from "acme-client";
 import { randomBytes } from "node:crypto";
-import { DNS_PROVIDER_KINDS } from "../src/dns-provider-kinds";
-import { BIND, PASSWORD, createHarness, type Harness } from "./harness";
-import { INFOBLOX, startInfobloxDouble, type InfobloxDouble } from "./infoblox-double";
+import { DNS_PROVIDER_KINDS } from "../src/issuance/dcv/dns-provider-kinds";
+import { BIND, PASSWORD, createHarness, type Harness } from "./support/harness";
+import { INFOBLOX, startInfobloxDouble, type InfobloxDouble } from "./support/infoblox-double";
 
 setDefaultTimeout(60_000);
 

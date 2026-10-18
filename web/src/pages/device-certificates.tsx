@@ -13,7 +13,7 @@ import { Checkbox } from "@/components/ui/checkbox";
 import { Field, FieldLabel } from "@/components/ui/field";
 import { InputGroup, InputGroupAddon, InputGroupInput } from "@/components/ui/input-group";
 import { Select, SelectContent, SelectItem, SelectTrigger, SelectValue } from "@/components/ui/select";
-import { DEVICE_KEY_TYPE_LABELS, WEAK_DEVICE_KEY_TYPE } from "../../../server/src/enrollment-profile-kinds";
+import { DEVICE_KEY_TYPE_LABELS, WEAK_DEVICE_KEY_TYPE } from "../../../server/src/enrollment/enrollment-profile-kinds";
 import { DEVICE_CERTIFICATE_STATUSES, api, can, revocationReasonLabel, revocationReasonsOf, type DeviceCertificate, type DeviceCertificateStatus, type EnrollmentProfile, type Me } from "@/lib/api";
 
 const ROUTE = "/app/organizations/$orgId/enrollment-profiles/$id/device-certificates";

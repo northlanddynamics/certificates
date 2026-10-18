@@ -2,7 +2,7 @@
 // rules that say, per name or zone, whether DCV is Direct or Delegated and through which DNS Provider. Through the API,
 // against a real Postgres; the Issuances that use these are in delegated-dcv.test.ts.
 import { afterAll, beforeAll, beforeEach, describe, expect, test } from "bun:test";
-import { BIND, PASSWORD, createHarness, type Harness } from "./harness";
+import { BIND, PASSWORD, createHarness, type Harness } from "./support/harness";
 
 let h: Harness;
 let operator: string;

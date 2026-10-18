@@ -6,8 +6,8 @@
 import acme from "acme-client";
 import { afterAll, beforeAll, beforeEach, describe, expect, setDefaultTimeout, test } from "bun:test";
 import { randomBytes } from "node:crypto";
-import { TestAgent } from "./agent-double";
-import { BIND, PASSWORD, createHarness, type Harness } from "./harness";
+import { TestAgent } from "./support/agent-double";
+import { BIND, PASSWORD, createHarness, type Harness } from "./support/harness";
 
 setDefaultTimeout(60_000);
 

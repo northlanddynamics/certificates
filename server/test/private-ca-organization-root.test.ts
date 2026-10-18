@@ -6,7 +6,7 @@ import { afterAll, beforeAll, beforeEach, describe, expect, test } from "bun:tes
 import * as x509 from "@peculiar/x509";
 import acme from "acme-client";
 import { webcrypto } from "node:crypto";
-import { PASSWORD, createHarness, type Harness } from "./harness";
+import { PASSWORD, createHarness, type Harness } from "./support/harness";
 
 let h: Harness;
 /** The harness's clock, which the Organization's own certificates here are dated by. */

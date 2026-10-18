@@ -6,7 +6,7 @@ import { Pkcs10CertificateRequest } from "@peculiar/x509";
 import acme from "acme-client";
 import { X509Certificate, createHash, randomBytes } from "node:crypto";
 import { generateCsr } from "../../web/src/lib/csr-generator";
-import { BIND, PASSWORD, createHarness, type Harness } from "./harness";
+import { BIND, PASSWORD, createHarness, type Harness } from "./support/harness";
 
 setDefaultTimeout(60_000);
 

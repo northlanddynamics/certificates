@@ -2,8 +2,8 @@
 // Better Auth guarantees and on the platform's additions: audit in the same transaction, serialised changes,
 // the removal hook, and the allowlist (every endpoint it serves is covered in organization-changes.test.ts).
 import { afterAll, beforeAll, beforeEach, describe, expect, test } from "bun:test";
-import { declaredPermissions, roleCan, type Permissions } from "../src/permissions";
-import { PASSWORD, createHarness, type Harness } from "./harness";
+import { declaredPermissions, roleCan, type Permissions } from "../src/tenancy/permissions";
+import { PASSWORD, createHarness, type Harness } from "./support/harness";
 
 let h: Harness;
 let operator: string;

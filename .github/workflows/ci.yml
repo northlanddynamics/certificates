@@ -31,7 +31,7 @@ jobs:
         run: |
           bun run auth:generate
           bun run db:generate
-          git diff --exit-code -- server/src/db server/drizzle
+          git diff --exit-code -- server/src/platform/db server/drizzle
           test -z "$(git status --porcelain server/drizzle)"
       # The tests' other servers: Pebble (the CA) and BIND (an RFC 2136 DNS server), from docker-compose.yml.
       # Postgres is the service container above, so only these two are started.

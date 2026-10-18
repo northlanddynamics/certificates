@@ -1,5 +1,5 @@
 // The names a CSR may ask for, checked as the platform checks them: these rules are a copy of `normalizeName` in
-// server/src/names.ts (the web package shares no code with the server), and server/test/csr-generator.test.ts holds
+// server/src/pki/names.ts (the web package shares no code with the server), and server/test/csr-generator.test.ts holds
 // the two to each other. A name is a hostname in lower case, or a wildcard: `*.` and then a hostname. No IP
 // addresses, and no underscores.
 const LABEL = "[a-z0-9]([a-z0-9-]{0,61}[a-z0-9])?";

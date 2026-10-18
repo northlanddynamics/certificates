@@ -1,7 +1,7 @@
 // Package dnsrelay carries out the DNS Provider operations the platform relays through this Agent: publishing and removing
 // the TXT records of Domain Control Validation, and testing a connection, in DNS the platform cannot reach. It is the
 // Agent's own implementation of each kind of DNS Provider, behaving as the platform's does when it runs one directly
-// (server/src/dns-provider.ts): the same settings, the same refusals, the same messages. A provider is plain data (its
+// (server/src/issuance/dcv/dns-provider.ts): the same settings, the same refusals, the same messages. A provider is plain data (its
 // type, settings and secret) that arrives with each operation, so nothing here keeps a secret between operations.
 package dnsrelay
 

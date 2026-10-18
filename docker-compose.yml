@@ -17,7 +17,7 @@ services:
       retries: 30
 
   # Let's Encrypt's ACME test server, the CA in tests. Its directory is https://localhost:14000/dir, served with a
-  # certificate from the minica root in server/test/pebble/minica.pem. It checks DNS-01 challenges against BIND, so
+  # certificate from the minica root in server/test/support/pebble/minica.pem. It checks DNS-01 challenges against BIND, so
   # a record the platform publishes there through RFC 2136 is the one the CA sees.
   pebble:
     image: ghcr.io/letsencrypt/pebble:latest

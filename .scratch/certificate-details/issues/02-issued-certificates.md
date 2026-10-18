@@ -19,7 +19,7 @@
 ## Comments
 
 Implemented. Notes:
-- `GET …/certificates/:certificateId` returns the list item's fields plus `subject`, `issuer`, `signatureAlgorithm` (such as "ECDSA with SHA-256"), `chain` (leaf and served intermediates, each with subject, issuer, serial, fingerprint and validity) and `acmeAccount: { id, environment }`, read from the stored chain (`server/src/certificate-facts.ts`). Scenarios are in `server/test/certificate-facts.test.ts`.
+- `GET …/certificates/:certificateId` returns the list item's fields plus `subject`, `issuer`, `signatureAlgorithm` (such as "ECDSA with SHA-256"), `chain` (leaf and served intermediates, each with subject, issuer, serial, fingerprint and validity) and `acmeAccount: { id, environment }`, read from the stored chain (`server/src/pki/certificate-facts.ts`). Scenarios are in `server/test/certificate-facts.test.ts`.
 - Visibility follows `GET …/managed-certificates/:id`: a Member of the Organization who may not see it gets 403 there and here, another Organization gets 404, and the page shows both as "not found". A Certificate of another Managed Certificate is 404.
 - The Certificate list item already carried its serial; nothing changed there.
 - `subject` is empty for Pebble's (and Let's Encrypt's short-lived) Certificates, which carry their names only as subject alternative names; the side sheet then shows only "Subject names".

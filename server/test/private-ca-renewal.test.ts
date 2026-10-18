@@ -7,8 +7,8 @@ import { afterAll, beforeAll, beforeEach, describe, expect, test } from "bun:tes
 import * as x509 from "@peculiar/x509";
 import acme from "acme-client";
 import { createHash, createPublicKey } from "node:crypto";
-import { TestAgent } from "./agent-double";
-import { PASSWORD, createHarness, type Harness } from "./harness";
+import { TestAgent } from "./support/agent-double";
+import { PASSWORD, createHarness, type Harness } from "./support/harness";
 
 let h: Harness;
 let operator: string;

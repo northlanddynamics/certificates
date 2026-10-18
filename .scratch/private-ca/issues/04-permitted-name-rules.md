@@ -16,7 +16,7 @@
 
 Implemented. Notes for the tickets that follow:
 
-- The rules are `permittedNames: { exact, zones }` on a Private CA (columns `permitted_exact_names`, `permitted_zones`); the matching and normalisation are in `server/src/permitted-names.ts`. An exact wildcard permits that wildcard alone; a zone permits its name and everything beneath it, wildcards included. At least one rule is required on create and update.
+- The rules are `permittedNames: { exact, zones }` on a Private CA (columns `permitted_exact_names`, `permitted_zones`); the matching and normalisation are in `server/src/private-ca/permitted-names.ts`. An exact wildcard permits that wildcard alone; a zone permits its name and everything beneath it, wildcards included. At least one rule is required on create and update.
 - A Private CA made before this ticket has no rules and issues for nothing until an Organization Administrator sets them.
 - `PATCH /api/organizations/{orgId}/private-cas/{id}` takes `permittedNames`; ticket 05 adds the validity fields to the same body and to `private_ca.updated`'s `detail` (`{ from, to }` per field changed). A change to identical rules is no event.
 - The Issuance backstop is `name_not_permitted`. Approving a proposal or a name change does not re-check the rules; the backstop catches rules narrowed in between.

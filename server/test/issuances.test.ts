@@ -6,10 +6,10 @@
 import { afterAll, beforeAll, beforeEach, describe, expect, test } from "bun:test";
 import { randomBytes } from "node:crypto";
 import { eq } from "drizzle-orm";
-import { listAudit } from "../src/audit";
-import { acmeAccount, certificate, issuance, managedCertificate, secret } from "../src/db/schema";
-import { refusalMessage, renewsAutomatically, type IssuanceIntent, type Refusal } from "../src/issuance";
-import { PASSWORD, createHarness, type Harness } from "./harness";
+import { listAudit } from "../src/audit/audit";
+import { acmeAccount, certificate, issuance, managedCertificate, secret } from "../src/platform/db/schema";
+import { refusalMessage, renewsAutomatically, type IssuanceIntent, type Refusal } from "../src/issuance/issuance";
+import { PASSWORD, createHarness, type Harness } from "./support/harness";
 
 let h: Harness;
 let orgId: string;

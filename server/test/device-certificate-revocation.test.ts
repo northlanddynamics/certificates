@@ -4,8 +4,8 @@
 import { afterAll, beforeAll, beforeEach, expect, test } from "bun:test";
 import * as x509 from "@peculiar/x509";
 import { randomUUID } from "node:crypto";
-import { PASSWORD, createHarness, type Harness } from "./harness";
-import { scepDevice } from "./scep-device";
+import { PASSWORD, createHarness, type Harness } from "./support/harness";
+import { scepDevice } from "./support/scep-device";
 
 let h: Harness;
 let operator: string;

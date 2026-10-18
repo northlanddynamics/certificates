@@ -4,8 +4,8 @@ import { describe, expect, test } from "bun:test";
 import * as x509 from "@peculiar/x509";
 import { readFileSync } from "node:fs";
 import { createPrivateKey } from "node:crypto";
-import { KEY_ALGORITHMS, parseCsr, type KeyAlgorithm } from "../src/csr";
-import { MAX_NAMES, normalizeName } from "../src/names";
+import { KEY_ALGORITHMS, parseCsr, type KeyAlgorithm } from "../src/pki/csr";
+import { MAX_NAMES, normalizeName } from "../src/pki/names";
 import { defaultHash, generateCsr, hashNote, SIGNATURE_HASHES } from "../../web/src/lib/csr-generator";
 
 const GENERATOR = new URL("../../web/src/lib/csr-generator.ts", import.meta.url);

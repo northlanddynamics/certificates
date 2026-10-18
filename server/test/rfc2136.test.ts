@@ -3,10 +3,10 @@
 import { createServer, type Server } from "node:net";
 import { Resolver } from "node:dns/promises";
 import { afterAll, describe, expect, test } from "bun:test";
-import { DnsProviderError, type DnsProvider } from "../src/dns-provider";
-import { DNS_PROVIDER_KINDS } from "../src/dns-provider-kinds";
-import { createRfc2136, type Rfc2136Settings } from "../src/rfc2136";
-import { BIND } from "./harness";
+import { DnsProviderError, type DnsProvider } from "../src/issuance/dcv/dns-provider";
+import { DNS_PROVIDER_KINDS } from "../src/issuance/dcv/dns-provider-kinds";
+import { createRfc2136, type Rfc2136Settings } from "../src/issuance/dcv/rfc2136";
+import { BIND } from "./support/harness";
 
 // A resolver of its own for each question, so that nothing is answered from a cache.
 const resolve = (name: string) => {

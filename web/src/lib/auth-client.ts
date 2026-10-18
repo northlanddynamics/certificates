@@ -1,5 +1,5 @@
 // Better Auth's client, for what is Better Auth's alone: signing in with a second factor, a passkey or SSO, and a user's own
-// TOTP and passkeys (served on the platform API under /api/auth; see server/src/account-security.ts).
+// TOTP and passkeys (served on the platform API under /api/auth; see server/src/tenancy/account-security.ts).
 import { passkeyClient } from "@better-auth/passkey/client";
 import { ssoClient } from "@better-auth/sso/client";
 import { twoFactorClient } from "better-auth/client/plugins";

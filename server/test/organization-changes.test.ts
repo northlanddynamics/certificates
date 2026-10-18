@@ -2,8 +2,8 @@
 // Event on success, and an actor who may not make the change is refused and leaves no trace. A new endpoint
 // added to the allowlist fails here until it has a scenario, so one cannot be exposed without its hooks.
 import { afterAll, beforeAll, beforeEach, describe, expect, test } from "bun:test";
-import { organizationChangeEndpoints } from "../src/organization-changes";
-import { PASSWORD, createHarness, type Harness } from "./harness";
+import { organizationChangeEndpoints } from "../src/tenancy/organization-changes";
+import { PASSWORD, createHarness, type Harness } from "./support/harness";
 
 let h: Harness;
 beforeAll(async () => {

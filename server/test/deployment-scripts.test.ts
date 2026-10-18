@@ -4,7 +4,7 @@
 import * as acme from "acme-client";
 import { randomBytes } from "node:crypto";
 import { afterAll, beforeAll, beforeEach, describe, expect, test } from "bun:test";
-import { BIND, PASSWORD, createHarness, type Harness } from "./harness";
+import { BIND, PASSWORD, createHarness, type Harness } from "./support/harness";
 
 let h: Harness;
 let operator: string;

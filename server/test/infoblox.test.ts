@@ -1,9 +1,9 @@
 // The Infoblox DNS Provider at its boundary: WAPI over HTTPS, spoken to a double of Infoblox's WAPI
 // (test/infoblox-double.ts) that checks the credentials and answers as NIOS does.
 import { afterAll, beforeAll, beforeEach, describe, expect, test } from "bun:test";
-import { DnsProviderError, type DnsProvider } from "../src/dns-provider";
-import { DNS_PROVIDER_KINDS } from "../src/dns-provider-kinds";
-import { INFOBLOX, startInfobloxDouble, type InfobloxDouble } from "./infoblox-double";
+import { DnsProviderError, type DnsProvider } from "../src/issuance/dcv/dns-provider";
+import { DNS_PROVIDER_KINDS } from "../src/issuance/dcv/dns-provider-kinds";
+import { INFOBLOX, startInfobloxDouble, type InfobloxDouble } from "./support/infoblox-double";
 
 let wapi: InfobloxDouble;
 beforeAll(async () => {

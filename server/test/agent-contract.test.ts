@@ -2,8 +2,8 @@
 // from it: this fails when the protocol the platform serves has moved on from that copy. `bun run contract:export` updates it.
 import { afterAll, beforeAll, expect, test } from "bun:test";
 import { readFileSync } from "node:fs";
-import { agentContract, serializeContract } from "../src/agent-contract";
-import { createHarness, type Harness } from "./harness";
+import { agentContract, serializeContract } from "../src/agents/agent-contract";
+import { createHarness, type Harness } from "./support/harness";
 
 let h: Harness;
 beforeAll(async () => {

@@ -3,9 +3,9 @@
 // Organization Administrator can require MFA, after which a password user without it must set it up before going on.
 // The authenticator app and the passkey are doubles in the test (totp.ts, passkey-double.ts); time for TOTP codes is real.
 import { afterAll, beforeAll, beforeEach, describe, expect, setDefaultTimeout, test } from "bun:test";
-import { PASSWORD, createHarness, type Harness } from "./harness";
-import { createPasskeyDouble, type PasskeyDouble } from "./passkey-double";
-import { totpCode } from "./totp";
+import { PASSWORD, createHarness, type Harness } from "./support/harness";
+import { createPasskeyDouble, type PasskeyDouble } from "./support/passkey-double";
+import { totpCode } from "./support/totp";
 
 setDefaultTimeout(30_000);
 

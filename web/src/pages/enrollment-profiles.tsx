@@ -21,7 +21,7 @@ import {
   type DeviceExtendedKeyUsage,
   type DeviceKeyType,
   type DeviceKeyUsage,
-} from "../../../server/src/enrollment-profile-kinds";
+} from "../../../server/src/enrollment/enrollment-profile-kinds";
 import { ConfirmDialog } from "@/components/confirm-dialog";
 import { CopyButton } from "@/components/copy-button";
 import { Alert, AlertDescription, AlertTitle } from "@/components/ui/alert";
@@ -67,7 +67,7 @@ const STEPS = [
 type StepId = (typeof STEPS)[number]["id"];
 
 // An Intune Enrollment Validator is configured with the Entra app that signs in to Graph and Intune: a tenant (its ID
-// or a domain of it) and an app ID. The server checks them too (server/src/intune.ts).
+// or a domain of it) and an app ID. The server checks them too (server/src/enrollment/intune.ts).
 const GUID = /^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/i;
 const TENANT = /^([0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}|([a-z0-9]([a-z0-9-]{0,61}[a-z0-9])?\.)+[a-z]{2,63})$/i;
 const VALIDATOR_LABEL: Record<string, string> = { intune: "Microsoft Intune", shared_challenge: "Shared Challenge" };

@@ -4,10 +4,10 @@
 // device, an administrator and a relying party see: SCEP answers, the certificates, the API and Audit Events.
 import { afterAll, beforeAll, beforeEach, describe, expect, test } from "bun:test";
 import * as x509 from "@peculiar/x509";
-import { PASSWORD, PKI_BASE_URL, createHarness, type Harness } from "./harness";
+import { PASSWORD, PKI_BASE_URL, createHarness, type Harness } from "./support/harness";
 import { FailInfo, ScepFailureError, generateRsaKeyPair, type CreateCsrOptions } from "ts-scep";
-import { scepDevice } from "./scep-device";
-import { DOUBLE_SECRET } from "./enrollment-validator-double";
+import { scepDevice } from "./support/scep-device";
+import { DOUBLE_SECRET } from "./support/enrollment-validator-double";
 
 let h: Harness;
 let operator: string;
