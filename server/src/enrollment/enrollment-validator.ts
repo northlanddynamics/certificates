@@ -2,7 +2,8 @@
 // enrollment request may be issued, is told the outcome, and may feed Revocations. A kind is described by plain data (its
 // non-secret settings and its write-only secret), like a DNS Provider kind, and `create` makes a running validator from
 // them; the secret is opened only then (enrollment-validators.ts), never shown or logged. The kinds the platform runs are
-// ENROLLMENT_VALIDATOR_KINDS (enrollment-validator-kinds.ts) unless the app is given others (`AppDeps.enrollmentValidators`).
+// ENROLLMENT_VALIDATOR_KINDS (enrollment-validator-kinds.ts) unless the app is given others (`AppDeps.enrollmentValidators`),
+// and a kind is looked up by name only with `kindOf`, which gives every trait it leaves out.
 // Every kind keeps the contract in server/test/support/enrollment-validator-contract.ts.
 import type { z } from "@hono/zod-openapi";
 import type { RevocationReason } from "../pki/revocation-reasons";
@@ -129,3 +130,34 @@ export interface EnrollmentValidatorKind<Settings = any> {
 
 /** The validator kinds the platform runs, by the name a profile gives. */
 export type EnrollmentValidators = Record<string, EnrollmentValidatorKind>;
+
+/** A kind the platform runs, as callers ask it: by its name, with every trait given, false or none where the kind leaves it out. */
+export interface ResolvedEnrollmentValidatorKind extends EnrollmentValidatorKind {
+  name: string;
+  allowsRenewal: boolean;
+  usesSharedChallenge: boolean;
+  deviceIdOf(subjectAltNames: { type: string; value: string }[]): string | undefined;
+}
+
+/**
+ * The kind of this name among those the platform runs; none when it runs no such kind, as for a profile whose kind has
+ * since been taken out, which each caller refuses in its own way. The only way to look a kind up by name.
+ */
+export function kindOf(kinds: EnrollmentValidators, name: string): ResolvedEnrollmentValidatorKind | undefined {
+  if (!Object.hasOwn(kinds, name)) return undefined;
+  const kind = kinds[name]!;
+  return {
+    name,
+    settings: kind.settings,
+    ...(kind.secret && { secret: kind.secret }),
+    vouchesForNames: kind.vouchesForNames,
+    allowsRenewal: kind.allowsRenewal === true,
+    usesSharedChallenge: kind.usesSharedChallenge === true,
+    ...(kind.revocationFeed && { revocationFeed: kind.revocationFeed }),
+    deviceIdOf: (subjectAltNames) => kind.deviceIdOf?.(subjectAltNames),
+    create: (settings, secret) => kind.create(settings, secret),
+  };
+}
+
+/** Every kind the platform runs, resolved as `kindOf` gives it. */
+export const kindsOf = (kinds: EnrollmentValidators): ResolvedEnrollmentValidatorKind[] => Object.keys(kinds).map((name) => kindOf(kinds, name)!);

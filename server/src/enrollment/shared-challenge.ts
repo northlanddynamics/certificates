@@ -3,7 +3,7 @@
 // give no per-device challenge (ADR 0008). It belongs to the profile, not to a validator, and this module holds it
 // through its life: it is issued when the profile is created and shown once, the platform keeping only its hash (as it
 // does an Agent's credential); a PKCSReq's challengePassword is checked against it, in constant time, before the
-// validator is asked (scep.ts); a rotation issues a new one, shown once, and keeps the old one as the previous, which
+// validator is asked (device-enrollment.ts); a rotation issues a new one, shown once, and keeps the old one as the previous, which
 // devices may still present until it expires or is retired, so a profile holds at most two. Once its expiry has passed,
 // the expiry pass clears the previous one, with an `enrollment_profile.shared_challenge_retired` Audit Event that has no
 // actor, as if it had been retired; a device presenting it is refused from its expiry on whether or not the pass has run.

@@ -7,6 +7,7 @@ import { createApp, type AppDeps } from "../../src/app";
 import { CertificateAuthorityError, createLetsEncrypt, type AcmeEnvironment, type RevocationReason } from "../../src/issuance/acme/certificate-authority";
 import { createTxtResolver, type TxtResolver } from "../../src/issuance/dcv/dcv";
 import type { DeviceCertificateRevocations } from "../../src/enrollment/device-certificate-revocation";
+import type { DeviceEnrollment } from "../../src/enrollment/device-enrollment";
 import type { Db } from "../../src/platform/db/client";
 import { z } from "@hono/zod-openapi";
 import type { EnrollmentRequest, EnrollmentValidatorKind } from "../../src/enrollment/enrollment-validator";
@@ -74,6 +75,8 @@ export interface Harness {
   unitOfWork: UnitOfWork;
   /** The platform's Device Certificate Revocation, for tests of its interface itself. */
   deviceCertificateRevocations: DeviceCertificateRevocations;
+  /** The platform's device enrollment, which the SCEP routes adapt, for tests of its interface itself. */
+  deviceEnrollment: DeviceEnrollment;
   issuances: Issuances;
   mailer: CapturingMailer;
   /** What webhook notification channels were sent, instead of sending it; `failing` makes every post fail. */
@@ -257,7 +260,7 @@ export async function createHarness(overrides: Partial<AppDeps> = {}, { database
     enrollmentValidators: { test_allow: allowing(true), test_names: allowing(false), test_renewal: allowing(true, true), test_double: validatorDouble.kind(), intune: createIntuneKind({ fetch: intune.fetch }), shared_challenge: sharedChallenge },
     ...overrides,
   };
-  const { app, auth, db, unitOfWork, issuances, renewals, notifications, auditForwarding, crls, enrollmentValidators, deviceCertificatePruning, sharedChallenges, deviceCertificateRevocations, scep: scepRoutes } = createApp(deps);
+  const { app, auth, db, unitOfWork, issuances, renewals, notifications, auditForwarding, crls, enrollmentValidators, deviceCertificatePruning, sharedChallenges, deviceCertificateRevocations, deviceEnrollment, scep: scepRoutes } = createApp(deps);
   if (migrate) await runMigrations(pool);
   const reset = async () => {
     await issuances.idle();
@@ -299,6 +302,7 @@ export async function createHarness(overrides: Partial<AppDeps> = {}, { database
     db,
     unitOfWork,
     deviceCertificateRevocations,
+    deviceEnrollment,
     issuances,
     mailer,
     webhooks,

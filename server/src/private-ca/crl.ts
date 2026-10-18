@@ -120,7 +120,7 @@ export function createCrls({ db, unitOfWork, kms, clock }: { db: Db; unitOfWork:
           .innerJoin(certificate, eq(certificate.id, certificateRevocation.certificateId))
           .where(and(eq(certificate.organizationId, organizationId), eq(certificate.issuingCaId, issuing.id), gt(certificate.notAfter, at)))
           .orderBy(certificateRevocation.revokedAt, certificate.serial);
-        // And the Device Certificates it signed (scep.ts), which are revoked on their own rows.
+        // And the Device Certificates it signed (device-enrollment.ts), which are revoked on their own rows.
         const devices = await tx
           .select({ serial: deviceCertificate.serial, revokedAt: deviceCertificate.revokedAt, reason: deviceCertificate.revocationReason })
           .from(deviceCertificate)
