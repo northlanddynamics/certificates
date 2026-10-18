@@ -1,13 +1,24 @@
 # 02: ML-DSA signing in the KMS seam, and its ADR
 
-**What to build:** The `Kms` seam creates ML-DSA-65 and ML-DSA-87 signing keys and signs an ML-DSA external μ, implemented by the local KMS; a new ADR amends ADR 0007. See `spec.md`, "KMS signing".
+**What to build:** The KMS makes ML-DSA-65 and ML-DSA-87 signing keys bound to an Organization and signs with them through the external μ, so that a Private CA's ML-DSA keys can live in the KMS like any other CA key, and a CRL of any size can be signed. The local KMS implements it; a new ADR amends ADR 0007. See `spec.md`, "KMS seam".
 
 **Blocked by:** 01
 
 **Status:** ready-for-agent
 
-- [ ] `KeyAlgorithm` gains `ml-dsa-44`, `ml-dsa-65`, `ml-dsa-87`; `createSigningKey` accepts only the latter two for CA keys.
-- [ ] A helper computes μ from a public key and a message; the seam signs μ for ML-DSA keys and a digest for the rest. The resulting signature verifies as pure ML-DSA over the whole message with WebCrypto.
-- [ ] The local KMS generates the key with Bun's native ML-DSA, wrapped and context-bound as for the other algorithms, and signs μ with `@noble/post-quantum` (`internal.sign` with `externalMu: true`) from the key's seed, since `node:crypto` cannot sign μ.
-- [ ] The KMS contract test covers ML-DSA, including a message over 4 KB.
-- [ ] A new ADR records: ML-DSA CA keys are signed through μ; AWS KMS `EXTERNAL_MU` (checked against AWS's documentation), Google Cloud KMS (checked), Azure Key Vault (no ML-DSA keys: such Organizations cannot have an ML-DSA Private CA). ADR 0007 gains a pointer to it.
+From the prototype, what the platform computes before asking the KMS to sign:
+
+```
+tr = SHAKE256(publicKey, 64 bytes)
+μ  = SHAKE256(tr ‖ 0x00 ‖ 0x00 ‖ message, 64 bytes)   // pure ML-DSA, empty context
+```
+
+- [ ] The key algorithms gain `ml-dsa-44`, `ml-dsa-65` and `ml-dsa-87`; the KMS creates signing keys of the latter two.
+- [ ] The seam signs μ for ML-DSA keys and a digest for the rest; an ML-DSA signature is returned raw and verifies as pure ML-DSA over the whole message.
+- [ ] The local KMS makes the key with Bun's native ML-DSA, wraps it bound to its algorithm and Organization like every other key, and signs μ with `@noble/post-quantum`'s internal signing with external μ, from the key's seed.
+- [ ] The KMS signing contract covers ML-DSA-65 and ML-DSA-87: create, public key, sign and verify with WebCrypto, a message over 4 KB, and refusal under another Organization's context.
+- [ ] A new ADR, which ADR 0007 points to, records:
+  - ML-DSA CA keys are signed through μ.
+  - AWS KMS's `EXTERNAL_MU`, checked against AWS's documentation.
+  - Google Cloud KMS's support, checked.
+  - Azure Key Vault has no ML-DSA keys, so ML-DSA is refused for a Private CA where it is the KMS.

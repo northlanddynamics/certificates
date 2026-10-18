@@ -154,4 +154,4 @@ A good test checks what an outside party sees: the API's answers, the Certificat
 - Before shipping the CSR Generator's fallback, check whether `@noble/post-quantum` (prototyped at 0.7.1) has been independently audited, and record it.
 - Client support to point users at: OpenSSL 3.5 or later; Chrome 150 or later for ML-DSA roots in private PKI; Windows AD CS gained ML-DSA in its May 2026 update, with TLS still limited. Firefox and Safari do not yet verify ML-DSA certificates.
 - The CA/Browser Forum's ML-DSA ballot was still in drafting in its August 2026 minutes; if it passes, ML-DSA on an ACME CA becomes a question of which CAs offer it.
-- Implementation order is in `issues/`: the X.509 library upgrade, the KMS seam and its ADR, ML-DSA Private CAs, ML-DSA Managed Certificates with Owner custody, then the Agent and the CSR Generator in either order.
+- Implementation order is in `issues/`: the X.509 library upgrade, the KMS seam and its ADR, a tracer from ML-DSA Private CA to ML-DSA Managed Certificate, then six tickets that can run in parallel.
