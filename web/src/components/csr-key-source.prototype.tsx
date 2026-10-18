@@ -11,7 +11,7 @@ import {
   EyeOffIcon,
   KeyRoundIcon,
   LoaderIcon,
-  TerminalIcon,
+  SquareTerminalIcon,
   XIcon,
 } from "lucide-react";
 import { useEffect, useState, type ReactNode } from "react";
@@ -273,10 +273,10 @@ export function SaveKey({ state, onChange, confirm = true, showCsr = true }: { s
   );
 }
 
-const MODES: { mode: KeyMode; title: string; description: string; icon: typeof KeyRoundIcon; recommended?: boolean }[] = [
-  { mode: "generate", title: "Generate here", description: "In this browser. The key never reaches the platform.", icon: KeyRoundIcon, recommended: true },
-  { mode: "command", title: "Run a command", description: "openssl where the key is to live; it never touches a browser.", icon: TerminalIcon },
-  { mode: "paste", title: "Paste a CSR", description: "Made with your own tools. Its key type and names are read from it.", icon: ClipboardPasteIcon },
+const MODES: { mode: KeyMode; title: string; icon: typeof KeyRoundIcon }[] = [
+  { mode: "generate", title: "Generate here", icon: KeyRoundIcon },
+  { mode: "command", title: "Run a command", icon: SquareTerminalIcon },
+  { mode: "paste", title: "Paste a CSR", icon: ClipboardPasteIcon },
 ];
 
 /**
@@ -343,7 +343,7 @@ export function KeySource({
         onValueChange={(m) => onChange({ ...state, mode: m as KeyMode })}
         className={cn("grid gap-2", offered.length === 3 ? "sm:grid-cols-3" : "sm:grid-cols-2")}
       >
-        {offered.map(({ mode, title, description, icon: Icon, recommended }) => (
+        {offered.map(({ mode, title, icon: Icon }) => (
           <FieldLabel key={mode} htmlFor={`${idPrefix}-mode-${mode}`}>
             <Field orientation="horizontal">
               <FieldContent>
@@ -351,10 +351,6 @@ export function KeySource({
                   <Icon className="size-4" />
                   {title}
                 </FieldTitle>
-                <FieldDescription>
-                  {recommended && <strong className="font-medium text-primary">Recommended. </strong>}
-                  {description}
-                </FieldDescription>
               </FieldContent>
               <RadioGroupItem value={mode} id={`${idPrefix}-mode-${mode}`} />
             </Field>
