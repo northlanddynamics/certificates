@@ -139,16 +139,14 @@ function Summary({ c, keyLine }: { c: Common; keyLine: ReactNode }) {
 }
 
 const keySummary = (c: Common) =>
-  c.key.mode === "later"
-    ? `${KEY_ALGORITHM_LABELS[c.keyAlgorithm]}; the Owners give the CSR once the names are approved`
-    : c.key.mode === "generate"
+  c.key.mode === "generate"
     ? `${KEY_ALGORITHM_LABELS[c.keyAlgorithm]}, made in this browser${c.key.generated ? `; saved as ${c.key.generated.fileBase}.key.pem` : ""}`
     : `${KEY_ALGORITHM_LABELS[c.keyAlgorithm]}, your own CSR (${c.key.mode === "command" ? "openssl" : "pasted"})`;
 
 /** What would have been sent: the prototype's end. */
 function WouldSend({ c, direct, onDone }: { c: Common; direct: boolean; onDone: () => void }) {
   const csr = csrOf(c.key, c.parsedNames, c.keyAlgorithm);
-  const body = { names: c.parsedNames, keyAlgorithm: c.keyAlgorithm, csr: c.key.mode === "later" ? "(after approval)" : csr ? `${csr.slice(0, 64)}…` : "(none)", ...c.choice.request, owners: c.owners };
+  const body = { names: c.parsedNames, keyAlgorithm: c.keyAlgorithm, csr: csr ? `${csr.slice(0, 64)}…` : "(none)", ...c.choice.request, owners: c.owners };
   return (
     <div className="flex flex-1 flex-col gap-4 overflow-y-auto p-6">
       <p className="flex items-center gap-2 font-medium">
@@ -256,7 +254,6 @@ function VariantB({ org, direct, onAtRisk, onDone }: PrototypeFormProps) {
             keyAlgorithm={c.keyAlgorithm}
             onKeyAlgorithmChange={c.setKeyAlgorithm}
             onNamesChange={(names) => c.setNames(names.join("\n"))}
-            allowLater={!direct}
             state={c.key}
             onChange={c.setKey}
             saveInline={false}
@@ -354,7 +351,7 @@ function VariantC({ org, direct, onAtRisk, onDone }: PrototypeFormProps) {
           <Field orientation="horizontal">
             <Checkbox id="proto-c-own" checked={own} onCheckedChange={(on) => c.setKey(emptyKey(on === true ? "command" : "generate"))} />
             <FieldLabel htmlFor="proto-c-own" className="font-normal">
-              {direct ? "I'll make the key myself (openssl, or a CSR I already have)" : "I'll make the key myself, or give the CSR after approval"}
+              I'll make the key myself (openssl, or a CSR I already have)
             </FieldLabel>
           </Field>
           {own && (
@@ -363,8 +360,7 @@ function VariantC({ org, direct, onAtRisk, onDone }: PrototypeFormProps) {
               keyAlgorithm={c.keyAlgorithm}
               onKeyAlgorithmChange={c.setKeyAlgorithm}
               onNamesChange={(names) => c.setNames(names.join("\n"))}
-              modes={["command", "paste", "later"]}
-              allowLater={!direct}
+              modes={["command", "paste"]}
               state={c.key}
               onChange={c.setKey}
               idPrefix="proto-c"
@@ -449,7 +445,6 @@ function VariantD({ org, direct, onAtRisk, onDone }: PrototypeFormProps) {
               keyAlgorithm={c.keyAlgorithm}
               onKeyAlgorithmChange={c.setKeyAlgorithm}
               onNamesChange={(names) => c.setNames(names.join("\n"))}
-              allowLater={!direct}
               state={c.key}
               onChange={c.setKey}
               idPrefix="proto-d"
@@ -462,7 +457,7 @@ function VariantD({ org, direct, onAtRisk, onDone }: PrototypeFormProps) {
         <footer className="flex shrink-0 items-center justify-between gap-4 border-t bg-muted/50 p-4 text-sm">
           <span className="text-muted-foreground">
             {c.parsedNames.length} {c.parsedNames.length === 1 ? "name" : "names"} · {KEY_ALGORITHM_LABELS[c.keyAlgorithm]} ·{" "}
-            {c.key.mode === "later" ? "CSR after approval" : keyReady ? "CSR ready" : c.key.mode === "generate" && c.key.generated ? "key not saved" : "no CSR yet"}
+            {keyReady ? "CSR ready" : c.key.mode === "generate" && c.key.generated ? "key not saved" : "no CSR yet"}
           </span>
           <Button type="button" disabled={!ready} onClick={() => setDone(true)}>
             {direct ? "Create and issue" : "Propose"}

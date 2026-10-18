@@ -1,11 +1,10 @@
 // PROTOTYPE (branch prototype/csr-ux): throwaway. The pieces the CSR prototypes share: where the CSR comes from
-// (generated here, pasted, made with openssl, or for a Proposal, after approval), a live check of a pasted CSR against
+// (generated here, pasted, or made with openssl), a live check of a pasted CSR against
 // the names and key algorithm, and the "save your key" checkpoint.
 import {
   CheckIcon,
   CircleAlertIcon,
   ClipboardPasteIcon,
-  ClockIcon,
   CopyIcon,
   DownloadIcon,
   EyeIcon,
@@ -27,8 +26,7 @@ import { normalizedNames } from "@/lib/csr-names";
 import { fileBase, inspectCsr, matchCsr, opensslCommand, type CsrFacts } from "@/lib/csr-inspect.prototype";
 import { cn } from "@/lib/utils";
 
-/** `later`: a Proposal goes to an Approver without a CSR, and its Owner gives one once the names are approved (needs a server change). */
-export type KeyMode = "generate" | "paste" | "command" | "later";
+export type KeyMode = "generate" | "paste" | "command";
 
 export interface GeneratedKey {
   keyPem: string;
@@ -55,7 +53,6 @@ export const madeFor = (names: string[], keyAlgorithm: KeyAlgorithm) => `${names
 
 /** The CSR this state would submit, if any, for these names and this key algorithm. */
 export function csrOf(state: KeyState, names: string[], keyAlgorithm: KeyAlgorithm): string {
-  if (state.mode === "later") return "";
   if (state.mode !== "generate") return state.pasted;
   return state.generated && state.generated.madeFor === madeFor(names, keyAlgorithm) ? state.generated.csrPem : "";
 }
@@ -96,7 +93,6 @@ const pastedOf = (state: KeyState) => (state.mode === "paste" || state.mode === 
 /** Whether the state holds a CSR the server will take for these names and key algorithm (and, for a generated one, a saved key). */
 export function useKeyReady(state: KeyState, names: string[], keyAlgorithm: KeyAlgorithm, { needConfirmation = false } = {}) {
   const facts = useCsrFacts(pastedOf(state));
-  if (state.mode === "later") return true;
   if (state.mode === "generate") return csrOf(state, names, keyAlgorithm) !== "" && state.keySaved && (!needConfirmation || state.confirmed);
   return typeof facts === "object" && facts !== null && matchCsr(facts, names, keyAlgorithm).ok;
 }
@@ -281,7 +277,6 @@ const MODES: { mode: KeyMode; title: string; description: string; icon: typeof K
   { mode: "generate", title: "Generate here", description: "In this browser. The key never reaches the platform.", icon: KeyRoundIcon, recommended: true },
   { mode: "command", title: "Run a command", description: "openssl where the key is to live; it never touches a browser.", icon: TerminalIcon },
   { mode: "paste", title: "Paste a CSR", description: "Made with your own tools. Its key type and names are read from it.", icon: ClipboardPasteIcon },
-  { mode: "later", title: "After approval", description: "No key until an Approver says yes; you are asked for the CSR then.", icon: ClockIcon },
 ];
 
 /**
@@ -298,7 +293,6 @@ export function KeySource({
   state,
   onChange,
   saveInline = true,
-  allowLater = false,
   modes,
   idPrefix,
 }: {
@@ -309,8 +303,6 @@ export function KeySource({
   state: KeyState;
   onChange: (s: KeyState) => void;
   saveInline?: boolean;
-  /** For a Proposal: offer giving the CSR once the names are approved. */
-  allowLater?: boolean;
   /** Only these ways, in this order; all of them otherwise. */
   modes?: KeyMode[];
   idPrefix: string;
@@ -318,7 +310,7 @@ export function KeySource({
   const [working, setWorking] = useState(false);
   const [error, setError] = useState<string | null>(null);
   useUnloadGuard(keyAtRisk(state));
-  const offered = MODES.filter((m) => (modes ?? MODES.map((x) => x.mode)).includes(m.mode) && (m.mode !== "later" || allowLater));
+  const offered = MODES.filter((m) => (modes ?? MODES.map((x) => x.mode)).includes(m.mode));
   const stale = state.generated !== null && state.generated.madeFor !== madeFor(names, keyAlgorithm);
   const command = opensslCommand(normalizedNames(names), keyAlgorithm);
   const pasted = pastedOf(state);
@@ -349,7 +341,7 @@ export function KeySource({
       <RadioGroup
         value={state.mode}
         onValueChange={(m) => onChange({ ...state, mode: m as KeyMode })}
-        className={cn("grid gap-2", offered.length === 4 ? "sm:grid-cols-2" : offered.length === 3 ? "sm:grid-cols-3" : "sm:grid-cols-2")}
+        className={cn("grid gap-2", offered.length === 3 ? "sm:grid-cols-3" : "sm:grid-cols-2")}
       >
         {offered.map(({ mode, title, description, icon: Icon, recommended }) => (
           <FieldLabel key={mode} htmlFor={`${idPrefix}-mode-${mode}`}>
@@ -437,23 +429,6 @@ export function KeySource({
             onUseNames={onNamesChange}
           />
         </Field>
-      )}
-
-      {state.mode === "later" && (
-        <div className="flex flex-col gap-2 rounded-md border border-dashed p-4 text-sm">
-          <span className="font-medium">Nothing to make now</span>
-          <span className="text-muted-foreground">
-            The proposal goes to an Approver with just its names. If they approve, the Owners are asked for a CSR, and Issuance starts once one is given. If
-            they reject it, no key was made for nothing.
-          </span>
-          <span className="text-xs text-muted-foreground">PROTOTYPE: needs the platform to accept a Proposal without a CSR.</span>
-          {onKeyAlgorithmChange && (
-            <FieldSet className="pt-2">
-              <FieldLegend variant="label">Key type to ask for</FieldLegend>
-              <KeyAlgorithmCards value={keyAlgorithm} onChange={onKeyAlgorithmChange} idPrefix={`${idPrefix}-later-alg`} compact />
-            </FieldSet>
-          )}
-        </div>
       )}
     </div>
   );
