@@ -2,14 +2,18 @@
 // WebCrypto, and hold it to what the server accepts: a CSR the real parseCsr takes, and names the real normalizeName agrees with.
 import { describe, expect, test } from "bun:test";
 import * as x509 from "@peculiar/x509";
-import { readFileSync } from "node:fs";
+import { mkdtempSync, readFileSync, rmSync } from "node:fs";
 import { createPrivateKey } from "node:crypto";
+import { tmpdir } from "node:os";
+import { join } from "node:path";
 import { KEY_ALGORITHMS, parseCsr, type KeyAlgorithm } from "../src/pki/csr";
 import { MAX_NAMES, normalizeName } from "../src/pki/names";
 import { defaultHash, generateCsr, hashNote, SIGNATURE_HASHES } from "../../web/src/lib/csr-generator";
+import { inspectCsr, matchCsr, opensslCommand, type CsrFacts } from "../../web/src/lib/csr-inspect";
 
 const GENERATOR = new URL("../../web/src/lib/csr-generator.ts", import.meta.url);
 const NAME_RULES = new URL("../../web/src/lib/csr-names.ts", import.meta.url);
+const INSPECTOR = new URL("../../web/src/lib/csr-inspect.ts", import.meta.url);
 
 describe("generateCsr", () => {
   for (const keyAlgorithm of KEY_ALGORITHMS) {
@@ -77,6 +81,75 @@ describe("generateCsr", () => {
   });
 });
 
+// What the web reads from a pasted CSR, to say at once whether it fits, must be what parseCsr reads from it.
+describe("inspectCsr", () => {
+  for (const keyAlgorithm of KEY_ALGORITHMS) {
+    test(`reads a ${keyAlgorithm} CSR's key algorithm and names as parseCsr does`, async () => {
+      const { csrPem } = await generateCsr({ keyAlgorithm, names: ["www.example.com", "*.example.com"], commonName: "www.example.com" });
+      const facts = (await inspectCsr(csrPem)) as CsrFacts;
+      const parsed = await parseCsr(csrPem);
+      expect(facts.keyAlgorithm).toBe(parsed.keyAlgorithm);
+      expect([...facts.names].sort()).toEqual([...parsed.names].sort());
+    }, 60_000);
+  }
+
+  test("counts the CN among the names, normalised, as parseCsr does", async () => {
+    const keys = (await crypto.subtle.generateKey({ name: "ECDSA", namedCurve: "P-256" }, true, ["sign", "verify"])) as CryptoKeyPair;
+    const csr = await x509.Pkcs10CertificateRequestGenerator.create({
+      name: "CN=Only.Example.COM",
+      keys,
+      signingAlgorithm: { name: "ECDSA", hash: "SHA-256" },
+      extensions: [new x509.SubjectAlternativeNameExtension([{ type: "dns", value: "other.example.com" }])],
+    });
+    const facts = (await inspectCsr(csr.toString("pem"))) as CsrFacts;
+    expect([...facts.names].sort()).toEqual([...(await parseCsr(csr.toString("pem"))).names].sort());
+  });
+
+  test("says why when the text is not a CSR, and nothing when there is no text", async () => {
+    expect(await inspectCsr("")).toBeNull();
+    expect(await inspectCsr("-----BEGIN CERTIFICATE REQUEST-----\nnot base64\n-----END CERTIFICATE REQUEST-----")).toContain("not a PEM CSR");
+  });
+
+  test("matchCsr names what is missing, what was not asked for, and a different key algorithm", async () => {
+    const { csrPem } = await generateCsr({ keyAlgorithm: "rsa-2048", names: ["a.example.com", "b.example.com"] });
+    const facts = (await inspectCsr(csrPem)) as CsrFacts;
+    expect(matchCsr(facts, ["B.example.com", "a.example.com"], "rsa-2048")).toEqual({ missing: [], extra: [], algorithmOk: true, ok: true });
+    expect(matchCsr(facts, ["a.example.com", "c.example.com"], "ecdsa-p256")).toEqual({ missing: ["c.example.com"], extra: ["b.example.com"], algorithmOk: false, ok: false });
+  });
+});
+
+// The command the web offers for making the key on the user's own machine must make a CSR the server takes.
+describe("opensslCommand", () => {
+  for (const keyAlgorithm of ["ecdsa-p256", "ecdsa-p384", "rsa-2048"] as const) {
+    test(`makes a ${keyAlgorithm} key and a CSR parseCsr accepts with exactly the names`, async () => {
+      const names = ["www.example.com", "*.example.com"];
+      const dir = mkdtempSync(join(tmpdir(), "openssl-command-"));
+      try {
+        const run = Bun.spawnSync(["sh", "-c", opensslCommand(names, keyAlgorithm)], { cwd: dir, stderr: "pipe" });
+        expect(run.exitCode).toBe(0);
+        const parsed = await parseCsr(readFileSync(join(dir, "www.example.com.csr.pem"), "utf8"));
+        expect(parsed.keyAlgorithm).toBe(keyAlgorithm);
+        expect([...parsed.names].sort()).toEqual([...names].sort());
+        expect(readFileSync(join(dir, "www.example.com.key.pem"), "utf8")).toContain("PRIVATE KEY");
+      } finally {
+        rmSync(dir, { recursive: true, force: true });
+      }
+    }, 60_000);
+  }
+
+  test("leaves out the CN when no name fits in one", async () => {
+    const long = `${"a".repeat(60)}.${"b".repeat(10)}.example.com`;
+    const dir = mkdtempSync(join(tmpdir(), "openssl-command-"));
+    try {
+      const run = Bun.spawnSync(["sh", "-c", opensslCommand([long], "ecdsa-p256")], { cwd: dir, stderr: "pipe" });
+      expect(run.exitCode).toBe(0);
+      expect((await parseCsr(readFileSync(join(dir, `${long}.csr.pem`), "utf8"))).names).toEqual([long]);
+    } finally {
+      rmSync(dir, { recursive: true, force: true });
+    }
+  });
+});
+
 // The web package shares no code with the server, so its name rules are a copy, held to the server's here.
 describe("the web name rules", () => {
   const FIXTURES = [
@@ -105,8 +178,8 @@ describe("the web name rules", () => {
 
 describe("the generator's imports", () => {
   test("are the X.509 library and the name rules alone, and nothing sends anything, so there is nowhere for the key to go", () => {
-    const allowed = ["@peculiar/x509", "./csr-names"];
-    for (const file of [GENERATOR, NAME_RULES]) {
+    const allowed = ["@peculiar/x509", "./csr-names", "./csr-generator"];
+    for (const file of [GENERATOR, NAME_RULES, INSPECTOR]) {
       const code = readFileSync(file, "utf8").replace(/\/\*[\s\S]*?\*\//g, "").replace(/\/\/.*$/gm, "");
       const imported = [...code.matchAll(/(?:from|import)\s*\(?\s*["']([^"']+)["']/g)].map((m) => m[1]!);
       for (const specifier of imported) expect(allowed).toContain(specifier);

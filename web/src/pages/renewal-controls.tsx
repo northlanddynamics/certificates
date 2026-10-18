@@ -5,7 +5,6 @@ import { Button } from "@/components/ui/button";
 import { Input } from "@/components/ui/input";
 import { Label } from "@/components/ui/label";
 import { Select, SelectContent, SelectItem, SelectTrigger, SelectValue } from "@/components/ui/select";
-import { Textarea } from "@/components/ui/textarea";
 import { api, can, type ManagedCertificate, type Me, type RenewalPolicy } from "@/lib/api";
 import { isOwner } from "@/lib/managed-certificate";
 
@@ -39,27 +38,17 @@ export function RenewNowButton({ org, m, userId, onChanged }: { org: Me["organiz
   );
 }
 
-/** A Managed Certificate's Renewal: its policy, how it is going, and for those who may, the means to change the policy and upload a new CSR. */
+/** A Managed Certificate's Renewal: its policy, how it is going, and for those who may, the means to change the policy. A new CSR is the Key and CSR card's. */
 export function Renewal({ org, m, userId, onChanged }: { org: Me["organizations"][number]; m: ManagedCertificate; userId?: string; onChanged: () => void }) {
   // The server decides; this only keeps the controls from those who surely may not (a Team's members may, too).
   const owns = isOwner(m, userId);
   const mayPolicy = can(org, "managedCertificate", "setRenewalPolicy") || owns;
-  // An Agent makes its own CSRs: only a key the Owner holds has one uploaded.
-  const mayCsr = (can(org, "managedCertificate", "replaceCsr") || owns) && m.keyCustody === "owner";
   const settled = m.approval.status !== "pending" && m.approval.status !== "rejected";
 
   const [mode, setMode] = useState<RenewalPolicy["mode"]>(m.renewal.policy.mode);
   const [days, setDays] = useState(String(m.renewal.policy.daysBeforeExpiry));
-  const [csr, setCsr] = useState("");
   const savePolicy = useMutation({ mutationFn: (policy: RenewalPolicy) => api.setRenewalPolicy(org.id, m.id, policy), onSuccess: onChanged });
-  const upload = useMutation({
-    mutationFn: () => api.uploadCsr(org.id, m.id, csr),
-    onSuccess: () => {
-      setCsr("");
-      onChanged();
-    },
-  });
-  const error = savePolicy.error ?? upload.error;
+  const error = savePolicy.error;
   const label = m.names.join(", ");
   const changed = mode !== m.renewal.policy.mode || Number(days) !== m.renewal.policy.daysBeforeExpiry;
 
@@ -72,56 +61,33 @@ export function Renewal({ org, m, userId, onChanged }: { org: Me["organizations"
           The CA suggests renewing between {when(m.renewal.ari.window.start)} and {when(m.renewal.ari.window.end)}
         </span>
       )}
-      {(mayPolicy || mayCsr) && (
+      {mayPolicy && (
         <details>
           <summary className="cursor-pointer underline">Renewal settings</summary>
-          <div className="mt-1 flex flex-col gap-3">
-            {mayPolicy && (
-              <form
-                className="flex flex-wrap items-center gap-2"
-                onSubmit={(e: FormEvent) => {
-                  e.preventDefault();
-                  savePolicy.mutate({ mode, daysBeforeExpiry: Number(days) });
-                }}
-              >
-                <Select value={mode} onValueChange={(value) => setMode(value as RenewalPolicy["mode"])}>
-                  <SelectTrigger size="sm" aria-label={`Renewal of ${label}`}>
-                    <SelectValue />
-                  </SelectTrigger>
-                  <SelectContent>
-                    <SelectItem value="automatic">Automatic</SelectItem>
-                    <SelectItem value="manual">Manual</SelectItem>
-                  </SelectContent>
-                </Select>
-                <Label className="gap-2 font-normal">
-                  Days before expiry
-                  <Input type="number" min={1} max={365} step={1} className="w-20" aria-label={`Days before expiry of ${label}`} value={days} onChange={(e) => setDays(e.target.value)} />
-                </Label>
-                <Button type="submit" size="sm" variant="outline" disabled={!changed || savePolicy.isPending}>
-                  Save
-                </Button>
-              </form>
-            )}
-            {mayCsr && (
-              <form
-                className="flex flex-col gap-2"
-                onSubmit={(e: FormEvent) => {
-                  e.preventDefault();
-                  upload.mutate();
-                }}
-              >
-                <Label className="font-normal" htmlFor={`new-csr-${m.id}`}>
-                  New CSR for the next Renewal (same key algorithm and names)
-                </Label>
-                <Textarea id={`new-csr-${m.id}`} className="font-mono text-xs" rows={5} value={csr} onChange={(e) => setCsr(e.target.value)} />
-                <span>
-                  <Button type="submit" size="sm" variant="outline" disabled={!csr.trim() || upload.isPending}>
-                    Upload CSR
-                  </Button>
-                </span>
-              </form>
-            )}
-          </div>
+          <form
+            className="mt-1 flex flex-wrap items-center gap-2"
+            onSubmit={(e: FormEvent) => {
+              e.preventDefault();
+              savePolicy.mutate({ mode, daysBeforeExpiry: Number(days) });
+            }}
+          >
+            <Select value={mode} onValueChange={(value) => setMode(value as RenewalPolicy["mode"])}>
+              <SelectTrigger size="sm" aria-label={`Renewal of ${label}`}>
+                <SelectValue />
+              </SelectTrigger>
+              <SelectContent>
+                <SelectItem value="automatic">Automatic</SelectItem>
+                <SelectItem value="manual">Manual</SelectItem>
+              </SelectContent>
+            </Select>
+            <Label className="gap-2 font-normal">
+              Days before expiry
+              <Input type="number" min={1} max={365} step={1} className="w-20" aria-label={`Days before expiry of ${label}`} value={days} onChange={(e) => setDays(e.target.value)} />
+            </Label>
+            <Button type="submit" size="sm" variant="outline" disabled={!changed || savePolicy.isPending}>
+              Save
+            </Button>
+          </form>
         </details>
       )}
       {error && <span className="text-destructive">{error.message}</span>}

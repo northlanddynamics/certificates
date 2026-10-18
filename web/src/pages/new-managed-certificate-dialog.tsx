@@ -1,41 +1,62 @@
 import { useMutation, useQuery } from "@tanstack/react-query";
-import { CheckIcon, ClipboardCheckIcon, FingerprintIcon, GlobeIcon, LandmarkIcon, PlusIcon, UsersIcon, type LucideIcon } from "lucide-react";
+import { CheckIcon, ClipboardCheckIcon, GlobeIcon, KeyRoundIcon, LandmarkIcon, PlusIcon, ShieldCheckIcon, UsersIcon, type LucideIcon } from "lucide-react";
 import { useState, type FormEvent, type ReactNode } from "react";
-import { CsrGenerator } from "@/components/csr-generator";
-import { CsrSignatureWarning } from "@/components/csr-signature-warning";
+import { ConfirmDialog } from "@/components/confirm-dialog";
+import { KeySource, SaveKey, csrOf, emptyKeySource, keyAtRisk, useKeySourceReady, type KeySourceState } from "@/components/csr-key-source";
 import { IssuerChoiceFields, useIssuerChoice } from "@/components/issuer-choice";
 import { Breadcrumb, BreadcrumbItem, BreadcrumbList, BreadcrumbPage, BreadcrumbSeparator } from "@/components/ui/breadcrumb";
 import { Button } from "@/components/ui/button";
 import { Checkbox } from "@/components/ui/checkbox";
 import { Dialog, DialogContent, DialogDescription, DialogTitle, DialogTrigger } from "@/components/ui/dialog";
 import { Field, FieldContent, FieldDescription, FieldError, FieldGroup, FieldLabel, FieldLegend, FieldSet, FieldTitle } from "@/components/ui/field";
-import { Select, SelectContent, SelectItem, SelectTrigger, SelectValue } from "@/components/ui/select";
 import { Sidebar, SidebarContent, SidebarGroup, SidebarGroupContent, SidebarMenu, SidebarMenuButton, SidebarMenuItem, SidebarProvider } from "@/components/ui/sidebar";
 import { Textarea } from "@/components/ui/textarea";
 import { api, can, ownerFromKey, ownerKey, type ManagedCertificate, type Me } from "@/lib/api";
-import { KEY_ALGORITHMS, KEY_ALGORITHM_LABELS, type KeyAlgorithm } from "@/lib/csr-generator";
+import { KEY_ALGORITHM_LABELS, type KeyAlgorithm } from "@/lib/csr-generator";
 import { nameProblems, splitNames } from "@/lib/csr-names";
 import { permitsOnlyLabel } from "@/lib/private-ca";
 
 type Org = Me["organizations"][number];
 
-const STEPS = [
+const ALL_STEPS = [
   { id: "authority", title: "Certificate Authority", icon: LandmarkIcon },
   { id: "names", title: "Domain names", icon: GlobeIcon },
-  { id: "subject", title: "Subject", icon: FingerprintIcon },
+  { id: "key", title: "Key and CSR", icon: KeyRoundIcon },
+  // Only when the key is generated here, which is the one way the key can be lost by closing the dialog.
+  { id: "save", title: "Save your key", icon: ShieldCheckIcon },
   { id: "ownership", title: "Ownership", icon: UsersIcon },
   { id: "review", title: "Review", icon: ClipboardCheckIcon },
 ] as const satisfies readonly { id: string; title: string; icon: LucideIcon }[];
-type StepId = (typeof STEPS)[number]["id"];
+type StepId = (typeof ALL_STEPS)[number]["id"];
 
 /** The button for a new Managed Certificate, and the dialog it opens. Nothing shows for someone who may neither create nor propose one. */
 export function NewManagedCertificateDialog({ org, onCreated }: { org: Org; onCreated: (created: ManagedCertificate) => void }) {
   const [open, setOpen] = useState(false);
+  // Whether closing would lose a generated key nobody has saved, and whether we are asking about that.
+  const [atRisk, setAtRisk] = useState(false);
+  const [confirmingClose, setConfirmingClose] = useState(false);
   const direct = can(org, "managedCertificate", "create");
   if (!direct && !can(org, "managedCertificate", "propose")) return null;
 
+  const close = () => {
+    setAtRisk(false);
+    setConfirmingClose(false);
+    setOpen(false);
+  };
   return (
-    <Dialog open={open} onOpenChange={setOpen}>
+    <>
+    <ConfirmDialog
+      open={confirmingClose}
+      onOpenChange={setConfirmingClose}
+      title="Discard the key you have not saved?"
+      description="It was made in this browser and exists nowhere else. Closing throws it away, and the CSR made from it with it."
+      confirmLabel="Discard it and close"
+      dismissLabel="Keep editing"
+      pending={false}
+      error={null}
+      onConfirm={close}
+    />
+    <Dialog open={open} onOpenChange={(next) => (next ? setOpen(true) : atRisk ? setConfirmingClose(true) : close())}>
       <DialogTrigger asChild>
         <Button>
           <PlusIcon />
@@ -50,28 +71,41 @@ export function NewManagedCertificateDialog({ org, onCreated }: { org: Org; onCr
         <NewManagedCertificateForm
           org={org}
           direct={direct}
+          onAtRisk={setAtRisk}
           onCreated={(created) => {
-            setOpen(false);
+            close();
             onCreated(created);
           }}
         />
       </DialogContent>
     </Dialog>
+    </>
   );
 }
 
 // Only mounted while the dialog is open, so its form starts empty each time and the Owners are fetched only when wanted.
 // Every step's state lives here, so moving between steps never loses what was entered.
-function NewManagedCertificateForm({ org, direct, onCreated }: { org: Org; direct: boolean; onCreated: (created: ManagedCertificate) => void }) {
+function NewManagedCertificateForm({
+  org,
+  direct,
+  onAtRisk,
+  onCreated,
+}: {
+  org: Org;
+  direct: boolean;
+  onAtRisk: (atRisk: boolean) => void;
+  onCreated: (created: ManagedCertificate) => void;
+}) {
   const [step, setStep] = useState<StepId>("authority");
   const choice = useIssuerChoice(org.id, { canReadAccounts: can(org, "acmeAccount", "read"), canReadPrivateCas: can(org, "privateCa", "read") });
   const { chosenCa, validityOk } = choice;
   const [names, setNames] = useState("");
   const [keyAlgorithm, setKeyAlgorithm] = useState<KeyAlgorithm>("ecdsa-p256");
-  const [csr, setCsr] = useState("");
-  const [generating, setGenerating] = useState(false);
-  // The CSR the generator filled in, so that changing the names or key algorithm it was made for can take it back out.
-  const [generated, setGenerated] = useState<string | null>(null);
+  const [keySource, setKeySourceState] = useState<KeySourceState>(emptyKeySource());
+  const setKeySource = (next: KeySourceState) => {
+    setKeySourceState(next);
+    onAtRisk(keyAtRisk(next));
+  };
   const [owners, setOwners] = useState<string[]>([]);
   const people = useQuery({ queryKey: ["members", org.id], queryFn: () => api.members(org.id) });
   const teams = useQuery({ queryKey: ["teams", org.id], queryFn: () => api.teams(org.id) });
@@ -80,7 +114,7 @@ function NewManagedCertificateForm({ org, direct, onCreated }: { org: Org; direc
       api.createManagedCertificate(org.id, {
         names: splitNames(names),
         keyAlgorithm,
-        csr,
+        csr: csrOf(keySource, splitNames(names), keyAlgorithm),
         ...choice.request,
         owners: owners.map(ownerFromKey),
       }),
@@ -93,30 +127,37 @@ function NewManagedCertificateForm({ org, direct, onCreated }: { org: Org; direc
 
   const parsedNames = splitNames(names);
   const problems = nameProblems(parsedNames);
-  // Whether each step holds what it needs. The Authority step does unless its validity is out of range (one CA is always chosen); the Ownership and Review steps always do: Owners are optional, and Review only shows what was entered.
-  const complete: Record<StepId, boolean> = { authority: validityOk, names: problems.length === 0, subject: csr.trim() !== "", ownership: true, review: true };
-  const index = STEPS.findIndex((s) => s.id === step);
-  const last = index === STEPS.length - 1;
+  const generating = keySource.mode === "generate";
+  const keyReady = useKeySourceReady(keySource, parsedNames, keyAlgorithm);
+  const steps = ALL_STEPS.filter((s) => s.id !== "save" || generating);
+  // Whether each step holds what it needs. The Authority step does unless its validity is out of range (one CA is always chosen). The Key step does once a key is
+  // generated for these names, or a CSR that matches them is pasted; the Save step once that key is saved and the user says so. The Ownership and Review steps
+  // always do: Owners are optional, and Review only shows what was entered.
+  const complete: Record<StepId, boolean> = {
+    authority: validityOk,
+    names: problems.length === 0,
+    key: generating ? csrOf(keySource, parsedNames, keyAlgorithm) !== "" : keyReady,
+    save: keyReady && keySource.confirmed,
+    ownership: true,
+    review: true,
+  };
+  const index = Math.max(0, steps.findIndex((s) => s.id === step));
+  const last = index === steps.length - 1;
   // A step may be opened once every step before it is complete.
-  const reachable = (i: number) => STEPS.slice(0, i).every((s) => complete[s.id]);
+  const reachable = (i: number) => steps.slice(0, i).every((s) => complete[s.id]);
   const goTo = (i: number) => {
-    const target = STEPS[i];
+    const target = steps[i];
     if (target && reachable(i)) setStep(target.id);
   };
 
-  const dropGeneratedCsr = () => {
-    if (generated !== null && csr === generated) setCsr("");
-    setGenerated(null);
-  };
-
   return (
-    <SidebarProvider className="h-[min(600px,85vh)] min-h-0 items-stretch">
+    <SidebarProvider className="h-[min(640px,85vh)] min-h-0 items-stretch">
       <Sidebar collapsible="none" className="hidden border-r md:flex">
         <SidebarContent>
           <SidebarGroup>
             <SidebarGroupContent>
               <SidebarMenu>
-                {STEPS.map((s, i) => {
+                {steps.map((s, i) => {
                   const done = i < index && complete[s.id];
                   return (
                     <SidebarMenuItem key={s.id}>
@@ -137,7 +178,7 @@ function NewManagedCertificateForm({ org, direct, onCreated }: { org: Org; direc
         onSubmit={(e: FormEvent) => {
           e.preventDefault();
           if (!last) goTo(index + 1);
-          else if (STEPS.every((s) => complete[s.id])) create.mutate();
+          else if (steps.every((s) => complete[s.id])) create.mutate();
         }}
       >
         <header className="flex h-14 shrink-0 items-center justify-between gap-2 px-4 pr-12">
@@ -146,12 +187,12 @@ function NewManagedCertificateForm({ org, direct, onCreated }: { org: Org; direc
               <BreadcrumbItem className="hidden md:block">{direct ? "New Managed Certificate" : "Propose a Managed Certificate"}</BreadcrumbItem>
               <BreadcrumbSeparator className="hidden md:block" />
               <BreadcrumbItem>
-                <BreadcrumbPage>{STEPS[index]?.title}</BreadcrumbPage>
+                <BreadcrumbPage>{steps[index]?.title}</BreadcrumbPage>
               </BreadcrumbItem>
             </BreadcrumbList>
           </Breadcrumb>
           <span className="text-xs text-muted-foreground">
-            Step {index + 1} of {STEPS.length}
+            Step {index + 1} of {steps.length}
           </span>
         </header>
         <div className="flex flex-1 flex-col gap-4 overflow-y-auto p-4 pt-0">
@@ -177,11 +218,7 @@ function NewManagedCertificateForm({ org, direct, onCreated }: { org: Org; direc
                   autoFocus
                   value={names}
                   aria-invalid={names.trim() !== "" && problems.length > 0}
-                  onChange={(e) => {
-                    setNames(e.target.value);
-                    // Only a change to the names themselves, not to the spaces between them, makes the CSR wrong.
-                    if (splitNames(e.target.value).join("\n") !== parsedNames.join("\n")) dropGeneratedCsr();
-                  }}
+                  onChange={(e) => setNames(e.target.value)}
                 />
                 <FieldDescription>One per line; wildcards as *.example.com. The certificate is issued for exactly these names.</FieldDescription>
                 {chosenCa && <FieldDescription>{permitsOnlyLabel(chosenCa)}</FieldDescription>}
@@ -195,62 +232,28 @@ function NewManagedCertificateForm({ org, direct, onCreated }: { org: Org; direc
             </FieldGroup>
           )}
 
-          {step === "subject" && (
-            <FieldGroup>
-              <Field>
-                <FieldLabel htmlFor="new-mc-algorithm">Key algorithm</FieldLabel>
-                <Select
-                  value={keyAlgorithm}
-                  onValueChange={(value) => {
-                    setKeyAlgorithm(value as KeyAlgorithm);
-                    dropGeneratedCsr();
-                  }}
-                >
-                  <SelectTrigger id="new-mc-algorithm" className="w-full">
-                    <SelectValue />
-                  </SelectTrigger>
-                  <SelectContent>
-                    {KEY_ALGORITHMS.map((value) => (
-                      <SelectItem key={value} value={value}>
-                        {KEY_ALGORITHM_LABELS[value]}
-                      </SelectItem>
-                    ))}
-                  </SelectContent>
-                </Select>
-                <FieldDescription>The type of key the CSR is made for. Changing it takes back a CSR that was generated here.</FieldDescription>
-              </Field>
-              <Field>
-                <FieldLabel htmlFor="new-mc-csr">CSR</FieldLabel>
-                <Textarea id="new-mc-csr" className="font-mono text-xs" rows={6} value={csr} onChange={(e) => setCsr(e.target.value)} />
-                <CsrSignatureWarning pem={csr} />
-                <FieldDescription>PEM, for a key you keep; it must ask for exactly the names from the previous step.</FieldDescription>
-                {generating ? (
-                  <div className="flex flex-col gap-3 rounded-md border p-4">
-                    <CsrGenerator
-                      names={parsedNames}
-                      keyAlgorithm={keyAlgorithm}
-                      locked
-                      onUse={(pem) => {
-                        setCsr(pem);
-                        setGenerated(pem);
-                        setGenerating(false);
-                      }}
-                    />
-                    <div>
-                      <Button type="button" variant="ghost" size="sm" onClick={() => setGenerating(false)}>
-                        Close the generator
-                      </Button>
-                    </div>
-                  </div>
-                ) : (
-                  <div>
-                    <Button type="button" variant="outline" size="sm" onClick={() => setGenerating(true)}>
-                      Generate a key and CSR here
-                    </Button>
-                  </div>
-                )}
-              </Field>
-            </FieldGroup>
+          {step === "key" && (
+            <FieldSet>
+              <FieldLegend>How will you provide the CSR?</FieldLegend>
+              <KeySource
+                names={parsedNames}
+                keyAlgorithm={keyAlgorithm}
+                onKeyAlgorithmChange={setKeyAlgorithm}
+                onNamesChange={(asked) => setNames(asked.join("\n"))}
+                state={keySource}
+                onChange={setKeySource}
+                saveInline={false}
+                idPrefix="new-mc-key"
+              />
+            </FieldSet>
+          )}
+
+          {step === "save" && (
+            <FieldSet>
+              <FieldLegend>Save your private key</FieldLegend>
+              <FieldDescription>Next stays off until you have downloaded or copied it. Closing this dialog before then asks first.</FieldDescription>
+              <SaveKey state={keySource} onChange={setKeySource} confirm />
+            </FieldSet>
           )}
 
           {step === "ownership" && (
@@ -289,7 +292,13 @@ function NewManagedCertificateForm({ org, direct, onCreated }: { org: Org; direc
                   validity={choice.validityText}
                   names={parsedNames}
                   keyAlgorithm={keyAlgorithm}
-                  csr={generated !== null && csr === generated ? "Generated in this browser" : "Provided"}
+                  csr={
+                    generating && keySource.generated
+                      ? `Generated in this browser; the key saved as ${keySource.generated.fileBase}.key.pem`
+                      : keySource.mode === "command"
+                        ? "Made with openssl"
+                        : "Pasted"
+                  }
                   owners={ownerChoices.filter((c) => owners.includes(c.key)).map((c) => c.label)}
                 />
               </FieldSet>

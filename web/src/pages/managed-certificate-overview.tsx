@@ -6,6 +6,7 @@ import { caLabel, issuerLabel, keyAlgorithmLabel } from "@/lib/managed-certifica
 import { chosenValidityLabel } from "@/lib/private-ca";
 import { useCertificateFacts, useManagedCertificatePage } from "@/lib/use-managed-certificate";
 import { IssuerControls } from "./issuer-controls";
+import { KeyAndCsrCard } from "./key-and-csr-card";
 import { NameChange } from "./name-change-controls";
 import { Owners } from "./owner-controls";
 import { Renewal } from "./renewal-controls";
@@ -64,7 +65,7 @@ export function ManagedCertificateOverview() {
             <ProposalStatus m={m} />
           </dl>
           <IssuerControls org={org} m={m} onChanged={refresh} />
-          {!m.archivedAt && m.keyCustody === "owner" && <NameChange org={org} m={m} userId={userId} onChanged={refresh} />}
+          <NameChange org={org} m={m} userId={userId} onChanged={refresh} />
         </CardContent>
       </Card>
 
@@ -104,6 +105,8 @@ export function ManagedCertificateOverview() {
           )}
         </CardContent>
       </Card>
+
+      <KeyAndCsrCard org={org} m={m} userId={userId} onChanged={refresh} />
 
       <Card>
         <CardHeader>

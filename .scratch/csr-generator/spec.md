@@ -52,7 +52,7 @@ A **CSR Generator** in the web app that makes a key pair and a CSR entirely in t
 
 ## Out of Scope
 
-- A general CSR decoder or checker (the pasted-CSR warning reads the signature algorithm and nothing else).
+- A general CSR decoder or checker. (Revised by ticket 04: a pasted CSR's key algorithm and names are read too, to check it against the form at once; nothing else is.)
 - Importing an existing key to sign a CSR.
 - Certificate chain tools.
 - Remembering anything between visits, such as recently used subject fields.
