@@ -6,7 +6,7 @@ import { mkdtempSync, readFileSync, rmSync } from "node:fs";
 import { createPrivateKey } from "node:crypto";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
-import { KEY_ALGORITHMS, parseCsr, type KeyAlgorithm } from "../src/pki/csr";
+import { CLASSICAL_KEY_ALGORITHMS as KEY_ALGORITHMS, parseCsr, type ClassicalKeyAlgorithm as KeyAlgorithm } from "../src/pki/csr";
 import { MAX_NAMES, normalizeName } from "../src/pki/names";
 import { defaultHash, generateCsr, hashNote, SIGNATURE_HASHES } from "../../web/src/lib/csr-generator";
 import { inspectCsr, matchCsr, opensslCommand, type CsrFacts } from "../../web/src/lib/csr-inspect";
@@ -88,7 +88,7 @@ describe("inspectCsr", () => {
       const { csrPem } = await generateCsr({ keyAlgorithm, names: ["www.example.com", "*.example.com"], commonName: "www.example.com" });
       const facts = (await inspectCsr(csrPem)) as CsrFacts;
       const parsed = await parseCsr(csrPem);
-      expect(facts.keyAlgorithm).toBe(parsed.keyAlgorithm);
+      expect(parsed.keyAlgorithm).toBe(facts.keyAlgorithm!);
       expect([...facts.names].sort()).toEqual([...parsed.names].sort());
     }, 60_000);
   }

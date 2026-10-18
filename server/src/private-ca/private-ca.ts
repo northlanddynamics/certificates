@@ -14,7 +14,7 @@ import type { Authorizer } from "../tenancy/authorization";
 import { makeCaCsr, makeDeviceCertificate, makeIssuingCa, makeRaCertificate, makeRoot, makeTlsServer, nameConstraintsOf, parseSubject, rootSubjectOf, signedCertificateRefusal, subjectAltNamesOf, type CaKey, type Signer } from "../pki/ca-certificates";
 import { ACME_ENVIRONMENTS, CertificateAuthorityError, type AcmeEnvironment } from "../issuance/acme/certificate-authority";
 import { publicationOf, type Crls } from "./crl";
-import { KEY_ALGORITHMS } from "../pki/csr";
+import { CLASSICAL_KEY_ALGORITHMS, KEY_ALGORITHMS } from "../pki/csr";
 import type { Db, Tx } from "../platform/db/client";
 import { issuingCa, privateCa } from "../platform/db/schema";
 import { HttpError, OrgParam, errors, isUniqueViolation, json } from "../platform/http";
@@ -477,7 +477,7 @@ export function registerPrivateCas(ctx: {
                 name: z.string().trim().min(1).max(100),
                 kind: z.enum(PRIVATE_CA_KINDS).default("platform_root"),
                 subject: z.string().min(1).max(1000).openapi({ example: "CN=Acme Internal TLS, O=Acme" }),
-                keyAlgorithm: z.enum(KEY_ALGORITHMS).default("ecdsa-p256"),
+                keyAlgorithm: z.enum(CLASSICAL_KEY_ALGORITHMS).default("ecdsa-p256"),
                 lifetimeYears: z.number().int().min(1).max(MAX_LIFETIME_YEARS).optional().openapi({ description: "For a platform-made root and its Issuing CA: 10 unless given. Not for an Organization's own root." }),
                 permittedNames: PermittedNamesField,
                 validity: ValidityField.default(DEFAULT_VALIDITY),

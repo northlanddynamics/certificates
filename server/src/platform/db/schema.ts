@@ -10,6 +10,7 @@ import type { IssuanceFailureCode } from "../../issuance/issuance-failure";
 import type { IssuanceKind } from "../../issuance/issuance-kinds";
 import type { IssuerKind } from "../../issuance/issuer-kinds";
 import type { KeyAlgorithm, KeyCustody } from "../../pki/csr";
+import type { SigningKeyAlgorithm } from "../crypto/kms";
 import type { IssuingCaStatus, PrivateCaKind, PrivateCaStatus } from "../../private-ca/private-ca-kinds";
 import type { DeviceExtendedKeyUsage, DeviceKeyType, DeviceKeyUsage } from "../../enrollment/enrollment-profile-kinds";
 import type { NameRules } from "../../enrollment/name-rules";
@@ -42,7 +43,7 @@ export const privateCa = pgTable(
     /** The root's status: a revoked root's Issuing CAs issue nothing. */
     status: text("status").$type<PrivateCaStatus>().notNull(),
     /** The algorithm of its keys, the root's and its Issuing CAs'. */
-    keyAlgorithm: text("key_algorithm").$type<KeyAlgorithm>().notNull(),
+    keyAlgorithm: text("key_algorithm").$type<SigningKeyAlgorithm>().notNull(),
     /**
      * The root: its certificate (PEM), and for a platform-made one, the KMS's reference to its key. An Organization's own
      * root is uploaded with its first signed Issuing CA, with `chainPem`, the certificates between its Issuing CAs and it

@@ -17,7 +17,7 @@ import { OpenAPIHono, createRoute, z } from "@hono/zod-openapi";
 import { and, desc, eq, inArray, sql } from "drizzle-orm";
 import type { Authorizer } from "../tenancy/authorization";
 import { ACME_ENVIRONMENTS } from "../issuance/acme/certificate-authority";
-import { KEY_ALGORITHMS } from "../pki/csr";
+import { CLASSICAL_KEY_ALGORITHMS, KEY_ALGORITHMS } from "../pki/csr";
 import type { Db, Tx } from "../platform/db/client";
 import { agent, certificate, deployment, deploymentRun, deploymentScript, deploymentScriptVersion, issuance, managedCertificate, workItem } from "../platform/db/schema";
 import { SCRIPT_INTERPRETERS } from "./deployment-script-kinds";
@@ -387,7 +387,7 @@ export function registerDeployments(ctx: {
                 scriptId: z.string().openapi({ description: "A Deployment Script of the Organization." }),
                 scriptVersion: z.number().int().min(1).optional().openapi({ description: "Which version of the script to run; the latest by default." }),
                 names: namesField("The DNS names to issue for."),
-                keyAlgorithm: z.enum(KEY_ALGORITHMS),
+                keyAlgorithm: z.enum(CLASSICAL_KEY_ALGORITHMS),
                 environment: z.enum(ACME_ENVIRONMENTS).optional().openapi({ description: "Which of the Organization's ACME accounts to issue through, when `issuer` is not given; staging unless given." }),
                 issuer: IssuerField.optional(),
                 validityDays: validityDaysField

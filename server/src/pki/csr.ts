@@ -7,8 +7,8 @@ import { fingerprintOf } from "./fingerprint";
 
 x509.cryptoProvider.set(webcrypto as unknown as Crypto);
 
-export const KEY_ALGORITHMS = ["ecdsa-p256", "ecdsa-p384", "rsa-2048", "rsa-3072", "rsa-4096"] as const;
-export type KeyAlgorithm = (typeof KEY_ALGORITHMS)[number];
+export * from "./key-algorithms";
+import { KEY_ALGORITHMS, type KeyAlgorithm } from "./key-algorithms";
 export const KEY_CUSTODIES = ["owner", "agent"] as const;
 export type KeyCustody = (typeof KEY_CUSTODIES)[number];
 

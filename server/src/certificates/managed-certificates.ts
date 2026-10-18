@@ -10,7 +10,7 @@ import { silentSince } from "../agents/agents";
 import type { Authorizer } from "../tenancy/authorization";
 import { ACME_ENVIRONMENTS } from "../issuance/acme/certificate-authority";
 import { certificateFacts } from "../pki/certificate-facts";
-import { KEY_ALGORITHMS } from "../pki/csr";
+import { CLASSICAL_KEY_ALGORITHMS } from "../pki/csr";
 import type { Db } from "../platform/db/client";
 import { issuance, managedCertificate } from "../platform/db/schema";
 import { HttpError, OrgParam, PageQuery, errors, json, pageOf } from "../platform/http";
@@ -95,7 +95,7 @@ export function registerManagedCertificates(ctx: {
             "application/json": {
               schema: z.object({
                 names: namesField("The DNS names to issue for."),
-                keyAlgorithm: z.enum(KEY_ALGORITHMS),
+                keyAlgorithm: z.enum(CLASSICAL_KEY_ALGORITHMS),
                 csr: csrField,
                 environment: z.enum(ACME_ENVIRONMENTS).optional().openapi({ description: "Which of the Organization's ACME accounts to issue through, when `issuer` is not given; staging unless given." }),
                 issuer: IssuerField.optional(),
