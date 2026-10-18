@@ -4,7 +4,7 @@
 
 **Blocked by:** 02 (Generate the CSR inside the new Managed Certificate dialog)
 
-**Status:** ready-for-agent
+**Status:** wontfix (superseded by 04)
 
 - [ ] The Name Change form's embedded generator follows the new names as they are typed, locked to the Managed Certificate's key algorithm, and "Use this CSR" fills the form's CSR textarea once the key is saved.
 - [ ] The Renewal upload's embedded generator uses the current names and the Managed Certificate's key algorithm, and its CSR fills the upload textarea.
