@@ -19,8 +19,14 @@ export interface CsrFacts {
   fingerprint: string;
 }
 
+/** The ML-DSA key algorithms, by the name the X.509 library gives their OIDs, which needs no WebCrypto. */
+const ML_DSA: Record<string, KeyAlgorithm> = { "ML-DSA-44": "ml-dsa-44", "ML-DSA-65": "ml-dsa-65", "ML-DSA-87": "ml-dsa-87" };
+
 // WebCrypto names no curve and no modulus length for a key until it is imported as one, so each is tried in turn.
-async function keyOf(spki: ArrayBuffer): Promise<Pick<CsrFacts, "keyAlgorithm" | "keyLabel">> {
+async function keyOf(publicKey: x509.PublicKey): Promise<Pick<CsrFacts, "keyAlgorithm" | "keyLabel">> {
+  const mlDsa = ML_DSA[publicKey.algorithm.name];
+  if (mlDsa) return { keyAlgorithm: mlDsa, keyLabel: KEY_ALGORITHM_LABELS[mlDsa] };
+  const spki = publicKey.rawData;
   for (const [namedCurve, keyAlgorithm] of [["P-256", "ecdsa-p256"], ["P-384", "ecdsa-p384"]] as const) {
     const ok = await crypto.subtle.importKey("spki", spki, { name: "ECDSA", namedCurve }, true, ["verify"]).then(() => true, () => false);
     if (ok) return { keyAlgorithm, keyLabel: KEY_ALGORITHM_LABELS[keyAlgorithm] };
@@ -41,12 +47,14 @@ export async function inspectCsr(pem: string): Promise<CsrFacts | string | null>
   } catch {
     return "This is not a PEM CSR. One starts with -----BEGIN CERTIFICATE REQUEST-----.";
   }
-  if (!(await csr.verify().catch(() => false))) return "This CSR's signature does not verify; it may have been damaged in copying.";
+  // A browser without ML-DSA cannot check an ML-DSA signature, which the server then checks alone.
+  const unverifiable = ML_DSA[csr.publicKey.algorithm.name] !== undefined;
+  if (!(await csr.verify().catch(() => unverifiable))) return "This CSR's signature does not verify; it may have been damaged in copying.";
   const alternativeNames = csr.getExtension(SUBJECT_ALTERNATIVE_NAME) as x509.SubjectAlternativeNameExtension | null;
   const asked = [...(alternativeNames?.names.items.map((item) => item.value) ?? []), ...csr.subjectName.getField("CN")];
   const digest = new Uint8Array(await crypto.subtle.digest("SHA-256", csr.rawData));
   return {
-    ...(await keyOf(csr.publicKey.rawData)),
+    ...(await keyOf(csr.publicKey)),
     names: [...new Set(asked.map((name) => normalizeName(name) ?? name))],
     fingerprint: [...digest.slice(0, 8)].map((b) => b.toString(16).padStart(2, "0")).join(":"),
   };
@@ -79,9 +87,13 @@ const NEW_KEY: Record<KeyAlgorithm, string> = {
   "rsa-2048": "-newkey rsa:2048",
   "rsa-3072": "-newkey rsa:3072",
   "rsa-4096": "-newkey rsa:4096",
+  // OpenSSL 3.5 or later.
+  "ml-dsa-44": "-newkey ml-dsa-44",
+  "ml-dsa-65": "-newkey ml-dsa-65",
+  "ml-dsa-87": "-newkey ml-dsa-87",
 };
 
-/** An openssl (1.1.1 or later) command that writes a key and a CSR for exactly these names, which are already checked. */
+/** An openssl (1.1.1 or later; 3.5 or later for ML-DSA) command that writes a key and a CSR for exactly these names, which are already checked. */
 export function opensslCommand(names: string[], keyAlgorithm: KeyAlgorithm): string {
   const base = safeFileBase(names[0]);
   const commonName = names.find((name) => name.length <= MAX_COMMON_NAME_LENGTH);

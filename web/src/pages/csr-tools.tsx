@@ -9,6 +9,7 @@ import { Input } from "@/components/ui/input";
 import { Select, SelectContent, SelectItem, SelectTrigger, SelectValue } from "@/components/ui/select";
 import { Textarea } from "@/components/ui/textarea";
 import {
+  CLASSICAL_KEY_ALGORITHMS,
   DEFAULT_KEY_ALGORITHM,
   KEY_ALGORITHM_LABELS,
   MAX_COMMON_NAME_LENGTH,
@@ -17,7 +18,7 @@ import {
   generateCsr,
   hashNote,
   isRsa,
-  type KeyAlgorithm,
+  type ClassicalKeyAlgorithm,
   type SignatureHash,
   type SubjectDetails,
 } from "@/lib/csr-generator";
@@ -41,7 +42,7 @@ const SUBJECT_FIELDS: [keyof Subject, string, string][] = [
  */
 export function CsrToolsPage() {
   const [typedNames, setTypedNames] = useState("");
-  const [keyAlgorithm, setKeyAlgorithm] = useState<KeyAlgorithm>(DEFAULT_KEY_ALGORITHM);
+  const [keyAlgorithm, setKeyAlgorithm] = useState<ClassicalKeyAlgorithm>(DEFAULT_KEY_ALGORITHM);
   const [hashChoice, setHashChoice] = useState<SignatureHash | null>(null);
   // Every hash is valid for every key algorithm, so a choice outlives a change of key; until one is made the key's default applies.
   const hash = hashChoice ?? defaultHash(keyAlgorithm);
@@ -114,7 +115,7 @@ export function CsrToolsPage() {
                   <FieldError key={p}>{p}</FieldError>
                 ))}
               </Field>
-              <KeyAlgorithmChoice value={keyAlgorithm} onChange={setKeyAlgorithm} idPrefix="csr-key-algorithm" />
+              <KeyAlgorithmChoice value={keyAlgorithm} options={CLASSICAL_KEY_ALGORITHMS} onChange={setKeyAlgorithm} idPrefix="csr-key-algorithm" />
               <Field>
                 <FieldLabel htmlFor="csr-common-name">Common name (CN)</FieldLabel>
                 <Select value={commonName ?? NO_COMMON_NAME} onValueChange={setCommonNameChoice} disabled={commonNames.length === 0}>

@@ -18,10 +18,13 @@ export const commonNameOf = (subject: string) => /(?:^|,\s*)CN=([^,]+)/i.exec(su
 export const issuingCaTitle = (privateCaName: string, issuingCaSubject: string) => `${commonNameOf(issuingCaSubject)} (Private CA ${privateCaName})`;
 
 /** The Issuing CA among the Private CAs' with that id, its `name` the title it is chosen by; none when there is none. */
-export function findIssuingCa(cas: Pick<PrivateCa, "name" | "issuingCas">[], issuingCaId: string): (IssuingCa & { name: string }) | undefined {
+export function findIssuingCa(
+  cas: Pick<PrivateCa, "name" | "issuingCas" | "certificateKeyAlgorithms">[],
+  issuingCaId: string,
+): (IssuingCa & Pick<PrivateCa, "name" | "certificateKeyAlgorithms">) | undefined {
   for (const ca of cas) {
     const issuing = ca.issuingCas.find((i) => i.id === issuingCaId);
-    if (issuing) return { ...issuing, name: issuingCaTitle(ca.name, issuing.subject) };
+    if (issuing) return { ...issuing, name: issuingCaTitle(ca.name, issuing.subject), certificateKeyAlgorithms: ca.certificateKeyAlgorithms };
   }
   return undefined;
 }

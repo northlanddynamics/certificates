@@ -4,7 +4,7 @@ import * as x509 from "@peculiar/x509";
 import { createPublicKey, webcrypto } from "node:crypto";
 import { normalizeName } from "./names";
 import { fingerprintOf } from "./fingerprint";
-import { KEY_ALGORITHMS, type KeyAlgorithm } from "./key-algorithms";
+import { KEY_ALGORITHMS, ML_DSA_KEY_ALGORITHMS, type KeyAlgorithm } from "./key-algorithms";
 
 // The key algorithms live apart so that the KMS can name them without loading the X.509 library; the rest of the
 // platform takes them from here, with the CSR.
@@ -33,20 +33,25 @@ export interface ParsedCsr {
   fingerprint: string;
 }
 
+/** Every key algorithm a CSR may be for, in words, for a refusal. */
+const SUPPORTED = "ECDSA (P-256, P-384), RSA (2048, 3072, 4096) and ML-DSA (ML-DSA-44, ML-DSA-65, ML-DSA-87)";
+
 function keyAlgorithmOf(spki: ArrayBuffer): KeyAlgorithm {
   const key = createPublicKey({ key: Buffer.from(spki), format: "der", type: "spki" });
   const { asymmetricKeyType: type, asymmetricKeyDetails: details } = key;
   if (type === "ec") {
     if (details?.namedCurve === "prime256v1") return "ecdsa-p256";
     if (details?.namedCurve === "secp384r1") return "ecdsa-p384";
-    throw new CsrError(`the CSR's key is on the curve ${details?.namedCurve}; only P-256 and P-384 are supported`);
+    throw new CsrError(`the CSR's key is on the curve ${details?.namedCurve}; only ${SUPPORTED} are supported`);
   }
   if (type === "rsa") {
     const algorithm = `rsa-${details?.modulusLength}`;
     if ((KEY_ALGORITHMS as readonly string[]).includes(algorithm)) return algorithm as KeyAlgorithm;
-    throw new CsrError(`the CSR's RSA key has ${details?.modulusLength} bits; only 2048, 3072 and 4096 are supported`);
+    throw new CsrError(`the CSR's RSA key has ${details?.modulusLength} bits; only ${SUPPORTED} are supported`);
   }
-  throw new CsrError(`the CSR's key is ${type}; only ECDSA (P-256, P-384) and RSA (2048, 3072, 4096) are supported`);
+  // Bun names an ML-DSA key's type as the platform names its algorithm.
+  if ((ML_DSA_KEY_ALGORITHMS as readonly (string | undefined)[]).includes(type)) return type as KeyAlgorithm;
+  throw new CsrError(`the CSR's key is ${type}; only ${SUPPORTED} are supported`);
 }
 
 /** Reads a PEM CSR and checks its signature, or throws a CsrError saying what is wrong with it. */

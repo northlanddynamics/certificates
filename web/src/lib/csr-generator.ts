@@ -2,10 +2,13 @@
 // imports nothing from api.ts and does not use fetch, so there is nowhere in it for the key to be sent.
 import * as x509 from "@peculiar/x509";
 
-/** The key algorithms the platform accepts in a CSR, as the server names them. */
-export const KEY_ALGORITHMS = ["ecdsa-p256", "ecdsa-p384", "rsa-2048", "rsa-3072", "rsa-4096"] as const;
+/** ECDSA and RSA: the key algorithms made here, as the server names them. */
+export const CLASSICAL_KEY_ALGORITHMS = ["ecdsa-p256", "ecdsa-p384", "rsa-2048", "rsa-3072", "rsa-4096"] as const;
+export type ClassicalKeyAlgorithm = (typeof CLASSICAL_KEY_ALGORITHMS)[number];
+/** The key algorithms the platform accepts in a CSR, as the server names them. Which a CA takes is the server's to say. */
+export const KEY_ALGORITHMS = [...CLASSICAL_KEY_ALGORITHMS, "ml-dsa-44", "ml-dsa-65", "ml-dsa-87"] as const;
 export type KeyAlgorithm = (typeof KEY_ALGORITHMS)[number];
-export const DEFAULT_KEY_ALGORITHM: KeyAlgorithm = "ecdsa-p256";
+export const DEFAULT_KEY_ALGORITHM: ClassicalKeyAlgorithm = "ecdsa-p256";
 
 export const KEY_ALGORITHM_LABELS: Record<KeyAlgorithm, string> = {
   "ecdsa-p256": "ECDSA P-256",
@@ -13,22 +16,33 @@ export const KEY_ALGORITHM_LABELS: Record<KeyAlgorithm, string> = {
   "rsa-2048": "RSA 2048",
   "rsa-3072": "RSA 3072",
   "rsa-4096": "RSA 4096",
+  "ml-dsa-44": "ML-DSA-44",
+  "ml-dsa-65": "ML-DSA-65",
+  "ml-dsa-87": "ML-DSA-87",
 };
+
+/** None known yet: a stable empty list, for a default that does not change between renders. */
+export const NO_KEY_ALGORITHMS: readonly KeyAlgorithm[] = [];
+
+export const isMlDsa = (keyAlgorithm: KeyAlgorithm) => keyAlgorithm.startsWith("ml-dsa-");
+
+/** Whether a key of the algorithm can be made here; not yet an ML-DSA one. */
+export const isGenerated = (keyAlgorithm: KeyAlgorithm): keyAlgorithm is ClassicalKeyAlgorithm => (CLASSICAL_KEY_ALGORITHMS as readonly string[]).includes(keyAlgorithm);
 
 // No SHA-1, MD5 or RSA-PSS: a CA would refuse them.
 export const SIGNATURE_HASHES = ["SHA-256", "SHA-384", "SHA-512"] as const;
 export type SignatureHash = (typeof SIGNATURE_HASHES)[number];
 
-export const isRsa = (keyAlgorithm: KeyAlgorithm) => keyAlgorithm.startsWith("rsa");
+export const isRsa = (keyAlgorithm: ClassicalKeyAlgorithm) => keyAlgorithm.startsWith("rsa");
 
 /** The longest a subject's CN may be (X.520); a CA refuses a longer one, so a longer name cannot be the CN. */
 export const MAX_COMMON_NAME_LENGTH = 64;
 
 /** The hash a key algorithm signs with unless the user chooses another: SHA-384 for P-384, SHA-256 otherwise. */
-export const defaultHash = (keyAlgorithm: KeyAlgorithm): SignatureHash => (keyAlgorithm === "ecdsa-p384" ? "SHA-384" : "SHA-256");
+export const defaultHash = (keyAlgorithm: ClassicalKeyAlgorithm): SignatureHash => (keyAlgorithm === "ecdsa-p384" ? "SHA-384" : "SHA-256");
 
 /** A soft note, never a refusal, when the hash is weaker than the key; null when there is nothing to say. */
-export const hashNote = (keyAlgorithm: KeyAlgorithm, hash: SignatureHash): string | null =>
+export const hashNote = (keyAlgorithm: ClassicalKeyAlgorithm, hash: SignatureHash): string | null =>
   keyAlgorithm === "ecdsa-p384" && hash === "SHA-256" ? "SHA-256 is weaker than a P-384 key; SHA-384 is the usual match." : null;
 
 export interface SubjectDetails {
@@ -41,7 +55,7 @@ export interface SubjectDetails {
 }
 
 export interface CsrInput {
-  keyAlgorithm: KeyAlgorithm;
+  keyAlgorithm: ClassicalKeyAlgorithm;
   /** The DNS names the CSR asks for, as subject alternative names. Already checked against the name rules. */
   names: string[];
   /** One of `names`, or none: the subject's CN. */
@@ -59,7 +73,7 @@ export interface GeneratedCsr {
 
 const RSA_BITS = { "rsa-2048": 2048, "rsa-3072": 3072, "rsa-4096": 4096 } as const;
 
-function keyParams(keyAlgorithm: KeyAlgorithm, hash: SignatureHash): RsaHashedKeyGenParams | EcKeyGenParams {
+function keyParams(keyAlgorithm: ClassicalKeyAlgorithm, hash: SignatureHash): RsaHashedKeyGenParams | EcKeyGenParams {
   switch (keyAlgorithm) {
     case "ecdsa-p256":
       return { name: "ECDSA", namedCurve: "P-256" };

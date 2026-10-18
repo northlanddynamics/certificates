@@ -177,6 +177,7 @@ function CertificateSheet({ org, m, certificateId, isCurrent, onClose }: { org: 
                   <CopyButton text={c.fingerprint} label="Copy the fingerprint" />
                 </span>
               </Fact>
+              <Fact label="Key algorithm">{c.keyAlgorithm}</Fact>
               <Fact label="Signature algorithm">{c.signatureAlgorithm}</Fact>
               <Fact label="CA">{caLabel(c.ca)}</Fact>
               {c.acmeAccount && (

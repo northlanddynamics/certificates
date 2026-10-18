@@ -19,7 +19,8 @@ import { Field, FieldDescription, FieldError, FieldGroup, FieldLabel, FieldLegen
 import { Select, SelectContent, SelectItem, SelectTrigger, SelectValue } from "@/components/ui/select";
 import { Sidebar, SidebarContent, SidebarGroup, SidebarGroupContent, SidebarMenu, SidebarMenuButton, SidebarMenuItem, SidebarProvider } from "@/components/ui/sidebar";
 import { api, can, issuingCaRevocationReasons, type IssuingCa, type PermittedNames, type PrivateCa, type PrivateCaValidity } from "@/lib/api";
-import { KEY_ALGORITHMS, KEY_ALGORITHM_LABELS, type KeyAlgorithm } from "@/lib/csr-generator";
+import { KEY_ALGORITHM_LABELS, isMlDsa, type KeyAlgorithm } from "@/lib/csr-generator";
+import { useKeyAlgorithms } from "@/components/issuer-choice";
 import { splitNames } from "@/lib/csr-names";
 import { keyAlgorithmLabel } from "@/lib/managed-certificate";
 import { DEFAULT_VALIDITY_DAYS, MAX_LIFETIME_YEARS, MAX_VALIDITY_DAYS, commonNameOf, daysLabel, isValidityDays, rootSubjectOf, validityLabel } from "@/lib/private-ca";
@@ -976,6 +977,9 @@ function CreatePrivateCaForm({ orgId, onDone }: { orgId: string; onDone: () => v
   const [name, setName] = useState("");
   const [subject, setSubject] = useState("");
   const [keyAlgorithm, setKeyAlgorithm] = useState<KeyAlgorithm>("ecdsa-p256");
+  // What the server says its keys may be under the kind of root chosen.
+  const underRoots = useKeyAlgorithms().data?.privateCaKeyAlgorithms;
+  const offered = underRoots?.[kind] ?? [keyAlgorithm];
   const [lifetimeYears, setLifetimeYears] = useState("10");
   const [rules, setRules] = useState<RulesText>({ exact: "", zones: "" });
   const [validity, setValidity] = useState<ValidityText>(validityTextOf({ maximumDays: DEFAULT_VALIDITY_DAYS, defaultDays: DEFAULT_VALIDITY_DAYS }));
@@ -1025,7 +1029,15 @@ function CreatePrivateCaForm({ orgId, onDone }: { orgId: string; onDone: () => v
             </Field>
             <Field>
               <FieldLabel>Hierarchy</FieldLabel>
-              <RadioGroup value={kind} onValueChange={(value) => setKind(value as PrivateCa["kind"])}>
+              <RadioGroup
+                value={kind}
+                onValueChange={(value) => {
+                  setKind(value as PrivateCa["kind"]);
+                  // A key algorithm not taken under the other kind of root falls back to the default.
+                  const taken = underRoots?.[value as PrivateCa["kind"]];
+                  if (taken && !taken.includes(keyAlgorithm)) setKeyAlgorithm("ecdsa-p256");
+                }}
+              >
                 {HIERARCHIES.map((h) => (
                   <Label key={h.value} htmlFor={`private-ca-kind-${h.value}`} className="flex items-start gap-3 rounded-md border p-3 font-normal">
                     <RadioGroupItem value={h.value} id={`private-ca-kind-${h.value}`} className="mt-0.5" />
@@ -1081,13 +1093,19 @@ function CreatePrivateCaForm({ orgId, onDone }: { orgId: string; onDone: () => v
                   <SelectValue />
                 </SelectTrigger>
                 <SelectContent>
-                  {KEY_ALGORITHMS.map((value) => (
+                  {offered.map((value) => (
                     <SelectItem key={value} value={value}>
                       {KEY_ALGORITHM_LABELS[value]}
                     </SelectItem>
                   ))}
                 </SelectContent>
               </Select>
+              {isMlDsa(keyAlgorithm) && (
+                <FieldDescription>
+                  Post-quantum, but only recent clients verify ML-DSA: OpenSSL 3.5 or later, and Chrome 150 or later; Firefox and Safari do not yet. Check every client that must trust
+                  this root first. Its Certificates have ML-DSA keys too.
+                </FieldDescription>
+              )}
             </Field>
             {platformRoot && (
               <Field data-invalid={!lifetimeOk}>

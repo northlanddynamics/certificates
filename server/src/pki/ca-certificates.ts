@@ -4,8 +4,8 @@
 // a CA signs.
 import * as x509 from "@peculiar/x509";
 import { randomBytes, webcrypto } from "node:crypto";
-import { isMlDsa, type ClassicalKeyAlgorithm, type SigningKeyAlgorithm } from "./csr";
-import { SIGNATURE_HASH, type Kms } from "../platform/crypto/kms";
+import { isMlDsa, type SigningKeyAlgorithm } from "./csr";
+import { SIGNATURE_HASH, externalMu, type Kms } from "../platform/crypto/kms";
 
 /** A CA key in the KMS: its reference, the context (an Organization's id) it was made for, and its algorithm. */
 export interface CaKey {
@@ -20,31 +20,37 @@ export interface Signer extends CaKey {
 }
 
 /** How each key algorithm appears to @peculiar/x509 as a signing key: what tells it how to name the signature. */
-const SIGNING_ALGORITHMS: Record<ClassicalKeyAlgorithm, Algorithm & { hash: string }> = {
+const SIGNING_ALGORITHMS: Record<SigningKeyAlgorithm, Algorithm & { hash?: string }> = {
   // The curve tells it how long r and s are.
   "ecdsa-p256": { name: "ECDSA", namedCurve: "P-256", hash: "SHA-256" } as Algorithm & { hash: string },
   "ecdsa-p384": { name: "ECDSA", namedCurve: "P-384", hash: "SHA-384" } as Algorithm & { hash: string },
   "rsa-2048": { name: "RSASSA-PKCS1-v1_5", hash: "SHA-256" },
   "rsa-3072": { name: "RSASSA-PKCS1-v1_5", hash: "SHA-256" },
   "rsa-4096": { name: "RSASSA-PKCS1-v1_5", hash: "SHA-256" },
+  // No hash: pure ML-DSA, named by the RFC 9881 OID with no parameters.
+  "ml-dsa-65": { name: "ML-DSA-65" },
+  "ml-dsa-87": { name: "ML-DSA-87" },
 };
 
+/** What the KMS is given to sign `data` with the key: the digest made with its hash, or for ML-DSA the external μ (ADR 0009). */
+async function toSign(kms: Kms, { key, context, algorithm }: CaKey, data: ArrayBuffer) {
+  if (isMlDsa(algorithm)) return externalMu(algorithm, await kms.publicKey(key, context), new Uint8Array(data));
+  return new Uint8Array(await webcrypto.subtle.digest(SIGNATURE_HASH[algorithm], data));
+}
+
 /**
- * What @peculiar/x509 is given to sign with: a WebCrypto whose `sign` hashes what is to be signed and has the KMS sign
- * the digest, and a stand-in for the private key, which the platform does not have. The KMS gives ECDSA signatures as
- * r ‖ s, as WebCrypto does, which the library encodes for X.509 itself.
+ * What @peculiar/x509 is given to sign with: a WebCrypto whose `sign` has the KMS sign what is to be signed (`toSign`),
+ * and a stand-in for the private key, which the platform does not have. The KMS gives ECDSA signatures as r ‖ s, as
+ * WebCrypto does, which the library encodes for X.509 itself, and ML-DSA signatures raw, as X.509 carries them.
  */
-function kmsSigning(kms: Kms, { key, context, algorithm }: CaKey) {
-  // The API makes no ML-DSA Private CA yet, so no ML-DSA key reaches here.
-  if (isMlDsa(algorithm)) throw new Error(`a ${algorithm} CA key cannot sign yet`);
-  const hash = SIGNATURE_HASH[algorithm];
+function kmsSigning(kms: Kms, caKey: CaKey) {
+  const { key, context, algorithm } = caKey;
   const subtle = {
     // What a CSR is made with asks for the public key this way; the stand-in for it is its DER SubjectPublicKeyInfo.
     exportKey: async (_format: "spki", publicKey: { spki: ArrayBuffer }) => publicKey.spki,
     digest: (alg: AlgorithmIdentifier, data: ArrayBuffer) => webcrypto.subtle.digest(alg, data),
     async sign(_alg: unknown, _key: unknown, data: ArrayBuffer) {
-      const digest = new Uint8Array(await webcrypto.subtle.digest(hash, data));
-      return (await kms.sign(key, context, digest)).slice().buffer;
+      return (await kms.sign(key, context, await toSign(kms, caKey, data))).slice().buffer;
     },
   };
   const crypto = { subtle, getRandomValues: <T extends ArrayBufferView>(array: T) => webcrypto.getRandomValues(array as any) as T } as unknown as Crypto;

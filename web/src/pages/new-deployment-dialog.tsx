@@ -10,7 +10,7 @@ import { RadioGroup, RadioGroupItem } from "@/components/ui/radio-group";
 import { Select, SelectContent, SelectItem, SelectTrigger, SelectValue } from "@/components/ui/select";
 import { Textarea } from "@/components/ui/textarea";
 import { api, can, type Me, type RenewalPolicy } from "@/lib/api";
-import { KEY_ALGORITHMS, KEY_ALGORITHM_LABELS, type KeyAlgorithm } from "@/lib/csr-generator";
+import { CLASSICAL_KEY_ALGORITHMS, KEY_ALGORITHM_LABELS, type KeyAlgorithm } from "@/lib/csr-generator";
 import { nameProblems, splitNames } from "@/lib/csr-names";
 import { permitsOnlyLabel } from "@/lib/private-ca";
 
@@ -175,7 +175,8 @@ function NewDeploymentForm({ org, onDone }: { org: Me["organizations"][number]; 
                   <SelectValue />
                 </SelectTrigger>
                 <SelectContent>
-                  {KEY_ALGORITHMS.map((value) => (
+                  {/* An Agent makes ECDSA and RSA keys only. */}
+                  {CLASSICAL_KEY_ALGORITHMS.map((value) => (
                     <SelectItem key={value} value={value}>
                       {KEY_ALGORITHM_LABELS[value]}
                     </SelectItem>
