@@ -8,16 +8,20 @@ import { ConfirmDialog } from "@/components/confirm-dialog";
 import { DataTable } from "@/components/data-table/data-table";
 import { Badge } from "@/components/ui/badge";
 import { Button } from "@/components/ui/button";
+import { Card, CardAction, CardContent, CardHeader, CardTitle } from "@/components/ui/card";
+import { Checkbox } from "@/components/ui/checkbox";
 import { Dialog, DialogContent, DialogDescription, DialogHeader, DialogTitle, DialogTrigger } from "@/components/ui/dialog";
 import { Input } from "@/components/ui/input";
 import { Label } from "@/components/ui/label";
 import { Select, SelectContent, SelectItem, SelectTrigger, SelectValue } from "@/components/ui/select";
 import { Textarea } from "@/components/ui/textarea";
-import { api, can, type SsoConnection, type SsoConnectionChange } from "@/lib/api";
+import { api, can, type LoginPolicy, type Me, type SsoConnection, type SsoConnectionChange } from "@/lib/api";
 import { useAction } from "@/lib/use-action";
 
-const ROUTE = "/app/organizations/$orgId/sso-connections";
+const ROUTE = "/app/organizations/$orgId/sign-in-settings";
 const TYPE_LABEL: Record<SsoConnection["type"], string> = { oidc: "OIDC", saml: "SAML" };
+
+type Org = Me["organizations"][number];
 
 // The server lists every connection, so there is nothing to page.
 const features = tableFeatures({});
@@ -25,20 +29,90 @@ const columnHelper = createColumnHelper<typeof features, SsoConnection>();
 const noRows: SsoConnection[] = [];
 
 /**
- * The Organization's SSO connections: the SAML (Ping, for example) or OIDC identity providers its users sign in through,
- * each for one email domain, which a TXT record must prove before it signs anyone in. Someone signing in through one becomes a Member. Only Organization
- * Administrators see or configure them, and every change is audited. Requiring SSO is on the Login policy page.
+ * How the Organization's users sign in: the login policy, which asks things of their sign-in, and the SSO connections
+ * they sign in through. Only Organization Administrators see or change either, and every change is audited.
  */
-export function SsoConnectionsPage() {
+export function SignInSettingsPage() {
   const { orgId } = useParams({ from: ROUTE });
   const org = useQuery({ queryKey: ["me"], queryFn: api.me, select: (me) => me.organizations.find((o) => o.id === orgId) }).data;
-  const allowed = org ? can(org, "ssoConnection", "read") : false;
+
+  return (
+    <div className="flex flex-col gap-6">
+      <h1 className="text-xl font-semibold">Sign-in settings</h1>
+      <div className="grid items-start gap-6 lg:grid-cols-2">
+        {org && can(org, "loginPolicy", "read") && <LoginPolicyCard orgId={orgId} mayChange={can(org, "loginPolicy", "update")} />}
+        {org && can(org, "ssoConnection", "read") && <SsoConnectionsCard org={org} />}
+      </div>
+    </div>
+  );
+}
+
+/**
+ * What the Organization asks of its users' sign-in. Requiring MFA holds up every member who signs in with a password
+ * and has no authenticator app, the Organization Administrator who turns it on included, until they set one up. Requiring
+ * SSO lets members sign in only through one of the Organization's SSO connections below; the server refuses it until the
+ * administrator has signed in through one themselves.
+ */
+function LoginPolicyCard({ orgId, mayChange }: { orgId: string; mayChange: boolean }) {
+  const policy = useQuery({ queryKey: ["login-policy", orgId], queryFn: () => api.loginPolicy(orgId) });
+  const change = useAction((policy: Partial<LoginPolicy>) => api.setLoginPolicy(orgId, policy), ["login-policy", "me", "audit-events"]);
+
+  return (
+    <Card>
+      <CardHeader>
+        <CardTitle>Login policy</CardTitle>
+      </CardHeader>
+      <CardContent className="flex flex-col gap-6">
+        {policy.data && (
+          <div className="flex items-start gap-3">
+            <Checkbox
+              id="require-mfa"
+              checked={policy.data.requireMfa}
+              disabled={!mayChange || change.isPending}
+              onCheckedChange={(checked) => change.mutate({ requireMfa: checked === true })}
+            />
+            <div className="flex flex-col gap-1">
+              <Label htmlFor="require-mfa">Require multi-factor authentication</Label>
+              <p className="text-sm text-muted-foreground">
+                Members who sign in with a password must set up an authenticator app before they can do anything else, you included. Signing in with a passkey alone is
+                not affected, but a member who also has a password still needs the app.
+              </p>
+            </div>
+          </div>
+        )}
+        {policy.data && (
+          <div className="flex items-start gap-3">
+            <Checkbox
+              id="require-sso"
+              checked={policy.data.requireSso}
+              disabled={!mayChange || change.isPending}
+              onCheckedChange={(checked) => change.mutate({ requireSso: checked === true })}
+            />
+            <div className="flex flex-col gap-1">
+              <Label htmlFor="require-sso">Require SSO</Label>
+              <p className="text-sm text-muted-foreground">
+                Members sign in only through one of the Organization's SSO connections: not with a password, nor a passkey. Sign in through a connection
+                yourself before turning this on. Platform Operators can still sign in with a password.
+              </p>
+            </div>
+          </div>
+        )}
+        {policy.isPending && <p className="text-sm text-muted-foreground">Loading…</p>}
+        {(policy.error ?? change.error) && <p className="text-sm text-destructive">{(policy.error ?? change.error)!.message}</p>}
+      </CardContent>
+    </Card>
+  );
+}
+
+/** The Organization's SSO connections: the SAML (Ping, for example) or OIDC identity providers its users sign in through. */
+function SsoConnectionsCard({ org }: { org: Org }) {
+  const orgId = org.id;
   const may = {
-    test: org ? can(org, "ssoConnection", "test") : false,
-    change: org ? can(org, "ssoConnection", "update") : false,
-    delete: org ? can(org, "ssoConnection", "delete") : false,
+    test: can(org, "ssoConnection", "test"),
+    change: can(org, "ssoConnection", "update"),
+    delete: can(org, "ssoConnection", "delete"),
   };
-  const connections = useQuery({ queryKey: ["sso-connections", orgId], queryFn: () => api.ssoConnections(orgId), enabled: allowed });
+  const connections = useQuery({ queryKey: ["sso-connections", orgId], queryFn: () => api.ssoConnections(orgId) });
   const columns = columnHelper.columns([
     columnHelper.accessor("name", { header: "Name", cell: ({ cell }) => <span className="font-medium">{cell.getValue()}</span> }),
     columnHelper.accessor("type", { header: "Type", cell: ({ cell }) => <Badge variant="secondary">{TYPE_LABEL[cell.getValue()]}</Badge> }),
@@ -65,18 +139,20 @@ export function SsoConnectionsPage() {
   const table = useTable({ features, columns, data: connections.data?.items ?? noRows, getRowId: (c) => c.id });
 
   return (
-    <div className="flex flex-col gap-6">
-      <div className="flex items-center justify-between gap-4">
-        <h1 className="text-xl font-semibold">SSO connections</h1>
-        {org && can(org, "ssoConnection", "create") && <AddConnectionDialog orgId={orgId} />}
-      </div>
-      <p className="text-sm text-muted-foreground">
-        Users whose email is in a connection's domain sign in through its identity provider, and become Members the first time they do. A member who already has an account
-        keeps it, and their role. A connection signs nobody in until a TXT record proves the Organization holds its domain.
-      </p>
-      <DataTable table={table} empty={connections.isPending ? "Loading…" : "No SSO connection is configured yet."} />
-      {connections.error && <p className="text-sm text-destructive">{connections.error.message}</p>}
-    </div>
+    <Card>
+      <CardHeader>
+        <CardTitle>SSO connections</CardTitle>
+        {can(org, "ssoConnection", "create") && <CardAction><AddConnectionDialog orgId={orgId} /></CardAction>}
+      </CardHeader>
+      <CardContent className="flex flex-col gap-6">
+        <p className="text-sm text-muted-foreground">
+          Users whose email is in a connection's domain sign in through its identity provider, and become Members the first time they do. A member who already has an account
+          keeps it, and their role. A connection signs nobody in until a TXT record proves the Organization holds its domain.
+        </p>
+        <DataTable table={table} empty={connections.isPending ? "Loading…" : "No SSO connection is configured yet."} />
+        {connections.error && <p className="text-sm text-destructive">{connections.error.message}</p>}
+      </CardContent>
+    </Card>
   );
 }
 
