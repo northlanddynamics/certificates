@@ -4,7 +4,7 @@
 // a CA signs.
 import * as x509 from "@peculiar/x509";
 import { randomBytes, webcrypto } from "node:crypto";
-import { isMlDsa, type SigningKeyAlgorithm } from "./csr";
+import { isMlDsa, mlDsaKeyAlgorithmOf, type MlDsaKeyAlgorithm, type SigningKeyAlgorithm } from "./csr";
 import { SIGNATURE_HASH, externalMu, type Kms } from "../platform/crypto/kms";
 
 /** A CA key in the KMS: its reference, the context (an Organization's id) it was made for, and its algorithm. */
@@ -387,12 +387,37 @@ function isCaCertificate(certificate: x509.X509Certificate) {
 const isSignedBy = (cert: x509.X509Certificate, issuer: x509.X509Certificate) => cert.issuer === issuer.subject && cert.verify({ publicKey: issuer.publicKey, signatureOnly: true }).catch(() => false);
 
 /**
- * Why the certificate uploaded for the Issuing CA, whose key's public key is `publicKey` (DER) and whose subject is
- * `subject`, may not make it a CA under `root` through `chain` (the one that signs it first) at `now`: it is not for
- * that key or subject, not a CA certificate, not valid now, or does not verify up to the root, a self-signed CA. None
- * when it may. Only signatures, CA flags and validity are checked along the path, not its path lengths or name constraints.
+ * Why `above`, the certificates over an Issuing CA of `keyAlgorithm` (its root and what is between), may not be: a chain
+ * is all ML-DSA or none of it, so that it is never part post-quantum, and an ML-DSA one is all of its own algorithm.
+ * A key that cannot be read is refused either way, as it cannot be told. None when they may.
  */
-export async function signedCertificateRefusal(certificate: x509.X509Certificate, { publicKey, subject, root, chain, now }: { publicKey: Uint8Array; subject: string; root: x509.X509Certificate; chain: x509.X509Certificate[]; now: Date }) {
+function chainAlgorithmRefusal(keyAlgorithm: SigningKeyAlgorithm, above: x509.X509Certificate[]) {
+  const wantsMlDsa = isMlDsa(keyAlgorithm);
+  for (const cert of above) {
+    let key: MlDsaKeyAlgorithm | undefined;
+    try {
+      key = mlDsaKeyAlgorithmOf(cert.publicKey.rawData);
+    } catch {
+      return `the key of ${cert.subject} cannot be read, so it cannot be told whether it is ML-DSA, as an ${keyAlgorithm} Issuing CA's chain must be`;
+    }
+    if (wantsMlDsa && key !== keyAlgorithm) return `an ${keyAlgorithm} Issuing CA needs the root and every certificate between it and the root to have an ${keyAlgorithm} key, so that the chain is never part post-quantum; the key of ${cert.subject} is ${key ?? "not ML-DSA"}`;
+    if (!wantsMlDsa && key) return `an ${keyAlgorithm} Issuing CA is not ML-DSA, so it cannot sit under ${cert.subject}, whose key is ${key}: a chain is all ML-DSA or none of it`;
+  }
+  return undefined;
+}
+
+/**
+ * Why the certificate uploaded for the Issuing CA, whose key's public key is `publicKey` (DER), whose algorithm is
+ * `keyAlgorithm` and whose subject is `subject`, may not make it a CA under `root` through `chain` (the one that signs
+ * it first) at `now`: it is not for that key or subject, not a CA certificate, the root and chain are not all ML-DSA of
+ * its algorithm when it is ML-DSA (and none ML-DSA when it is not), not valid now, or does not verify up to the root, a
+ * self-signed CA. None when it may. Only signatures, CA flags, key algorithms and validity are checked along the path,
+ * not its path lengths or name constraints.
+ */
+export async function signedCertificateRefusal(
+  certificate: x509.X509Certificate,
+  { publicKey, keyAlgorithm, subject, root, chain, now }: { publicKey: Uint8Array; keyAlgorithm: SigningKeyAlgorithm; subject: string; root: x509.X509Certificate; chain: x509.X509Certificate[]; now: Date },
+) {
   if (!Buffer.from(certificate.publicKey.rawData).equals(Buffer.from(publicKey))) return "the certificate is not for the Issuing CA's key, the one its CSR is for";
   if (!isCaCertificate(certificate)) return "the certificate is not a CA certificate: its basic constraints must make it a CA, and its key usage, if any, must let it sign certificates";
   if (new x509.Name(certificate.subject).toString() !== subject) return `the certificate's subject is ${certificate.subject}, not the Issuing CA's ${subject}`;
@@ -400,6 +425,8 @@ export async function signedCertificateRefusal(certificate: x509.X509Certificate
   if (certificate.notAfter <= now) return "the certificate has ended";
   const above = [...chain, root];
   if (!above.every(isCaCertificate)) return "the root and chain must be CA certificates";
+  const algorithmRefusal = chainAlgorithmRefusal(keyAlgorithm, above);
+  if (algorithmRefusal) return algorithmRefusal;
   if (above.some((cert) => cert.notAfter <= now)) return "a certificate of the root and chain has ended";
   if (!(await isSignedBy(root, root))) return "the root is not self-signed";
   const path = [certificate, ...above];
