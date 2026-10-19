@@ -77,7 +77,7 @@ export function registerNameChangeRoutes(ctx: {
           throw new HttpError(422, "the Managed Certificate already has the same names; to replace only its CSR, upload a new one");
         }
         // Only a validity asked for is checked: one it keeps is clipped at Issuance to a maximum lowered since.
-        const refused = await issuerRefusal(tx, orgId, issuerOf(mc), { names, validityDays: body.validityDays ?? null });
+        const refused = await issuerRefusal(tx, orgId, issuerOf(mc), { names, validityDays: body.validityDays ?? null, keyAlgorithm: csr.keyAlgorithm });
         if (refused) throw new HttpError(refused.status, refused.message);
         const validityDays = body.validityDays === undefined ? mc.validityDays : body.validityDays;
         const detail = { from: mc.names, to: names, ...validityChangeDetail(mc.validityDays, validityDays), csrFingerprint: csr.fingerprint };
