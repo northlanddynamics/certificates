@@ -5,7 +5,7 @@
 import { afterAll, beforeAll, beforeEach, describe, expect, test } from "bun:test";
 import * as x509 from "@peculiar/x509";
 import { webcrypto } from "node:crypto";
-import { PASSWORD, createHarness, type Harness } from "./support/harness";
+import { PASSWORD, PKI_BASE_URL, createHarness, type Harness } from "./support/harness";
 
 let h: Harness;
 let operator: string;
@@ -371,5 +371,177 @@ describe("the inventory", () => {
     for (const algorithm of Object.keys(ids) as MlDsa[]) expect(await listed(algorithm)).toEqual([ids[algorithm]]);
     expect(await listed("ml-dsa-44,ml-dsa-87")).toEqual([ids["ml-dsa-44"], ids["ml-dsa-87"]].sort());
     expect((await listed("ml-dsa-44,ml-dsa-65,ml-dsa-87")).length).toBe(3);
+  });
+});
+
+const DAY_MS = 86_400_000;
+const START = Date.parse("2026-01-01T00:00:00Z");
+
+/** A CA's CRL, fetched as a relying party does: from its public URL, with no credentials. */
+async function publishedCrl(kind: "issuing-cas" | "roots", id: string) {
+  const res = await h.app.request(`${PKI_BASE_URL}/pki/${kind}/${id}/ca.crl`);
+  expect(res.status).toBe(200);
+  expect(res.headers.get("content-type")).toBe("application/pkix-crl");
+  return new x509.X509Crl(new Uint8Array(await res.arrayBuffer()));
+}
+
+const CRL_NUMBER = "2.5.29.20";
+const crlNumberOf = (crl: x509.X509Crl) => {
+  const value = new Uint8Array(crl.extensions.find((e) => e.type === CRL_NUMBER)!.value);
+  return Number(BigInt(`0x${Buffer.from(value.subarray(2, 2 + value[1]!)).toString("hex")}`));
+};
+
+/** The size of what a CRL's issuer signed (its TBSCertList, the first element of the CRL's SEQUENCE), header included. */
+function signedSizeOf(crl: x509.X509Crl) {
+  const bytes = new Uint8Array(crl.rawData);
+  const headerSize = (at: number) => (bytes[at + 1]! & 0x80 ? 2 + (bytes[at + 1]! & 0x7f) : 2);
+  const at = headerSize(0);
+  const length = bytes[at + 1]! & 0x80 ? Number(BigInt(`0x${Buffer.from(bytes.subarray(at + 2, at + headerSize(at))).toString("hex")}`)) : bytes[at + 1]!;
+  return headerSize(at) + length;
+}
+
+const revoke = (mcId: string, certificateId: string, reason: string) => h.api(`${mcs()}/${mcId}/certificates/${certificateId}/revocation`, { cookie: org.cookie, body: { reason } });
+
+describe.each(["ml-dsa-65", "ml-dsa-87"] as const)("the CRLs of an %s Private CA", (caAlgorithm) => {
+  test("revoking an ML-DSA Certificate reissues its Issuing CA's CRL, signed with ML-DSA and listing it, which the X.509 library verifies", async () => {
+    const ca = await createCa(caAlgorithm);
+    const [issuing, root] = await download(`${casOf()}/${ca.id}/issuing-cas/${ca.issuing.id}/chain`);
+    const created = await h.api(mcs(), { cookie: org.cookie, body: { ...(await mlDsaRequest("ml-dsa-44", ["app.internal.acme"])), ...fromCa(ca.issuing.id) } });
+    const mc = await ended(created.body.id);
+    const before = await publishedCrl("issuing-cas", ca.issuing.id);
+    expect(before.entries).toEqual([]);
+
+    h.setNow(new Date(START + 60_000));
+    expect((await revoke(mc.id, mc.currentCertificate.id, "keyCompromise")).status).toBe(200);
+
+    const crl = await publishedCrl("issuing-cas", ca.issuing.id);
+    expect(await crl.verify({ publicKey: issuing! })).toBe(true);
+    // The signature field of its TBS and its own signature algorithm.
+    expect(algorithmIdentifiersIn(crl.rawData, caAlgorithm)).toBe(2);
+    expect(crl.entries.map((e) => ({ serial: e.serialNumber.toUpperCase(), reason: e.reason }))).toEqual([{ serial: mc.currentCertificate.serial, reason: x509.X509CrlReason.keyCompromise }]);
+    expect(crlNumberOf(crl)).toBeGreaterThan(crlNumberOf(before));
+
+    // The root's CRL of its Issuing CAs is signed with ML-DSA too.
+    const rootCrl = await publishedCrl("roots", ca.id);
+    expect(await rootCrl.verify({ publicKey: root! })).toBe(true);
+    expect(algorithmIdentifiersIn(rootCrl.rawData, caAlgorithm)).toBe(2);
+  });
+
+  test("revoking the Issuing CA puts it on its root's CRL, signed with ML-DSA", async () => {
+    const ca = await createCa(caAlgorithm);
+    const [issuing, root] = await download(`${casOf()}/${ca.id}/issuing-cas/${ca.issuing.id}/chain`);
+
+    const res = await h.api(`${casOf()}/${ca.id}/issuing-cas/${ca.issuing.id}/revocation`, { cookie: org.cookie, body: { reason: "keyCompromise" } });
+    expect(res.status).toBe(200);
+
+    const rootCrl = await publishedCrl("roots", ca.id);
+    expect(await rootCrl.verify({ publicKey: root! })).toBe(true);
+    expect(rootCrl.entries.map((e) => e.serialNumber.toUpperCase())).toEqual([issuing!.serialNumber.toUpperCase()]);
+  });
+});
+
+describe("a revocation the KMS cannot sign an ML-DSA CRL for", () => {
+  test("is refused with 502 for a Certificate and for an Issuing CA, and nothing is revoked", async () => {
+    const { ca, mc } = await issuedOnMlDsaCa();
+    const certificate = mc.currentCertificate;
+
+    h.kms.failing = true;
+    const revokedCertificate = await revoke(mc.id, certificate.id, "keyCompromise");
+    const revokedIssuingCa = await h.api(`${casOf()}/${ca.id}/issuing-cas/${ca.issuing.id}/revocation`, { cookie: org.cookie, body: { reason: "keyCompromise" } });
+    h.kms.failing = false;
+
+    expect(revokedCertificate.status).toBe(502);
+    expect(revokedIssuingCa.status).toBe(502);
+    expect((await publishedCrl("issuing-cas", ca.issuing.id)).entries).toEqual([]);
+    expect((await publishedCrl("roots", ca.id)).entries).toEqual([]);
+    expect((await h.api(`${mcs()}/${mc.id}`, { cookie: org.cookie })).body.currentCertificate.revocation).toBeNull();
+    expect((await h.api(`${casOf()}/${ca.id}`, { cookie: org.cookie })).body.issuingCas[0].status).toBe("active");
+    expect((await revoke(mc.id, certificate.id, "keyCompromise")).status).toBe(200);
+  });
+});
+
+describe("the scheduled reissue of an ML-DSA Private CA's CRLs", () => {
+  test("reissues a CRL over 4 KB, which no KMS limit on a message stops, and it still verifies", async () => {
+    const ca = await createCa("ml-dsa-65");
+    const [issuing, root] = await download(`${casOf()}/${ca.id}/issuing-cas/${ca.issuing.id}/chain`);
+    // One entry takes about 50 bytes, so this many is a CRL whose TBS alone is over 4 KB.
+    const ids: string[] = [];
+    for (let i = 0; i < 100; i++) {
+      const created = await h.api(mcs(), { cookie: org.cookie, body: { ...(await mlDsaRequest("ml-dsa-44", [`host${i}.internal.acme`])), ...fromCa(ca.issuing.id) } });
+      expect(created.status).toBe(201);
+      ids.push(created.body.id);
+    }
+    await h.settleIssuances();
+    for (const id of ids) {
+      const mc = (await h.api(`${mcs()}/${id}`, { cookie: org.cookie })).body;
+      expect(mc.issuance.status).toBe("succeeded");
+      expect((await revoke(id, mc.currentCertificate.id, "cessationOfOperation")).status).toBe(200);
+    }
+    const first = await publishedCrl("issuing-cas", ca.issuing.id);
+    const firstRoot = await publishedCrl("roots", ca.id);
+    expect(first.entries).toHaveLength(100);
+    expect(signedSizeOf(first)).toBeGreaterThan(4096);
+    expect(await first.verify({ publicKey: issuing! })).toBe(true);
+
+    h.setNow(new Date(first.nextUpdate!.getTime() - 3 * DAY_MS));
+    expect(await h.runCrlScheduler()).toBe(2);
+    const secondRoot = await publishedCrl("roots", ca.id);
+    expect(crlNumberOf(secondRoot)).toBeGreaterThan(crlNumberOf(firstRoot));
+    expect(await secondRoot.verify({ publicKey: root! })).toBe(true);
+    expect(algorithmIdentifiersIn(secondRoot.rawData, "ml-dsa-65")).toBe(2);
+    const second = await publishedCrl("issuing-cas", ca.issuing.id);
+    expect(crlNumberOf(second)).toBeGreaterThan(crlNumberOf(first));
+    expect(second.entries).toHaveLength(100);
+    expect(signedSizeOf(second)).toBeGreaterThan(4096);
+    expect(await second.verify({ publicKey: issuing! })).toBe(true);
+  }, 120_000);
+});
+
+describe("adding an Issuing CA under an ML-DSA root", () => {
+  test.each(["ml-dsa-65", "ml-dsa-87"] as const)("%s: gets a new ML-DSA key of the root's algorithm, and a Managed Certificate issued from it verifies to the same root", async (caAlgorithm) => {
+    const ca = await createCa(caAlgorithm);
+    const [first, root] = await download(`${casOf()}/${ca.id}/issuing-cas/${ca.issuing.id}/chain`);
+
+    const added = await h.api(`${casOf()}/${ca.id}/issuing-cas`, { cookie: org.cookie, body: { subject: "CN=Acme Quantum Devices, O=Acme", permittedNames: { exact: [], zones: ["internal.acme"] } } });
+    expect(added.status).toBe(201);
+    const [second, sameRoot] = await download(`${casOf()}/${ca.id}/issuing-cas/${added.body.id}/chain`);
+    expect(sameRoot!.equal(root!)).toBe(true);
+    expect(algorithmIdentifiersIn(second!.rawData, caAlgorithm)).toBe(3);
+    expect(await second!.verify({ publicKey: root!.publicKey, signatureOnly: true })).toBe(true);
+    expect(Buffer.from(second!.publicKey.rawData).equals(Buffer.from(first!.publicKey.rawData))).toBe(false);
+
+    const created = await h.api(mcs(), { cookie: org.cookie, body: { ...(await mlDsaRequest("ml-dsa-65", ["app.internal.acme"])), ...fromCa(added.body.id) } });
+    expect(created.status).toBe(201);
+    const mc = await ended(created.body.id);
+    expect(mc.issuance.status).toBe("succeeded");
+    const [leaf, ...above] = await download(`${mcs()}/${mc.id}/certificate?chain=with-root`);
+    expect(await leaf!.verify({ publicKey: second!.publicKey, signatureOnly: true })).toBe(true);
+    const path = await new x509.X509ChainBuilder({ certificates: above }).build(leaf!);
+    expect(path.at(-1)!.equal(root!)).toBe(true);
+
+    // It publishes its own CRL at once, signed with ML-DSA.
+    const crl = await publishedCrl("issuing-cas", added.body.id);
+    expect(await crl.verify({ publicKey: second! })).toBe(true);
+    expect(algorithmIdentifiersIn(crl.rawData, caAlgorithm)).toBe(2);
+  });
+
+  test("rolls a Managed Certificate over: repointed to the new Issuing CA, its Renewal comes from it, verifies to the same root, and the retired one still publishes its CRL", async () => {
+    const { ca, mc } = await issuedOnMlDsaCa();
+    const [old, root] = await download(`${casOf()}/${ca.id}/issuing-cas/${ca.issuing.id}/chain`);
+    const added = await h.api(`${casOf()}/${ca.id}/issuing-cas`, { cookie: org.cookie, body: { subject: "CN=Acme Quantum TLS 2, O=Acme", permittedNames: { exact: [], zones: ["internal.acme"] } } });
+    expect(added.status).toBe(201);
+
+    expect((await h.api(`${mcs()}/${mc.id}/issuer`, { method: "PUT", cookie: org.cookie, body: fromCa(added.body.id) })).status).toBe(200);
+    expect((await h.api(`${casOf()}/${ca.id}/issuing-cas/${ca.issuing.id}/retire`, { cookie: org.cookie, method: "POST", body: {} })).status).toBe(200);
+    expect((await h.api(`${mcs()}/${mc.id}/renewals`, { cookie: org.cookie, method: "POST", body: {} })).status).toBe(202);
+    const renewed = await ended(mc.id);
+    expect(renewed.issuance).toMatchObject({ kind: "renewal", status: "succeeded" });
+    expect(renewed.currentCertificate.issuingCaId).toBe(added.body.id);
+
+    const [leaf, ...above] = await download(`${mcs()}/${mc.id}/certificate?chain=with-root`);
+    const [next] = await download(`${casOf()}/${ca.id}/issuing-cas/${added.body.id}/chain`);
+    expect(await leaf!.verify({ publicKey: next!.publicKey, signatureOnly: true })).toBe(true);
+    expect((await new x509.X509ChainBuilder({ certificates: above }).build(leaf!)).at(-1)!.equal(root!)).toBe(true);
+    expect(await (await publishedCrl("issuing-cas", ca.issuing.id)).verify({ publicKey: old! })).toBe(true);
   });
 });
