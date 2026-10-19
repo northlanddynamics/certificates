@@ -1,6 +1,6 @@
 import { useMutation, useQuery } from "@tanstack/react-query";
 import { CheckIcon, ClipboardCheckIcon, GlobeIcon, KeyRoundIcon, LandmarkIcon, PlusIcon, ShieldCheckIcon, UsersIcon, type LucideIcon } from "lucide-react";
-import { useState, type FormEvent, type ReactNode } from "react";
+import { useEffect, useState, type FormEvent, type ReactNode } from "react";
 import { ConfirmDialog } from "@/components/confirm-dialog";
 import { KeySource, SaveKey, csrOf, emptyKeySource, keyAtRisk, useKeySourceReady, type KeySourceState } from "@/components/csr-key-source";
 import { IssuerChoiceFields, useIssuerChoice } from "@/components/issuer-choice";
@@ -98,9 +98,13 @@ function NewManagedCertificateForm({
 }) {
   const [step, setStep] = useState<StepId>("authority");
   const choice = useIssuerChoice(org.id, { canReadAccounts: can(org, "acmeAccount", "read"), canReadPrivateCas: can(org, "privateCa", "read") });
-  const { chosenCa, validityOk } = choice;
+  const { chosenCa, validityOk, keyAlgorithms } = choice;
   const [names, setNames] = useState("");
   const [keyAlgorithm, setKeyAlgorithm] = useState<KeyAlgorithm>("ecdsa-p256");
+  // Only what the chosen CA takes is offered: choosing a CA that does not take the key algorithm chosen moves to its first.
+  useEffect(() => {
+    if (keyAlgorithms.length > 0 && !keyAlgorithms.includes(keyAlgorithm)) setKeyAlgorithm(keyAlgorithms[0]!);
+  }, [keyAlgorithms, keyAlgorithm]);
   const [keySource, setKeySourceState] = useState<KeySourceState>(emptyKeySource());
   const setKeySource = (next: KeySourceState) => {
     setKeySourceState(next);
@@ -238,6 +242,7 @@ function NewManagedCertificateForm({
               <KeySource
                 names={parsedNames}
                 keyAlgorithm={keyAlgorithm}
+                keyAlgorithms={keyAlgorithms}
                 onKeyAlgorithmChange={setKeyAlgorithm}
                 onNamesChange={(asked) => setNames(asked.join("\n"))}
                 state={keySource}

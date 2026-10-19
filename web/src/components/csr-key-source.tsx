@@ -6,7 +6,7 @@ import { Checkbox } from "@/components/ui/checkbox";
 import { Field, FieldContent, FieldDescription, FieldLabel, FieldLegend, FieldSet, FieldTitle } from "@/components/ui/field";
 import { RadioGroup, RadioGroupItem } from "@/components/ui/radio-group";
 import { Textarea } from "@/components/ui/textarea";
-import { KEY_ALGORITHMS, KEY_ALGORITHM_LABELS, MAX_COMMON_NAME_LENGTH, generateCsr, type KeyAlgorithm } from "@/lib/csr-generator";
+import { KEY_ALGORITHM_LABELS, MAX_COMMON_NAME_LENGTH, NO_KEY_ALGORITHMS, generateCsr, isGenerated, type KeyAlgorithm } from "@/lib/csr-generator";
 import { inspectCsr, matchCsr, opensslCommand, safeFileBase, type CsrFacts } from "@/lib/csr-inspect";
 import { normalizedNames } from "@/lib/csr-names";
 import { cn } from "@/lib/utils";
@@ -83,15 +83,18 @@ const KEY_ALGORITHM_HINTS: Record<KeyAlgorithm, string> = {
   "rsa-2048": "For older clients and appliances that cannot use ECDSA.",
   "rsa-3072": "RSA where a policy asks for more than 2048 bits.",
   "rsa-4096": "The largest RSA key; slower to make and to use.",
+  "ml-dsa-44": "Post-quantum, with the smallest ML-DSA keys and signatures. Your server and its clients must support ML-DSA (OpenSSL 3.5 or later).",
+  "ml-dsa-65": "Post-quantum, stronger than ML-DSA-44. Your server and its clients must support ML-DSA (OpenSSL 3.5 or later).",
+  "ml-dsa-87": "Post-quantum, the strongest ML-DSA, as CNSA 2.0 asks. Your server and its clients must support ML-DSA (OpenSSL 3.5 or later).",
 };
 
-/** The five key algorithms as a row of choices, with a line on when to choose the chosen one. */
-export function KeyAlgorithmChoice({ value, onChange, idPrefix }: { value: KeyAlgorithm; onChange: (value: KeyAlgorithm) => void; idPrefix: string }) {
+/** The key algorithms offered (`options`) as a row of choices, with a line on when to choose the chosen one. */
+export function KeyAlgorithmChoice<T extends KeyAlgorithm>({ value, options, onChange, idPrefix }: { value: T; options: readonly T[]; onChange: (value: T) => void; idPrefix: string }) {
   return (
     <FieldSet>
       <FieldLegend variant="label">Key type</FieldLegend>
-      <RadioGroup value={value} onValueChange={(v) => onChange(v as KeyAlgorithm)} className="flex flex-wrap gap-2">
-        {KEY_ALGORITHMS.map((alg) => (
+      <RadioGroup value={value} onValueChange={(v) => onChange(v as T)} className="flex flex-wrap gap-2">
+        {options.map((alg) => (
           <FieldLabel key={alg} htmlFor={`${idPrefix}-${alg}`} className="w-auto! flex-none whitespace-nowrap">
             <Field orientation="horizontal" className="gap-3 py-2!">
               <FieldContent>
@@ -277,12 +280,14 @@ const MODES: { mode: KeySourceMode; title: string; icon: typeof KeyRoundIcon }[]
 
 /**
  * How the CSR for a form's names is provided. The key algorithm is the form's: fixed, unless the form passes
- * `onKeyAlgorithmChange`, when it is chosen here and a pasted CSR's own is taken. `onNamesChange` lets a pasted CSR's
- * names replace the form's. With `saveInline` the generated key is saved here; otherwise the form has a step for it.
+ * `onKeyAlgorithmChange`, when it is chosen here from `keyAlgorithms` (what the CA takes) and a pasted CSR's own is
+ * taken. `onNamesChange` lets a pasted CSR's names replace the form's. With `saveInline` the generated key is saved
+ * here; otherwise the form has a step for it. A key that cannot be made here (ML-DSA) is made with a command or pasted.
  */
 export function KeySource({
   names,
   keyAlgorithm,
+  keyAlgorithms: taken = NO_KEY_ALGORITHMS,
   onKeyAlgorithmChange,
   onNamesChange,
   state,
@@ -292,6 +297,7 @@ export function KeySource({
 }: {
   names: string[];
   keyAlgorithm: KeyAlgorithm;
+  keyAlgorithms?: readonly KeyAlgorithm[];
   onKeyAlgorithmChange?: (keyAlgorithm: KeyAlgorithm) => void;
   onNamesChange?: (names: string[]) => void;
   state: KeySourceState;
@@ -302,6 +308,8 @@ export function KeySource({
   const [working, setWorking] = useState(false);
   const [error, setError] = useState<string | null>(null);
   useUnloadGuard(keyAtRisk(state));
+  // Until the form knows what its CA takes, only its own key algorithm is offered.
+  const keyAlgorithms = taken.length > 0 ? taken : [keyAlgorithm];
   const distinct = normalizedNames(names);
   const stale = state.generated !== null && state.generated.madeFor !== madeFor(names, keyAlgorithm);
   const facts = useCsrFacts(state.mode === "generate" ? "" : state.pasted);
@@ -309,10 +317,17 @@ export function KeySource({
   // A pasted CSR is for one kind of key; where the form lets it, that settles the key type.
   const pastedKeyAlgorithm = typeof facts === "object" && facts !== null ? facts.keyAlgorithm : null;
   useEffect(() => {
-    if (onKeyAlgorithmChange && pastedKeyAlgorithm && pastedKeyAlgorithm !== keyAlgorithm) onKeyAlgorithmChange(pastedKeyAlgorithm);
-  }, [onKeyAlgorithmChange, pastedKeyAlgorithm, keyAlgorithm]);
+    if (onKeyAlgorithmChange && pastedKeyAlgorithm && pastedKeyAlgorithm !== keyAlgorithm && (taken.length === 0 || taken.includes(pastedKeyAlgorithm))) onKeyAlgorithmChange(pastedKeyAlgorithm);
+  }, [onKeyAlgorithmChange, pastedKeyAlgorithm, keyAlgorithm, taken]);
+
+  // The key cannot be made here, so it is made with the command instead.
+  const generatable = isGenerated(keyAlgorithm);
+  useEffect(() => {
+    if (!generatable && state.mode === "generate") onChange({ ...state, mode: "command" });
+  }, [generatable, state, onChange]);
 
   async function generate() {
+    if (!isGenerated(keyAlgorithm)) return;
     setWorking(true);
     setError(null);
     try {
@@ -330,20 +345,21 @@ export function KeySource({
       <RadioGroup value={state.mode} onValueChange={(mode) => onChange({ ...state, mode: mode as KeySourceMode })} className="grid gap-2 sm:grid-cols-3">
         {MODES.map(({ mode, title, icon: Icon }) => (
           <FieldLabel key={mode} htmlFor={`${idPrefix}-mode-${mode}`}>
-            <Field orientation="horizontal">
+            <Field orientation="horizontal" data-disabled={mode === "generate" && !generatable}>
               <FieldContent>
                 <FieldTitle>
                   <Icon className="size-4" />
                   {title}
                 </FieldTitle>
               </FieldContent>
-              <RadioGroupItem value={mode} id={`${idPrefix}-mode-${mode}`} />
+              <RadioGroupItem value={mode} id={`${idPrefix}-mode-${mode}`} disabled={mode === "generate" && !generatable} />
             </Field>
           </FieldLabel>
         ))}
       </RadioGroup>
 
-      {onKeyAlgorithmChange && state.mode !== "paste" && <KeyAlgorithmChoice value={keyAlgorithm} onChange={onKeyAlgorithmChange} idPrefix={`${idPrefix}-alg`} />}
+      {onKeyAlgorithmChange && state.mode !== "paste" && <KeyAlgorithmChoice value={keyAlgorithm} options={keyAlgorithms} onChange={onKeyAlgorithmChange} idPrefix={`${idPrefix}-alg`} />}
+      {!generatable && <FieldDescription>An {KEY_ALGORITHM_LABELS[keyAlgorithm]} key cannot be made in this browser yet: run the command, or paste a CSR made elsewhere.</FieldDescription>}
 
       {state.mode === "generate" && (
         <div className="flex flex-col gap-3">

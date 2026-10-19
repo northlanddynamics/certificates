@@ -6,7 +6,7 @@ import { mkdtempSync, readFileSync, rmSync } from "node:fs";
 import { createPrivateKey } from "node:crypto";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
-import { CLASSICAL_KEY_ALGORITHMS, parseCsr, type ClassicalKeyAlgorithm } from "../src/pki/csr";
+import { CLASSICAL_KEY_ALGORITHMS, ML_DSA_KEY_ALGORITHMS, parseCsr, type ClassicalKeyAlgorithm } from "../src/pki/csr";
 import { MAX_NAMES, normalizeName } from "../src/pki/names";
 import { defaultHash, generateCsr, hashNote, SIGNATURE_HASHES } from "../../web/src/lib/csr-generator";
 import { inspectCsr, matchCsr, opensslCommand, type CsrFacts } from "../../web/src/lib/csr-inspect";
@@ -88,10 +88,28 @@ describe("inspectCsr", () => {
       const { csrPem } = await generateCsr({ keyAlgorithm, names: ["www.example.com", "*.example.com"], commonName: "www.example.com" });
       const facts = (await inspectCsr(csrPem)) as CsrFacts;
       const parsed = await parseCsr(csrPem);
-      // The parser knows ML-DSA too, the Generator not yet: so the narrower is the expected.
       expect(parsed.keyAlgorithm).toBe(facts.keyAlgorithm!);
       expect([...facts.names].sort()).toEqual([...parsed.names].sort());
     }, 60_000);
+  }
+
+  // The Generator does not make ML-DSA keys yet, so these CSRs are made with Bun's native ML-DSA, as an Owner's own tooling would.
+  for (const keyAlgorithm of ML_DSA_KEY_ALGORITHMS) {
+    test(`reads a ${keyAlgorithm} CSR's key algorithm and names as parseCsr does`, async () => {
+      const algorithm = { name: keyAlgorithm.toUpperCase() };
+      const keys = (await crypto.subtle.generateKey(algorithm, false, ["sign", "verify"])) as CryptoKeyPair;
+      const csr = await x509.Pkcs10CertificateRequestGenerator.create({
+        name: "CN=www.example.com",
+        keys,
+        signingAlgorithm: algorithm,
+        extensions: [new x509.SubjectAlternativeNameExtension([{ type: "dns", value: "*.example.com" }])],
+      });
+      const facts = (await inspectCsr(csr.toString("pem"))) as CsrFacts;
+      const parsed = await parseCsr(csr.toString("pem"));
+      expect(parsed.keyAlgorithm).toBe(keyAlgorithm);
+      expect(facts.keyAlgorithm).toBe(keyAlgorithm);
+      expect([...facts.names].sort()).toEqual([...parsed.names].sort());
+    });
   }
 
   test("counts the CN among the names, normalised, as parseCsr does", async () => {

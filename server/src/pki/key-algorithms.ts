@@ -1,6 +1,6 @@
 // The algorithms of the keys the platform deals with: Managed Certificates', Private CAs' and Agents'. Apart from
 // csr.ts so that what needs only the list (the KMS) does not load the X.509 library.
-/** ECDSA and RSA: until a Private CA signs with ML-DSA, the only key algorithms the API takes for a new key. */
+/** ECDSA and RSA: what an ACME CA, and a Private CA whose keys are of one of them, issue for. */
 export const CLASSICAL_KEY_ALGORITHMS = ["ecdsa-p256", "ecdsa-p384", "rsa-2048", "rsa-3072", "rsa-4096"] as const;
 export type ClassicalKeyAlgorithm = (typeof CLASSICAL_KEY_ALGORITHMS)[number];
 /** Pure ML-DSA (FIPS 204), as RFC 9881 names it in X.509. */
@@ -13,3 +13,11 @@ export const isMlDsa = (algorithm: KeyAlgorithm): algorithm is MlDsaKeyAlgorithm
 export const SIGNING_KEY_ALGORITHMS = KEY_ALGORITHMS.filter((algorithm): algorithm is SigningKeyAlgorithm => algorithm !== "ml-dsa-44");
 export type SigningKeyAlgorithm = Exclude<KeyAlgorithm, "ml-dsa-44">;
 export type MlDsaSigningKeyAlgorithm = Extract<SigningKeyAlgorithm, MlDsaKeyAlgorithm>;
+
+/**
+ * The key algorithms a Managed Certificate may have on a CA whose own key is `caKeyAlgorithm`, or on an ACME CA when
+ * none is given. A chain is all ML-DSA or none of it: an ML-DSA leaf under an ECDSA CA gains no quantum resistance,
+ * and an ECDSA leaf under an ML-DSA CA is the weak link.
+ */
+export const certificateKeyAlgorithmsOn = (caKeyAlgorithm?: KeyAlgorithm): readonly KeyAlgorithm[] =>
+  caKeyAlgorithm && isMlDsa(caKeyAlgorithm) ? ML_DSA_KEY_ALGORITHMS : CLASSICAL_KEY_ALGORITHMS;

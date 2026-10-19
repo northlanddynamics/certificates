@@ -272,7 +272,7 @@ describe("a CSR must match the Managed Certificate", () => {
     const unsupportedKey = await admin().create({ ...good, csr: p521 });
     for (const res of [notACsr, wrongPem, badSignature, unsupportedKey]) expect(res.status).toBe(400);
     expect(badSignature.body.error).toContain("signature");
-    expect(unsupportedKey.body.error).toContain("P-256 and P-384");
+    expect(unsupportedKey.body.error).toContain("ECDSA (P-256, P-384), RSA (2048, 3072, 4096) and ML-DSA (ML-DSA-44, ML-DSA-65, ML-DSA-87)");
     await nothingCreated();
   });
 

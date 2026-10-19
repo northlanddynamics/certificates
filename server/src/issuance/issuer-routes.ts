@@ -2,7 +2,8 @@
 // another, which is how an Issuing CA is rolled over (private-ca.ts). It needs no Approval: the names it is issued for
 // stay as they were approved, and must be within the new Issuing CA's permitted name rules. It never moves a Managed
 // Certificate between kinds of issuer. Its next Issuance, by Renewal or asked for, comes from the new Issuing CA; the
-// Certificates it has stay as they were, on the CRL of the Issuing CA that signed them.
+// Certificates it has stay as they were, on the CRL of the Issuing CA that signed them. Also here: which key algorithms
+// each kind of CA takes, so that no client need hold a copy of the rule.
 import { OpenAPIHono, createRoute, z } from "@hono/zod-openapi";
 import { and, eq } from "drizzle-orm";
 import type { Authorizer } from "../tenancy/authorization";
@@ -11,12 +12,46 @@ import { HttpError, errors, json } from "../platform/http";
 import { issuerColumns, issuerOf } from "./issuer";
 import { ManagedCertificate, ManagedCertificateParams, type ManagedCertificateReader } from "../certificates/managed-certificate-reader";
 import { lockManagedCertificate, pendingNameChanges } from "../certificates/name-change";
-import { IssuerField, issuerRefusal } from "../private-ca/private-ca";
+import { IssuerField, caKeyAlgorithmsUnder, issuerRefusal } from "../private-ca/private-ca";
+import { KEY_ALGORITHMS, certificateKeyAlgorithmsOn } from "../pki/csr";
 import type { Actor, UnitOfWork } from "../platform/unit-of-work";
 
 export function registerIssuerRoutes(ctx: { app: OpenAPIHono; requireUser(c: any): Promise<Actor>; authorize: Authorizer["authorize"]; unitOfWork: UnitOfWork; reader: ManagedCertificateReader }) {
   const { app, requireUser, authorize, unitOfWork, reader } = ctx;
   const { findManagedCertificate, withState } = reader;
+
+  app.openapi(
+    createRoute({
+      method: "get",
+      path: "/api/key-algorithms",
+      tags: ["Managed Certificates"],
+      summary: "The key algorithms, and which ones each kind of CA takes",
+      description:
+        "`keyAlgorithms`: every key algorithm a Managed Certificate may have. `privateCaKeyAlgorithms`: what a Private CA's own keys may be under each kind of root (never ML-DSA-44, too weak for a CA key, and for now ML-DSA only under a platform-made root). " +
+        "`acmeKeyAlgorithms`: what a Managed Certificate on an ACME CA may have. On a Private CA, it is its `certificateKeyAlgorithms`: a chain is all ML-DSA or none of it. Anyone signed in may ask.",
+      responses: {
+        200: json(
+          z.object({
+            keyAlgorithms: z.array(z.enum(KEY_ALGORITHMS)),
+            privateCaKeyAlgorithms: z.object({ platform_root: z.array(z.enum(KEY_ALGORITHMS)), organization_root: z.array(z.enum(KEY_ALGORITHMS)) }),
+            acmeKeyAlgorithms: z.array(z.enum(KEY_ALGORITHMS)),
+          }),
+        ),
+        ...errors(401),
+      },
+    }),
+    async (c) => {
+      await requireUser(c);
+      return c.json(
+        {
+          keyAlgorithms: [...KEY_ALGORITHMS],
+          privateCaKeyAlgorithms: { platform_root: [...caKeyAlgorithmsUnder("platform_root")], organization_root: [...caKeyAlgorithmsUnder("organization_root")] },
+          acmeKeyAlgorithms: [...certificateKeyAlgorithmsOn()],
+        },
+        200,
+      );
+    },
+  );
 
   app.openapi(
     createRoute({
@@ -26,7 +61,7 @@ export function registerIssuerRoutes(ctx: { app: OpenAPIHono; requireUser(c: any
       summary: "Repoint the Managed Certificate to another Issuing CA",
       description:
         "Only for a Managed Certificate issued from a Private CA, and only to another Issuing CA (422 for a move between kinds of issuer, such as to or from an ACME CA). " +
-        "The Issuing CA, of any of the Organization's Private CAs, must issue (active, under an active root), permit its names (and those of a name change pending Approval), and allow the validity it chose; 422 otherwise. " +
+        "The Issuing CA, of any of the Organization's Private CAs, must issue (active, under an active root), permit its names (and those of a name change pending Approval), allow the validity it chose, and take its key algorithm (ML-DSA keys only on an ML-DSA Private CA, and only those there); 422 otherwise. " +
         "No Approval is needed, and nothing is issued: its next Issuance, a Renewal or one asked for, comes from the new Issuing CA, and the Certificates it has are unchanged. " +
         "Repointing it to the Issuing CA it is on already changes nothing. Refused with 409 for one archived or rejected. Only Organization Administrators may.",
       request: { params: ManagedCertificateParams, body: { content: { "application/json": { schema: z.object({ issuer: IssuerField }) } } } },
@@ -48,7 +83,7 @@ export function registerIssuerRoutes(ctx: { app: OpenAPIHono; requireUser(c: any
         if (from.issuingCaId === to.issuingCaId) return;
         const pending = (await pendingNameChanges(tx, [mc.id])).get(mc.id);
         for (const asked of [{ names: mc.names, validityDays: mc.validityDays }, ...(pending ? [{ names: pending.names, validityDays: pending.validityDays }] : [])]) {
-          const refused = await issuerRefusal(tx, orgId, to, asked);
+          const refused = await issuerRefusal(tx, orgId, to, { ...asked, keyAlgorithm: mc.keyAlgorithm });
           if (refused) throw new HttpError(refused.status, refused.message);
         }
         await tx

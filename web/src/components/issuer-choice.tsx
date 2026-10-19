@@ -4,6 +4,7 @@ import { Field, FieldContent, FieldDescription, FieldError, FieldLabel, FieldTit
 import { Input } from "@/components/ui/input";
 import { RadioGroup, RadioGroupItem } from "@/components/ui/radio-group";
 import { api, type NewManagedCertificate } from "@/lib/api";
+import { KEY_ALGORITHM_LABELS, NO_KEY_ALGORITHMS } from "@/lib/csr-generator";
 import { commonNameOf, daysLabel, findIssuingCa, isValidityDays, permittedNamesLabel, validityLabel } from "@/lib/private-ca";
 
 type Environment = "staging" | "production";
@@ -22,6 +23,9 @@ const environments = (trying: string): { value: Environment; title: string; desc
   { value: "production", title: "Production", description: "The CA's live service. Certificates are publicly trusted, and the CA's rate limits apply." },
 ];
 
+/** The key algorithms, and which ones each kind of CA takes, as the server says; they do not change while the app runs. */
+export const useKeyAlgorithms = () => useQuery({ queryKey: ["key-algorithms"], queryFn: () => api.keyAlgorithms(), staleTime: Infinity });
+
 /**
  * The state of choosing where Certificates are issued from: an ACME environment (staging to begin with) or an active
  * Issuing CA under an active root, and for an Issuing CA a validity (empty for its default). The ACME accounts and the
@@ -32,12 +36,15 @@ export function useIssuerChoice(orgId: string, { canReadAccounts, canReadPrivate
   const [validityDays, setValidityDays] = useState("");
   const accounts = useQuery({ queryKey: ["acme-accounts", orgId], queryFn: () => api.acmeAccounts(orgId), enabled: canReadAccounts });
   const privateCas = useQuery({ queryKey: ["private-cas", orgId], queryFn: () => api.privateCas(orgId), enabled: canReadPrivateCas });
+  const keyAlgorithms = useKeyAlgorithms();
   // The Private CAs whose root is active, each with its active Issuing CAs: those that can issue, grouped as they are offered.
   const activeCas = (privateCas.data?.items ?? [])
     .filter((ca) => ca.status === "active")
     .map((ca) => ({ ...ca, issuingCas: ca.issuingCas.filter((i) => i.status === "active") }))
     .filter((ca) => ca.issuingCas.length > 0);
   const chosenCa = issuer.kind === "private_ca" ? findIssuingCa(activeCas, issuer.issuingCaId) : undefined;
+  // What a Managed Certificate on the chosen CA may have, as the server says; none until it has said.
+  const takes = issuer.kind === "private_ca" ? chosenCa?.certificateKeyAlgorithms : keyAlgorithms.data?.acmeKeyAlgorithms;
   // The validity chosen, in days; none for the Issuing CA's default.
   const chosenValidity = validityDays.trim() === "" ? null : Number(validityDays);
   const validityOk = !chosenCa || chosenValidity === null || isValidityDays(validityDays, chosenCa.validity.maximumDays);
@@ -51,6 +58,8 @@ export function useIssuerChoice(orgId: string, { canReadAccounts, canReadPrivate
     setValidityDays,
     activeCas,
     chosenCa,
+    /** The key algorithms the chosen CA takes; none until known. */
+    keyAlgorithms: takes ?? NO_KEY_ALGORITHMS,
     chosenValidity,
     validityOk,
     registered,
@@ -86,6 +95,7 @@ export function IssuerChoiceFields({ choice, idPrefix, trying }: { choice: Retur
             <p id={`${idPrefix}-ca-${ca.id}`} className="pt-2 text-sm font-medium">
               Private CA {ca.name}
               <span className="block text-xs font-normal text-muted-foreground">The Organization's own CA. Trusted only where its root is installed; no DCV.</span>
+              <span className="block text-xs font-normal text-muted-foreground">Keys: {ca.certificateKeyAlgorithms.map((alg) => KEY_ALGORITHM_LABELS[alg]).join(", ")}.</span>
             </p>
             {ca.issuingCas.map((issuing) => (
               <FieldLabel key={issuing.id} htmlFor={`${idPrefix}-issuing-${issuing.id}`}>

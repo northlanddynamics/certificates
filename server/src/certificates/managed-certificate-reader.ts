@@ -68,7 +68,8 @@ const ChainCertificate = z.object({
 export const CertificateFacts = Certificate.extend({
   subject: z.string().openapi({ description: "The leaf's subject, as a distinguished name; `names` are its subject alternative names." }),
   issuer: z.string().openapi({ description: "The distinguished name of the CA certificate that signed it." }),
-  signatureAlgorithm: z.string().openapi({ description: "How the CA signed it, such as `ECDSA with SHA-256`." }),
+  keyAlgorithm: z.string().openapi({ description: "The leaf's key, such as `ECDSA P-256`, `RSA 2048` or `ML-DSA-65`." }),
+  signatureAlgorithm: z.string().openapi({ description: "How the CA signed it, such as `ECDSA with SHA-256` or `ML-DSA-65`." }),
   chain: z.array(ChainCertificate).openapi({ description: "The leaf and the intermediates the CA served, leaf first." }),
   acmeAccount: z
     .object({ id: z.string(), environment: z.enum(ACME_ENVIRONMENTS) })

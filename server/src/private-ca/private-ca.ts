@@ -14,7 +14,7 @@ import type { Authorizer } from "../tenancy/authorization";
 import { makeCaCsr, makeDeviceCertificate, makeIssuingCa, makeRaCertificate, makeRoot, makeTlsServer, nameConstraintsOf, parseSubject, rootSubjectOf, signedCertificateRefusal, subjectAltNamesOf, type CaKey, type Signer } from "../pki/ca-certificates";
 import { ACME_ENVIRONMENTS, CertificateAuthorityError, type AcmeEnvironment } from "../issuance/acme/certificate-authority";
 import { publicationOf, type Crls } from "./crl";
-import { CLASSICAL_KEY_ALGORITHMS, KEY_ALGORITHMS } from "../pki/csr";
+import { CLASSICAL_KEY_ALGORITHMS, KEY_ALGORITHMS, SIGNING_KEY_ALGORITHMS, certificateKeyAlgorithmsOn, isMlDsa, type KeyAlgorithm, type SigningKeyAlgorithm } from "../pki/csr";
 import type { Db, Tx } from "../platform/db/client";
 import { issuingCa, privateCa } from "../platform/db/schema";
 import { HttpError, OrgParam, errors, isUniqueViolation, json } from "../platform/http";
@@ -22,7 +22,7 @@ import { IssuanceFailure } from "../issuance/issuance-failure";
 import type { Issuer } from "../issuance/issuer";
 import type { Kms } from "../platform/crypto/kms";
 import { constraintNamesOf, namesOutside, normalizePermittedNames, samePermittedNames, type PermittedNames } from "./permitted-names";
-import { DEFAULT_LIFETIME_YEARS, DEFAULT_VALIDITY_DAYS, ISSUING_CA_STATUSES, MAX_LIFETIME_YEARS, MAX_VALIDITY_DAYS, PRIVATE_CA_KINDS, PRIVATE_CA_STATUSES } from "./private-ca-kinds";
+import { DEFAULT_LIFETIME_YEARS, DEFAULT_VALIDITY_DAYS, ISSUING_CA_STATUSES, MAX_LIFETIME_YEARS, MAX_VALIDITY_DAYS, PRIVATE_CA_KINDS, PRIVATE_CA_STATUSES, type PrivateCaKind } from "./private-ca-kinds";
 import { ISSUING_CA_REVOCATION_REASONS } from "../pki/revocation-reasons";
 import type { Actor, Change, UnitOfWork } from "../platform/unit-of-work";
 
@@ -116,6 +116,9 @@ export const PrivateCa = z.object({
   kind: z.enum(PRIVATE_CA_KINDS).openapi({ description: "`platform_root`: the platform made its root, which signs its Issuing CAs. `organization_root`: the Organization's own root signs them." }),
   status: z.enum(PRIVATE_CA_STATUSES).openapi({ description: "Its root's: a `revoked` root's Issuing CAs issue nothing." }),
   keyAlgorithm: z.enum(KEY_ALGORITHMS).openapi({ description: "The algorithm of its keys, the root's and its Issuing CAs'." }),
+  certificateKeyAlgorithms: z
+    .array(z.enum(KEY_ALGORITHMS))
+    .openapi({ description: "The key algorithms a Managed Certificate issued from it may have: ML-DSA ones on an ML-DSA Private CA, and only there, so that a chain is all ML-DSA or none of it." }),
   root: z
     .object({ subject: z.string(), notAfter: z.string() })
     .nullable()
@@ -151,6 +154,7 @@ const toPrivateCa = (row: PrivateCaRow, issuingCas: IssuingCaRow[]): z.infer<typ
   kind: row.kind,
   status: row.status,
   keyAlgorithm: row.keyAlgorithm,
+  certificateKeyAlgorithms: [...certificateKeyAlgorithmsOn(row.keyAlgorithm)],
   root: rootOf(row),
   issuingCas: issuingCas.filter((i) => i.privateCaId === row.id).map(toIssuingCa),
   createdAt: row.createdAt.toISOString(),
@@ -206,18 +210,36 @@ export function namesRefusal(of: IssuingCaOf, names: string[]) {
   return outside.length === 0 ? undefined : `${outside.join(", ")} ${outside.length === 1 ? "is" : "are"} outside the permitted names of ${issuingCaLabel(of)}`;
 }
 
+/** Why a Managed Certificate with a key of `keyAlgorithm` may not be issued from the CA, whose own key is `caKeyAlgorithm` (none for an ACME CA). None when it may. */
+export function keyAlgorithmRefusal(keyAlgorithm: KeyAlgorithm, on: { caKeyAlgorithm?: KeyAlgorithm; label: string }) {
+  const taken = certificateKeyAlgorithmsOn(on.caKeyAlgorithm);
+  if (taken.includes(keyAlgorithm)) return undefined;
+  const why = isMlDsa(keyAlgorithm)
+    ? "an ML-DSA key gains no quantum resistance under a CA whose own key is not ML-DSA"
+    : "a key that is not ML-DSA would be the weak link under an ML-DSA CA";
+  return `${on.label} takes keys of ${taken.join(", ")}, not ${keyAlgorithm}: ${why}`;
+}
+
 /**
- * Why a Managed Certificate may not ask the issuer for the names (normalised) and the validity: a 422 when it is an
- * Issuing CA that is not the Organization's, or does not issue (it or its root), or does not permit the names, or allows
- * no such validity; a 400 for a validity asked of an ACME CA, which decides its own (and checks control of the names
- * instead). None when it may.
+ * Why a Managed Certificate may not ask the issuer for the names (normalised), the validity and, when given, the key
+ * algorithm: a 422 when it is an Issuing CA that is not the Organization's, or does not issue (it or its root), or does
+ * not permit the names, or allows no such validity, or when the issuer takes no such key algorithm; a 400 for a
+ * validity asked of an ACME CA, which decides its own (and checks control of the names instead). None when it may.
  */
-export async function issuerRefusal(db: Db | Tx, organizationId: string, issuer: Issuer, asked: { names: string[]; validityDays: number | null }) {
+export async function issuerRefusal(db: Db | Tx, organizationId: string, issuer: Issuer, asked: { names: string[]; validityDays: number | null; keyAlgorithm?: KeyAlgorithm }) {
   const refused = (status: 400 | 422, message: string) => ({ status, message });
-  if (issuer.kind !== "private_ca") return asked.validityDays === null ? undefined : refused(400, "a validity can be chosen only for a Managed Certificate issued from a Private CA");
+  if (issuer.kind !== "private_ca") {
+    if (asked.validityDays !== null) return refused(400, "a validity can be chosen only for a Managed Certificate issued from a Private CA");
+    const refusal = asked.keyAlgorithm && keyAlgorithmRefusal(asked.keyAlgorithm, { label: "an ACME CA" });
+    return refusal ? refused(422, refusal) : undefined;
+  }
   const of = await findIssuingCa(db, organizationId, issuer.issuingCaId);
   if (!of) return refused(422, "the Organization has no such Issuing CA");
-  const refusal = issuingRefusal(of) ?? namesRefusal(of, asked.names) ?? validityRefusal(of, asked.validityDays);
+  const refusal =
+    issuingRefusal(of) ??
+    namesRefusal(of, asked.names) ??
+    validityRefusal(of, asked.validityDays) ??
+    (asked.keyAlgorithm && keyAlgorithmRefusal(asked.keyAlgorithm, { caKeyAlgorithm: of.ca.keyAlgorithm, label: issuingCaLabel(of) }));
   return refusal ? refused(422, refusal) : undefined;
 }
 
@@ -234,11 +256,16 @@ export const IssuerField = z
  * active under an active root, permit the names (normalised), and allow the validity chosen, which only a Private CA
  * lets be chosen.
  */
-export async function issuerAsked(db: Db, orgId: string, body: { environment?: AcmeEnvironment; issuer?: z.infer<typeof IssuerField>; validityDays?: number }, names: string[]): Promise<Issuer> {
+export async function issuerAsked(
+  db: Db,
+  orgId: string,
+  body: { environment?: AcmeEnvironment; issuer?: z.infer<typeof IssuerField>; validityDays?: number; keyAlgorithm: KeyAlgorithm },
+  names: string[],
+): Promise<Issuer> {
   if (body.issuer && body.environment) throw new HttpError(400, "give either `issuer` or `environment`, not both");
   const issuer = body.issuer ?? { kind: "acme", environment: body.environment ?? "staging" };
   const validityDays = body.validityDays ?? null;
-  const refusal = await issuerRefusal(db, orgId, issuer, { names, validityDays });
+  const refusal = await issuerRefusal(db, orgId, issuer, { names, validityDays, keyAlgorithm: body.keyAlgorithm });
   if (refusal) throw new HttpError(refusal.status, refusal.message);
   return issuer;
 }
@@ -369,6 +396,21 @@ function yearsAfter(from: Date, years: number) {
 
 const sameCertificates = (a: x509.X509Certificate[], b: x509.X509Certificate[]) => a.length === b.length && a.every((cert, i) => cert.equal(b[i]!));
 
+/**
+ * What a Private CA's keys may be under each kind of root: never ML-DSA-44, too weak for a CA key; and ML-DSA only
+ * under a platform-made root for now, as nothing yet checks that an Organization's own root is ML-DSA too, so that a
+ * chain is never part post-quantum.
+ */
+export const caKeyAlgorithmsUnder = (kind: PrivateCaKind): readonly SigningKeyAlgorithm[] => (kind === "platform_root" ? SIGNING_KEY_ALGORITHMS : CLASSICAL_KEY_ALGORITHMS);
+
+/** A Private CA's key algorithm as asked under a root of `kind`; a 422 for one that may not be (`caKeyAlgorithmsUnder`). */
+function caKeyAlgorithmAsked(algorithm: KeyAlgorithm, kind: PrivateCaKind): SigningKeyAlgorithm {
+  if (algorithm === "ml-dsa-44") throw new HttpError(422, "ML-DSA-44 is too weak for a CA key, which outlives and outweighs every Certificate it signs; choose ML-DSA-65 or ML-DSA-87");
+  const allowed = caKeyAlgorithmsUnder(kind).find((under) => under === algorithm);
+  if (!allowed) throw new HttpError(422, `an ${algorithm} Issuing CA can be made only under a platform-made root for now`);
+  return allowed;
+}
+
 /** A lifetime asked of an Issuing CA under the Organization's own root, which decides it. */
 const noLifetimeUnderOwnRoot = () => new HttpError(422, "the Organization's own root decides how long an Issuing CA under it lasts, so no lifetime can be given");
 
@@ -477,7 +519,14 @@ export function registerPrivateCas(ctx: {
                 name: z.string().trim().min(1).max(100),
                 kind: z.enum(PRIVATE_CA_KINDS).default("platform_root"),
                 subject: z.string().min(1).max(1000).openapi({ example: "CN=Acme Internal TLS, O=Acme" }),
-                keyAlgorithm: z.enum(CLASSICAL_KEY_ALGORITHMS).default("ecdsa-p256"),
+                keyAlgorithm: z
+                  .enum(KEY_ALGORITHMS)
+                  .default("ecdsa-p256")
+                  .openapi({
+                    description:
+                      "Its keys', the root's and its Issuing CAs'. Refused with 422: `ml-dsa-44`, too weak for a CA key, and for now ML-DSA under the Organization's own root (`/api/key-algorithms` lists what each kind takes). " +
+                      "ML-DSA is verified only by recent clients, such as OpenSSL 3.5 or later and Chrome 150 or later.",
+                  }),
                 lifetimeYears: z.number().int().min(1).max(MAX_LIFETIME_YEARS).optional().openapi({ description: "For a platform-made root and its Issuing CA: 10 unless given. Not for an Organization's own root." }),
                 permittedNames: PermittedNamesField,
                 validity: ValidityField.default(DEFAULT_VALIDITY),
@@ -496,6 +545,7 @@ export function registerPrivateCas(ctx: {
       const subject = subjectAsked(body.subject);
       const permittedNames = permittedNamesAsked(body.permittedNames);
       const validity = validityAsked(body.validity);
+      const keyAlgorithm = caKeyAlgorithmAsked(body.keyAlgorithm, body.kind);
       if (body.kind === "organization_root" && body.lifetimeYears !== undefined) throw noLifetimeUnderOwnRoot();
 
       const taken = () => new HttpError(409, `the Organization already has a Private CA named ${body.name}`);
@@ -507,10 +557,10 @@ export function registerPrivateCas(ctx: {
 
       if (body.kind === "organization_root") {
         // As below, the key is made first; one not stored then leaves only a key nothing refers to.
-        const key = await kms.createSigningKey(body.keyAlgorithm, orgId);
+        const key = await kms.createSigningKey(keyAlgorithm, orgId);
         try {
           const row = await unitOfWork.run(actor, async (tx, change) => {
-            const [row] = await tx.insert(privateCa).values({ organizationId: orgId, name: body.name, kind: "organization_root", status: "active", keyAlgorithm: body.keyAlgorithm }).returning();
+            const [row] = await tx.insert(privateCa).values({ organizationId: orgId, name: body.name, kind: "organization_root", status: "active", keyAlgorithm }).returning();
             const [first] = await tx
               .insert(issuingCa)
               .values({ ...awaitingSignature(orgId, row!.id, subject, key, permittedNames, validity) })
@@ -519,7 +569,7 @@ export function registerPrivateCas(ctx: {
               organizationId: orgId,
               action: "private_ca.created",
               target: { type: "private_ca", id: row!.id },
-              detail: { name: body.name, kind: "organization_root", keyAlgorithm: body.keyAlgorithm, subject: subject.toString(), permittedNames, validity, issuingCa: { id: first!.id } },
+              detail: { name: body.name, kind: "organization_root", keyAlgorithm, subject: subject.toString(), permittedNames, validity, issuingCa: { id: first!.id } },
             });
             return row!;
           });
@@ -535,8 +585,8 @@ export function registerPrivateCas(ctx: {
       const id = randomUUID();
       const notBefore = clock();
       const notAfter = yearsAfter(notBefore, body.lifetimeYears ?? DEFAULT_LIFETIME_YEARS);
-      const rootKey: CaKey = { key: await kms.createSigningKey(body.keyAlgorithm, orgId), context: orgId, algorithm: body.keyAlgorithm };
-      const issuingKey: CaKey = { key: await kms.createSigningKey(body.keyAlgorithm, orgId), context: orgId, algorithm: body.keyAlgorithm };
+      const rootKey: CaKey = { key: await kms.createSigningKey(keyAlgorithm, orgId), context: orgId, algorithm: keyAlgorithm };
+      const issuingKey: CaKey = { key: await kms.createSigningKey(keyAlgorithm, orgId), context: orgId, algorithm: keyAlgorithm };
       const root = await makeRoot(kms, rootKey, { subject: rootSubjectOf(subject), notBefore, notAfter });
       const issuing = await makeIssuingCa(kms, { ...rootKey, certificate: root }, issuingKey, {
         subject,
@@ -550,7 +600,7 @@ export function registerPrivateCas(ctx: {
         const row = await unitOfWork.run(actor, async (tx, change) => {
           const [row] = await tx
             .insert(privateCa)
-            .values({ id, organizationId: orgId, name: body.name, kind: "platform_root", status: "active", keyAlgorithm: body.keyAlgorithm, rootCertificatePem: root.toString("pem"), rootKey: rootKey.key })
+            .values({ id, organizationId: orgId, name: body.name, kind: "platform_root", status: "active", keyAlgorithm, rootCertificatePem: root.toString("pem"), rootKey: rootKey.key })
             .returning();
           const [first] = await tx
             .insert(issuingCa)
@@ -576,7 +626,7 @@ export function registerPrivateCas(ctx: {
             detail: {
               name: body.name,
               kind: "platform_root",
-              keyAlgorithm: body.keyAlgorithm,
+              keyAlgorithm,
               subject: subject.toString(),
               notAfter: notAfter.toISOString(),
               permittedNames,

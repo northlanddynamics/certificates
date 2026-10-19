@@ -1,5 +1,6 @@
 // The server's own list of the reasons each kind of issuer takes, from a module that imports only types.
 import { ISSUING_CA_REVOCATION_REASONS, REVOCATION_REASONS_OF, type RevocationReason } from "../../../server/src/pki/revocation-reasons";
+import type { KeyAlgorithm } from "./csr-generator";
 import type { DeviceExtendedKeyUsage, DeviceKeyType, DeviceKeyUsage } from "../../../server/src/enrollment/enrollment-profile-kinds";
 
 // The web UI talks only to the platform's HTTP API (described by /api/openapi.json).
@@ -252,6 +253,8 @@ export interface CertificateFacts extends Certificate {
   /** The leaf's subject; empty when its names are only in `names`, as a CA's short-lived Certificates have them. */
   subject: string;
   issuer: string;
+  /** The leaf's key, such as "ECDSA P-256" or "ML-DSA-65". */
+  keyAlgorithm: string;
   signatureAlgorithm: string;
   /** The leaf and the intermediates the CA served, leaf first. */
   chain: ChainCertificate[];
@@ -269,6 +272,8 @@ export interface PrivateCa {
   status: "active" | "revoked";
   /** The algorithm of its keys, the root's and its Issuing CAs'. */
   keyAlgorithm: string;
+  /** The key algorithms a Managed Certificate issued from it may have. */
+  certificateKeyAlgorithms: KeyAlgorithm[];
   /** The root that signs its Issuing CAs; under the Organization's own root, none until it is uploaded with the first signed Issuing CA. */
   root: { subject: string; notAfter: string } | null;
   /** Its Issuing CAs, oldest first. */
@@ -794,6 +799,9 @@ export const api = {
     call<{ ok: boolean; error?: string; note?: string }>(`/api/organizations/${orgId}/enrollment-profiles/${id}/validator/test`, { method: "POST", body: {} }),
   /** Where a profile's root or Issuing CA certificate downloads from, for the device management platform's trusted certificate profile. */
   enrollmentProfileCaCertificateUrl: (orgId: string, id: string, ca: "root" | "issuing") => `/api/organizations/${orgId}/enrollment-profiles/${id}/ca-certificate?ca=${ca}`,
+  /** Every key algorithm, and which ones a Private CA's keys (under each kind of root) and a Managed Certificate on an ACME CA may have. */
+  keyAlgorithms: () =>
+    call<{ keyAlgorithms: KeyAlgorithm[]; privateCaKeyAlgorithms: Record<PrivateCa["kind"], KeyAlgorithm[]>; acmeKeyAlgorithms: KeyAlgorithm[] }>("/api/key-algorithms"),
   acmeAccounts: (orgId: string) => call<{ items: AcmeAccount[] }>(`/api/organizations/${orgId}/acme-accounts`),
   registerAcmeAccount: (orgId: string, body: { environment: AcmeAccount["environment"]; contactEmail?: string }) =>
     call<AcmeAccount>(`/api/organizations/${orgId}/acme-accounts`, { body: { ...body, termsOfServiceAgreed: true } }),
