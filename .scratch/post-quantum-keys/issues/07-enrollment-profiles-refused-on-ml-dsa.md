@@ -4,9 +4,14 @@
 
 **Blocked by:** 03
 
-**Status:** ready-for-agent
+**Status:** done
 
-- [ ] Creating an Enrollment Profile on an ML-DSA Issuing CA is refused with a 422 that says why.
-- [ ] Repointing an Enrollment Profile to an ML-DSA Issuing CA is refused the same way, and the profile is left as it was.
-- [ ] The web app does not offer ML-DSA Issuing CAs when creating or repointing a profile.
-- [ ] Seam A tests cover both, following the existing Enrollment Profile lifecycle tests.
+- [x] Creating an Enrollment Profile on an ML-DSA Issuing CA is refused with a 422 that says why.
+- [x] Repointing an Enrollment Profile to an ML-DSA Issuing CA is refused the same way, and the profile is left as it was.
+- [x] The web app does not offer ML-DSA Issuing CAs when creating or repointing a profile.
+- [x] Seam A tests cover both, following the existing Enrollment Profile lifecycle tests.
+
+## Comments
+
+- The rule is `enrollmentProfileRefusal` in `server/src/private-ca/private-ca.ts`, applied beside `issuingRefusal` when a profile is created and when it is repointed (the repoint is refused before the new RA is signed, so the profile is untouched). It is also reported on each Private CA in the list as `enrollmentProfileRefusal` (the reason, or null), so the web holds no copy of the rule: both the create form and the Change Issuing CA dialog drop the Private CAs that carry one.
+- Tests are in `server/test/enrollment-profile-lifecycle.test.ts`.
