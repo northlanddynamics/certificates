@@ -21,3 +21,9 @@ export type MlDsaSigningKeyAlgorithm = Extract<SigningKeyAlgorithm, MlDsaKeyAlgo
  */
 export const certificateKeyAlgorithmsOn = (caKeyAlgorithm?: KeyAlgorithm): readonly KeyAlgorithm[] =>
   caKeyAlgorithm && isMlDsa(caKeyAlgorithm) ? ML_DSA_KEY_ALGORITHMS : CLASSICAL_KEY_ALGORITHMS;
+
+/** Why a key of `keyAlgorithm` cannot go where the other kind of key is: ML-DSA and classical keys are never mixed in a chain. */
+export const mixedChainReason = (keyAlgorithm: KeyAlgorithm) =>
+  isMlDsa(keyAlgorithm)
+    ? "an ML-DSA key gains no quantum resistance under a CA whose own key is not ML-DSA"
+    : "a key that is not ML-DSA would be the weak link under an ML-DSA CA";

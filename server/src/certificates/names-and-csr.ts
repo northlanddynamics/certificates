@@ -1,7 +1,7 @@
 // Whether a CSR is fit to issue the given names from: the one check every route that takes names, a CSR or both makes,
 // so a Managed Certificate is never created, changed or renewed from a CSR that asks for something else.
 import { z } from "@hono/zod-openapi";
-import { CsrError, MAX_CSR_LENGTH, parseCsr, type KeyAlgorithm, type ParsedCsr } from "../pki/csr";
+import { CsrError, MAX_CSR_LENGTH, isMlDsa, mixedChainReason, parseCsr, type KeyAlgorithm, type ParsedCsr } from "../pki/csr";
 import { HttpError } from "../platform/http";
 import { MAX_NAMES, normalizeNames, sameNames } from "../pki/names";
 
@@ -25,7 +25,9 @@ export async function checkNamesAndCsr(input: { names: string[]; csr: string; ke
     throw err;
   });
   if (csr.keyAlgorithm !== input.keyAlgorithm) {
-    throw new HttpError(422, `the CSR's key is ${csr.keyAlgorithm}, but the Managed Certificate's key algorithm is ${input.keyAlgorithm}`);
+    // The Managed Certificate's key algorithm is one its CA takes, so a CSR of a kind of key the CA does not take (ML-DSA under a classical CA, or the reverse) is refused as the CA would.
+    const why = isMlDsa(csr.keyAlgorithm) === isMlDsa(input.keyAlgorithm) ? "" : `: ${mixedChainReason(csr.keyAlgorithm)}`;
+    throw new HttpError(422, `the CSR's key is ${csr.keyAlgorithm}, but the Managed Certificate's key algorithm is ${input.keyAlgorithm}${why}`);
   }
   if (!sameNames(csr.names, normalized.names)) {
     throw new HttpError(422, `the CSR must ask for exactly the names (${normalized.names.join(", ")}), but asks for ${csr.names.join(", ")}`);

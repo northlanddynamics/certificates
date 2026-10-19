@@ -14,7 +14,7 @@ import type { Authorizer } from "../tenancy/authorization";
 import { makeCaCsr, makeDeviceCertificate, makeIssuingCa, makeRaCertificate, makeRoot, makeTlsServer, nameConstraintsOf, parseSubject, rootSubjectOf, signedCertificateRefusal, subjectAltNamesOf, type CaKey, type Signer } from "../pki/ca-certificates";
 import { ACME_ENVIRONMENTS, CertificateAuthorityError, type AcmeEnvironment } from "../issuance/acme/certificate-authority";
 import { publicationOf, type Crls } from "./crl";
-import { CLASSICAL_KEY_ALGORITHMS, KEY_ALGORITHMS, SIGNING_KEY_ALGORITHMS, certificateKeyAlgorithmsOn, isMlDsa, type KeyAlgorithm, type SigningKeyAlgorithm } from "../pki/csr";
+import { CLASSICAL_KEY_ALGORITHMS, KEY_ALGORITHMS, SIGNING_KEY_ALGORITHMS, certificateKeyAlgorithmsOn, mixedChainReason, type KeyAlgorithm, type SigningKeyAlgorithm } from "../pki/csr";
 import type { Db, Tx } from "../platform/db/client";
 import { issuingCa, privateCa } from "../platform/db/schema";
 import { HttpError, OrgParam, errors, isUniqueViolation, json } from "../platform/http";
@@ -214,10 +214,7 @@ export function namesRefusal(of: IssuingCaOf, names: string[]) {
 export function keyAlgorithmRefusal(keyAlgorithm: KeyAlgorithm, on: { caKeyAlgorithm?: KeyAlgorithm; label: string }) {
   const taken = certificateKeyAlgorithmsOn(on.caKeyAlgorithm);
   if (taken.includes(keyAlgorithm)) return undefined;
-  const why = isMlDsa(keyAlgorithm)
-    ? "an ML-DSA key gains no quantum resistance under a CA whose own key is not ML-DSA"
-    : "a key that is not ML-DSA would be the weak link under an ML-DSA CA";
-  return `${on.label} takes keys of ${taken.join(", ")}, not ${keyAlgorithm}: ${why}`;
+  return `${on.label} takes keys of ${taken.join(", ")}, not ${keyAlgorithm}: ${mixedChainReason(keyAlgorithm)}`;
 }
 
 /**

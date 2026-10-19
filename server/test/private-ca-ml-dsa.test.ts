@@ -223,3 +223,153 @@ describe("a Managed Certificate on an ML-DSA Private CA", () => {
     expect(facts.body).toMatchObject({ keyAlgorithm: "ML-DSA-44", signatureAlgorithm: "ML-DSA-65" });
   });
 });
+
+/** A CSR for the names under a fresh ECDSA key, as an Owner of a classical Managed Certificate would send. */
+async function ecdsaRequest(names: string[]) {
+  const keys = (await webcrypto.subtle.generateKey({ name: "ECDSA", namedCurve: "P-256" }, false, ["sign", "verify"])) as CryptoKeyPair;
+  const csr = await x509.Pkcs10CertificateRequestGenerator.create(
+    { name: `CN=${names[0]}`, keys, signingAlgorithm: { name: "ECDSA", hash: "SHA-256" }, extensions: [new x509.SubjectAlternativeNameExtension(names.map((value) => ({ type: "dns" as const, value })))] },
+    webcrypto as unknown as Crypto,
+  );
+  return csr.toString("pem");
+}
+
+/** An ML-DSA Managed Certificate on a fresh ML-DSA-65 Private CA with its first Certificate issued, and the CA it is on. */
+async function issuedOnMlDsaCa(keyAlgorithm: MlDsa = "ml-dsa-65") {
+  const ca = await createCa("ml-dsa-65");
+  const created = await h.api(mcs(), { cookie: org.cookie, body: { ...(await mlDsaRequest(keyAlgorithm, ["app.internal.acme"])), ...fromCa(ca.issuing.id) } });
+  expect(created.status).toBe(201);
+  const mc = await ended(created.body.id);
+  expect(mc.issuance.status).toBe("succeeded");
+  return { ca, mc };
+}
+
+const leafOf = async (id: string) => (await download(`${mcs()}/${id}/certificate`))[0]!;
+const certificateCount = async (id: string) => (await h.api(`${mcs()}/${id}/certificates`, { cookie: org.cookie })).body.items.length as number;
+
+describe("a Name Change of an ML-DSA Managed Certificate", () => {
+  test("applies at once for an Organization Administrator with an ML-DSA CSR of the same algorithm, and the new Certificate is signed with ML-DSA", async () => {
+    const { mc } = await issuedOnMlDsaCa("ml-dsa-65");
+    const csr = (await mlDsaRequest("ml-dsa-65", ["www.internal.acme"])).csr;
+
+    const changed = await h.api(`${mcs()}/${mc.id}/name-change`, { cookie: org.cookie, body: { names: ["www.internal.acme"], csr } });
+    expect(changed.status).toBe(201);
+    const after = await ended(mc.id);
+    expect(after.issuance.status).toBe("succeeded");
+    expect(after.names).toEqual(["www.internal.acme"]);
+
+    const leaf = await leafOf(mc.id);
+    expect(leaf.subject).toBe("CN=www.internal.acme");
+    expect(algorithmIdentifiersIn(leaf.rawData, "ml-dsa-65")).toBe(3);
+    expect((await auditOf()).find((e) => e.action === "managed_certificate.names_changed")).toMatchObject({ target: { id: mc.id } });
+  });
+
+  test("proposed by an Owner with an ML-DSA CSR waits for Approval, and an Approver's approval issues it", async () => {
+    const ca = await createCa("ml-dsa-65");
+    const owner = await join("owner@acme.test", "member");
+    const approver = await join("approver@acme.test", "approver");
+    const created = await h.api(mcs(), { cookie: org.cookie, body: { ...(await mlDsaRequest("ml-dsa-44", ["app.internal.acme"])), ...fromCa(ca.issuing.id), owners: [{ type: "user", id: ((await h.api("/api/me", { cookie: owner })).body.user.id as string) }] } });
+    expect(created.status).toBe(201);
+    await ended(created.body.id);
+
+    const proposed = await h.api(`${mcs()}/${created.body.id}/name-change`, { cookie: owner, body: { names: ["www.internal.acme"], csr: (await mlDsaRequest("ml-dsa-44", ["www.internal.acme"])).csr } });
+    expect(proposed.status).toBe(201);
+    expect(await certificateCount(created.body.id)).toBe(1);
+
+    expect((await h.api(`${mcs()}/${created.body.id}/name-change/approve`, { cookie: approver, body: {} })).status).toBe(200);
+    expect((await ended(created.body.id)).names).toEqual(["www.internal.acme"]);
+    expect(algorithmIdentifiersIn((await leafOf(created.body.id)).rawData, "ml-dsa-44")).toBe(1);
+  });
+
+  test.each([
+    ["an ML-DSA CSR of another ML-DSA algorithm", () => mlDsaRequest("ml-dsa-87", ["www.internal.acme"]).then((r) => r.csr), "ml-dsa-87, but the Managed Certificate's key algorithm is ml-dsa-65", undefined],
+    ["an ECDSA CSR, which an ML-DSA Private CA would not take", () => ecdsaRequest(["www.internal.acme"]), "ecdsa-p256, but the Managed Certificate's key algorithm is ml-dsa-65", "weak link"],
+  ])("is refused with a 422 for %s, and nothing changes", async (_, csr, reason, why) => {
+    const { mc } = await issuedOnMlDsaCa("ml-dsa-65");
+    const res = await h.api(`${mcs()}/${mc.id}/name-change`, { cookie: org.cookie, body: { names: ["www.internal.acme"], csr: await csr() } });
+    expect(res.status).toBe(422);
+    expect(res.body.error).toContain(reason);
+    if (why) expect(res.body.error).toContain(why);
+    expect((await h.api(`${mcs()}/${mc.id}`, { cookie: org.cookie })).body.names).toEqual(["app.internal.acme"]);
+    expect(await certificateCount(mc.id)).toBe(1);
+  });
+
+  test("an ML-DSA CSR for an ECDSA Managed Certificate on an ECDSA Private CA is refused with a 422 that says why", async () => {
+    const classic = await h.api(casOf(), { cookie: org.cookie, body: { ...NEW_CA, name: "Classic TLS", subject: "CN=Acme Classic TLS", keyAlgorithm: "ecdsa-p256" } });
+    const created = await h.api(mcs(), { cookie: org.cookie, body: { names: ["app.internal.acme"], keyAlgorithm: "ecdsa-p256", csr: await ecdsaRequest(["app.internal.acme"]), ...fromCa(classic.body.issuingCas[0].id) } });
+    expect(created.status).toBe(201);
+    await ended(created.body.id);
+
+    const res = await h.api(`${mcs()}/${created.body.id}/name-change`, { cookie: org.cookie, body: { names: ["www.internal.acme"], csr: (await mlDsaRequest("ml-dsa-65", ["www.internal.acme"])).csr } });
+    expect(res.status).toBe(422);
+    expect(res.body.error).toContain("gains no quantum resistance");
+  });
+});
+
+describe("a Renewal of an ML-DSA Managed Certificate", () => {
+  test("uses a new ML-DSA CSR of the same algorithm uploaded for it, and the Certificate issued has the new key", async () => {
+    const { mc } = await issuedOnMlDsaCa("ml-dsa-65");
+    const replacement = await mlDsaRequest("ml-dsa-65", ["app.internal.acme"]);
+
+    const uploaded = await h.api(`${mcs()}/${mc.id}/csr`, { cookie: org.cookie, body: { csr: replacement.csr } });
+    expect(uploaded.status).toBe(200);
+    expect((await auditOf()).find((e) => e.action === "managed_certificate.csr_uploaded")).toMatchObject({ target: { id: mc.id } });
+
+    const renewing = await h.api(`${mcs()}/${mc.id}/renewals`, { cookie: org.cookie, method: "POST", body: {} });
+    expect(renewing.status).toBe(202);
+    expect((await ended(mc.id)).issuance.status).toBe("succeeded");
+    expect(await certificateCount(mc.id)).toBe(2);
+
+    const leaf = await leafOf(mc.id);
+    expect(Buffer.from(leaf.publicKey.rawData)).toEqual(Buffer.from(new x509.Pkcs10CertificateRequest(replacement.csr).publicKey.rawData));
+    expect(algorithmIdentifiersIn(leaf.rawData, "ml-dsa-65")).toBe(3);
+  });
+
+  test.each([
+    ["an ML-DSA CSR of another ML-DSA algorithm", () => mlDsaRequest("ml-dsa-44", ["app.internal.acme"]).then((r) => r.csr), "ml-dsa-44, but the Managed Certificate's key algorithm is ml-dsa-65", undefined],
+    ["an ECDSA CSR, which an ML-DSA Private CA would not take", () => ecdsaRequest(["app.internal.acme"]), "ecdsa-p256, but the Managed Certificate's key algorithm is ml-dsa-65", "weak link"],
+  ])("refuses %s with a 422 that says why, and keeps the CSR it has", async (_, csr, reason, why) => {
+    const { mc } = await issuedOnMlDsaCa("ml-dsa-65");
+    const before = (await h.api(`${mcs()}/${mc.id}`, { cookie: org.cookie })).body;
+
+    const res = await h.api(`${mcs()}/${mc.id}/csr`, { cookie: org.cookie, body: { csr: await csr() } });
+    expect(res.status).toBe(422);
+    expect(res.body.error).toContain(reason);
+    if (why) expect(res.body.error).toContain(why);
+    expect((await h.api(`${mcs()}/${mc.id}`, { cookie: org.cookie })).body.csr).toEqual(before.csr);
+  });
+});
+
+describe("a Renewal of an ECDSA Managed Certificate on an ECDSA Private CA", () => {
+  test("refuses an uploaded ML-DSA CSR with a 422 that says why, and keeps the CSR it has", async () => {
+    const classic = await h.api(casOf(), { cookie: org.cookie, body: { ...NEW_CA, name: "Classic TLS", subject: "CN=Acme Classic TLS", keyAlgorithm: "ecdsa-p256" } });
+    const csr = await ecdsaRequest(["app.internal.acme"]);
+    const created = await h.api(mcs(), { cookie: org.cookie, body: { names: ["app.internal.acme"], keyAlgorithm: "ecdsa-p256", csr, ...fromCa(classic.body.issuingCas[0].id) } });
+    expect(created.status).toBe(201);
+    const before = (await ended(created.body.id)).csr;
+
+    const res = await h.api(`${mcs()}/${created.body.id}/csr`, { cookie: org.cookie, body: { csr: (await mlDsaRequest("ml-dsa-65", ["app.internal.acme"])).csr } });
+    expect(res.status).toBe(422);
+    expect(res.body.error).toContain("gains no quantum resistance");
+    expect((await h.api(`${mcs()}/${created.body.id}`, { cookie: org.cookie })).body.csr).toEqual(before);
+  });
+});
+
+describe("the inventory", () => {
+  test("filters by the three ML-DSA key algorithms, one or several at once", async () => {
+    const ca = await createCa("ml-dsa-65");
+    const ids: Record<MlDsa, string> = { "ml-dsa-44": "", "ml-dsa-65": "", "ml-dsa-87": "" };
+    for (const algorithm of Object.keys(ids) as MlDsa[]) {
+      const created = await h.api(mcs(), { cookie: org.cookie, body: { ...(await mlDsaRequest(algorithm, [`${algorithm}.internal.acme`])), ...fromCa(ca.issuing.id) } });
+      expect(created.status).toBe(201);
+      ids[algorithm] = created.body.id;
+    }
+    const classic = await h.api(casOf(), { cookie: org.cookie, body: { ...NEW_CA, name: "Classic TLS", subject: "CN=Acme Classic TLS", keyAlgorithm: "ecdsa-p256" } });
+    expect((await h.api(mcs(), { cookie: org.cookie, body: { names: ["classic.internal.acme"], keyAlgorithm: "ecdsa-p256", csr: await ecdsaRequest(["classic.internal.acme"]), ...fromCa(classic.body.issuingCas[0].id) } })).status).toBe(201);
+
+    const listed = async (keyAlgorithm: string) => ((await h.api(`${mcs()}?keyAlgorithm=${keyAlgorithm}`, { cookie: org.cookie })).body.items as { id: string }[]).map((m) => m.id).sort();
+    for (const algorithm of Object.keys(ids) as MlDsa[]) expect(await listed(algorithm)).toEqual([ids[algorithm]]);
+    expect(await listed("ml-dsa-44,ml-dsa-87")).toEqual([ids["ml-dsa-44"], ids["ml-dsa-87"]].sort());
+    expect((await listed("ml-dsa-44,ml-dsa-65,ml-dsa-87")).length).toBe(3);
+  });
+});
