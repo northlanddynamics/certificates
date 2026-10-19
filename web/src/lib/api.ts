@@ -274,6 +274,8 @@ export interface PrivateCa {
   keyAlgorithm: string;
   /** The key algorithms a Managed Certificate issued from it may have. */
   certificateKeyAlgorithms: KeyAlgorithm[];
+  /** Why an Enrollment Profile cannot be created on, or repointed to, its Issuing CAs; null when it can. */
+  enrollmentProfileRefusal: string | null;
   /** The root that signs its Issuing CAs; under the Organization's own root, none until it is uploaded with the first signed Issuing CA. */
   root: { subject: string; notAfter: string } | null;
   /** Its Issuing CAs, oldest first. */

@@ -33,10 +33,10 @@ const certificatesIn = (pem: string) => (pem.match(/-----BEGIN CERTIFICATE-----[
 const read = (cert: { raw: Buffer }) => new x509.X509Certificate(new Uint8Array(cert.raw));
 
 /** A new Private CA with a platform-made root, and its first Issuing CA as `issuing`. */
-async function createCa(target = org) {
+async function createCa(target = org, keyAlgorithm = "ecdsa-p256") {
   const res = await h.api(cas(target.orgId), {
     cookie: target.cookie,
-    body: { name: "Devices", subject: "CN=Acme Devices, O=Acme", keyAlgorithm: "ecdsa-p256", lifetimeYears: 5, permittedNames: { exact: [], zones: ["devices.acme"] } },
+    body: { name: keyAlgorithm === "ecdsa-p256" ? "Devices" : `Devices ${keyAlgorithm}`, subject: "CN=Acme Devices, O=Acme", keyAlgorithm, lifetimeYears: 5, permittedNames: { exact: [], zones: ["devices.acme"] } },
   });
   expect(res.status).toBe(201);
   return { id: res.body.id as string, issuing: res.body.issuingCas[0] as { id: string } };
@@ -70,6 +70,35 @@ async function crlFor(cert: x509.X509Certificate) {
   expect(res.status).toBe(200);
   return new x509.X509Crl(new Uint8Array(await res.arrayBuffer()));
 }
+
+describe("an Enrollment Profile and an ML-DSA Issuing CA", () => {
+  test("is refused one at creation, with the reason, and the CA list says it takes none", async () => {
+    const ca = await createCa(org, "ml-dsa-65");
+    const res = await h.api(profiles(), { cookie: org.cookie, body: { name: "Wi-Fi", issuingCaId: ca.issuing.id, validator: { kind: "test_allow" } } });
+    expect(res.status).toBe(422);
+    expect(res.body.error).toMatch(/ML-DSA/);
+    expect(res.body.error).toMatch(/SCEP/);
+    expect((await h.api(profiles(), { cookie: org.cookie })).body.items).toEqual([]);
+
+    const listed = (await h.api(cas(), { cookie: org.cookie })).body.items as { id: string; enrollmentProfileRefusal: string | null }[];
+    expect(listed.find((one) => one.id === ca.id)!.enrollmentProfileRefusal).toMatch(/ML-DSA/);
+  });
+
+  test("is refused being repointed to one, and is left as it was", async () => {
+    const classical = await createCa();
+    const profile = await createProfile(classical.issuing.id);
+    const quantum = await createCa(org, "ml-dsa-87");
+
+    const res = await update(profile.id, { issuingCaId: quantum.issuing.id });
+    expect(res.status).toBe(422);
+    expect(res.body.error).toMatch(/ML-DSA/);
+    expect(await profileOf(profile.id)).toMatchObject({ issuingCaId: classical.issuing.id, raCertificate: profile.raCertificate });
+    expect((await auditOf()).filter((e) => e.action === "enrollment_profile.updated")).toEqual([]);
+
+    const listed = (await h.api(cas(), { cookie: org.cookie })).body.items as { id: string; enrollmentProfileRefusal: string | null }[];
+    expect(listed.find((one) => one.id === classical.id)!.enrollmentProfileRefusal).toBeNull();
+  });
+});
 
 describe("disabling an Enrollment Profile", () => {
   test("refuses all enrollment, audited, and keeps its Device Certificates and their CRL entries", async () => {

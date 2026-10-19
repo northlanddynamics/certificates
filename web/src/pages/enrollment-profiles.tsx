@@ -278,7 +278,7 @@ function IssuingCaDialog({ profile, open, onOpenChange }: ProfileDialogProps) {
   const { orgId } = useParams({ from: ROUTE });
   const privateCas = useQuery({ queryKey: ["private-cas", orgId], queryFn: () => api.privateCas(orgId), enabled: open });
   const choices = (privateCas.data?.items ?? []).flatMap((ca) =>
-    ca.status === "active" ? ca.issuingCas.filter((i) => i.status === "active" && i.id !== profile.issuingCaId).map((i) => ({ id: i.id, title: issuingCaTitle(ca.name, i.subject), privateCaId: ca.id })) : [],
+    ca.status === "active" && !ca.enrollmentProfileRefusal ? ca.issuingCas.filter((i) => i.status === "active" && i.id !== profile.issuingCaId).map((i) => ({ id: i.id, title: issuingCaTitle(ca.name, i.subject), privateCaId: ca.id })) : [],
   );
   const [issuingCaId, setIssuingCaId] = useState("");
   const chosen = choices.find((c) => c.id === issuingCaId);
@@ -814,8 +814,8 @@ function NewProfileForm({ orgId, onDone }: { orgId: string; onDone: (created: Cr
   const [step, setStep] = useState<StepId>("issuer");
   const privateCas = useQuery({ queryKey: ["private-cas", orgId], queryFn: () => api.privateCas(orgId) });
   const kinds = useQuery({ queryKey: ["enrollment-validator-kinds", orgId], queryFn: () => api.enrollmentValidatorKinds(orgId) });
-  // Only an active Issuing CA under an active root issues.
-  const issuingCas = (privateCas.data?.items ?? []).flatMap((ca) => (ca.status === "active" ? ca.issuingCas.filter((i) => i.status === "active").map((i) => ({ id: i.id, title: issuingCaTitle(ca.name, i.subject) })) : []));
+  // Only an active Issuing CA under an active root issues, and not an ML-DSA one: SCEP clients cannot verify its RA certificate.
+  const issuingCas = (privateCas.data?.items ?? []).flatMap((ca) => (ca.status === "active" && !ca.enrollmentProfileRefusal ? ca.issuingCas.filter((i) => i.status === "active").map((i) => ({ id: i.id, title: issuingCaTitle(ca.name, i.subject) })) : []));
   const [name, setName] = useState("");
   const [issuingCaId, setIssuingCaId] = useState("");
   // None until the administrator sets one: the default then follows the validator chosen.
@@ -932,7 +932,7 @@ function NewProfileForm({ orgId, onDone }: { orgId: string; onDone: (created: Cr
                       ))}
                     </SelectContent>
                   </Select>
-                  <FieldDescription>Only an active Issuing CA under an active root can be chosen.</FieldDescription>
+                  <FieldDescription>Only an active Issuing CA under an active root can be chosen, and not an ML-DSA one: SCEP clients cannot verify the RA certificate it would sign.</FieldDescription>
                 </Field>
               </FieldGroup>
             </FieldSet>

@@ -14,7 +14,7 @@ import type { Authorizer } from "../tenancy/authorization";
 import { makeCaCsr, makeDeviceCertificate, makeIssuingCa, makeRaCertificate, makeRoot, makeTlsServer, nameConstraintsOf, parseSubject, rootSubjectOf, signedCertificateRefusal, subjectAltNamesOf, type CaKey, type Signer } from "../pki/ca-certificates";
 import { ACME_ENVIRONMENTS, CertificateAuthorityError, type AcmeEnvironment } from "../issuance/acme/certificate-authority";
 import { publicationOf, type Crls } from "./crl";
-import { KEY_ALGORITHMS, certificateKeyAlgorithmsOn, mixedChainReason, type KeyAlgorithm, type SigningKeyAlgorithm } from "../pki/csr";
+import { KEY_ALGORITHMS, certificateKeyAlgorithmsOn, isMlDsa, mixedChainReason, type KeyAlgorithm, type SigningKeyAlgorithm } from "../pki/csr";
 import type { Db, Tx } from "../platform/db/client";
 import { issuingCa, privateCa } from "../platform/db/schema";
 import { HttpError, OrgParam, errors, isUniqueViolation, json } from "../platform/http";
@@ -119,6 +119,10 @@ export const PrivateCa = z.object({
   certificateKeyAlgorithms: z
     .array(z.enum(KEY_ALGORITHMS))
     .openapi({ description: "The key algorithms a Managed Certificate issued from it may have: ML-DSA ones on an ML-DSA Private CA, and only there, so that a chain is all ML-DSA or none of it." }),
+  enrollmentProfileRefusal: z
+    .string()
+    .nullable()
+    .openapi({ description: "Why an Enrollment Profile cannot be created on, or repointed to, its Issuing CAs (the keys are ML-DSA, which SCEP clients cannot verify); none when it can." }),
   root: z
     .object({ subject: z.string(), notAfter: z.string() })
     .nullable()
@@ -155,6 +159,7 @@ const toPrivateCa = (row: PrivateCaRow, issuingCas: IssuingCaRow[]): z.infer<typ
   status: row.status,
   keyAlgorithm: row.keyAlgorithm,
   certificateKeyAlgorithms: [...certificateKeyAlgorithmsOn(row.keyAlgorithm)],
+  enrollmentProfileRefusal: enrollmentProfileRefusal(row) ?? null,
   root: rootOf(row),
   issuingCas: issuingCas.filter((i) => i.privateCaId === row.id).map(toIssuingCa),
   createdAt: row.createdAt.toISOString(),
@@ -199,6 +204,14 @@ export function issuingRefusal(of: IssuingCaOf) {
   if (of.issuing.status !== "active" || !of.issuing.certificatePem) return `${issuingCaLabel(of)} is ${of.issuing.status}, so it issues nothing`;
   return undefined;
 }
+
+/**
+ * Why the Private CA takes no Enrollment Profile: its keys are ML-DSA. Device keys stay RSA, and a profile's SCEP RA
+ * certificate, signed by its Issuing CA, would carry an ML-DSA signature that SCEP clients (Intune, Iru, network gear)
+ * cannot verify. None when it takes them.
+ */
+export const enrollmentProfileRefusal = (ca: Pick<PrivateCaRow, "name" | "keyAlgorithm">) =>
+  isMlDsa(ca.keyAlgorithm) ? `the Private CA ${ca.name} has ${ca.keyAlgorithm} keys, and SCEP clients cannot verify the ML-DSA signature of a profile's RA certificate, so devices cannot enroll under an ML-DSA Issuing CA` : undefined;
 
 /** Why a Managed Certificate on the Issuing CA may not choose `validityDays`: it is above the maximum. None when it may, or chooses none. */
 export const validityRefusal = (of: IssuingCaOf, validityDays: number | null) =>

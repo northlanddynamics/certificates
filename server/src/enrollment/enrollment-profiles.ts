@@ -31,7 +31,7 @@ import type { EnrollmentValidatorRuns } from "./enrollment-validators";
 import { HttpError, OrgParam, errors, isUniqueViolation, json } from "../platform/http";
 import { IssuanceFailure } from "../issuance/issuance-failure";
 import { NameRules } from "./name-rules";
-import { findIssuingCa, issuingRefusal, type IssuingCaOf, type PrivateCas } from "../private-ca/private-ca";
+import { enrollmentProfileRefusal, findIssuingCa, issuingRefusal, type IssuingCaOf, type PrivateCas } from "../private-ca/private-ca";
 import type { Secrets } from "../platform/crypto/secrets";
 import { sharedChallengesOf, type SharedChallenges } from "./shared-challenge";
 import type { Actor, UnitOfWork } from "../platform/unit-of-work";
@@ -274,7 +274,7 @@ export function registerEnrollmentProfiles(ctx: {
       if (kind.vouchesForNames && body.nameRules) throw new HttpError(422, `an Enrollment Validator of the kind ${body.validator.kind} vouches for the names a device asks for, so the profile takes no name rules`);
       const of = isId(body.issuingCaId) ? await findIssuingCa(db, orgId, body.issuingCaId) : undefined;
       if (!of) throw new HttpError(422, "the Organization has no such Issuing CA");
-      const refusal = issuingRefusal(of);
+      const refusal = issuingRefusal(of) ?? enrollmentProfileRefusal(of.ca);
       if (refusal) throw new HttpError(422, refusal);
 
       const taken = () => new HttpError(409, `the Organization already has an Enrollment Profile named ${body.name}`);
@@ -484,7 +484,7 @@ export function registerEnrollmentProfiles(ctx: {
       if (repointing) {
         const of = isId(body.issuingCaId!) ? await findIssuingCa(db, orgId, body.issuingCaId!) : undefined;
         if (!of) throw new HttpError(422, "the Organization has no such Issuing CA");
-        const refusal = issuingRefusal(of);
+        const refusal = issuingRefusal(of) ?? enrollmentProfileRefusal(of.ca);
         if (refusal) throw new HttpError(422, refusal);
         // Signed before the change, as when a profile is created: the KMS is not asked inside a transaction.
         to = { of, ra: await makeRa(orgId, of.issuing.id, found.row.publicId) };
