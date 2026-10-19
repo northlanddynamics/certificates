@@ -12,8 +12,8 @@ import { HttpError, errors, json } from "../platform/http";
 import { issuerColumns, issuerOf } from "./issuer";
 import { ManagedCertificate, ManagedCertificateParams, type ManagedCertificateReader } from "../certificates/managed-certificate-reader";
 import { lockManagedCertificate, pendingNameChanges } from "../certificates/name-change";
-import { IssuerField, caKeyAlgorithmsUnder, issuerRefusal } from "../private-ca/private-ca";
-import { KEY_ALGORITHMS, certificateKeyAlgorithmsOn } from "../pki/csr";
+import { IssuerField, issuerRefusal } from "../private-ca/private-ca";
+import { KEY_ALGORITHMS, SIGNING_KEY_ALGORITHMS, certificateKeyAlgorithmsOn } from "../pki/csr";
 import type { Actor, UnitOfWork } from "../platform/unit-of-work";
 
 export function registerIssuerRoutes(ctx: { app: OpenAPIHono; requireUser(c: any): Promise<Actor>; authorize: Authorizer["authorize"]; unitOfWork: UnitOfWork; reader: ManagedCertificateReader }) {
@@ -27,7 +27,7 @@ export function registerIssuerRoutes(ctx: { app: OpenAPIHono; requireUser(c: any
       tags: ["Managed Certificates"],
       summary: "The key algorithms, and which ones each kind of CA takes",
       description:
-        "`keyAlgorithms`: every key algorithm a Managed Certificate may have. `privateCaKeyAlgorithms`: what a Private CA's own keys may be under each kind of root (never ML-DSA-44, too weak for a CA key, and for now ML-DSA only under a platform-made root). " +
+        "`keyAlgorithms`: every key algorithm a Managed Certificate may have. `privateCaKeyAlgorithms`: what a Private CA's own keys may be under each kind of root (never ML-DSA-44, too weak for a CA key). " +
         "`acmeKeyAlgorithms`: what a Managed Certificate on an ACME CA may have. On a Private CA, it is its `certificateKeyAlgorithms`: a chain is all ML-DSA or none of it. Anyone signed in may ask.",
       responses: {
         200: json(
@@ -45,7 +45,7 @@ export function registerIssuerRoutes(ctx: { app: OpenAPIHono; requireUser(c: any
       return c.json(
         {
           keyAlgorithms: [...KEY_ALGORITHMS],
-          privateCaKeyAlgorithms: { platform_root: [...caKeyAlgorithmsUnder("platform_root")], organization_root: [...caKeyAlgorithmsUnder("organization_root")] },
+          privateCaKeyAlgorithms: { platform_root: [...SIGNING_KEY_ALGORITHMS], organization_root: [...SIGNING_KEY_ALGORITHMS] },
           acmeKeyAlgorithms: [...certificateKeyAlgorithmsOn()],
         },
         200,

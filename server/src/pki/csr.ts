@@ -4,7 +4,7 @@ import * as x509 from "@peculiar/x509";
 import { createPublicKey, webcrypto } from "node:crypto";
 import { normalizeName } from "./names";
 import { fingerprintOf } from "./fingerprint";
-import { KEY_ALGORITHMS, ML_DSA_KEY_ALGORITHMS, type KeyAlgorithm } from "./key-algorithms";
+import { KEY_ALGORITHMS, ML_DSA_KEY_ALGORITHMS, type KeyAlgorithm, type MlDsaKeyAlgorithm } from "./key-algorithms";
 
 // The key algorithms live apart so that the KMS can name them without loading the X.509 library; the rest of the
 // platform takes them from here, with the CSR.
@@ -35,6 +35,13 @@ export interface ParsedCsr {
 
 /** Every key algorithm a CSR may be for, in words, for a refusal. */
 const SUPPORTED = "ECDSA (P-256, P-384), RSA (2048, 3072, 4096) and ML-DSA (ML-DSA-44, ML-DSA-65, ML-DSA-87)";
+
+/** The ML-DSA algorithm of the DER SubjectPublicKeyInfo's key, or none when it is another kind of key; throws when it cannot be read. */
+export function mlDsaKeyAlgorithmOf(spki: ArrayBuffer): MlDsaKeyAlgorithm | undefined {
+  // Bun names an ML-DSA key's type as the platform names its algorithm.
+  const { asymmetricKeyType: type } = createPublicKey({ key: Buffer.from(spki), format: "der", type: "spki" });
+  return (ML_DSA_KEY_ALGORITHMS as readonly (string | undefined)[]).includes(type) ? (type as MlDsaKeyAlgorithm) : undefined;
+}
 
 function keyAlgorithmOf(spki: ArrayBuffer): KeyAlgorithm {
   const key = createPublicKey({ key: Buffer.from(spki), format: "der", type: "spki" });

@@ -121,10 +121,17 @@ describe("creating an ML-DSA Private CA", () => {
     expect((await h.api(casOf(), { cookie: org.cookie })).body.items).toEqual([]);
   });
 
-  test("is refused under the Organization's own root for now, which nothing yet checks is ML-DSA too", async () => {
+  test("under the Organization's own root makes only its Issuing CA's ML-DSA key, awaiting a root of the same algorithm", async () => {
     const res = await h.api(casOf(), { cookie: org.cookie, body: { ...NEW_CA, kind: "organization_root", lifetimeYears: undefined, keyAlgorithm: "ml-dsa-65" } });
+    expect(res.status).toBe(201);
+    expect(res.body).toMatchObject({ kind: "organization_root", keyAlgorithm: "ml-dsa-65", root: null });
+    expect(res.body.issuingCas).toMatchObject([{ status: "awaiting_signature" }]);
+  });
+
+  test("ML-DSA-44 is refused under the Organization's own root too", async () => {
+    const res = await h.api(casOf(), { cookie: org.cookie, body: { ...NEW_CA, kind: "organization_root", lifetimeYears: undefined, keyAlgorithm: "ml-dsa-44" } });
     expect(res.status).toBe(422);
-    expect(res.body.error).toContain("platform-made root");
+    expect(res.body.error).toContain("ML-DSA-65 or ML-DSA-87");
   });
 
   test("is an Audit Event that records its key algorithm", async () => {
@@ -152,7 +159,7 @@ describe("the key algorithms each CA takes", () => {
       keyAlgorithms: ["ecdsa-p256", "ecdsa-p384", "rsa-2048", "rsa-3072", "rsa-4096", "ml-dsa-44", "ml-dsa-65", "ml-dsa-87"],
       privateCaKeyAlgorithms: {
         platform_root: ["ecdsa-p256", "ecdsa-p384", "rsa-2048", "rsa-3072", "rsa-4096", "ml-dsa-65", "ml-dsa-87"],
-        organization_root: ["ecdsa-p256", "ecdsa-p384", "rsa-2048", "rsa-3072", "rsa-4096"],
+        organization_root: ["ecdsa-p256", "ecdsa-p384", "rsa-2048", "rsa-3072", "rsa-4096", "ml-dsa-65", "ml-dsa-87"],
       },
       acmeKeyAlgorithms: ["ecdsa-p256", "ecdsa-p384", "rsa-2048", "rsa-3072", "rsa-4096"],
     });

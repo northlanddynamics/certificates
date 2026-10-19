@@ -80,11 +80,13 @@ const YEAR_MS = 365 * 24 * 60 * 60 * 1000;
 interface OwnCa {
   keys: CryptoKeyPair;
   certificate: x509.X509Certificate;
+  /** What its key and signatures are. */
+  algorithm: Algorithm;
 }
 
 /** The Organization's own self-signed root. */
-async function ownRoot(subject = "CN=Acme Offline Root, O=Acme", notAfter = new Date(NOW.getTime() + 20 * YEAR_MS)): Promise<OwnCa> {
-  const keys = (await webcrypto.subtle.generateKey(ALGORITHM, false, ["sign", "verify"])) as CryptoKeyPair;
+async function ownRoot(subject = "CN=Acme Offline Root, O=Acme", notAfter = new Date(NOW.getTime() + 20 * YEAR_MS), algorithm: Algorithm = ALGORITHM): Promise<OwnCa> {
+  const keys = (await webcrypto.subtle.generateKey(algorithm, false, ["sign", "verify"])) as CryptoKeyPair;
   const certificate = await x509.X509CertificateGenerator.createSelfSigned(
     {
       serialNumber: "01",
@@ -92,12 +94,12 @@ async function ownRoot(subject = "CN=Acme Offline Root, O=Acme", notAfter = new 
       notBefore: new Date(NOW.getTime() - 60_000),
       notAfter,
       keys,
-      signingAlgorithm: ALGORITHM,
+      signingAlgorithm: algorithm,
       extensions: [new x509.BasicConstraintsExtension(true, undefined, true), new x509.KeyUsagesExtension(x509.KeyUsageFlags.keyCertSign | x509.KeyUsageFlags.cRLSign, true)],
     },
     webcrypto as unknown as Crypto,
   );
-  return { keys, certificate };
+  return { keys, certificate, algorithm };
 }
 
 /** A certificate `by` signs for `publicKey` and `subject`: a CA one unless `ca` is false, with whatever `extensions` are added. */
@@ -111,7 +113,7 @@ async function sign(by: OwnCa, publicKey: x509.PublicKey, subject: string, { ca 
       notAfter,
       publicKey,
       signingKey: by.keys.privateKey,
-      signingAlgorithm: ALGORITHM,
+      signingAlgorithm: by.algorithm,
       extensions: [
         new x509.BasicConstraintsExtension(ca, ca ? 0 : undefined, true),
         new x509.KeyUsagesExtension(ca ? x509.KeyUsageFlags.keyCertSign | x509.KeyUsageFlags.cRLSign : x509.KeyUsageFlags.digitalSignature, true),
@@ -123,8 +125,8 @@ async function sign(by: OwnCa, publicKey: x509.PublicKey, subject: string, { ca 
 }
 
 /** An intermediate CA of the Organization's, under `by`. */
-async function ownIntermediate(by: OwnCa, subject = "CN=Acme Policy CA, O=Acme"): Promise<OwnCa> {
-  const keys = (await webcrypto.subtle.generateKey(ALGORITHM, false, ["sign", "verify"])) as CryptoKeyPair;
+async function ownIntermediate(by: OwnCa, subject = "CN=Acme Policy CA, O=Acme", algorithm: Algorithm = ALGORITHM): Promise<OwnCa> {
+  const keys = (await webcrypto.subtle.generateKey(algorithm, false, ["sign", "verify"])) as CryptoKeyPair;
   const publicKey = await x509.PublicKey.create(keys.publicKey, webcrypto as unknown as Crypto);
   const certificate = await x509.X509CertificateGenerator.create(
     {
@@ -135,12 +137,12 @@ async function ownIntermediate(by: OwnCa, subject = "CN=Acme Policy CA, O=Acme")
       notAfter: new Date(NOW.getTime() + 10 * YEAR_MS),
       publicKey,
       signingKey: by.keys.privateKey,
-      signingAlgorithm: ALGORITHM,
+      signingAlgorithm: by.algorithm,
       extensions: [new x509.BasicConstraintsExtension(true, 1, true), new x509.KeyUsagesExtension(x509.KeyUsageFlags.keyCertSign | x509.KeyUsageFlags.cRLSign, true)],
     },
     webcrypto as unknown as Crypto,
   );
-  return { keys, certificate };
+  return { keys, certificate, algorithm };
 }
 
 /** Uploads the Issuing CA's signed certificate, with the root and chain above when given; the answer as it came. */
@@ -453,5 +455,117 @@ describe("what an Organization-root Issuing CA issues", () => {
     const res = await h.app.request(`http://localhost${mcs()}/${created.body.id}/certificate?chain=leaf`, { headers: { cookie: org.cookie } });
     const [leaf] = certificatesIn(await res.text());
     expect(leaf!.notAfter.getTime()).toBeLessThanOrEqual(root.certificate.notAfter.getTime());
+  });
+});
+
+describe("an ML-DSA Issuing CA under the Organization's own root", () => {
+  const mlDsa = (level: 44 | 65 | 87): Algorithm => ({ name: `ML-DSA-${level}` });
+  const ML_DSA_CA = { ...NEW_CA, keyAlgorithm: "ml-dsa-65" };
+  /** The Organization's own self-signed ML-DSA root. */
+  const ownMlDsaRoot = (level: 44 | 65 | 87 = 65) => ownRoot("CN=Acme Quantum Root, O=Acme", undefined, mlDsa(level));
+
+  /** A CSR for the names under a fresh ML-DSA key, which stays here. */
+  async function mlDsaRequest(level: 65 | 87, names: string[]) {
+    const algorithm = mlDsa(level);
+    const keys = (await webcrypto.subtle.generateKey(algorithm, false, ["sign", "verify"])) as CryptoKeyPair;
+    const csr = await x509.Pkcs10CertificateRequestGenerator.create(
+      { name: `CN=${names[0]}`, keys, signingAlgorithm: algorithm, extensions: [new x509.SubjectAlternativeNameExtension(names.map((value) => ({ type: "dns" as const, value })))] },
+      webcrypto as unknown as Crypto,
+    );
+    return { names, keyAlgorithm: `ml-dsa-${level}`, csr: csr.toString("pem") };
+  }
+
+  /** Has `signer` sign the Issuing CA's CSR and uploads it with `root` and `chain`, and checks that it is refused with a 422 matching `pattern`, leaving the Issuing CA awaiting signature and the Private CA with no root. */
+  async function refused(ca: { id: string }, issuing: { id: string }, signer: OwnCa, root: OwnCa, pattern: RegExp, chain: OwnCa[] = []) {
+    const res = await signAndUpload(ca, issuing, signer, root, chain);
+    expect(res.status).toBe(422);
+    expect(res.body.error).toMatch(pattern);
+    const listed = (await h.api(`${cas()}/${ca.id}`, { cookie: org.cookie })).body as PrivateCa;
+    expect(listed.issuingCas.find((i) => i.id === issuing.id)!.status).toBe("awaiting_signature");
+    expect(listed.root).toBeNull();
+  }
+
+  test.each([65, 87] as const)("ML-DSA-%i: an ML-DSA root of the same algorithm makes it active, and a Managed Certificate issued from it verifies to that root", async (level) => {
+    const ca = await createCa({ ...ML_DSA_CA, keyAlgorithm: `ml-dsa-${level}` });
+    expect(ca).toMatchObject({ kind: "organization_root", keyAlgorithm: `ml-dsa-${level}` });
+    const { csr } = await csrOf(ca, ca.issuing);
+    expect(csr!.publicKey.algorithm.name).toBe(`ML-DSA-${level}`);
+    expect(await csr!.verify()).toBe(true);
+
+    const root = await ownMlDsaRoot(level);
+    const uploaded = await signAndUpload(ca, ca.issuing, root, root);
+
+    expect(uploaded.status).toBe(200);
+    expect(uploaded.body).toMatchObject({ id: ca.issuing.id, status: "active" });
+    const created = await h.api(mcs(), { cookie: org.cookie, body: { ...(await mlDsaRequest(level, ["app.internal.acme"])), ...fromCa(ca.issuing.id) } });
+    expect(created.status).toBe(201);
+    await h.settleIssuances();
+    expect((await h.api(`${mcs()}/${created.body.id}`, { cookie: org.cookie })).body.issuance).toMatchObject({ status: "succeeded" });
+    const res = await h.app.request(`http://localhost${mcs()}/${created.body.id}/certificate?chain=with-root`, { headers: { cookie: org.cookie } });
+    const [leaf, issuing, top, ...rest] = certificatesIn(await res.text());
+    expect(rest).toEqual([]);
+    expect(top!.equal(root.certificate)).toBe(true);
+    expect(await signedBy(leaf!, issuing!)).toBe(true);
+    expect(await signedBy(issuing!, root.certificate)).toBe(true);
+    expect(issuing!.signatureAlgorithm.name).toBe(`ML-DSA-${level}`);
+  });
+
+  test("an ML-DSA intermediate between it and the root is accepted", async () => {
+    const ca = await createCa(ML_DSA_CA);
+    const root = await ownMlDsaRoot(65);
+    const policy = await ownIntermediate(root, "CN=Acme Quantum Policy CA, O=Acme", mlDsa(65));
+
+    expect((await signAndUpload(ca, ca.issuing, policy, root, [policy])).status).toBe(200);
+  });
+
+  test("a root of another algorithm is refused with a 422 that says why", async () => {
+    const ca = await createCa(ML_DSA_CA);
+    const root = await ownRoot();
+    await refused(ca, ca.issuing, root, root, /ml-dsa-65 Issuing CA needs.*ml-dsa-65.*not ML-DSA/);
+  });
+
+  test("an ML-DSA root of another level is refused", async () => {
+    const ca = await createCa(ML_DSA_CA);
+    const root = await ownMlDsaRoot(87);
+    await refused(ca, ca.issuing, root, root, /ml-dsa-65 Issuing CA needs.*ml-dsa-65.*ml-dsa-87/);
+  });
+
+  test("an ML-DSA-44 root is refused", async () => {
+    const ca = await createCa(ML_DSA_CA);
+    const root = await ownMlDsaRoot(44);
+    await refused(ca, ca.issuing, root, root, /ml-dsa-65 Issuing CA needs.*ml-dsa-44/);
+  });
+
+  test("an intermediate that is not ML-DSA, under an ML-DSA root, is refused", async () => {
+    const ca = await createCa(ML_DSA_CA);
+    const root = await ownMlDsaRoot(65);
+    const policy = await ownIntermediate(root);
+    await refused(ca, ca.issuing, policy, root, /needs.*ml-dsa-65.*not ML-DSA/, [policy]);
+  });
+
+  test("an ML-DSA root is refused for an Issuing CA that is not ML-DSA", async () => {
+    const ca = await createCa();
+    const root = await ownMlDsaRoot(65);
+    await refused(ca, ca.issuing, root, root, /ecdsa-p256 Issuing CA is not ML-DSA.*ml-dsa-65/);
+  });
+
+  test("a refused root leaves the Private CA free to take the right one", async () => {
+    const ca = await createCa(ML_DSA_CA);
+    await refused(ca, ca.issuing, await ownRoot(), await ownRoot(), /ml-dsa-65 Issuing CA needs/);
+
+    const root = await ownMlDsaRoot(65);
+    expect((await signAndUpload(ca, ca.issuing, root, root)).status).toBe(200);
+  });
+
+  test("an Issuing CA added under it has the same ML-DSA algorithm, and takes the root the Private CA keeps", async () => {
+    const ca = await createCa(ML_DSA_CA);
+    const root = await ownMlDsaRoot(65);
+    await signAndUpload(ca, ca.issuing, root, root);
+
+    const added = await h.api(`${cas()}/${ca.id}/issuing-cas`, { cookie: org.cookie, body: { subject: "CN=Acme Issuing CA 2, O=Acme", permittedNames: NEW_CA.permittedNames } });
+    expect(added.status).toBe(201);
+    const { csr } = await csrOf(ca, added.body);
+    expect(csr!.publicKey.algorithm.name).toBe("ML-DSA-65");
+    expect((await signAndUpload(ca, added.body, root)).status).toBe(200);
   });
 });

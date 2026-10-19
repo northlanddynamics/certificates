@@ -14,7 +14,7 @@ import type { Authorizer } from "../tenancy/authorization";
 import { makeCaCsr, makeDeviceCertificate, makeIssuingCa, makeRaCertificate, makeRoot, makeTlsServer, nameConstraintsOf, parseSubject, rootSubjectOf, signedCertificateRefusal, subjectAltNamesOf, type CaKey, type Signer } from "../pki/ca-certificates";
 import { ACME_ENVIRONMENTS, CertificateAuthorityError, type AcmeEnvironment } from "../issuance/acme/certificate-authority";
 import { publicationOf, type Crls } from "./crl";
-import { CLASSICAL_KEY_ALGORITHMS, KEY_ALGORITHMS, SIGNING_KEY_ALGORITHMS, certificateKeyAlgorithmsOn, mixedChainReason, type KeyAlgorithm, type SigningKeyAlgorithm } from "../pki/csr";
+import { KEY_ALGORITHMS, certificateKeyAlgorithmsOn, mixedChainReason, type KeyAlgorithm, type SigningKeyAlgorithm } from "../pki/csr";
 import type { Db, Tx } from "../platform/db/client";
 import { issuingCa, privateCa } from "../platform/db/schema";
 import { HttpError, OrgParam, errors, isUniqueViolation, json } from "../platform/http";
@@ -394,18 +394,13 @@ function yearsAfter(from: Date, years: number) {
 const sameCertificates = (a: x509.X509Certificate[], b: x509.X509Certificate[]) => a.length === b.length && a.every((cert, i) => cert.equal(b[i]!));
 
 /**
- * What a Private CA's keys may be under each kind of root: never ML-DSA-44, too weak for a CA key; and ML-DSA only
- * under a platform-made root for now, as nothing yet checks that an Organization's own root is ML-DSA too, so that a
- * chain is never part post-quantum.
+ * A Private CA's key algorithm as asked: any CA key but ML-DSA-44, too weak for one, under either kind of root. Under an
+ * Organization's own root an ML-DSA Issuing CA needs a root of its algorithm, which an upload is checked for
+ * (`signedCertificateRefusal`), so that a chain is never part post-quantum.
  */
-export const caKeyAlgorithmsUnder = (kind: PrivateCaKind): readonly SigningKeyAlgorithm[] => (kind === "platform_root" ? SIGNING_KEY_ALGORITHMS : CLASSICAL_KEY_ALGORITHMS);
-
-/** A Private CA's key algorithm as asked under a root of `kind`; a 422 for one that may not be (`caKeyAlgorithmsUnder`). */
-function caKeyAlgorithmAsked(algorithm: KeyAlgorithm, kind: PrivateCaKind): SigningKeyAlgorithm {
+function caKeyAlgorithmAsked(algorithm: KeyAlgorithm): SigningKeyAlgorithm {
   if (algorithm === "ml-dsa-44") throw new HttpError(422, "ML-DSA-44 is too weak for a CA key, which outlives and outweighs every Certificate it signs; choose ML-DSA-65 or ML-DSA-87");
-  const allowed = caKeyAlgorithmsUnder(kind).find((under) => under === algorithm);
-  if (!allowed) throw new HttpError(422, `an ${algorithm} Issuing CA can be made only under a platform-made root for now`);
-  return allowed;
+  return algorithm;
 }
 
 /** A lifetime asked of an Issuing CA under the Organization's own root, which decides it. */
@@ -521,7 +516,7 @@ export function registerPrivateCas(ctx: {
                   .default("ecdsa-p256")
                   .openapi({
                     description:
-                      "Its keys', the root's and its Issuing CAs'. Refused with 422: `ml-dsa-44`, too weak for a CA key, and for now ML-DSA under the Organization's own root (`/api/key-algorithms` lists what each kind takes). " +
+                      "Its keys', the root's and its Issuing CAs'. Refused with 422: `ml-dsa-44`, too weak for a CA key (`/api/key-algorithms` lists what each kind takes). Under the Organization's own root an ML-DSA Issuing CA needs a root, and anything between, of the same ML-DSA algorithm, which the certificate uploaded for it is checked for. " +
                       "ML-DSA is verified only by recent clients, such as OpenSSL 3.5 or later and Chrome 150 or later.",
                   }),
                 lifetimeYears: z.number().int().min(1).max(MAX_LIFETIME_YEARS).optional().openapi({ description: "For a platform-made root and its Issuing CA: 10 unless given. Not for an Organization's own root." }),
@@ -542,7 +537,7 @@ export function registerPrivateCas(ctx: {
       const subject = subjectAsked(body.subject);
       const permittedNames = permittedNamesAsked(body.permittedNames);
       const validity = validityAsked(body.validity);
-      const keyAlgorithm = caKeyAlgorithmAsked(body.keyAlgorithm, body.kind);
+      const keyAlgorithm = caKeyAlgorithmAsked(body.keyAlgorithm);
       if (body.kind === "organization_root" && body.lifetimeYears !== undefined) throw noLifetimeUnderOwnRoot();
 
       const taken = () => new HttpError(409, `the Organization already has a Private CA named ${body.name}`);
@@ -1019,7 +1014,7 @@ export function registerPrivateCas(ctx: {
         const chain = kept?.chain ?? chainGiven ?? [];
 
         const publicKey = await kms.publicKey(issuing.key, orgId);
-        const refusal = await signedCertificateRefusal(certificate!, { publicKey, subject: issuing.subject, root, chain, now: clock() });
+        const refusal = await signedCertificateRefusal(certificate!, { publicKey, keyAlgorithm: ca.keyAlgorithm, subject: issuing.subject, root, chain, now: clock() });
         if (refusal) throw new HttpError(422, refusal);
 
         if (!kept) {
