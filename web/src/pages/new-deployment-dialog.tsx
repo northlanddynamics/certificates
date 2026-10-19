@@ -1,7 +1,8 @@
 import { useMutation, useQuery, useQueryClient } from "@tanstack/react-query";
-import { BotIcon, CheckIcon, ClipboardCheckIcon, FileTerminalIcon, GlobeIcon, PlusIcon, RefreshCwIcon, type LucideIcon } from "lucide-react";
-import { useState, type FormEvent, type ReactNode } from "react";
+import { BotIcon, CheckIcon, ClipboardCheckIcon, FileTerminalIcon, GlobeIcon, PlusIcon, RefreshCwIcon, TriangleAlertIcon, type LucideIcon } from "lucide-react";
+import { useEffect, useState, type FormEvent, type ReactNode } from "react";
 import { IssuerChoiceFields, useIssuerChoice } from "@/components/issuer-choice";
+import { Alert, AlertDescription, AlertTitle } from "@/components/ui/alert";
 import { Button } from "@/components/ui/button";
 import { Dialog, DialogContent, DialogDescription, DialogHeader, DialogTitle, DialogTrigger } from "@/components/ui/dialog";
 import { Field, FieldContent, FieldDescription, FieldError, FieldGroup, FieldLabel, FieldLegend, FieldSet, FieldTitle } from "@/components/ui/field";
@@ -10,7 +11,7 @@ import { RadioGroup, RadioGroupItem } from "@/components/ui/radio-group";
 import { Select, SelectContent, SelectItem, SelectTrigger, SelectValue } from "@/components/ui/select";
 import { Textarea } from "@/components/ui/textarea";
 import { api, can, type Me, type RenewalPolicy } from "@/lib/api";
-import { CLASSICAL_KEY_ALGORITHMS, KEY_ALGORITHM_LABELS, type KeyAlgorithm } from "@/lib/csr-generator";
+import { KEY_ALGORITHM_LABELS, isMlDsa, type KeyAlgorithm } from "@/lib/csr-generator";
 import { nameProblems, splitNames } from "@/lib/csr-names";
 import { permitsOnlyLabel } from "@/lib/private-ca";
 
@@ -59,6 +60,11 @@ function NewDeploymentForm({ org, onDone }: { org: Me["organizations"][number]; 
   const [names, setNames] = useState("");
   const [keyAlgorithm, setKeyAlgorithm] = useState<KeyAlgorithm>("ecdsa-p256");
   const choice = useIssuerChoice(orgId, { canReadAccounts: can(org, "acmeAccount", "read"), canReadPrivateCas: can(org, "privateCa", "read") });
+  // Only what the chosen CA takes is offered, as the server says: choosing a CA that does not take the key algorithm chosen moves to its first.
+  const offered = choice.keyAlgorithms.length > 0 ? choice.keyAlgorithms : [keyAlgorithm];
+  useEffect(() => {
+    if (choice.keyAlgorithms.length > 0 && !choice.keyAlgorithms.includes(keyAlgorithm)) setKeyAlgorithm(choice.keyAlgorithms[0]!);
+  }, [choice.keyAlgorithms, keyAlgorithm]);
   const [scriptId, setScriptId] = useState("");
   const [version, setVersion] = useState(LATEST);
   const [mode, setMode] = useState<RenewalPolicy["mode"]>("automatic");
@@ -175,15 +181,24 @@ function NewDeploymentForm({ org, onDone }: { org: Me["organizations"][number]; 
                   <SelectValue />
                 </SelectTrigger>
                 <SelectContent>
-                  {/* An Agent makes ECDSA and RSA keys only. */}
-                  {CLASSICAL_KEY_ALGORITHMS.map((value) => (
+                  {offered.map((value) => (
                     <SelectItem key={value} value={value}>
                       {KEY_ALGORITHM_LABELS[value]}
                     </SelectItem>
                   ))}
                 </SelectContent>
               </Select>
-              <FieldDescription>The Agent makes a key of this type on its own host.</FieldDescription>
+              <FieldDescription>The Agent makes a key of this type on its own host. Only the types the chosen CA takes are offered.</FieldDescription>
+              {isMlDsa(keyAlgorithm) && (
+                <Alert>
+                  <TriangleAlertIcon />
+                  <AlertTitle>The Deployment Script's target must support ML-DSA</AlertTitle>
+                  <AlertDescription>
+                    Whatever the script installs this key and Certificate into (a web server or load balancer, with OpenSSL 3.5 or later underneath, for example) must itself support ML-DSA, and so must the
+                    clients that connect to it. The platform cannot make up for that: check them before you deploy.
+                  </AlertDescription>
+                </Alert>
+              )}
             </Field>
             <FieldSet>
               <FieldLegend variant="label">Issued from</FieldLegend>

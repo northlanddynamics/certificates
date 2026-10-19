@@ -1,7 +1,8 @@
 // Package keystore makes and keeps the private keys of the Managed Certificates this Agent holds the key for. A key is
 // made here, kept in a directory only the service account can read, and never leaves the host: the platform is sent only a
-// CSR for it (ADR 0002). Keys are filed by Managed Certificate and by the hash of their public key, so that the key for a
-// Certificate is found from the Certificate itself, and a key made later for the same Managed Certificate would sit beside it.
+// CSR for it (ADR 0002). Keys are filed by Managed Certificate and by the hash of their public key (the SubjectPublicKeyInfo
+// the Certificate carries, which Go can read for RSA and ECDSA only), so that the key for a Certificate is found from the
+// Certificate itself, and a key made later for the same Managed Certificate would sit beside it.
 package keystore
 
 import (
@@ -31,7 +32,13 @@ var ErrNoKey = errors.New("this Agent holds no key for that Certificate")
 
 var uuid = regexp.MustCompile(`^[0-9a-fA-F]{8}-[0-9a-fA-F]{4}-[0-9a-fA-F]{4}-[0-9a-fA-F]{4}-[0-9a-fA-F]{12}$`)
 
-func generate(algorithm string) (crypto.Signer, error) {
+// material is a key made: its PKCS#8, its SubjectPublicKeyInfo, and how to ask for a Certificate for it.
+type material struct {
+	pkcs8, spki []byte
+	csr         func(names []string) ([]byte, error)
+}
+
+func generateClassical(algorithm string) (crypto.Signer, error) {
 	switch algorithm {
 	case "ecdsa-p256":
 		return ecdsa.GenerateKey(elliptic.P256(), rand.Reader)
@@ -47,6 +54,27 @@ func generate(algorithm string) (crypto.Signer, error) {
 	return nil, fmt.Errorf("the key algorithm %q is not one this Agent makes", algorithm)
 }
 
+func generate(algorithm string) (material, error) {
+	if params, ok := mlDsaAlgorithms[algorithm]; ok {
+		return generateMLDSA(params)
+	}
+	key, err := generateClassical(algorithm)
+	if err != nil {
+		return material{}, err
+	}
+	pkcs8, err := x509.MarshalPKCS8PrivateKey(key)
+	if err != nil {
+		return material{}, err
+	}
+	spki, err := x509.MarshalPKIXPublicKey(key.Public())
+	if err != nil {
+		return material{}, err
+	}
+	return material{pkcs8: pkcs8, spki: spki, csr: func(names []string) ([]byte, error) {
+		return x509.CreateCertificateRequest(rand.Reader, &x509.CertificateRequest{Subject: pkix.Name{CommonName: names[0]}, DNSNames: names}, key)
+	}}, nil
+}
+
 func (s Store) dirFor(managedCertificateID string) (string, error) {
 	// The id becomes a directory name: only what the platform makes ids of.
 	if !uuid.MatchString(managedCertificateID) {
@@ -55,13 +83,11 @@ func (s Store) dirFor(managedCertificateID string) (string, error) {
 	return filepath.Join(s.Dir, managedCertificateID), nil
 }
 
-func fileName(publicKey crypto.PublicKey) (string, error) {
-	der, err := x509.MarshalPKIXPublicKey(publicKey)
-	if err != nil {
-		return "", err
-	}
-	sum := sha256.Sum256(der)
-	return hex.EncodeToString(sum[:]) + ".key", nil
+// fileName is the hash of the SubjectPublicKeyInfo as the Certificate carries it. For RSA and ECDSA that is what Go encodes
+// a public key as, which is how keys were named before ML-DSA: the CA copies the CSR's encoding into the Certificate.
+func fileName(subjectPublicKeyInfo []byte) string {
+	sum := sha256.Sum256(subjectPublicKeyInfo)
+	return hex.EncodeToString(sum[:]) + ".key"
 }
 
 // Generate makes a key of the algorithm for the Managed Certificate, stores it, and returns a PEM CSR for it asking for
@@ -78,15 +104,7 @@ func (s Store) Generate(managedCertificateID, algorithm string, names []string) 
 	if err != nil {
 		return nil, err
 	}
-	der, err := x509.MarshalPKCS8PrivateKey(key)
-	if err != nil {
-		return nil, err
-	}
-	csrDER, err := x509.CreateCertificateRequest(rand.Reader, &x509.CertificateRequest{Subject: pkix.Name{CommonName: names[0]}, DNSNames: names}, key)
-	if err != nil {
-		return nil, err
-	}
-	name, err := fileName(key.Public())
+	csrDER, err := key.csr(names)
 	if err != nil {
 		return nil, err
 	}
@@ -99,7 +117,7 @@ func (s Store) Generate(managedCertificateID, algorithm string, names []string) 
 			return nil, err
 		}
 	}
-	if err := writeAtomically(filepath.Join(dir, name), pem.EncodeToMemory(&pem.Block{Type: "PRIVATE KEY", Bytes: der})); err != nil {
+	if err := writeAtomically(filepath.Join(dir, fileName(key.spki)), pem.EncodeToMemory(&pem.Block{Type: "PRIVATE KEY", Bytes: key.pkcs8})); err != nil {
 		return nil, err
 	}
 	return pem.EncodeToMemory(&pem.Block{Type: "CERTIFICATE REQUEST", Bytes: csrDER}), nil
@@ -111,11 +129,7 @@ func (s Store) KeyFile(managedCertificateID string, leaf *x509.Certificate) (str
 	if err != nil {
 		return "", err
 	}
-	name, err := fileName(leaf.PublicKey)
-	if err != nil {
-		return "", err
-	}
-	path := filepath.Join(dir, name)
+	path := filepath.Join(dir, fileName(leaf.RawSubjectPublicKeyInfo))
 	if _, err := os.Stat(path); err != nil {
 		if errors.Is(err, os.ErrNotExist) {
 			return "", ErrNoKey

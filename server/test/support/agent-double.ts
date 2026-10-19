@@ -1,9 +1,11 @@
 // An Agent as the platform sees it, for Seam A: it registers and speaks the protocol with the credential it was given
 // (ADR 0006). (The real Agent is the Go program in agent/, which Seam B runs against a stub of the platform.)
 import * as acme from "acme-client";
-import { createHash } from "node:crypto";
+import * as x509 from "@peculiar/x509";
+import { createHash, webcrypto } from "node:crypto";
 import { DnsProviderError } from "../../src/issuance/dcv/dns-provider";
 import { DNS_PROVIDER_KINDS } from "../../src/issuance/dcv/dns-provider-kinds";
+import { isMlDsa, type KeyAlgorithm } from "../../src/pki/key-algorithms";
 import type { Harness } from "./harness";
 
 /** The headers of a call that carries `credential`. */
@@ -46,6 +48,18 @@ const KEY_MAKERS = {
   "rsa-3072": () => acme.crypto.createPrivateRsaKey(3072),
   "rsa-4096": () => acme.crypto.createPrivateRsaKey(4096),
 } as const;
+
+/** An ML-DSA key (with Bun's native ML-DSA) and a CSR for it, as the Agent makes them: the key as a PEM, and the CSR as a PEM. */
+async function mlDsaKeyAndCsr(keyAlgorithm: KeyAlgorithm, names: string[]) {
+  const algorithm = { name: keyAlgorithm.toUpperCase() };
+  const keys = (await webcrypto.subtle.generateKey(algorithm, true, ["sign", "verify"])) as CryptoKeyPair;
+  const csr = await x509.Pkcs10CertificateRequestGenerator.create(
+    { name: `CN=${names[0]}`, keys, signingAlgorithm: algorithm, extensions: [new x509.SubjectAlternativeNameExtension(names.map((value) => ({ type: "dns" as const, value })))] },
+    webcrypto as unknown as Crypto,
+  );
+  const pkcs8 = Buffer.from(await webcrypto.subtle.exportKey("pkcs8", keys.privateKey)).toString("base64");
+  return { key: `-----BEGIN PRIVATE KEY-----\n${pkcs8.match(/.{1,64}/g)!.join("\n")}\n-----END PRIVATE KEY-----\n`, csr: csr.toString("pem") };
+}
 
 export class TestAgent {
   /** Every work item this Agent has been given, in order. */
@@ -140,7 +154,12 @@ export class TestAgent {
 
   /** Makes the key for the Managed Certificate here and reports a CSR for it, as the Agent does. */
   private async generateKey(item: WorkItem) {
-    const { managedCertificateId, names, keyAlgorithm } = item.payload as { managedCertificateId: string; names: string[]; keyAlgorithm: keyof typeof KEY_MAKERS };
+    const { managedCertificateId, names, keyAlgorithm } = item.payload as { managedCertificateId: string; names: string[]; keyAlgorithm: KeyAlgorithm };
+    if (isMlDsa(keyAlgorithm)) {
+      const made = await mlDsaKeyAndCsr(keyAlgorithm, names);
+      this.keys.set(managedCertificateId, made.key);
+      return this.report(item.id, { ok: true, csr: made.csr });
+    }
     const key = await KEY_MAKERS[keyAlgorithm]();
     const [, csr] = await acme.crypto.createCsr({ commonName: names[0], altNames: names }, key);
     this.keys.set(managedCertificateId, key.toString());
