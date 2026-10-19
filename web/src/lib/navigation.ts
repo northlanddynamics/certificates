@@ -1,4 +1,4 @@
-import { BadgeCheckIcon, BellIcon, BuildingIcon, LockKeyholeIcon, PlugIcon, ScrollTextIcon, SendIcon, BotIcon, GlobeIcon, LandmarkIcon, FileKey2Icon, FileTerminalIcon, KeyRoundIcon, LogInIcon, RocketIcon, ShieldCheckIcon, ShieldEllipsisIcon, ShieldIcon, ShieldUserIcon, TabletSmartphoneIcon, UserRoundIcon, UsersIcon, type LucideIcon } from "lucide-react";
+import { BadgeCheckIcon, BellIcon, BuildingIcon, PlugIcon, ScrollTextIcon, SendIcon, BotIcon, GlobeIcon, LandmarkIcon, FileKey2Icon, FileTerminalIcon, KeyRoundIcon, LogInIcon, RocketIcon, ShieldCheckIcon, ShieldEllipsisIcon, ShieldUserIcon, TabletSmartphoneIcon, UserRoundIcon, UsersIcon, type LucideIcon } from "lucide-react";
 import { can, type Me } from "@/lib/api";
 
 type Org = Me["organizations"][number];
@@ -58,14 +58,6 @@ export function organizationNavGroups(org: Org): NavGroup[] {
             ...(can(org, "dnsProvider", "read") ? [{ title: "DNS Providers", url: `${base}/dns-providers`, icon: GlobeIcon }] : []),
           ],
         },
-        {
-          title: "Security",
-          icon: ShieldIcon,
-          items: [
-            ...(can(org, "loginPolicy", "read") ? [{ title: "Login policy", url: loginPolicyUrl(org.id), icon: LockKeyholeIcon }] : []),
-            ...(can(org, "ssoConnection", "read") ? [{ title: "SSO connections", url: `${base}/sso-connections`, icon: LogInIcon }] : []),
-          ],
-        },
       ],
     },
     {
@@ -99,8 +91,8 @@ export const organizationNav = (org: Org): NavItem[] =>
 
 export const platformNav: NavItem[] = [{ title: "Organizations", url: "/platform/organizations", icon: BuildingIcon }];
 
-/** An Organization's login policy, which stays open to a user it holds up, so that the requirement can be undone. */
-export const loginPolicyUrl = (orgId: string) => `/organizations/${orgId}/login-policy`;
+/** An Organization's sign-in settings (its login policy and SSO connections), which stay open to a user the login policy holds up, so that the requirement can be undone. */
+export const signInSettingsUrl = (orgId: string) => `/organizations/${orgId}/sign-in-settings`;
 
 /** The signed-in user's own page, which the user menu opens. */
 export const ACCOUNT_SECURITY_URL = "/account/security";
@@ -108,6 +100,8 @@ export const accountNav: NavItem[] = [{ title: "Account security", url: ACCOUNT_
 
 /** The pages of one Organization that the user menu opens, below the user's own. */
 export const organizationAccountNav = (org: Org): NavItem[] => [
+  // Shown to whoever may see either of its sections, which each check for themselves.
+  ...(can(org, "loginPolicy", "read") || can(org, "ssoConnection", "read") ? [{ title: "Sign-in settings", url: signInSettingsUrl(org.id), icon: LogInIcon }] : []),
   // Anyone may list the channels (to choose one as a Subscriber), but the page is for configuring them.
   ...(can(org, "notificationChannel", "create") ? [{ title: "Notification channels", url: `/organizations/${org.id}/notification-channels`, icon: BellIcon }] : []),
   // Anyone may make their own keys, so the page is open to all.

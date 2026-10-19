@@ -25,8 +25,7 @@ import { NotificationsTab } from "./pages/subscriber-controls";
 import { NotificationChannelsPage } from "./pages/notification-channels";
 import { AuditLogPage } from "./pages/audit-log";
 import { AuditForwardingPage } from "./pages/audit-forwarding";
-import { LoginPolicyPage } from "./pages/login-policy";
-import { SsoConnectionsPage } from "./pages/sso-connections";
+import { SignInSettingsPage } from "./pages/sign-in-settings";
 import { MembersPage } from "./pages/members";
 import { PlatformOrganizationsPage } from "./pages/platform-organizations";
 import { TeamsPage } from "./pages/teams";
@@ -172,16 +171,27 @@ const auditForwardingRoute = createRoute({
   component: AuditForwardingPage,
 });
 
-const loginPolicyRoute = createRoute({
+const signInSettingsRoute = createRoute({
   getParentRoute: () => appRoute,
-  path: "/organizations/$orgId/login-policy",
-  component: LoginPolicyPage,
+  path: "/organizations/$orgId/sign-in-settings",
+  component: SignInSettingsPage,
 });
 
-const ssoConnectionsRoute = createRoute({
+// The login policy and SSO connections pages became the sign-in settings page: their old addresses go to it.
+const loginPolicyRedirectRoute = createRoute({
+  getParentRoute: () => appRoute,
+  path: "/organizations/$orgId/login-policy",
+  beforeLoad: ({ params }) => {
+    throw redirect({ to: "/organizations/$orgId/sign-in-settings", params: { orgId: params.orgId }, replace: true });
+  },
+});
+
+const ssoConnectionsRedirectRoute = createRoute({
   getParentRoute: () => appRoute,
   path: "/organizations/$orgId/sso-connections",
-  component: SsoConnectionsPage,
+  beforeLoad: ({ params }) => {
+    throw redirect({ to: "/organizations/$orgId/sign-in-settings", params: { orgId: params.orgId }, replace: true });
+  },
 });
 
 const accountSecurityRoute = createRoute({
@@ -215,8 +225,8 @@ const routeTree = rootRoute.addChildren([
       certificateNotificationsRoute,
       certificateUnknownTabRoute,
     ]),
-    membersRoute, teamsRoute, apiKeysRoute, agentsRoute, deploymentsRoute, deploymentScriptsRoute, acmeAccountsRoute, privateCasRoute, enrollmentProfilesRoute, deviceCertificatesRoute, dnsProvidersRoute, notificationChannelsRoute, auditLogRoute, auditForwardingRoute, loginPolicyRoute,
-    ssoConnectionsRoute, csrToolsRoute,
+    membersRoute, teamsRoute, apiKeysRoute, agentsRoute, deploymentsRoute, deploymentScriptsRoute, acmeAccountsRoute, privateCasRoute, enrollmentProfilesRoute, deviceCertificatesRoute, dnsProvidersRoute, notificationChannelsRoute, auditLogRoute, auditForwardingRoute, signInSettingsRoute,
+    loginPolicyRedirectRoute, ssoConnectionsRedirectRoute, csrToolsRoute,
     accountSecurityRoute,
     platformOrganizationsRoute,
   ]),
