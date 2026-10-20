@@ -33,8 +33,8 @@ const OutputLimit = 32 * 1024
 // DefaultTimeout is how long a script may run before it is stopped.
 const DefaultTimeout = 10 * time.Minute
 
-// ParameterPrefix is put before each parameter's name to make the variable the script reads it from.
-const ParameterPrefix = "DEPLOY_PARAM_"
+// parameterPrefix is put before each parameter's name to make the variable the script reads it from.
+const parameterPrefix = "DEPLOY_PARAM_"
 
 // parameterName is the form a parameter's name takes, so that no name can reach another variable or break the environment.
 var parameterName = regexp.MustCompile(`^[A-Z][A-Z0-9_]*$`)
@@ -128,7 +128,7 @@ func (r Runner) Run(ctx context.Context, w Work) Result {
 	defer cancel()
 	cmd := exec.CommandContext(runCtx, command[0], command[1:]...)
 	cmd.Dir = filepath.Dir(files.leaf)
-	cmd.Env = append(os.Environ(),
+	cmd.Env = append(inheritedEnv(),
 		"CERT_KEY_FILE="+keyFile,
 		"CERT_LEAF_FILE="+files.leaf,
 		"CERT_CHAIN_FILE="+files.chain,
@@ -179,9 +179,17 @@ func parameterEnv(values map[string]string) ([]string, error) {
 		if !parameterName.MatchString(name) {
 			return nil, fmt.Errorf("the parameter name %q is not one a script can be given", name)
 		}
-		env = append(env, ParameterPrefix+name+"="+values[name])
+		env = append(env, parameterPrefix+name+"="+values[name])
 	}
 	return env, nil
+}
+
+// inheritedEnv is the Agent's own environment without any variable under the parameter prefix, so that a parameter the
+// work item does not carry is absent from the script's.
+func inheritedEnv() []string {
+	return slices.DeleteFunc(os.Environ(), func(kv string) bool {
+		return len(kv) >= len(parameterPrefix) && strings.EqualFold(kv[:len(parameterPrefix)], parameterPrefix)
+	})
 }
 
 func parseChain(chainPEM string) (all []*pem.Block, leaf *x509.Certificate, err error) {

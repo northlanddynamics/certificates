@@ -431,10 +431,11 @@ func withParameters(values map[string]any) func(map[string]any) {
 	return func(p map[string]any) { p["parameters"] = values }
 }
 
-func TestTheScriptIsGivenEachParameterUnderThePrefixAndAnUnsetOneIsAbsent(t *testing.T) {
+func TestTheScriptIsGivenEachParameterUnderThePrefixOverAnyAgentVariableAndAnUnsetOneIsAbsent(t *testing.T) {
 	d := newDeployWorld(t)
 	t.Setenv("DEPLOY_PARAM_SITE_ID", "from the Agent")
-	script := fmt.Sprintf("#!/usr/bin/env bash\nset -eu\n{\necho \"SITE_ID=$DEPLOY_PARAM_SITE_ID\"\necho \"REGION=$DEPLOY_PARAM_REGION\"\necho \"WIDE=$DEPLOY_PARAM_PATH\"\necho \"PORT=${DEPLOY_PARAM_PORT-absent}\"\necho \"PATH=$PATH\"\n} > %q\n", d.out)
+	t.Setenv("DEPLOY_PARAM_PORT", "from the Agent")
+	script := fmt.Sprintf("#!/usr/bin/env bash\nset -eu\n{\necho \"SITE_ID=$DEPLOY_PARAM_SITE_ID\"\necho \"REGION=$DEPLOY_PARAM_REGION\"\necho \"PARAM_PATH=$DEPLOY_PARAM_PATH\"\necho \"PORT=${DEPLOY_PARAM_PORT-absent}\"\necho \"PATH=$PATH\"\n} > %q\n", d.out)
 	d.stub.Enqueue(d.runItem("r1", script, withParameters(map[string]any{"SITE_ID": "site-42", "REGION": "eu west 1", "PATH": "/nowhere"})))
 	r := d.result(2)
 	if !r.OK || r.Run == nil {
@@ -449,8 +450,9 @@ func TestTheScriptIsGivenEachParameterUnderThePrefixAndAnUnsetOneIsAbsent(t *tes
 		k, v, _ := strings.Cut(line, "=")
 		seen[k] = v
 	}
-	// The platform's value wins over the Agent's own variable of the same name.
-	for k, want := range map[string]string{"SITE_ID": "site-42", "REGION": "eu west 1", "WIDE": "/nowhere", "PORT": "absent", "PATH": os.Getenv("PATH")} {
+	// The platform's value wins over the Agent's own variable of the same name, the Agent's own is not passed on for a
+	// parameter the work item leaves unset, and a parameter named like an Agent variable does not reach that variable.
+	for k, want := range map[string]string{"SITE_ID": "site-42", "REGION": "eu west 1", "PARAM_PATH": "/nowhere", "PORT": "absent", "PATH": os.Getenv("PATH")} {
 		if seen[k] != want {
 			t.Fatalf("%s=%q, want %q", k, seen[k], want)
 		}
@@ -476,6 +478,7 @@ func TestAParameterWhoseNameIsNotAllowedFailsTheRunAndTheScriptIsNotRun(t *testi
 
 func TestAScriptWithNoParametersSeesNoneOfThem(t *testing.T) {
 	d := newDeployWorld(t)
+	t.Setenv("DEPLOY_PARAM_SITE_ID", "from the Agent")
 	script := fmt.Sprintf("#!/usr/bin/env bash\nset -eu\nenv | grep '^DEPLOY_PARAM_' > %q || true\n", d.out)
 	for i, mutate := range []func(map[string]any){func(map[string]any) {}, withParameters(map[string]any{})} {
 		d.stub.Enqueue(d.runItem(fmt.Sprintf("r%d", i+1), script, mutate))
