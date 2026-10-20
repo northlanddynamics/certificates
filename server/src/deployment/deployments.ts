@@ -581,6 +581,50 @@ export function registerDeployments(ctx: {
 
   app.openapi(
     createRoute({
+      method: "put",
+      path: "/api/organizations/{orgId}/deployments/{id}/parameters",
+      tags: ["Deployments"],
+      summary: "Replace the Deployment's parameter values",
+      description:
+        "Replaces all of them, checked against the script version the Deployment is pinned to by the same rules as when it was set up: " +
+        "a value for a parameter it does not declare, one that is too long or holds a NUL or newline, or a required one with no value is refused with 400, " +
+        "`parameters` in the error saying what is wrong with each, and the values are left as they were. " +
+        "Every run given to the Agent from now on has the new values, a renewal, a run again or a run given again that was never reported; a run the Agent already has keeps what it was given.",
+      request: { params: DeploymentParams, body: { content: { "application/json": { schema: ParameterValues } } } },
+      responses: { 200: json(Deployment, "The Deployment with its new values"), 400: json(ParametersRefused, "Error"), ...errors(401, 403, 404) },
+    }),
+    async (c) => {
+      const { orgId, id } = c.req.valid("param");
+      const given = c.req.valid("json");
+      const actor = await requireUser(c);
+      await authorize(actor, orgId, { deployment: ["update"] });
+      await findDeployment(orgId, id);
+      await unitOfWork.run(actor, async (tx, change) => {
+        const row = await lockDeployment(tx, orgId, id);
+        if (!row) throw new HttpError(404, "Deployment not found");
+        // The version is pinned for life, so the values are checked against what it declares, never a later one.
+        const [version] = await tx
+          .select({ parameters: deploymentScriptVersion.parameters })
+          .from(deploymentScriptVersion)
+          .where(and(eq(deploymentScriptVersion.scriptId, row.scriptId), eq(deploymentScriptVersion.version, row.scriptVersion)));
+        const parameters = checkedParameters(version!, given);
+        const changed = version!.parameters.map((p) => p.name).filter((name) => parameters[name] !== row.parameters[name]);
+        if (changed.length === 0) return;
+        await tx.update(deployment).set({ parameters }).where(eq(deployment.id, row.id));
+        await change.audit({
+          organizationId: orgId,
+          action: "deployment.parameters_changed",
+          target: { type: "deployment", id: row.id },
+          // Which changed, never their values: the audit trail is not a second copy of them.
+          detail: { agentId: row.agentId, managedCertificateId: row.managedCertificateId, parameters: changed },
+        });
+      });
+      return c.json((await withState([await findDeployment(orgId, id)]))[0]!, 200);
+    },
+  );
+
+  app.openapi(
+    createRoute({
       method: "get",
       path: "/api/organizations/{orgId}/deployments/{id}/runs",
       tags: ["Deployments"],

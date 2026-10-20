@@ -79,6 +79,7 @@ export const AUDIT_ACTIONS = [
   "deployment.key_failed",
   "deployment.key_requested",
   "deployment.run_requested",
+  "deployment.parameters_changed",
   "deployment_run.succeeded",
   "deployment_run.failed",
   "notification_channel.created",

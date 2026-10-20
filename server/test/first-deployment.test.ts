@@ -711,3 +711,132 @@ describe("parameter values", () => {
     }
   });
 });
+
+describe("editing the parameter values", () => {
+  const BIND_SITE = [
+    "#!/usr/bin/env bash",
+    "# deploy-params:begin",
+    '# [{ "name": "SITE_ID", "required": true }, { "name": "PORT", "default": "443" }, { "name": "POOL" }]',
+    "# deploy-params:end",
+    'bind-site "$DEPLOY_PARAM_SITE_ID" "${DEPLOY_PARAM_PORT}" "${DEPLOY_PARAM_POOL:-}"',
+    "",
+  ].join("\n");
+  const TYPO = "site-7f3a9x";
+  const SITE = "site-7f3a9c";
+  const withTypo = async (agent: TestAgent) => deploymentRequest(agent, { scriptId: (await script(acmeOrg, "bind-site", BIND_SITE)).id, parameters: { SITE_ID: TYPO, POOL: "blue" } });
+  const edit = (id: string, parameters: unknown, org: Org = acmeOrg) => api(org, `/deployments/${id}/parameters`, parameters, "PUT");
+
+  test("the values are replaced, all of them, by the same rules as when it was set up, and the next run is given them", async () => {
+    await readyToIssue();
+    const agent = await agentIn();
+    const d = await deployed(agent, await withTypo(agent));
+
+    const edited = await edit(d.id, { SITE_ID: SITE, PORT: "" });
+
+    expect(edited.status).toBe(200);
+    // POOL was not given, so it is unset now; PORT was left blank, so it takes its default.
+    const values = { SITE_ID: SITE, PORT: "443" };
+    expect(edited.body).toMatchObject({ id: d.id, parameters: values, state: "deployed" });
+    expect((await deployment(d.id)).parameters).toEqual(values);
+
+    expect((await api(acmeOrg, `/deployments/${d.id}/runs`, {}, "POST")).status).toBe(202);
+    await agent.work();
+    expect(agent.deployed.map((r) => [r.item.payload.trigger, r.item.payload.parameters])).toEqual([
+      ["issuance", { SITE_ID: TYPO, PORT: "443", POOL: "blue" }],
+      ["rerun", values],
+    ]);
+  });
+
+  test("a run given to the Agent and never reported is given again with the values as they are now", async () => {
+    await readyToIssue();
+    const agent = await agentIn();
+    const created = await setUp(acmeOrg, await withTypo(agent));
+    await agent.work();
+    await h.settleIssuances();
+    const runItem = async () => ((await agent.poll()).body.items as { id: string; type: string; payload: any }[]).find((i) => i.type === "deployment.run");
+    const first = await runItem();
+    expect(first!.payload.parameters.SITE_ID).toBe(TYPO);
+
+    expect((await edit(created.body.id, { SITE_ID: SITE })).status).toBe(200);
+    h.setNow(new Date("2026-01-01T00:20:00Z"));
+
+    expect(await runItem()).toMatchObject({ id: first!.id, payload: { parameters: { SITE_ID: SITE, PORT: "443" } } });
+  });
+
+  test.each([
+    ["a required parameter with no value", { POOL: "green" }, "SITE_ID", "required"],
+    ["a required parameter left blank", { SITE_ID: "  " }, "SITE_ID", "required"],
+    ["a parameter the version does not declare", { SITE_ID: SITE, SITEID: "7" }, "SITEID", "not a parameter"],
+    ["a value over 1 KiB", { SITE_ID: "x".repeat(1025) }, "SITE_ID", "KiB"],
+    ["a value with a NUL in it", { SITE_ID: "a\u0000b" }, "SITE_ID", "NUL"],
+    ["a value with a newline in it", { SITE_ID: SITE, POOL: "a\nb" }, "POOL", "newline"],
+    ["a value with a carriage return in it", { SITE_ID: "a\rb" }, "SITE_ID", "newline"],
+  ])("%s is refused with 400 naming the parameter, and the values are unchanged", async (_what, parameters, name, problem) => {
+    await readyToIssue();
+    const agent = await agentIn();
+    const created = await setUp(acmeOrg, await withTypo(agent));
+    const before = (await auditOf()).length;
+
+    const refused = await edit(created.body.id, parameters);
+
+    expect(refused.status).toBe(400);
+    expect(Object.keys(refused.body.parameters)).toEqual([name]);
+    expect(refused.body.parameters[name]).toContain(problem);
+    expect((await deployment(created.body.id)).parameters).toEqual({ SITE_ID: TYPO, PORT: "443", POOL: "blue" });
+    expect((await auditOf()).length).toBe(before);
+  });
+
+  test("the values are checked against the version the Deployment is pinned to, not the latest", async () => {
+    await readyToIssue();
+    const agent = await agentIn();
+    const created = await setUp(acmeOrg, await withTypo(agent));
+    // A later version that declares no parameters at all does not change what the Deployment takes.
+    expect((await api(acmeOrg, `/deployment-scripts/${created.body.script.id}/versions`, { content: INSTALL })).status).toBe(201);
+
+    const edited = await edit(created.body.id, { SITE_ID: SITE });
+
+    expect(edited.status).toBe(200);
+    expect(edited.body).toMatchObject({ script: { version: 1 }, parameters: { SITE_ID: SITE, PORT: "443" } });
+  });
+
+  test("the Audit Event names the parameters changed and holds none of their values", async () => {
+    await readyToIssue();
+    const created = await setUp(acmeOrg, await withTypo(await agentIn()));
+
+    // SITE_ID is changed and POOL unset; PORT is given the value it had, so it is not a change.
+    expect((await edit(created.body.id, { SITE_ID: SITE, PORT: "443" })).status).toBe(200);
+
+    const events = (await auditOf()).filter((e) => e.action === "deployment.parameters_changed");
+    expect(events).toHaveLength(1);
+    expect(events[0]).toMatchObject({ actor: { email: "admin@acme.test" }, target: { type: "deployment", id: created.body.id }, detail: { parameters: ["SITE_ID", "POOL"] } });
+    for (const value of [SITE, TYPO, "blue"]) expect(JSON.stringify(events)).not.toContain(value);
+  });
+
+  test("an edit that changes nothing is not an Audit Event", async () => {
+    await readyToIssue();
+    const created = await setUp(acmeOrg, await withTypo(await agentIn()));
+    const before = (await auditOf()).length;
+
+    const edited = await edit(created.body.id, { SITE_ID: TYPO, POOL: "blue" });
+
+    expect(edited.status).toBe(200);
+    expect((await auditOf()).length).toBe(before);
+  });
+
+  test("only an Organization Administrator holds deployment:update and may edit the values, and only in their own Organization", async () => {
+    await readyToIssue();
+    const created = await setUp(acmeOrg, await withTypo(await agentIn()));
+    expect((await h.api("/api/me", { cookie: acmeOrg.cookie })).body.organizations[0].permissions.deployment).toContain("update");
+
+    for (const role of ["approver", "member"]) {
+      const cookie = await join(role);
+      expect((await h.api("/api/me", { cookie })).body.organizations[0].permissions.deployment).toBeUndefined();
+      const refused = await h.api(`/api/organizations/${acmeOrg.orgId}/deployments/${created.body.id}/parameters`, { cookie, body: { SITE_ID: SITE }, method: "PUT" });
+      expect(refused.status).toBe(403);
+    }
+    expect((await h.api(`/api/organizations/${acmeOrg.orgId}/deployments/${created.body.id}/parameters`, { body: { SITE_ID: SITE }, method: "PUT" })).status).toBe(401);
+    expect((await edit(created.body.id, { SITE_ID: SITE }, globex)).status).toBe(404);
+    expect((await edit("not-a-deployment", { SITE_ID: SITE })).status).toBe(404);
+    expect((await deployment(created.body.id)).parameters.SITE_ID).toBe(TYPO);
+  });
+});
