@@ -32,7 +32,7 @@ import { lockManagedCertificate } from "../certificates/name-change";
 import { IssuerField, issuerAsked, validityDaysField } from "../private-ca/private-ca";
 import type { Actor, UnitOfWork } from "../platform/unit-of-work";
 import { PreparationError, type RunReport, type WorkItems } from "../agents/work-items";
-import { ParameterValuesError, parameterValues } from "./script-parameters";
+import { ParameterValuesError, type ScriptParameter, parameterValues } from "./script-parameters";
 
 export const DEPLOYMENT_WORK_TYPES = { generateKey: "deployment.generate_key", run: "deployment.run" } as const;
 
@@ -121,7 +121,7 @@ const ParameterValues = z
   .openapi({ description: "A value for each parameter the script version declares, by name: at most 1 KiB, with no NUL or newline. A blank one is not given; one not given takes its default or is left unset." });
 
 /** The values a Deployment of `version` keeps from those `given`; refused with 400 naming each parameter at fault. */
-function checkedParameters(version: { parameters: Parameters<typeof parameterValues>[0] }, given: Record<string, string>) {
+function checkedParameters(version: { parameters: ScriptParameter[] }, given: Record<string, string>) {
   try {
     return parameterValues(version.parameters, given);
   } catch (err) {
@@ -430,7 +430,7 @@ export function registerDeployments(ctx: {
           },
         },
       },
-      responses: { 201: json(Deployment, "Set up, and the Agent asked to make the key"), ...errors(400, 401, 403, 404), 400: json(ParametersRefused, "Error") },
+      responses: { 201: json(Deployment, "Set up, and the Agent asked to make the key"), 400: json(ParametersRefused, "Error"), ...errors(401, 403, 404) },
     }),
     async (c) => {
       const { orgId } = c.req.valid("param");
