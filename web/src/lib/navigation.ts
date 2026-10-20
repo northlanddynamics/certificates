@@ -1,4 +1,4 @@
-import { BadgeCheckIcon, BellIcon, BuildingIcon, PlugIcon, ScrollTextIcon, SendIcon, BotIcon, GlobeIcon, LandmarkIcon, FileKey2Icon, FileTerminalIcon, KeyRoundIcon, LogInIcon, RocketIcon, ShieldCheckIcon, ShieldEllipsisIcon, ShieldUserIcon, TabletSmartphoneIcon, UserRoundIcon, UsersIcon, type LucideIcon } from "lucide-react";
+import { BadgeCheckIcon, BellIcon, BuildingIcon, PlugIcon, ScrollTextIcon, SendIcon, BotIcon, GlobeIcon, LandmarkIcon, FileKey2Icon, FileSearchIcon, FileTerminalIcon, KeyRoundIcon, LogInIcon, RocketIcon, ShieldCheckIcon, ShieldEllipsisIcon, ShieldUserIcon, TabletSmartphoneIcon, UserRoundIcon, UsersIcon, type LucideIcon } from "lucide-react";
 import { can, type Me } from "@/lib/api";
 
 type Org = Me["organizations"][number];
@@ -30,8 +30,14 @@ export function organizationNavGroups(org: Org): NavGroup[] {
   const base = `/organizations/${org.id}`;
   const groups: NavGroup[] = [
     { label: "Inventory", items: [{ title: "Managed Certificates", url: `${base}/certificates`, icon: ShieldCheckIcon }] },
-    // Generated in the browser and asking the platform for nothing, so there is no permission to check.
-    { label: "Tools", items: [{ title: "CSR Generator", url: `${base}/tools/csr`, icon: FileKey2Icon }] },
+    // Run in the browser and asking the platform for nothing, so there is no permission to check.
+    {
+      label: "Tools",
+      items: [
+        { title: "CSR Generator", url: `${base}/tools/csr`, icon: FileKey2Icon },
+        { title: "CSR Viewer", url: `${base}/tools/csr-viewer`, icon: FileSearchIcon },
+      ],
+    },
     {
       label: "Organization",
       items: can(org, "invitation", "create")

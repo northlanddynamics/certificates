@@ -23,7 +23,7 @@ export interface CsrFacts {
 const ML_DSA: Record<string, KeyAlgorithm> = { "ML-DSA-44": "ml-dsa-44", "ML-DSA-65": "ml-dsa-65", "ML-DSA-87": "ml-dsa-87" };
 
 // WebCrypto names no curve and no modulus length for a key until it is imported as one, so each is tried in turn.
-async function keyOf(publicKey: x509.PublicKey): Promise<Pick<CsrFacts, "keyAlgorithm" | "keyLabel">> {
+export async function keyOf(publicKey: x509.PublicKey): Promise<Pick<CsrFacts, "keyAlgorithm" | "keyLabel">> {
   const mlDsa = ML_DSA[publicKey.algorithm.name];
   if (mlDsa) return { keyAlgorithm: mlDsa, keyLabel: KEY_ALGORITHM_LABELS[mlDsa] };
   const spki = publicKey.rawData;
