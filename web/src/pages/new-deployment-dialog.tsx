@@ -2,7 +2,7 @@ import { useMutation, useQuery, useQueryClient } from "@tanstack/react-query";
 import { BotIcon, CheckIcon, ClipboardCheckIcon, FileTerminalIcon, GlobeIcon, PlusIcon, RefreshCwIcon, TriangleAlertIcon, type LucideIcon } from "lucide-react";
 import { useEffect, useState, type FormEvent } from "react";
 import { IssuerChoiceFields, useIssuerChoice } from "@/components/issuer-choice";
-import { ParameterFields, missingParameters, parameterValues } from "@/components/parameter-fields";
+import { ParameterFields, missingParameters, shownValues } from "@/components/parameter-fields";
 import { SummaryRows } from "@/components/summary-rows";
 import { Alert, AlertDescription, AlertTitle } from "@/components/ui/alert";
 import { Button } from "@/components/ui/button";
@@ -83,7 +83,7 @@ function NewDeploymentForm({ org, onDone }: { org: Me["organizations"][number]; 
   const versions = script.data?.versions ?? [];
   const chosenVersion = version === LATEST ? (script.data?.latestVersion ?? chosenScript?.latestVersion) : versions.find((v) => v.version === Number(version));
   const declared = chosenVersion?.parameters ?? [];
-  const parameters = parameterValues(declared, typed);
+  const parameters = shownValues(declared, typed);
 
   const parsedNames = splitNames(names);
   const problems = nameProblems(parsedNames);
@@ -231,6 +231,7 @@ function NewDeploymentForm({ org, onDone }: { org: Me["organizations"][number]; 
                   setScriptId(value);
                   setVersion(LATEST);
                   setTyped({});
+                  create.reset();
                 }}
               >
                 <SelectTrigger id="new-deployment-script" className="w-full">
@@ -253,7 +254,13 @@ function NewDeploymentForm({ org, onDone }: { org: Me["organizations"][number]; 
             {chosenScript && (
               <Field>
                 <FieldLabel htmlFor="new-deployment-version">Version</FieldLabel>
-                <Select value={version} onValueChange={setVersion}>
+                <Select
+                  value={version}
+                  onValueChange={(value) => {
+                    setVersion(value);
+                    create.reset();
+                  }}
+                >
                   <SelectTrigger id="new-deployment-version" className="w-full">
                     <SelectValue />
                   </SelectTrigger>

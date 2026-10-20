@@ -5,15 +5,16 @@ import type { ScriptParameter } from "@/lib/api";
 /**
  * The value each parameter `declared` is shown with, by name: what was typed for its name, else its default, else blank.
  * `typed` may hold names the version does not declare (typed for another version), which are left out, so a value is
- * kept across a version switch only for a name both versions declare.
+ * kept across a version switch only for a name both versions declare. A blank value is sent as it is: the server then
+ * applies the default, or leaves the parameter unset.
  */
-export function parameterValues(declared: ScriptParameter[], typed: Record<string, string>): Record<string, string> {
+export function shownValues(declared: ScriptParameter[], typed: Record<string, string>): Record<string, string> {
   return Object.fromEntries(declared.map((p) => [p.name, typed[p.name] ?? p.default ?? ""]));
 }
 
-/** The required parameters with no value, so the form can stop before the server refuses it. */
+/** The required parameters with neither a value nor a default, which the server would refuse, so the form stops first. */
 export function missingParameters(declared: ScriptParameter[], values: Record<string, string>): string[] {
-  return declared.filter((p) => p.required && (values[p.name] ?? "").trim() === "").map((p) => p.name);
+  return declared.filter((p) => p.required && [values[p.name], p.default].every((v) => (v ?? "").trim() === "")).map((p) => p.name);
 }
 
 /**
@@ -34,7 +35,7 @@ export function ParameterFields({
   problems?: Record<string, string>;
   idPrefix: string;
 }) {
-  const values = parameterValues(declared, typed);
+  const values = shownValues(declared, typed);
   const missing = missingParameters(declared, values);
   return (
     <FieldGroup>
@@ -44,17 +45,17 @@ export function ParameterFields({
         return (
           <Field key={p.name} data-invalid={problem !== undefined}>
             <FieldLabel htmlFor={id}>
-              {p.label || p.name}
+              {p.label}
               {p.required && <span className="font-normal text-muted-foreground">(required)</span>}
             </FieldLabel>
-            <Input id={id} value={values[p.name]} aria-required={p.required} aria-invalid={problem !== undefined} onChange={(e) => onChange(p.name, e.target.value)} />
+            <Input id={id} value={values[p.name]} placeholder={p.default} aria-required={p.required} aria-invalid={problem !== undefined} onChange={(e) => onChange(p.name, e.target.value)} />
             <FieldDescription>
               {p.description && <>{p.description} </>}
               The script finds it in <code>DEPLOY_PARAM_{p.name}</code>.
             </FieldDescription>
             {problem && (
               <FieldError>
-                {p.label || p.name} {problem}.
+                {p.label} {problem}.
               </FieldError>
             )}
           </Field>
