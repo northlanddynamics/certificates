@@ -28,8 +28,7 @@ export const ScriptParameter = z
     description: z.string().openapi({ description: "Help for whoever gives the value." }),
     required: z.boolean(),
     default: z.string().optional().openapi({ description: "Used when no value is given." }),
-  })
-  .openapi("ScriptParameter");
+  });
 export type ScriptParameter = z.infer<typeof ScriptParameter>;
 
 /** How a parameter may be written in the section: only `name` is needed. */
