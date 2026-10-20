@@ -952,6 +952,11 @@ export const deployment = pgTable(
     scriptId: uuid("script_id").notNull(),
     /** The version of the script it runs; the Agent is given exactly that content. */
     scriptVersion: integer("script_version").notNull(),
+    /**
+     * The values of the parameters the script version declares, by name, as the script is given them: checked against that
+     * version when set, and kept in plain text, so nothing secret. A parameter left unset is not here.
+     */
+    parameters: jsonb("parameters").$type<Record<string, string>>().notNull().default({}),
     createdById: text("created_by_id").notNull(),
     createdByEmail: text("created_by_email").notNull(),
     /** Why the Agent could not make the key or its CSR was refused, while that is so: the Deployment waits for a person. */

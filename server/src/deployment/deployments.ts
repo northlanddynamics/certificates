@@ -5,8 +5,8 @@
 // holding a key (ADR 0002):
 //   1. `deployment.generate_key`: the Agent makes the key in a store only its service account reads and reports a CSR for
 //      it. The platform checks the CSR as it does an Owner's, keeps it and begins the Issuance.
-//   2. When the Issuance stores the Certificate, `deployment.run`: the Agent is given the Certificate and the script
-//      (with its hash, which it checks before running it, ADR 0004), runs it, and reports how it went.
+//   2. When the Issuance stores the Certificate, `deployment.run`: the Agent is given the Certificate, the script (with its
+//      hash, which it checks before running it, ADR 0004) and the Deployment's parameter values, runs it, and reports how it went.
 //   3. That report is the Deployment Run. An Organization Administrator can have the Agent run it again for the current
 //      Certificate without renewing.
 // Each Renewal is for a new key: its Issuance waits (issuance.ts) while the Agent is asked again, through
@@ -32,6 +32,7 @@ import { lockManagedCertificate } from "../certificates/name-change";
 import { IssuerField, issuerAsked, validityDaysField } from "../private-ca/private-ca";
 import type { Actor, UnitOfWork } from "../platform/unit-of-work";
 import { PreparationError, type RunReport, type WorkItems } from "../agents/work-items";
+import { ParameterValuesError, parameterValues } from "./script-parameters";
 
 export const DEPLOYMENT_WORK_TYPES = { generateKey: "deployment.generate_key", run: "deployment.run" } as const;
 
@@ -70,6 +71,9 @@ const Deployment = z.object({
   keyAlgorithm: z.enum(KEY_ALGORITHMS),
   agent: z.object({ id: z.string(), hostName: z.string() }),
   script: z.object({ id: z.string(), name: z.string(), interpreter: z.enum(SCRIPT_INTERPRETERS), version: z.number().int(), hash: z.string() }),
+  parameters: z.record(z.string(), z.string()).openapi({
+    description: "The values the script is given, by parameter name, as `DEPLOY_PARAM_` and the name: none for a parameter left unset. Plain text, so nothing secret.",
+  }),
   createdAt: z.string(),
   createdBy: z.string(),
   state: z.enum(DEPLOYMENT_STATES).openapi({
@@ -106,6 +110,25 @@ const DeploymentsQuery = PageQuery.extend({
   agentId: anyId.optional().meta({ description: "Those on any of these Agents, comma-separated." }),
   scriptId: anyId.optional().meta({ description: "Those running any of these Deployment Scripts, comma-separated." }),
 });
+
+/** A refusal of the parameter values given, saying what is wrong with each parameter at fault. */
+const ParametersRefused = z.object({
+  error: z.string(),
+  parameters: z.record(z.string(), z.string()).optional().openapi({ description: "When parameter values are refused: what is wrong with each parameter at fault, by name." }),
+});
+const ParameterValues = z
+  .record(z.string(), z.string())
+  .openapi({ description: "A value for each parameter the script version declares, by name: at most 1 KiB, with no NUL or newline. A blank one is not given; one not given takes its default or is left unset." });
+
+/** The values a Deployment of `version` keeps from those `given`; refused with 400 naming each parameter at fault. */
+function checkedParameters(version: { parameters: Parameters<typeof parameterValues>[0] }, given: Record<string, string>) {
+  try {
+    return parameterValues(version.parameters, given);
+  } catch (err) {
+    if (err instanceof ParameterValuesError) throw new HttpError(400, err.message, { parameters: err.problems });
+    throw err;
+  }
+}
 
 const DeploymentParams = OrgParam.extend({ id: z.string().openapi({ param: { name: "id", in: "path" } }) });
 
@@ -175,6 +198,7 @@ export function registerDeployments(ctx: {
           version: row.scriptVersion,
           hash: versions.find((v) => v.scriptId === row.scriptId && v.version === row.scriptVersion)!.hash,
         },
+        parameters: row.parameters,
         createdAt: row.createdAt.toISOString(),
         createdBy: row.createdByEmail,
         state,
@@ -276,6 +300,8 @@ export function registerDeployments(ctx: {
         names: cert.names,
         certificate: { id: cert.id, fingerprint: cert.fingerprint, notAfter: cert.notAfter.toISOString(), chainPem: cert.chainPem },
         script: { name: script.name, interpreter: script.interpreter, version: version.version, hash: version.hash, content: version.content },
+        // As they are now, at each delivery: a change to them reaches the next one.
+        parameters: row.parameters,
       };
     },
     {
@@ -376,7 +402,8 @@ export function registerDeployments(ctx: {
         "and its report of running it is the first Deployment Run. One Agent can serve many Deployments. The script version is pinned: the latest unless `scriptVersion` says. " +
         "An Agent that is offline does the work when it next polls. " +
         "Its issuer is an ACME CA (staging unless `environment` says otherwise) or, given `issuer`, an active Issuing CA of one of the Organization's Private CAs, which issues with no DCV; " +
-        "names outside the Issuing CA's permitted name rules are refused with 422, as is a `validityDays` above its maximum; `validityDays` with an ACME CA, or both `issuer` and `environment`, is refused with 400.",
+        "names outside the Issuing CA's permitted name rules are refused with 422, as is a `validityDays` above its maximum; `validityDays` with an ACME CA, or both `issuer` and `environment`, is refused with 400. " +
+        "`parameters` are checked against the parameters the script version declares: a value for one it does not declare, one that is too long or holds a NUL or newline, or a required one with no value is refused with 400, `parameters` in the error saying what is wrong with each.",
       request: {
         params: OrgParam,
         body: {
@@ -397,12 +424,13 @@ export function registerDeployments(ctx: {
                   .optional()
                   .openapi({ description: "For a Private CA issuer only: how many days its Certificates are valid for, at most the Issuing CA's maximum; its default when not given." }),
                 renewalPolicy: RenewalPolicy.default({ mode: "automatic", daysBeforeExpiry: 30 }),
+                parameters: ParameterValues.default({}),
               }),
             },
           },
         },
       },
-      responses: { 201: json(Deployment, "Set up, and the Agent asked to make the key"), ...errors(400, 401, 403, 404) },
+      responses: { 201: json(Deployment, "Set up, and the Agent asked to make the key"), ...errors(400, 401, 403, 404), 400: json(ParametersRefused, "Error") },
     }),
     async (c) => {
       const { orgId } = c.req.valid("param");
@@ -430,6 +458,7 @@ export function registerDeployments(ctx: {
           .orderBy(desc(deploymentScriptVersion.version))
           .limit(1);
         if (!version) throw new HttpError(400, `the script has no version ${body.scriptVersion}`);
+        const parameters = checkedParameters(version, body.parameters);
 
         const [mc] = await tx
           .insert(managedCertificate)
@@ -453,6 +482,7 @@ export function registerDeployments(ctx: {
             agentId: chosen.id,
             scriptId: script.id,
             scriptVersion: version.version,
+            parameters,
             createdById: actor.id,
             createdByEmail: actor.email,
             createdAt: change.occurredAt,
@@ -485,6 +515,8 @@ export function registerDeployments(ctx: {
             scriptVersion: version.version,
             scriptHash: version.hash,
             renewalPolicy: body.renewalPolicy,
+            // Which were set, never their values: the audit trail is not a second copy of them.
+            parameters: Object.keys(parameters),
           },
         });
         await workItems.enqueueIn(tx, change, orgId, chosen.id, DEPLOYMENT_WORK_TYPES.generateKey, { deploymentId: row!.id });

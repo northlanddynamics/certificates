@@ -89,6 +89,8 @@ describe("setting up the first Deployment", () => {
     expect(created.body).toMatchObject({
       agent: { id: agent.id },
       script: { id: request.scriptId, name: "install", interpreter: "bash", version: 1, hash: sha256(INSTALL) },
+      // The script declares no parameters, so it is given none.
+      parameters: {},
       state: "awaiting_key",
       lastRun: null,
     });
@@ -117,6 +119,7 @@ describe("setting up the first Deployment", () => {
       names: request.names,
       certificate: { id: issued.currentCertificate.id, fingerprint: issued.currentCertificate.fingerprint },
       script: { name: "install", interpreter: "bash", version: 1, hash: sha256(INSTALL), content: INSTALL },
+      parameters: {},
     });
     // The Certificate it was given is the one issued, for the key the Agent holds.
     const leaf = new X509Certificate(run!.item.payload.certificate.chainPem);
@@ -566,5 +569,145 @@ describe("Managed Certificates whose key an Agent holds", () => {
     await h.settleIssuances();
     expect(await deployment(created.id)).toMatchObject({ state: "issuance_failed" });
     expect(agent.executed.map((i) => i.type)).toEqual(["deployment.generate_key"]);
+  });
+});
+
+describe("parameter values", () => {
+  /** A script declaring a required site id, a port with a default, and a pool that may be left unset. */
+  const BIND_SITE = [
+    "#!/usr/bin/env bash",
+    "# deploy-params:begin",
+    "# [",
+    '#   { "name": "SITE_ID", "label": "Site id", "required": true },',
+    '#   { "name": "PORT", "default": "443" },',
+    '#   { "name": "POOL" }',
+    "# ]",
+    "# deploy-params:end",
+    'bind-site "$DEPLOY_PARAM_SITE_ID" "${DEPLOY_PARAM_PORT}" "${DEPLOY_PARAM_POOL:-}"',
+    "",
+  ].join("\n");
+  const SITE = "site-7f3a9c";
+  const bindSite = () => script(acmeOrg, "bind-site", BIND_SITE);
+  const withParameters = async (agent: TestAgent, parameters: unknown) => deploymentRequest(agent, { scriptId: (await bindSite()).id, parameters });
+
+  test("the values are kept on the Deployment, defaults filled in and blanks left out, and given to the Agent with the script", async () => {
+    await readyToIssue();
+    const agent = await agentIn();
+
+    const created = await setUp(acmeOrg, await withParameters(agent, { SITE_ID: SITE, POOL: "" }));
+
+    expect(created.status).toBe(201);
+    const values = { SITE_ID: SITE, PORT: "443" };
+    expect(created.body.parameters).toEqual(values);
+    expect((await deployment(created.body.id)).parameters).toEqual(values);
+    expect((await api(acmeOrg, "/deployments")).body.items[0].parameters).toEqual(values);
+
+    await untilDeployed(agent);
+    expect(agent.deployed[0]!.item.payload.parameters).toEqual(values);
+  });
+
+  test("running the Deployment again gives the Agent the same values", async () => {
+    await readyToIssue();
+    const agent = await agentIn();
+    const created = await setUp(acmeOrg, await withParameters(agent, { SITE_ID: SITE, PORT: "8443" }));
+    await untilDeployed(agent);
+
+    expect((await api(acmeOrg, `/deployments/${created.body.id}/runs`, {}, "POST")).status).toBe(202);
+    await agent.work();
+
+    expect(agent.deployed.map((r) => [r.item.payload.trigger, r.item.payload.parameters])).toEqual([
+      ["issuance", { SITE_ID: SITE, PORT: "8443" }],
+      ["rerun", { SITE_ID: SITE, PORT: "8443" }],
+    ]);
+  });
+
+  test("a run the Agent was given and never reported is given again with the values", async () => {
+    await readyToIssue();
+    const agent = await agentIn();
+    await setUp(acmeOrg, await withParameters(agent, { SITE_ID: SITE }));
+    await agent.work();
+    await h.settleIssuances();
+
+    const runItem = async () => ((await agent.poll()).body.items as { id: string; type: string; payload: any }[]).find((i) => i.type === "deployment.run");
+    const first = await runItem();
+    expect(first!.payload.parameters).toEqual({ SITE_ID: SITE, PORT: "443" });
+    // It stopped before reporting, and is given the run again later.
+    h.setNow(new Date("2026-01-01T00:20:00Z"));
+    const again = await runItem();
+    expect(again).toMatchObject({ id: first!.id, payload: { parameters: { SITE_ID: SITE, PORT: "443" } } });
+  });
+
+  test.each([
+    ["a required parameter with no value", {}, "SITE_ID", "required"],
+    ["a required parameter left blank", { SITE_ID: "  " }, "SITE_ID", "required"],
+    ["a parameter the version does not declare", { SITE_ID: SITE, SITEID: "7" }, "SITEID", "not a parameter"],
+    ["a value over 1 KiB", { SITE_ID: "x".repeat(1025) }, "SITE_ID", "KiB"],
+    ["a value with a NUL in it", { SITE_ID: "a\u0000b" }, "SITE_ID", "NUL"],
+    ["a value with a newline in it", { SITE_ID: SITE, POOL: "a\nb" }, "POOL", "newline"],
+    ["a value with a carriage return in it", { SITE_ID: "a\rb" }, "SITE_ID", "newline"],
+  ])("%s is refused with 400 naming the parameter, and nothing is set up", async (_what, parameters, name, problem) => {
+    await readyToIssue();
+    const agent = await agentIn();
+    const before = (await auditOf()).length;
+
+    const refused = await setUp(acmeOrg, await withParameters(agent, parameters));
+
+    expect(refused.status).toBe(400);
+    expect(refused.body.error).toContain(name);
+    expect(Object.keys(refused.body.parameters)).toEqual([name]);
+    expect(refused.body.parameters[name]).toContain(problem);
+    expect((await api(acmeOrg, "/deployments")).body.total).toBe(0);
+    expect((await api(acmeOrg, "/managed-certificates")).body.total).toBe(0);
+    expect((await auditOf()).length).toBe(before);
+  });
+
+  test("every parameter at fault is named at once", async () => {
+    await readyToIssue();
+    const refused = await setUp(acmeOrg, await withParameters(await agentIn(), { PORT: "a\nb", NOPE: "1" }));
+
+    expect(refused.status).toBe(400);
+    expect(Object.keys(refused.body.parameters).sort()).toEqual(["NOPE", "PORT", "SITE_ID"]);
+  });
+
+  test("values for a script that declares no parameters are refused", async () => {
+    await readyToIssue();
+    const refused = await setUp(acmeOrg, await deploymentRequest(await agentIn(), { parameters: { SITE_ID: SITE } }));
+
+    expect(refused.status).toBe(400);
+    expect(refused.body.parameters).toEqual({ SITE_ID: expect.stringContaining("not a parameter") });
+  });
+
+  test("values are checked against the version chosen, not the latest", async () => {
+    await readyToIssue();
+    const agent = await agentIn();
+    const s = await bindSite();
+    expect((await api(acmeOrg, `/deployment-scripts/${s.id}/versions`, { content: INSTALL })).status).toBe(201);
+
+    expect((await setUp(acmeOrg, await deploymentRequest(agent, { scriptId: s.id, parameters: { SITE_ID: SITE } }))).status).toBe(400);
+    const pinned = await setUp(acmeOrg, await deploymentRequest(agent, { scriptId: s.id, scriptVersion: 1, parameters: { SITE_ID: SITE } }));
+    expect(pinned.status).toBe(201);
+    expect(pinned.body).toMatchObject({ script: { version: 1 }, parameters: { SITE_ID: SITE, PORT: "443" } });
+  });
+
+  test("the Audit Event of setting it up names the parameters set and holds none of their values", async () => {
+    await readyToIssue();
+    const created = await setUp(acmeOrg, await withParameters(await agentIn(), { SITE_ID: SITE, PORT: "8443-tls" }));
+    expect(created.status).toBe(201);
+
+    const events = await auditOf();
+    expect(events.find((e) => e.action === "deployment.created")!.detail.parameters).toEqual(["SITE_ID", "PORT"]);
+    for (const value of [SITE, "8443-tls"]) expect(JSON.stringify(events)).not.toContain(value);
+  });
+
+  test("only an Organization Administrator sees the values", async () => {
+    await readyToIssue();
+    const created = await setUp(acmeOrg, await withParameters(await agentIn(), { SITE_ID: SITE }));
+    for (const role of ["approver", "member"]) {
+      const cookie = await join(role);
+      for (const path of ["/deployments", `/deployments/${created.body.id}`, `/managed-certificates/${created.body.managedCertificateId}`]) {
+        const res = await h.app.request(`http://localhost/api/organizations/${acmeOrg.orgId}${path}`, { headers: { cookie } });
+        expect(await res.text()).not.toContain(SITE);
+      }
+    }
   });
 });

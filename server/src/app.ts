@@ -140,7 +140,7 @@ export function createApp(deps: AppDeps) {
   const app = new OpenAPIHono();
 
   app.onError((err, c) => {
-    if (err instanceof HttpError) return c.json({ error: err.message }, err.status);
+    if (err instanceof HttpError) return c.json({ ...err.detail, error: err.message }, err.status);
     console.error(err);
     return c.json({ error: "internal error" }, 500);
   });

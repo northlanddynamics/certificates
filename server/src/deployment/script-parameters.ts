@@ -87,3 +87,31 @@ export function declaredParameters(content: string): ScriptParameter[] {
     ...(p.default === undefined ? {} : { default: p.default }),
   }));
 }
+
+/** Values given for a version's parameters that it cannot run with: `problems` says, for each parameter at fault, what is wrong. */
+export class ParameterValuesError extends Error {
+  constructor(readonly problems: Record<string, string>) {
+    super(`the parameter values cannot be used: ${Object.entries(problems).map(([name, problem]) => `${name} ${problem}`).join("; ")}`);
+  }
+}
+
+/**
+ * The values a Deployment of a version declaring `declared` keeps, from those `given`: a blank one counts as not given,
+ * a parameter not given takes its default, and one still blank is left out, so the script finds it unset. Throws a
+ * `ParameterValuesError` naming every parameter at fault: one the version does not declare, a value that cannot be put
+ * in an environment variable, a required one with no value.
+ */
+export function parameterValues(declared: ScriptParameter[], given: Record<string, string>): Record<string, string> {
+  const problems: Record<string, string> = {};
+  for (const name of Object.keys(given)) if (!declared.some((p) => p.name === name)) problems[name] = "is not a parameter the script version declares";
+  const values: Record<string, string> = {};
+  for (const p of declared) {
+    const value = [given[p.name], p.default].find((v) => v !== undefined && v.trim() !== "");
+    const problem = value === undefined ? undefined : valueProblem(value);
+    if (problem) problems[p.name] = problem;
+    else if (value !== undefined) values[p.name] = value;
+    else if (p.required) problems[p.name] = "is required";
+  }
+  if (Object.keys(problems).length > 0) throw new ParameterValuesError(problems);
+  return values;
+}
