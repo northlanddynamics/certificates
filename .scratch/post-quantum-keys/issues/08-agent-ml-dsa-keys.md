@@ -22,3 +22,9 @@
   - a Deployment Run hands the script the right key;
   - an existing RSA or ECDSA key is still found.
 - [x] A CSR the real Agent made is kept as a server-side fixture that the CSR parser accepts.
+
+## Comments
+
+- The Agent's ML-DSA code is `agent/internal/keystore/mldsa.go` (CIRCL; the PKCS#10 built with Go's ASN.1 encoder) and keys are named by the hash of the Certificate's raw SubjectPublicKeyInfo in `keystore.go`; the key files are 0600 in a 0700 directory.
+- An algorithm the Agent does not make fails the Work Item with "the key algorithm … is not one this Agent makes". The new Deployment dialog takes its choices from the CA list, so it offers ML-DSA only for an ML-DSA Private CA.
+- Seam B tests are in `agent/internal/agent/ml_dsa_test.go`; the server-side fixtures (a CSR the real Agent made, one per algorithm) and the test that the CSR parser accepts them are in `server/test/fixtures/agent/` and `server/test/agent-ml-dsa.test.ts`.
