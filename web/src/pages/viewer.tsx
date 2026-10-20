@@ -2,6 +2,7 @@ import { FileSearchIcon, LoaderIcon } from "lucide-react";
 import { useEffect, useState } from "react";
 import { CertificateDetailsView } from "@/components/certificate-details-view";
 import { CsrDetailsView } from "@/components/csr-details-view";
+import { PemConverter } from "@/components/pem-converter";
 import { PemDropField } from "@/components/pem-drop-field";
 import { Alert, AlertDescription } from "@/components/ui/alert";
 import { Card, CardContent, CardDescription, CardHeader, CardTitle } from "@/components/ui/card";
@@ -9,12 +10,14 @@ import { Empty, EmptyDescription, EmptyHeader, EmptyMedia, EmptyTitle } from "@/
 import { Tabs, TabsList, TabsTrigger } from "@/components/ui/tabs";
 import { parseCertificateDetails, type CertificateReading } from "@/lib/certificate-details";
 import { parseCsrDetails, type CsrReading } from "@/lib/csr-details";
+import { fileBaseOf } from "@/lib/pki-convert";
 import { readPkiText, type PkiItem } from "@/lib/pki-input";
 
-type Read = { kind: "csr"; reading: CsrReading } | { kind: "certificate"; reading: CertificateReading };
+/** What one CSR or certificate says, with the PEM it was read from, which is what a conversion starts from. */
+type Read = { pem: string } & ({ kind: "csr"; reading: CsrReading } | { kind: "certificate"; reading: CertificateReading });
 
 const readItem = async (item: PkiItem): Promise<Read> =>
-  item.kind === "csr" ? { kind: "csr", reading: await parseCsrDetails(item.pem) } : { kind: "certificate", reading: await parseCertificateDetails(item.pem) };
+  item.kind === "csr" ? { kind: "csr", pem: item.pem, reading: await parseCsrDetails(item.pem) } : { kind: "certificate", pem: item.pem, reading: await parseCertificateDetails(item.pem) };
 
 type Reading = { status: "empty" } | { status: "reading" } | { status: "refused"; problem: string } | { status: "read"; reads: Read[] };
 
@@ -68,30 +71,47 @@ export function ViewerPage() {
   const [pick, setPick] = useState<{ count: number; index: number } | null>(null);
   const reads = reading.status === "read" ? reading.reads : [];
   const index = pick && pick.count === reads.length && pick.index < reads.length ? pick.index : 0;
+  const shown = reads[index];
+  // Only what was read can be converted: a certificate that cannot be parsed has nothing to convert. A bundle is the certificates that were.
+  const convertible = shown?.reading.ok ? shown : null;
+  const bundle = reads.filter((read) => read.kind === "certificate" && read.reading.ok);
 
   return (
     <div className="flex flex-col gap-6">
       <div>
-        <h1 className="text-xl font-semibold">CSR and Certificate Viewer</h1>
+        <h1 className="text-xl font-semibold">PEM Parser</h1>
         <p className="text-sm text-muted-foreground">
-          Paste, drop or choose a CSR or a certificate; you need not say which. See what it holds, and for a CSR whether the platform would take it. It is read in your browser; nothing is sent.
+          Paste, drop or choose a CSR or a certificate; you need not say which. See what it holds, and for a CSR whether the platform would take it, then convert it to PEM, DER, base64 or PKCS#7. It is read in your browser; nothing is sent.
         </p>
       </div>
       <div className="grid items-start gap-6 lg:grid-cols-[minmax(0,2fr)_minmax(0,3fr)]">
-        <Card className="lg:sticky lg:top-4">
-          <CardHeader>
-            <CardTitle>CSR or certificate</CardTitle>
-            <CardDescription>PEM, or a DER file. A chain is shown one certificate at a time.</CardDescription>
-          </CardHeader>
-          <CardContent className="flex flex-col gap-3">
-            <PemDropField id="viewer-text" value={text} onChange={setText} />
-            {reading.status === "refused" && (
-              <p role="alert" className="text-sm text-destructive">
-                {reading.problem}
-              </p>
-            )}
-          </CardContent>
-        </Card>
+        {/* Kept in view while the details scroll; a column taller than the window scrolls by itself. */}
+        <div className="flex flex-col gap-6 lg:sticky lg:top-4 lg:max-h-[calc(100vh-2rem)] lg:overflow-y-auto lg:-m-1 lg:p-1 [&>*]:shrink-0">
+          <Card>
+            <CardHeader>
+              <CardTitle>CSR or certificate</CardTitle>
+              <CardDescription>PEM, or a DER file; a PKCS#7 (.p7b) bundle is read as its certificates. A chain is shown one certificate at a time.</CardDescription>
+            </CardHeader>
+            <CardContent className="flex flex-col gap-3">
+              <PemDropField id="viewer-text" value={text} onChange={setText} />
+              {reading.status === "refused" && (
+                <p role="alert" className="text-sm text-destructive">
+                  {reading.problem}
+                </p>
+              )}
+            </CardContent>
+          </Card>
+          {convertible && (
+            <PemConverter
+              key={index}
+              shown={convertible}
+              shownTitle={`${reads.length > 1 ? `${index + 1}. ` : ""}${convertible.kind === "csr" ? "This CSR" : "This certificate"}`}
+              shownFileBase={fileBaseOf(nameOf(convertible), convertible.kind)}
+              bundle={bundle}
+              bundleFileBase="certificates"
+            />
+          )}
+        </div>
 
         <div className="flex flex-col gap-4" aria-live="polite">
           {reads.length > 1 && (
@@ -110,7 +130,7 @@ export function ViewerPage() {
               </div>
             </Tabs>
           )}
-          {reads[index] && <ReadView read={reads[index]} />}
+          {shown && <ReadView read={shown} />}
           {reading.status === "reading" && (
             <p className="flex items-center gap-2 text-sm text-muted-foreground">
               <LoaderIcon className="size-4 animate-spin" />

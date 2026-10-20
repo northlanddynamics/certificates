@@ -73,7 +73,7 @@ export function PemDropField({ id, value, onChange }: { id: string; value: strin
           spellCheck={false}
           autoComplete="off"
           className="max-h-72 min-h-48 font-mono text-xs field-sizing-fixed"
-          placeholder={"-----BEGIN CERTIFICATE REQUEST-----\n  or\n-----BEGIN CERTIFICATE-----\n\nPaste a CSR or a certificate here, or drop a file on this box."}
+          placeholder={"-----BEGIN CERTIFICATE REQUEST-----\n  or\n-----BEGIN CERTIFICATE-----\n\nPaste a CSR or a certificate here, or drop a file on this box (PEM, DER or PKCS#7)."}
           aria-label="CSR or certificate (PEM)"
           value={value}
           onChange={(e) => accept(e.target.value)}
@@ -84,7 +84,7 @@ export function PemDropField({ id, value, onChange }: { id: string; value: strin
             ref={fileInput}
             type="file"
             hidden
-            accept=".csr,.req,.pem,.crt,.cer,.cert,.der,.txt"
+            accept=".csr,.req,.pem,.crt,.cer,.cert,.der,.p7b,.p7c,.txt"
             onChange={(e) => {
               const file = e.target.files?.[0];
               // So that choosing the same file again reads it again.

@@ -35,7 +35,7 @@ export function organizationNavGroups(org: Org): NavGroup[] {
       label: "Tools",
       items: [
         { title: "CSR Generator", url: `${base}/tools/csr`, icon: FileKey2Icon },
-        { title: "CSR and Certificate Viewer", url: `${base}/tools/viewer`, icon: FileSearchIcon },
+        { title: "PEM Parser", url: `${base}/tools/viewer`, icon: FileSearchIcon },
       ],
     },
     {

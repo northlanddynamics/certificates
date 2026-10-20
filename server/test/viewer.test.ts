@@ -1,4 +1,4 @@
-// The CSR and Certificate Viewer lives in the web package and runs in the user's browser; these tests run its reader here, under Bun's
+// The PEM Parser (the Viewer) lives in the web package and runs in the user's browser; these tests run its reader here, under Bun's
 // WebCrypto, and hold its verdict to the server's parseCsr, so the viewer never says "the platform takes it" of a CSR the
 // server refuses.
 import { describe, expect, test } from "bun:test";
@@ -8,11 +8,12 @@ import { CsrError, MAX_CSR_LENGTH as SERVER_MAX_CSR_LENGTH, parseCsr } from "../
 import { generateCsr } from "../../web/src/lib/csr-generator";
 import { parseCertificateDetails, type CertificateDetails } from "../../web/src/lib/certificate-details";
 import { parseCsrDetails, type CsrDetails } from "../../web/src/lib/csr-details";
-import { MAX_CSR_LENGTH, kindOfDer, readPkiText, textOfPkiFile } from "../../web/src/lib/pki-input";
+import { conversionsOf, fileBaseOf, type ConversionFormat } from "../../web/src/lib/pki-convert";
+import { MAX_CSR_LENGTH, isPkcs7Der, kindOfDer, readPkiText, textOfPkiFile, type PkiItem } from "../../web/src/lib/pki-input";
 import { verifyMlDsaCertificate, verifyMlDsaCsr } from "../../web/src/lib/csr-ml-dsa";
 
 const fixture = (name: string) => readFileSync(new URL(`./fixtures/agent/${name}.csr.pem`, import.meta.url), "utf8");
-const DETAILS = [new URL("../../web/src/lib/csr-details.ts", import.meta.url), new URL("../../web/src/lib/pki-input.ts", import.meta.url), new URL("../../web/src/lib/pki-common.ts", import.meta.url), new URL("../../web/src/lib/certificate-details.ts", import.meta.url)];
+const DETAILS = [new URL("../../web/src/lib/csr-details.ts", import.meta.url), new URL("../../web/src/lib/pki-input.ts", import.meta.url), new URL("../../web/src/lib/pki-common.ts", import.meta.url), new URL("../../web/src/lib/certificate-details.ts", import.meta.url), new URL("../../web/src/lib/pki-convert.ts", import.meta.url)];
 
 async function detailsOf(pem: string): Promise<CsrDetails> {
   const reading = await parseCsrDetails(pem);
@@ -416,9 +417,87 @@ describe("textOfPkiFile", () => {
   });
 });
 
+describe("conversionsOf", () => {
+  const certificateItem = async (name = "ca.example.com"): Promise<PkiItem> => ({ kind: "certificate", pem: (await selfSigned(name)).certificate.toString("pem").trim() });
+  const csrItem = async (): Promise<PkiItem> => ({ kind: "csr", pem: (await generateCsr({ keyAlgorithm: "ecdsa-p256", names: ["a.example.com"] })).csrPem.trim() });
+  const make = (items: PkiItem[], format: ConversionFormat) => conversionsOf(items).find((conversion) => conversion.format === format)!.make();
+
+  test("offers a certificate PEM, DER, base64 and PKCS#7, and a CSR the first three", async () => {
+    expect(conversionsOf([await certificateItem()]).map((c) => c.format)).toEqual(["pem", "der", "base64", "pkcs7-pem", "pkcs7-der"]);
+    expect(conversionsOf([await csrItem()]).map((c) => c.format)).toEqual(["pem", "der", "base64"]);
+    expect(conversionsOf([])).toEqual([]);
+  });
+
+  test("writes the same bytes: DER and PEM read back as the CSR or certificate they came from", async () => {
+    for (const item of [await certificateItem(), await csrItem()]) {
+      const der = make([item], "der") as Uint8Array;
+      expect(kindOfDer(der)).toBe(item.kind);
+      expect(readPkiText(textOfPkiFile(der))).toEqual({ kind: "items", items: [item] });
+      expect(readPkiText(make([item], "pem") as string)).toEqual({ kind: "items", items: [item] });
+      // One line, and what the viewer reads when the header and footer were lost.
+      const base64 = (make([item], "base64") as string).trimEnd();
+      expect(base64).not.toContain("\n");
+      expect(readPkiText(base64)).toEqual({ kind: "items", items: [item] });
+    }
+  });
+
+  test("keeps a certificate's signature valid through DER", async () => {
+    const { certificate } = await selfSigned();
+    const der = make([{ kind: "certificate", pem: certificate.toString("pem").trim() }], "der") as Uint8Array;
+    expect(await new x509.X509Certificate(der as BufferSource).verify({ date: NOW })).toBe(true);
+  });
+
+  test("names the file for what it holds: .csr for a CSR, .p7b for a bundle, .der for the binary form", async () => {
+    const extensions = (item: PkiItem) => Object.fromEntries(conversionsOf([item]).map((c) => [c.format, c.extension]));
+    expect(extensions(await csrItem())).toEqual({ pem: ".csr", der: ".der", base64: ".txt" });
+    expect(extensions(await certificateItem())).toEqual({ pem: ".pem", der: ".der", base64: ".txt", "pkcs7-pem": ".p7b", "pkcs7-der": ".p7b" });
+    expect(conversionsOf([await certificateItem()]).filter((c) => !c.text).map((c) => c.format)).toEqual(["der", "pkcs7-der"]);
+  });
+
+  test("makes a PKCS#7 bundle that is read back as the same certificates, in order, from PEM, DER or bare base64", async () => {
+    const chain = [await certificateItem("leaf.example.com"), await certificateItem("intermediate.example.com"), await certificateItem("root.example.com")];
+    const expected = { kind: "items" as const, items: chain };
+    const pem = make(chain, "pkcs7-pem") as string;
+    // The label OpenSSL and Windows know, not the one the library writes.
+    expect(pem.startsWith("-----BEGIN PKCS7-----\n")).toBe(true);
+    expect(readPkiText(pem)).toEqual(expected);
+    const der = make(chain, "pkcs7-der") as Uint8Array;
+    expect(isPkcs7Der(der)).toBe(true);
+    expect(kindOfDer(der)).toBeNull();
+    expect(readPkiText(textOfPkiFile(der))).toEqual(expected);
+    expect(readPkiText(pem.split("\n").filter((line) => !line.startsWith("-----")).join(""))).toEqual(expected);
+    // The library's own PEM label is read too.
+    expect(readPkiText(pem.replace(/PKCS7/g, "CMS"))).toEqual(expected);
+  });
+
+  test("makes one PEM file of several certificates, and no DER, since a DER file holds one", async () => {
+    const chain = [await certificateItem("leaf.example.com"), await certificateItem("root.example.com")];
+    expect(conversionsOf(chain).map((c) => c.format)).toEqual(["pem", "pkcs7-pem", "pkcs7-der"]);
+    expect(readPkiText(make(chain, "pem") as string)).toEqual({ kind: "items", items: chain });
+  });
+
+  test("never bundles a CSR into PKCS#7", async () => {
+    expect(conversionsOf([await csrItem()]).map((c) => c.format)).not.toContain("pkcs7-pem");
+  });
+
+  test("refuses a PKCS#7 block that holds no certificate, in words", () => {
+    const read = readPkiText("-----BEGIN PKCS7-----\nAAAA\n-----END PKCS7-----");
+    expect(read).toMatchObject({ kind: "refused", clear: false });
+    expect(read?.kind === "refused" && read.problem).toContain("PKCS#7");
+  });
+
+  test("makes a file name of what a name has, never one that climbs out of a folder", () => {
+    expect(fileBaseOf("*.example.com", "certificate")).toBe("wildcard.example.com");
+    expect(fileBaseOf("../../etc/passwd", "certificate")).toBe("etc_passwd");
+    expect(fileBaseOf("Example Inc / Ünïcode", "csr")).toBe("Example_Inc_n_code");
+    expect(fileBaseOf(null, "csr")).toBe("csr");
+    expect(fileBaseOf("***", "certificate")).toBe("certificate");
+  });
+});
+
 describe("the viewer's imports", () => {
   test("are the X.509 library and the CSR modules alone, and nothing sends anything, so a CSR or certificate read here goes nowhere", () => {
-    const allowed = ["@peculiar/x509", "./csr-generator", "./csr-inspect", "./csr-names", "./csr-signature", "./csr-ml-dsa", "./pki-common"];
+    const allowed = ["@peculiar/x509", "./csr-generator", "./csr-inspect", "./csr-names", "./csr-signature", "./csr-ml-dsa", "./pki-common", "./pki-input"];
     for (const file of DETAILS) {
       const code = readFileSync(file, "utf8").replace(/\/\*[\s\S]*?\*\//g, "").replace(/\/\/.*$/gm, "");
       const imported = [...code.matchAll(/(?:from|import)\s*\(?\s*["']([^"']+)["']/g)].map((m) => m[1]!);
