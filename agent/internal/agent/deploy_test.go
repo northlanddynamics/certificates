@@ -426,3 +426,68 @@ func TestAScriptThatNeverEndsIsStoppedAndReported(t *testing.T) {
 		t.Fatal("the script was not stopped")
 	}
 }
+
+func withParameters(values map[string]any) func(map[string]any) {
+	return func(p map[string]any) { p["parameters"] = values }
+}
+
+func TestTheScriptIsGivenEachParameterUnderThePrefixOverAnyAgentVariableAndAnUnsetOneIsAbsent(t *testing.T) {
+	d := newDeployWorld(t)
+	t.Setenv("DEPLOY_PARAM_SITE_ID", "from the Agent")
+	t.Setenv("DEPLOY_PARAM_PORT", "from the Agent")
+	script := fmt.Sprintf("#!/usr/bin/env bash\nset -eu\n{\necho \"SITE_ID=$DEPLOY_PARAM_SITE_ID\"\necho \"REGION=$DEPLOY_PARAM_REGION\"\necho \"PARAM_PATH=$DEPLOY_PARAM_PATH\"\necho \"PORT=${DEPLOY_PARAM_PORT-absent}\"\necho \"PATH=$PATH\"\n} > %q\n", d.out)
+	d.stub.Enqueue(d.runItem("r1", script, withParameters(map[string]any{"SITE_ID": "site-42", "REGION": "eu west 1", "PATH": "/nowhere"})))
+	r := d.result(2)
+	if !r.OK || r.Run == nil {
+		t.Fatalf("got %+v run %+v", r, r.Run)
+	}
+	data, err := os.ReadFile(d.out)
+	if err != nil {
+		t.Fatal(err)
+	}
+	seen := map[string]string{}
+	for _, line := range strings.Split(strings.TrimSpace(string(data)), "\n") {
+		k, v, _ := strings.Cut(line, "=")
+		seen[k] = v
+	}
+	// The platform's value wins over the Agent's own variable of the same name, the Agent's own is not passed on for a
+	// parameter the work item leaves unset, and a parameter named like an Agent variable does not reach that variable.
+	for k, want := range map[string]string{"SITE_ID": "site-42", "REGION": "eu west 1", "PARAM_PATH": "/nowhere", "PORT": "absent", "PATH": os.Getenv("PATH")} {
+		if seen[k] != want {
+			t.Fatalf("%s=%q, want %q", k, seen[k], want)
+		}
+	}
+}
+
+func TestAParameterWhoseNameIsNotAllowedFailsTheRunAndTheScriptIsNotRun(t *testing.T) {
+	for _, name := range []string{"site_id", "1SITE", "_SITE", "", "SITE ID", "X=PATH", "=LD_PRELOAD", "SITE\nLD_PRELOAD", "SITÉ"} {
+		t.Run(fmt.Sprintf("%q", name), func(t *testing.T) {
+			d := newDeployWorld(t)
+			content := fmt.Sprintf("touch %q\n", d.out)
+			d.stub.Enqueue(d.runItem("r1", content, withParameters(map[string]any{"SITE_ID": "site-42", name: "/tmp/x"})))
+			r := d.result(2)
+			if r.OK || r.Error == "" || r.Run == nil || r.Run.ExitCode != nil || !strings.Contains(r.Run.Output, "parameter") {
+				t.Fatalf("got %+v run %+v", r, r.Run)
+			}
+			if _, err := os.Stat(d.out); err == nil {
+				t.Fatal("the script ran")
+			}
+		})
+	}
+}
+
+func TestAScriptWithNoParametersSeesNoneOfThem(t *testing.T) {
+	d := newDeployWorld(t)
+	t.Setenv("DEPLOY_PARAM_SITE_ID", "from the Agent")
+	script := fmt.Sprintf("#!/usr/bin/env bash\nset -eu\nenv | grep '^DEPLOY_PARAM_' > %q || true\n", d.out)
+	for i, mutate := range []func(map[string]any){func(map[string]any) {}, withParameters(map[string]any{})} {
+		d.stub.Enqueue(d.runItem(fmt.Sprintf("r%d", i+1), script, mutate))
+		r := d.result(i + 2)
+		if !r.OK {
+			t.Fatalf("got %+v run %+v", r, r.Run)
+		}
+		if data, err := os.ReadFile(d.out); err != nil || len(data) != 0 {
+			t.Fatalf("the script saw %q (%v)", data, err)
+		}
+	}
+}
