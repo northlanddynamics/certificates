@@ -323,6 +323,13 @@
       "when": 1792264795731,
       "tag": "0045_shared_challenge_rotation",
       "breakpoints": true
+    },
+    {
+      "idx": 46,
+      "version": "7",
+      "when": 1792514961231,
+      "tag": "0046_deployment_script_parameters",
+      "breakpoints": true
     }
   ]
 }

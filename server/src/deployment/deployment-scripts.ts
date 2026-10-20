@@ -12,6 +12,7 @@ import { SCRIPT_INTERPRETERS } from "./deployment-script-kinds";
 import { HttpError, OrgParam, PageQuery, anyOf, errors, isUniqueViolation, json, pageOf } from "../platform/http";
 import type { Actor, Change, UnitOfWork } from "../platform/unit-of-work";
 import { sha256Hex } from "../platform/crypto/sha256";
+import { ScriptParameter, ScriptParametersError, declaredParameters } from "./script-parameters";
 
 
 /** The hash that identifies a version: SHA-256 of the content's UTF-8 bytes, lower-case hex. */
@@ -33,13 +34,24 @@ const Version = z.object({
   version: z.number().int().openapi({ description: "1 for the first, then one more each time." }),
   hash: z.string().openapi({ description: "SHA-256 of the content's UTF-8 bytes, lower-case hex: what identifies the version, and what an Agent checks before it runs it." }),
   size: z.number().int().openapi({ description: "The content's length in bytes." }),
+  parameters: z.array(ScriptParameter).openapi({ description: "What the content's `# deploy-params:begin` section declares, in its order: none for a script without one." }),
   uploadedBy: z.string(),
   uploadedAt: z.string(),
 });
 const Script = z.object({ id: z.string(), name: Name, interpreter: z.enum(SCRIPT_INTERPRETERS), latestVersion: Version });
 
+/** The parameters `content` declares; a section that cannot be used refuses the upload. */
+function parametersOf(content: string) {
+  try {
+    return declaredParameters(content);
+  } catch (err) {
+    if (err instanceof ScriptParametersError) throw new HttpError(422, err.message);
+    throw err;
+  }
+}
+
 /** Adds `content` to `script` as its version `version` and audits the upload with the hash: what both ways of uploading share. */
-async function addVersion(tx: Tx, change: Change, actor: Actor, script: ScriptRow, version: number, content: string) {
+async function addVersion(tx: Tx, change: Change, actor: Actor, script: ScriptRow, version: number, content: string, parameters: ScriptParameter[]) {
   const [row] = await tx
     .insert(deploymentScriptVersion)
     .values({
@@ -49,6 +61,7 @@ async function addVersion(tx: Tx, change: Change, actor: Actor, script: ScriptRo
       hash: scriptHash(content),
       content,
       size: Buffer.byteLength(content, "utf8"),
+      parameters,
       uploadedById: actor.id,
       uploadedByEmail: actor.email,
       uploadedAt: change.occurredAt,
@@ -71,7 +84,7 @@ const VersionParams = ScriptParams.extend({ hash: z.string().openapi({ param: { 
 const ScriptWithVersions = Script.extend({ versions: z.array(Version).openapi({ description: "Every version, newest first." }) });
 const VersionWithContent = Version.extend({ content: Content });
 
-const toVersion = (row: VersionRow) => ({ version: row.version, hash: row.hash, size: row.size, uploadedBy: row.uploadedByEmail, uploadedAt: row.uploadedAt.toISOString() });
+const toVersion = (row: VersionRow) => ({ version: row.version, hash: row.hash, size: row.size, parameters: row.parameters, uploadedBy: row.uploadedByEmail, uploadedAt: row.uploadedAt.toISOString() });
 const toScript = (script: ScriptRow, latest: VersionRow) => ({ id: script.id, name: script.name, interpreter: script.interpreter, latestVersion: toVersion(latest) });
 
 export function registerDeploymentScripts(ctx: {
@@ -123,6 +136,7 @@ export function registerDeploymentScripts(ctx: {
           version: deploymentScriptVersion.version,
           hash: deploymentScriptVersion.hash,
           size: deploymentScriptVersion.size,
+          parameters: deploymentScriptVersion.parameters,
           uploadedByEmail: deploymentScriptVersion.uploadedByEmail,
           uploadedAt: deploymentScriptVersion.uploadedAt,
         })
@@ -188,9 +202,9 @@ export function registerDeploymentScripts(ctx: {
       summary: "Upload a new version of a Deployment Script",
       description:
         "Adds a version; no version is ever changed. The interpreter stays the script's own. Content the script already has is refused, " +
-        "so a hash names one of its versions.",
+        "so a hash names one of its versions. A parameter section that cannot be used is refused with `422`.",
       request: { params: ScriptParams, body: { content: { "application/json": { schema: z.object({ content: Content }) } } } },
-      responses: { 201: json(Script, "Created"), ...errors(400, 401, 403, 404, 409) },
+      responses: { 201: json(Script, "Created"), ...errors(400, 401, 403, 404, 409, 422) },
     }),
     async (c) => {
       const { orgId, scriptId } = c.req.valid("param");
@@ -198,6 +212,7 @@ export function registerDeploymentScripts(ctx: {
       const actor = await requireUser(c);
       await authorize(actor, orgId, { deploymentScript: ["upload"] });
       const existing = await findScript(orgId, scriptId);
+      const parameters = parametersOf(content);
       const hash = scriptHash(content);
       const added = await unitOfWork.run(actor, async (tx, change) => {
         // Under the script's row, so uploads at once are numbered one after the other.
@@ -209,7 +224,7 @@ export function registerDeploymentScripts(ctx: {
         if (same) throw new HttpError(409, `the script already has this content, as version ${same.version}`);
         const [last] = await tx.select({ version: max(deploymentScriptVersion.version) }).from(deploymentScriptVersion).where(eq(deploymentScriptVersion.scriptId, existing.id));
         const version = (last?.version ?? 0) + 1;
-        const row = await addVersion(tx, change, actor, script!, version, content);
+        const row = await addVersion(tx, change, actor, script!, version, content, parameters);
         return toScript(script!, row);
       });
       return c.json(added, 201);
@@ -222,22 +237,26 @@ export function registerDeploymentScripts(ctx: {
       path: "/api/organizations/{orgId}/deployment-scripts",
       tags: ["Deployment Scripts"],
       summary: "Upload a Deployment Script",
-      description: "Adds a script to the library as its version 1. Upload a change to it as a new version of the same script.",
+      description:
+        "Adds a script to the library as its version 1. Upload a change to it as a new version of the same script. Parameters are declared " +
+        "in a comment block of the content, `# deploy-params:begin` to `# deploy-params:end`, holding a JSON array once each line's leading " +
+        "`# ` is removed; a section that cannot be used is refused with `422`.",
       request: {
         params: OrgParam,
         body: { content: { "application/json": { schema: z.object({ name: Name, interpreter: z.enum(SCRIPT_INTERPRETERS), content: Content }) } } },
       },
-      responses: { 201: json(Script, "Created"), ...errors(400, 401, 403, 404, 409) },
+      responses: { 201: json(Script, "Created"), ...errors(400, 401, 403, 404, 409, 422) },
     }),
     async (c) => {
       const { orgId } = c.req.valid("param");
       const body = c.req.valid("json");
       const actor = await requireUser(c);
       await authorize(actor, orgId, { deploymentScript: ["upload"] });
+      const parameters = parametersOf(body.content);
       try {
         const created = await unitOfWork.run(actor, async (tx, change) => {
           const [script] = await tx.insert(deploymentScript).values({ organizationId: orgId, name: body.name, interpreter: body.interpreter, createdAt: change.occurredAt }).returning();
-          const version = await addVersion(tx, change, actor, script!, 1, body.content);
+          const version = await addVersion(tx, change, actor, script!, 1, body.content, parameters);
           return toScript(script!, version);
         });
         return c.json(created, 201);
