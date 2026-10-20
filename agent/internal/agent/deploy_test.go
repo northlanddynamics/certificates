@@ -153,30 +153,35 @@ func TestKeysAreKeptForTheServiceAccountAlone(t *testing.T) {
 	if runtime.GOOS == "windows" {
 		t.Skip("file modes do not protect files on Windows; the installer sets the directory's ACL")
 	}
-	w, _ := relayWorld(t)
-	w.stub.Enqueue(generateKeyItem("k1", "ecdsa-p256", "app.example.test"))
-	w.runUntilReported(1)
-	files := keyFiles(t, w)
-	if len(files) != 1 {
-		t.Fatalf("expected one stored key, got %v", files)
-	}
-	for path, want := range map[string]os.FileMode{
-		filepath.Join(w.cfg.StateDir, "keys"):       0o700,
-		filepath.Join(w.cfg.StateDir, "keys", mcID): 0o700,
-		files[0]: 0o600,
-	} {
-		info, err := os.Stat(path)
-		if err != nil || info.Mode().Perm() != want {
-			t.Fatalf("%s: mode %v, %v; want %v", path, info.Mode().Perm(), err, want)
-		}
+	for _, algorithm := range []string{"ecdsa-p256", "ml-dsa-44"} {
+		t.Run(algorithm, func(t *testing.T) {
+			w, _ := relayWorld(t)
+			w.stub.Enqueue(generateKeyItem("k1", algorithm, "app.example.test"))
+			w.runUntilReported(1)
+			files := keyFiles(t, w)
+			if len(files) != 1 {
+				t.Fatalf("expected one stored key, got %v", files)
+			}
+			for path, want := range map[string]os.FileMode{
+				filepath.Join(w.cfg.StateDir, "keys"):       0o700,
+				filepath.Join(w.cfg.StateDir, "keys", mcID): 0o700,
+				files[0]: 0o600,
+			} {
+				info, err := os.Stat(path)
+				if err != nil || info.Mode().Perm() != want {
+					t.Fatalf("%s: mode %v, %v; want %v", path, info.Mode().Perm(), err, want)
+				}
+			}
+		})
 	}
 }
 
 func TestAKeyThatCannotBeMadeIsReportedAndNothingIsStored(t *testing.T) {
 	cases := map[string]platformstub.WorkItem{
-		"an algorithm it does not know":       generateKeyItem("a", "dsa-1024", "app.example.test"),
-		"no names":                            generateKeyItem("b", "ecdsa-p256"),
-		"a Managed Certificate id with a dot": {ID: "c", Type: "deployment.generate_key", Payload: map[string]any{"deploymentId": "d", "managedCertificateId": "../../escape", "names": []string{"a.example.test"}, "keyAlgorithm": "ecdsa-p256"}},
+		"an algorithm it does not know":        generateKeyItem("a", "dsa-1024", "app.example.test"),
+		"an ML-DSA algorithm it does not know": generateKeyItem("d", "ml-dsa-99", "app.example.test"),
+		"no names":                             generateKeyItem("b", "ecdsa-p256"),
+		"a Managed Certificate id with a dot":  {ID: "c", Type: "deployment.generate_key", Payload: map[string]any{"deploymentId": "d", "managedCertificateId": "../../escape", "names": []string{"a.example.test"}, "keyAlgorithm": "ecdsa-p256"}},
 	}
 	for name, item := range cases {
 		t.Run(name, func(t *testing.T) {
