@@ -1,11 +1,12 @@
-// Makes an ML-DSA key and a CSR with `@noble/post-quantum`, a pure-JS ML-DSA, for a browser whose WebCrypto has none.
-// Loaded only once an ML-DSA algorithm is chosen (csr-generator.ts imports it on demand). Pure, like the generator: it
-// uses no fetch, so there is nowhere in it for the key to be sent (ADR 0002).
+// Makes an ML-DSA key and a CSR with `@noble/post-quantum`, a pure-JS ML-DSA, for a browser whose WebCrypto has none, and
+// checks an ML-DSA CSR's or self-signed certificate's signature for the viewer. Loaded only once an ML-DSA algorithm is chosen or read (csr-generator.ts,
+// csr-details.ts and certificate-details.ts import it on demand). Pure, like the generator: it uses no fetch, so there is nowhere in it for a
+// key or a CSR to be sent (ADR 0002).
 import { ml_dsa44, ml_dsa65, ml_dsa87 } from "@noble/post-quantum/ml-dsa.js";
 import { AsnConvert } from "@peculiar/asn1-schema";
 import { Attributes, CertificationRequest, CertificationRequestInfo } from "@peculiar/asn1-csr";
 import { ExtensionRequest, id_pkcs9_at_extensionRequest } from "@peculiar/asn1-pkcs9";
-import { AlgorithmIdentifier, Attribute, Extension, Name, SubjectPublicKeyInfo } from "@peculiar/asn1-x509";
+import { AlgorithmIdentifier, Attribute, Certificate, Extension, Name, SubjectPublicKeyInfo } from "@peculiar/asn1-x509";
 import * as x509 from "@peculiar/x509";
 import { sanExtension, type GeneratedCsr, type MlDsaKeyAlgorithm } from "./csr-generator";
 
@@ -52,4 +53,23 @@ export async function generateMlDsaCsrWithNoble(keyAlgorithm: MlDsaKeyAlgorithm,
   const signature = ml.sign(new Uint8Array(AsnConvert.serialize(info)), secretKey);
   const csr = AsnConvert.serialize(new CertificationRequest({ certificationRequestInfo: info, signatureAlgorithm: algorithm, signature: toArrayBuffer(signature) }));
   return { keyPem: x509.PemConverter.encode(toArrayBuffer(seedPkcs8(oid, seed)), "PRIVATE KEY"), csrPem: x509.PemConverter.encode(csr, "CERTIFICATE REQUEST") };
+}
+
+/** Whether an ML-DSA CSR's signature verifies against its own public key, for a browser whose WebCrypto cannot check one; false for anything that is not an ML-DSA CSR. */
+export function verifyMlDsaCsr(der: ArrayBuffer): boolean {
+  const csr = AsnConvert.parse(der, CertificationRequest);
+  const entry = Object.values(ML_DSA).find((candidate) => candidate.oid === csr.signatureAlgorithm.algorithm);
+  if (!entry) return false;
+  const message = new Uint8Array(AsnConvert.serialize(csr.certificationRequestInfo));
+  return entry.ml.verify(new Uint8Array(csr.signature), message, new Uint8Array(csr.certificationRequestInfo.subjectPKInfo.subjectPublicKey));
+}
+
+/** Whether an ML-DSA certificate's signature verifies against the given public key, which for a self-signed one is its own; false for anything signed another way. */
+export function verifyMlDsaCertificate(der: ArrayBuffer, issuerSpki: ArrayBuffer): boolean {
+  const certificate = AsnConvert.parse(der, Certificate);
+  const entry = Object.values(ML_DSA).find((candidate) => candidate.oid === certificate.signatureAlgorithm.algorithm);
+  if (!entry) return false;
+  const message = new Uint8Array(AsnConvert.serialize(certificate.tbsCertificate));
+  const publicKey = AsnConvert.parse(issuerSpki, SubjectPublicKeyInfo).subjectPublicKey;
+  return entry.ml.verify(new Uint8Array(certificate.signatureValue), message, new Uint8Array(publicKey));
 }
