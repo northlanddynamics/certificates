@@ -330,6 +330,13 @@
       "when": 1792514961231,
       "tag": "0046_deployment_script_parameters",
       "breakpoints": true
+    },
+    {
+      "idx": 47,
+      "version": "7",
+      "when": 1792518519634,
+      "tag": "0047_deployment_parameters",
+      "breakpoints": true
     }
   ]
 }

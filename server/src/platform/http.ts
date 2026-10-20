@@ -6,6 +6,8 @@ export class HttpError extends Error {
   constructor(
     readonly status: ErrorStatus,
     message: string,
+    /** More of the error for a program to read, sent beside `error`: such as which fields are at fault. */
+    readonly detail?: Record<string, unknown>,
   ) {
     super(message);
   }
