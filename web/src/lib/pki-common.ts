@@ -3,10 +3,7 @@
 // read goes nowhere.
 import * as x509 from "@peculiar/x509";
 import { type KeyAlgorithm } from "./csr-generator";
-import { keyOf } from "./csr-inspect";
-
-// By OID: looked up by class, an extension is not found when two copies of the library are loaded.
-export const SUBJECT_ALTERNATIVE_NAME = "2.5.29.17";
+import { SUBJECT_ALTERNATIVE_NAME, keyOf } from "./csr-inspect";
 
 export type SignatureCheck = "valid" | "invalid" | "unchecked";
 

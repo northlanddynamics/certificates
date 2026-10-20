@@ -3,8 +3,8 @@
 // certificate not signed by itself is signed by an issuer whose certificate is not here, so its signature is left
 // unchecked. Pure, with no fetch, so a pasted certificate goes nowhere.
 import * as x509 from "@peculiar/x509";
+import { SUBJECT_ALTERNATIVE_NAME } from "./csr-inspect";
 import {
-  SUBJECT_ALTERNATIVE_NAME,
   alternativeNames,
   digest,
   extensionsOf,

@@ -1,10 +1,11 @@
-import { useQuery, useQueryClient } from "@tanstack/react-query";
+import { useQueryClient } from "@tanstack/react-query";
 import { Link, useNavigate, useParams } from "@tanstack/react-router";
 import { ClockIcon } from "lucide-react";
 import { useState } from "react";
 import { Alert, AlertAction, AlertDescription, AlertTitle } from "@/components/ui/alert";
 import { Button } from "@/components/ui/button";
-import { api, type ManagedCertificate } from "@/lib/api";
+import { type ManagedCertificate } from "@/lib/api";
+import { useOrg } from "@/lib/use-org";
 import { ManagedCertificates } from "./managed-certificates";
 import { NewManagedCertificateDialog } from "./new-managed-certificate-dialog";
 
@@ -14,7 +15,7 @@ export function CertificatesPage() {
   const navigate = useNavigate();
   // A Proposal is not opened on creation: it waits for Approval, so the inventory says so, with the way to it.
   const [proposed, setProposed] = useState<ManagedCertificate | null>(null);
-  const org = useQuery({ queryKey: ["me"], queryFn: api.me, select: (me) => me.organizations.find((o) => o.id === orgId) }).data;
+  const org = useOrg(orgId);
   if (!org) return <p className="text-muted-foreground">You do not belong to this Organization.</p>;
   // A proposal joins the Approval queue as well as the inventory.
   const created = async (m: ManagedCertificate) => {

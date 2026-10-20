@@ -8,7 +8,7 @@ import { Button } from "@/components/ui/button";
 import { Card, CardContent, CardHeader, CardTitle } from "@/components/ui/card";
 import { Collapsible, CollapsibleContent, CollapsibleTrigger } from "@/components/ui/collapsible";
 import { type CertificateDetails } from "@/lib/certificate-details";
-import { safeFileBase } from "@/lib/csr-inspect";
+import { fileBaseOf } from "@/lib/pki-convert";
 import { cn } from "@/lib/utils";
 
 const when = (iso: string) => `${new Intl.DateTimeFormat("en-US", { dateStyle: "medium", timeStyle: "short", timeZone: "UTC" }).format(new Date(iso))} UTC`;
@@ -60,7 +60,7 @@ function signatureNote(details: CertificateDetails): string {
 }
 
 export function CertificateDetailsView({ details }: { details: CertificateDetails }) {
-  const fileBase = safeFileBase(details.names.find((name) => name.type === "DNS")?.value ?? details.subject.find((field) => field.type === "CN")?.value);
+  const fileBase = fileBaseOf(details.names.find((name) => name.type === "DNS")?.value ?? details.subject.find((field) => field.type === "CN")?.value ?? null, "certificate");
   return (
     <div className="flex flex-col gap-6">
       <Verdict details={details} />

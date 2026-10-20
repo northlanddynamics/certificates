@@ -10,6 +10,7 @@ import { Dialog, DialogClose, DialogContent, DialogDescription, DialogFooter, Di
 import { Input } from "@/components/ui/input";
 import { Label } from "@/components/ui/label";
 import { api, can, type AcmeAccount } from "@/lib/api";
+import { useOrg } from "@/lib/use-org";
 import { useAction } from "@/lib/use-action";
 
 const ROUTE = "/app/organizations/$orgId/acme-accounts";
@@ -37,7 +38,7 @@ const noRows: AcmeAccount[] = [];
  */
 export function AcmeAccountsPage() {
   const { orgId } = useParams({ from: ROUTE });
-  const org = useQuery({ queryKey: ["me"], queryFn: api.me, select: (me) => me.organizations.find((o) => o.id === orgId) }).data;
+  const org = useOrg(orgId);
   const allowed = org ? can(org, "acmeAccount", "read") : false;
   const accounts = useQuery({ queryKey: ["acme-accounts", orgId], queryFn: () => api.acmeAccounts(orgId), enabled: allowed });
   const items = accounts.data?.items ?? noRows;
@@ -71,7 +72,7 @@ export function AcmeAccountsPage() {
 
 function TestAccount({ account }: { account: AcmeAccount }) {
   const { orgId } = useParams({ from: ROUTE });
-  const org = useQuery({ queryKey: ["me"], queryFn: api.me, select: (me) => me.organizations.find((o) => o.id === orgId) }).data;
+  const org = useOrg(orgId);
   const test = useMutation({ mutationFn: () => api.testAcmeAccount(orgId, account.id) });
   if (!org || !can(org, "acmeAccount", "test")) return null;
   return (

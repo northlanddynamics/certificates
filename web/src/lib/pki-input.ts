@@ -36,6 +36,9 @@ const KIND_OF_LABEL: Record<string, PkiKind> = {
 };
 const NOT_PEM = "This is not PEM. A CSR starts with -----BEGIN CERTIFICATE REQUEST-----, a certificate with -----BEGIN CERTIFICATE----- and a PKCS#7 bundle with -----BEGIN PKCS7-----.";
 
+/** Whether the text holds a private key, even a block cut short or with a mismatched footer: one that must not be kept, or sent anywhere. */
+export const containsPrivateKey = (text: string) => /-----BEGIN [A-Z0-9 ]*PRIVATE KEY-----/.test(text);
+
 /** A PEM block: `label` around `base64`, in lines of 64. */
 export const wrapPem = (label: string, base64: string) => `-----BEGIN ${label}-----\n${base64.match(/.{1,64}/g)?.join("\n") ?? ""}\n-----END ${label}-----`;
 const wrap = (kind: PkiKind, base64: string) => wrapPem(LABELS[kind], base64);
@@ -75,8 +78,8 @@ export function isPkcs7Der(bytes: Uint8Array): boolean {
   return outer?.tag === 0x30 && SIGNED_DATA_OID.every((byte, i) => bytes[outer.start + i] === byte);
 }
 
-const bytesOfBase64 = (base64: string) => Uint8Array.from(atob(base64), (c) => c.charCodeAt(0));
-const base64OfBytes = (bytes: Uint8Array) => {
+export const bytesOfBase64 = (base64: string) => Uint8Array.from(atob(base64), (c) => c.charCodeAt(0));
+export const base64OfBytes = (bytes: Uint8Array) => {
   let binary = "";
   for (const byte of bytes) binary += String.fromCharCode(byte);
   return btoa(binary);
@@ -97,8 +100,7 @@ export function readPkiText(text: string): PkiText | null {
   const trimmed = text.trim();
   if (trimmed === "") return null;
   if (trimmed.length > MAX_CSR_LENGTH) return { kind: "refused", problem: `This is far larger than a CSR or a certificate chain (more than ${MAX_CSR_LENGTH.toLocaleString("en-US")} characters).`, clear: false };
-  // Even a block cut short or with a mismatched footer, which would not be a block below, is a key that must not be kept.
-  if (/-----BEGIN [A-Z0-9 ]*PRIVATE KEY-----/.test(trimmed))
+  if (containsPrivateKey(trimmed))
     return { kind: "refused", problem: "That is a private key, which is never needed here, so it has been cleared. Paste the CSR or certificate, not the key.", clear: true };
   const blocks = [...trimmed.matchAll(BLOCK)].map((m) => ({ label: m[1]!, body: m[2]!.replace(/\s+/g, "") }));
   if (blocks.length > 0) {

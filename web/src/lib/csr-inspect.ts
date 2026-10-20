@@ -4,9 +4,10 @@
 import * as x509 from "@peculiar/x509";
 import { KEY_ALGORITHM_LABELS, MAX_COMMON_NAME_LENGTH, type KeyAlgorithm } from "./csr-generator";
 import { normalizeName } from "./csr-names";
+import { fileBaseOf } from "./pki-convert";
 
 // By OID: looked up by class, an extension is not found when two copies of the library are loaded.
-const SUBJECT_ALTERNATIVE_NAME = "2.5.29.17";
+export const SUBJECT_ALTERNATIVE_NAME = "2.5.29.17";
 
 export interface CsrFacts {
   /** One the platform accepts, or null for any other key. */
@@ -78,9 +79,6 @@ export function matchCsr(facts: CsrFacts, names: string[], keyAlgorithm: KeyAlgo
   return { missing, extra, algorithmOk, ok: missing.length === 0 && extra.length === 0 && algorithmOk };
 }
 
-/** A file name for a name, safe for a wildcard: `*.example.com` is `wildcard.example.com`. */
-export const safeFileBase = (name: string | undefined) => (name ?? "csr").replace(/^\*\./, "wildcard.").replace(/[^a-z0-9.-]/gi, "_");
-
 const NEW_KEY: Record<KeyAlgorithm, string> = {
   "ecdsa-p256": "-newkey ec -pkeyopt ec_paramgen_curve:P-256",
   "ecdsa-p384": "-newkey ec -pkeyopt ec_paramgen_curve:P-384",
@@ -95,7 +93,7 @@ const NEW_KEY: Record<KeyAlgorithm, string> = {
 
 /** An openssl (1.1.1 or later; 3.5 or later for ML-DSA) command that writes a key and a CSR for exactly these names, which are already checked. */
 export function opensslCommand(names: string[], keyAlgorithm: KeyAlgorithm): string {
-  const base = safeFileBase(names[0]);
+  const base = fileBaseOf(names[0] ?? null, "csr");
   const commonName = names.find((name) => name.length <= MAX_COMMON_NAME_LENGTH);
   return [
     `openssl req -new ${NEW_KEY[keyAlgorithm]} -nodes \\`,

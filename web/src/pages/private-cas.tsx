@@ -1,11 +1,10 @@
 import { useQuery } from "@tanstack/react-query";
 import { useParams } from "@tanstack/react-router";
 import { createColumnHelper, tableFeatures, useTable } from "@tanstack/react-table";
-import { CalendarClockIcon, CheckIcon, ClipboardCheckIcon, FingerprintIcon, GlobeIcon, KeyRoundIcon, MoreHorizontalIcon, NetworkIcon, PlusIcon, type LucideIcon } from "lucide-react";
-import { useMemo, useState, type FormEvent, type ReactNode } from "react";
+import { CalendarClockIcon, ClipboardCheckIcon, FingerprintIcon, GlobeIcon, KeyRoundIcon, MoreHorizontalIcon, NetworkIcon, PlusIcon } from "lucide-react";
+import { useMemo, useState, type FormEvent } from "react";
 import { DataTable } from "@/components/data-table/data-table";
 import { Badge } from "@/components/ui/badge";
-import { Breadcrumb, BreadcrumbItem, BreadcrumbList, BreadcrumbPage, BreadcrumbSeparator } from "@/components/ui/breadcrumb";
 import { Button } from "@/components/ui/button";
 import { Dialog, DialogClose, DialogContent, DialogDescription, DialogFooter, DialogHeader, DialogTitle, DialogTrigger } from "@/components/ui/dialog";
 import { DropdownMenu, DropdownMenuContent, DropdownMenuItem, DropdownMenuSeparator, DropdownMenuTrigger } from "@/components/ui/dropdown-menu";
@@ -15,10 +14,13 @@ import { RadioGroup, RadioGroupItem } from "@/components/ui/radio-group";
 import { Textarea } from "@/components/ui/textarea";
 import { Tooltip, TooltipContent, TooltipTrigger } from "@/components/ui/tooltip";
 import { ConfirmDialog } from "@/components/confirm-dialog";
+import { SteppedForm, STEPPED_DIALOG, type Step } from "@/components/stepped-form";
+import { SummaryRows } from "@/components/summary-rows";
+import { useCertificateText } from "@/components/use-certificate-text";
 import { Field, FieldDescription, FieldError, FieldGroup, FieldLabel, FieldLegend, FieldSet } from "@/components/ui/field";
 import { Select, SelectContent, SelectItem, SelectTrigger, SelectValue } from "@/components/ui/select";
-import { Sidebar, SidebarContent, SidebarGroup, SidebarGroupContent, SidebarMenu, SidebarMenuButton, SidebarMenuItem, SidebarProvider } from "@/components/ui/sidebar";
 import { api, can, issuingCaRevocationReasons, type IssuingCa, type PermittedNames, type PrivateCa, type PrivateCaValidity } from "@/lib/api";
+import { useOrg } from "@/lib/use-org";
 import { KEY_ALGORITHM_LABELS, isMlDsa, type KeyAlgorithm } from "@/lib/csr-generator";
 import { useKeyAlgorithms } from "@/components/issuer-choice";
 import { splitNames } from "@/lib/csr-names";
@@ -114,7 +116,7 @@ const noRows: CaRow[] = [];
  */
 export function PrivateCasPage() {
   const { orgId } = useParams({ from: ROUTE });
-  const org = useQuery({ queryKey: ["me"], queryFn: api.me, select: (me) => me.organizations.find((o) => o.id === orgId) }).data;
+  const org = useOrg(orgId);
   const allowed = org ? can(org, "privateCa", "read") : false;
   const cas = useQuery({ queryKey: ["private-cas", orgId], queryFn: () => api.privateCas(orgId), enabled: allowed });
   const rows = useMemo(() => cas.data?.items.flatMap(rowsOf) ?? noRows, [cas.data]);
@@ -228,7 +230,7 @@ function RootNameConstraints({ constraints }: { constraints: IssuingCa["nameCons
 /** The Organization of the page, as /api/me reports it, and whether its user may change, retire and revoke its Private CAs. */
 function usePrivateCaPermissions() {
   const { orgId } = useParams({ from: ROUTE });
-  const org = useQuery({ queryKey: ["me"], queryFn: api.me, select: (me) => me.organizations.find((o) => o.id === orgId) }).data;
+  const org = useOrg(orgId);
   const may = (action: string) => (org ? can(org, "privateCa", action) : false);
   return { orgId, mayUpdate: may("update"), mayRetire: may("retire"), mayRevoke: may("revoke") };
 }
@@ -552,6 +554,7 @@ function EditPermittedNamesForm({ orgId, ca, issuing, onDone }: EditFormProps) {
 
 /** A PEM field, typed or pasted, or read from a file chosen. */
 function PemField({ id, label, value, onChange, placeholder, hint }: { id: string; label: string; value: string; onChange: (value: string) => void; placeholder: string; hint: string }) {
+  const { accept, notice } = useCertificateText(onChange);
   return (
     <div className="flex flex-col gap-2">
       <div className="flex items-center justify-between gap-2">
@@ -563,12 +566,13 @@ function PemField({ id, label, value, onChange, placeholder, hint }: { id: strin
           className="h-8 w-56 text-xs"
           onChange={async (e) => {
             const file = e.target.files?.[0];
-            if (file) onChange(await file.text());
+            if (file) accept(await file.text());
           }}
         />
       </div>
-      <Textarea id={id} rows={4} className="font-mono text-xs" value={value} onChange={(e) => onChange(e.target.value)} placeholder={placeholder} />
+      <Textarea id={id} rows={4} className="font-mono text-xs" value={value} onChange={(e) => accept(e.target.value)} placeholder={placeholder} />
       <p className="text-xs text-muted-foreground">{hint}</p>
+      {notice}
     </div>
   );
 }
@@ -650,120 +654,6 @@ function UploadCertificateForm({ orgId, ca, issuing, onDone }: EditFormProps) {
         </Button>
       </DialogFooter>
     </form>
-  );
-}
-
-/** The dialog that holds a stepped form, sized as the New Managed Certificate dialog is. */
-const STEPPED_DIALOG = "gap-0 overflow-hidden p-0 sm:max-w-[calc(100%-2rem)] md:max-w-[760px] lg:max-w-[860px]";
-
-type Step<Id extends string> = { id: Id; title: string; icon: LucideIcon };
-
-/**
- * A form in steps, laid out as the New Managed Certificate dialog is: the steps down the side, one shown at a time, Back and Next below.
- * A step may be opened once every step before it is complete; submitting the last one calls `onSubmit`.
- */
-function SteppedForm<Id extends string>({
-  title,
-  steps,
-  step,
-  onStep,
-  complete,
-  submitLabel,
-  pending,
-  onSubmit,
-  children,
-}: {
-  title: string;
-  steps: readonly Step<Id>[];
-  step: Id;
-  onStep: (step: Id) => void;
-  complete: Record<Id, boolean>;
-  submitLabel: string;
-  pending: boolean;
-  onSubmit: () => void;
-  children: ReactNode;
-}) {
-  const index = steps.findIndex((s) => s.id === step);
-  const last = index === steps.length - 1;
-  const reachable = (i: number) => steps.slice(0, i).every((s) => complete[s.id]);
-  const goTo = (i: number) => {
-    const target = steps[i];
-    if (target && reachable(i)) onStep(target.id);
-  };
-  return (
-    <SidebarProvider className="h-[min(600px,85vh)] min-h-0 items-stretch">
-      <Sidebar collapsible="none" className="hidden border-r md:flex">
-        <SidebarContent>
-          <SidebarGroup>
-            <SidebarGroupContent>
-              <SidebarMenu>
-                {steps.map((s, i) => (
-                  <SidebarMenuItem key={s.id}>
-                    <SidebarMenuButton isActive={s.id === step} disabled={!reachable(i)} onClick={() => goTo(i)}>
-                      {i < index && complete[s.id] ? <CheckIcon className="text-primary" /> : <s.icon />}
-                      <span>{s.title}</span>
-                    </SidebarMenuButton>
-                  </SidebarMenuItem>
-                ))}
-              </SidebarMenu>
-            </SidebarGroupContent>
-          </SidebarGroup>
-        </SidebarContent>
-      </Sidebar>
-      <form
-        className="flex min-w-0 flex-1 flex-col"
-        onSubmit={(e: FormEvent) => {
-          e.preventDefault();
-          if (!last) goTo(index + 1);
-          else if (steps.every((s) => complete[s.id])) onSubmit();
-        }}
-      >
-        <header className="flex h-14 shrink-0 items-center justify-between gap-2 px-4 pr-12">
-          <Breadcrumb>
-            <BreadcrumbList>
-              <BreadcrumbItem className="hidden md:block">{title}</BreadcrumbItem>
-              <BreadcrumbSeparator className="hidden md:block" />
-              <BreadcrumbItem>
-                <BreadcrumbPage>{steps[index]?.title}</BreadcrumbPage>
-              </BreadcrumbItem>
-            </BreadcrumbList>
-          </Breadcrumb>
-          <span className="text-xs text-muted-foreground">
-            Step {index + 1} of {steps.length}
-          </span>
-        </header>
-        <div className="flex flex-1 flex-col gap-4 overflow-y-auto p-4 pt-0">{children}</div>
-        <footer className="flex shrink-0 items-center justify-between gap-2 border-t bg-muted/50 p-4">
-          <Button type="button" variant="outline" disabled={index === 0} onClick={() => goTo(index - 1)}>
-            Back
-          </Button>
-          {last ? (
-            <Button key="submit" type="submit" disabled={pending}>
-              {submitLabel}
-            </Button>
-          ) : (
-            <Button key="next" type="button" disabled={!complete[step]} onClick={() => goTo(index + 1)}>
-              Next
-            </Button>
-          )}
-        </footer>
-      </form>
-    </SidebarProvider>
-  );
-}
-
-function Summary({ rows }: { rows: { label: string; value: ReactNode }[] }) {
-  return (
-    <div className="rounded-md border p-4">
-      <dl className="grid grid-cols-[9rem_1fr] gap-x-4 gap-y-3 text-sm">
-        {rows.map(({ label, value }) => (
-          <div key={label} className="col-span-2 grid grid-cols-subgrid items-baseline">
-            <dt className="text-muted-foreground">{label}</dt>
-            <dd className="min-w-0 break-words">{value}</dd>
-          </div>
-        ))}
-      </dl>
-    </div>
   );
 }
 
@@ -912,7 +802,7 @@ function AddIssuingCaForm({ orgId, ca, onDone }: { orgId: string; ca: PrivateCa;
           <FieldSet>
             <FieldLegend>Review</FieldLegend>
             <FieldDescription>Use Back to change anything.</FieldDescription>
-            <Summary
+            <SummaryRows
               rows={[
                 { label: "Private CA", value: ca.name },
                 { label: "Subject", value: <span className="break-all font-mono text-xs">{subject.trim()}</span> },
@@ -1154,7 +1044,7 @@ function CreatePrivateCaForm({ orgId, onDone }: { orgId: string; onDone: () => v
           <FieldSet>
             <FieldLegend>Review</FieldLegend>
             <FieldDescription>Use Back to change anything.</FieldDescription>
-            <Summary
+            <SummaryRows
               rows={[
                 { label: "Name", value: name.trim() },
                 { label: "Hierarchy", value: hierarchy?.title ?? kind },

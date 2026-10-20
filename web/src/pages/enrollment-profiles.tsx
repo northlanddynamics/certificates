@@ -1,7 +1,7 @@
 import { useMutation, useQuery } from "@tanstack/react-query";
 import { Link, useParams } from "@tanstack/react-router";
 import { createColumnHelper, tableFeatures, useTable } from "@tanstack/react-table";
-import { CheckIcon, ClipboardCheckIcon, KeyRoundIcon, TriangleAlertIcon, LandmarkIcon, MoreHorizontalIcon, PlusIcon, ScrollTextIcon, ShieldCheckIcon, type LucideIcon } from "lucide-react";
+import { ClipboardCheckIcon, KeyRoundIcon, TriangleAlertIcon, LandmarkIcon, MoreHorizontalIcon, PlusIcon, ScrollTextIcon, ShieldCheckIcon, type LucideIcon } from "lucide-react";
 import { useState, type FormEvent } from "react";
 import { toast } from "sonner";
 import {
@@ -24,10 +24,11 @@ import {
 } from "../../../server/src/enrollment/enrollment-profile-kinds";
 import { ConfirmDialog } from "@/components/confirm-dialog";
 import { CopyButton } from "@/components/copy-button";
+import { SteppedForm, STEPPED_DIALOG } from "@/components/stepped-form";
+import { SummaryRows } from "@/components/summary-rows";
 import { Alert, AlertDescription, AlertTitle } from "@/components/ui/alert";
 import { DataTable } from "@/components/data-table/data-table";
 import { Badge } from "@/components/ui/badge";
-import { Breadcrumb, BreadcrumbItem, BreadcrumbList, BreadcrumbPage, BreadcrumbSeparator } from "@/components/ui/breadcrumb";
 import { Button } from "@/components/ui/button";
 import { Checkbox } from "@/components/ui/checkbox";
 import { Dialog, DialogContent, DialogDescription, DialogFooter, DialogHeader, DialogTitle, DialogTrigger } from "@/components/ui/dialog";
@@ -35,8 +36,8 @@ import { DropdownMenu, DropdownMenuContent, DropdownMenuItem, DropdownMenuSepara
 import { Field, FieldDescription, FieldError, FieldGroup, FieldLabel, FieldLegend, FieldSet } from "@/components/ui/field";
 import { Input } from "@/components/ui/input";
 import { Select, SelectContent, SelectItem, SelectTrigger, SelectValue } from "@/components/ui/select";
-import { Sidebar, SidebarContent, SidebarGroup, SidebarGroupContent, SidebarMenu, SidebarMenuButton, SidebarMenuItem, SidebarProvider } from "@/components/ui/sidebar";
 import { api, can, type CreatedEnrollmentProfile, type EnrollmentProfile } from "@/lib/api";
+import { useOrg } from "@/lib/use-org";
 import { daysLabel, findIssuingCa, issuingCaTitle, isValidityDays } from "@/lib/private-ca";
 import { useAction } from "@/lib/use-action";
 import { EMPTY_NAME_RULES, NameRulesEditor, draftOf, nameRulesSummary, rulesOf, takesNameRules as kindTakesNameRules } from "./name-rules-editor";
@@ -122,7 +123,7 @@ const noRows: EnrollmentProfile[] = [];
  */
 export function EnrollmentProfilesPage() {
   const { orgId } = useParams({ from: ROUTE });
-  const org = useQuery({ queryKey: ["me"], queryFn: api.me, select: (me) => me.organizations.find((o) => o.id === orgId) }).data;
+  const org = useOrg(orgId);
   const allowed = org ? can(org, "enrollmentProfile", "read") : false;
   const profiles = useQuery({ queryKey: ["enrollment-profiles", orgId], queryFn: () => api.enrollmentProfiles(orgId), enabled: allowed });
   const table = useTable({ features, columns, data: profiles.data?.items ?? noRows, getRowId: (p) => p.id });
@@ -191,7 +192,7 @@ function DeviceCertificatesLink({ profile }: { profile: EnrollmentProfile }) {
  */
 function ProfileActions({ profile }: { profile: EnrollmentProfile }) {
   const { orgId } = useParams({ from: ROUTE });
-  const org = useQuery({ queryKey: ["me"], queryFn: api.me, select: (me) => me.organizations.find((o) => o.id === orgId) }).data;
+  const org = useOrg(orgId);
   const mayUpdate = org ? can(org, "enrollmentProfile", "update") : false;
   const mayDisable = org ? can(org, "enrollmentProfile", "disable") && profile.enabled : false;
   const kinds = useQuery({ queryKey: ["enrollment-validator-kinds", orgId], queryFn: () => api.enrollmentValidatorKinds(orgId), enabled: mayUpdate });
@@ -680,7 +681,7 @@ function NewProfileDialog({ orgId }: { orgId: string }) {
           <SharedChallengePanel profile={created} challenge={created.sharedChallenge.challenge} onDone={() => setOpen(false)} />
         </DialogContent>
       ) : (
-        <DialogContent className="gap-0 overflow-hidden p-0 sm:max-w-[calc(100%-2rem)] md:max-w-[760px] lg:max-w-[860px]">
+        <DialogContent className={STEPPED_DIALOG}>
           <DialogTitle className="sr-only">New Enrollment Profile</DialogTitle>
           <DialogDescription className="sr-only">The platform makes the profile's SCEP RA key, which it keeps, and has the Issuing CA sign its certificate.</DialogDescription>
           {/* Only mounted while open, so each opening starts from a clean form. */}
@@ -854,242 +855,168 @@ function NewProfileForm({ orgId, onDone }: { orgId: string; onDone: (created: Cr
     validator: kind !== "" && (!intune || intuneOk) && "rules" in nameRules,
     review: true,
   };
-  const index = STEPS.findIndex((s) => s.id === step);
-  const last = index === STEPS.length - 1;
-  // A step may be opened once every step before it is complete.
-  const reachable = (i: number) => STEPS.slice(0, i).every((s) => complete[s.id]);
-  const goTo = (i: number) => {
-    const target = STEPS[i];
-    if (target && reachable(i)) setStep(target.id);
-  };
 
   return (
-    <SidebarProvider className="h-[min(600px,85vh)] min-h-0 items-stretch">
-      <Sidebar collapsible="none" className="hidden border-r md:flex">
-        <SidebarContent>
-          <SidebarGroup>
-            <SidebarGroupContent>
-              <SidebarMenu>
-                {STEPS.map((s, i) => {
-                  const done = i < index && complete[s.id];
-                  return (
-                    <SidebarMenuItem key={s.id}>
-                      <SidebarMenuButton isActive={s.id === step} disabled={!reachable(i)} onClick={() => goTo(i)}>
-                        {done ? <CheckIcon className="text-primary" /> : <s.icon />}
-                        <span>{s.title}</span>
-                      </SidebarMenuButton>
-                    </SidebarMenuItem>
-                  );
-                })}
-              </SidebarMenu>
-            </SidebarGroupContent>
-          </SidebarGroup>
-        </SidebarContent>
-      </Sidebar>
-      <form
-        className="flex min-w-0 flex-1 flex-col"
-        onSubmit={(e: FormEvent) => {
-          e.preventDefault();
-          if (!last) goTo(index + 1);
-          else if (STEPS.every((s) => complete[s.id])) create.mutate(undefined);
-        }}
-      >
-        <header className="flex h-14 shrink-0 items-center justify-between gap-2 px-4 pr-12">
-          <Breadcrumb>
-            <BreadcrumbList>
-              <BreadcrumbItem className="hidden md:block">New Enrollment Profile</BreadcrumbItem>
-              <BreadcrumbSeparator className="hidden md:block" />
-              <BreadcrumbItem>
-                <BreadcrumbPage>{STEPS[index]?.title}</BreadcrumbPage>
-              </BreadcrumbItem>
-            </BreadcrumbList>
-          </Breadcrumb>
-          <span className="text-xs text-muted-foreground">
-            Step {index + 1} of {STEPS.length}
-          </span>
-        </header>
-        <div className="flex flex-1 flex-col gap-4 overflow-y-auto p-4 pt-0">
-          {step === "issuer" && (
+    <SteppedForm
+      title="New Enrollment Profile"
+      steps={STEPS}
+      step={step}
+      onStep={setStep}
+      complete={complete}
+      submitLabel="Create"
+      pending={create.isPending}
+      onSubmit={() => create.mutate(undefined)}
+    >
+      {step === "issuer" && (
+        <FieldSet>
+          <FieldLegend>Name it and choose its Issuing CA</FieldLegend>
+          <FieldDescription>The platform makes the profile's SCEP RA key, which it keeps, and has the Issuing CA sign its certificate.</FieldDescription>
+          <FieldGroup>
+            <Field>
+              <FieldLabel htmlFor="profile-name">Name</FieldLabel>
+              <Input id="profile-name" autoFocus value={name} onChange={(e) => setName(e.target.value)} placeholder="Wi-Fi" />
+            </Field>
+            <Field>
+              <FieldLabel htmlFor="profile-issuing-ca">Issuing CA</FieldLabel>
+              <Select value={issuingCaId} onValueChange={setIssuingCaId}>
+                <SelectTrigger id="profile-issuing-ca" className="w-full">
+                  <SelectValue placeholder={privateCas.isPending ? "Loading…" : issuingCas.length === 0 ? "No active Issuing CA" : "Choose an Issuing CA"} />
+                </SelectTrigger>
+                <SelectContent>
+                  {issuingCas.map((i) => (
+                    <SelectItem key={i.id} value={i.id}>
+                      {i.title}
+                    </SelectItem>
+                  ))}
+                </SelectContent>
+              </Select>
+              <FieldDescription>Only an active Issuing CA under an active root can be chosen, and not an ML-DSA one: SCEP clients cannot verify the RA certificate it would sign.</FieldDescription>
+            </Field>
+          </FieldGroup>
+        </FieldSet>
+      )}
+
+      {step === "certificate" && (
+        <FieldGroup>
+          <Field data-invalid={!validityOk}>
+            <FieldLabel htmlFor="profile-validity">Validity (days)</FieldLabel>
+            <Input id="profile-validity" inputMode="numeric" autoFocus value={validityDays} onChange={(e) => setChosenValidityDays(e.target.value)} aria-invalid={!validityOk} />
+            <FieldDescription>
+              Up to {daysLabel(MAX_DEVICE_VALIDITY_DAYS)}, and never past the Issuing CA's end. Unless you set it, {daysLabel(DEFAULT_DEVICE_VALIDITY_DAYS)}, or {daysLabel(DEFAULT_SHARED_CHALLENGE_VALIDITY_DAYS)} with a
+              Shared Challenge.
+            </FieldDescription>
+          </Field>
+          <Field data-invalid={!retentionOk}>
+            <FieldLabel htmlFor="profile-retention">Retention (days)</FieldLabel>
+            <Input id="profile-retention" inputMode="numeric" value={retentionDays} onChange={(e) => setRetentionDays(e.target.value)} aria-invalid={!retentionOk} />
+            <FieldDescription>How long after it ends a Device Certificate is kept before it is deleted; its Audit Events are kept.</FieldDescription>
+          </Field>
+          <div className="grid gap-6 sm:grid-cols-2">
+            <Choices legend="Key usage" id="profile-ku" values={DEVICE_KEY_USAGES} labels={KEY_USAGE_LABEL} chosen={keyUsage} onChange={setKeyUsage} />
+            <Choices legend="Extended key usage" id="profile-eku" values={DEVICE_EXTENDED_KEY_USAGE_NAMES} labels={EXTENDED_KEY_USAGE_LABEL} chosen={extendedKeyUsage} onChange={setExtendedKeyUsage} />
+          </div>
+        </FieldGroup>
+      )}
+
+      {step === "keys" && (
+        <FieldGroup>
+          <FieldDescription>A device whose request is for any other kind of key is refused.</FieldDescription>
+          <KeyTypeChoices id="profile-keys" chosen={allowedKeyTypes} onChange={setAllowedKeyTypes} />
+        </FieldGroup>
+      )}
+
+      {step === "validator" && (
+        <FieldGroup>
+          <Field>
+            <FieldLabel htmlFor="profile-validator">Enrollment Validator</FieldLabel>
+            {kinds.data && kinds.data.items.length === 0 ? (
+              <FieldDescription>The platform runs no Enrollment Validator yet, so no profile can be created.</FieldDescription>
+            ) : (
+              <Select value={kind} onValueChange={setValidatorKind}>
+                <SelectTrigger id="profile-validator" className="w-full">
+                  <SelectValue placeholder="Loading…" />
+                </SelectTrigger>
+                <SelectContent>
+                  {(kinds.data?.items ?? []).map((k) => (
+                    <SelectItem key={k.kind} value={k.kind}>
+                      {validatorLabel(k.kind)}
+                    </SelectItem>
+                  ))}
+                </SelectContent>
+              </Select>
+            )}
+            {VALIDATOR_DESCRIPTION[kind] && <FieldDescription>{VALIDATOR_DESCRIPTION[kind]}</FieldDescription>}
+          </Field>
+          {usesSharedChallenge && (
+            <Alert>
+              <TriangleAlertIcon />
+              <AlertTitle>Anyone who holds the Shared Challenge can enroll</AlertTitle>
+              <AlertDescription>
+                <p>
+                  It sits in the SCEP profile on every device, so whoever copies it from one can enroll under any names. The platform cannot tie a certificate to a device. What they can get is still bounded:
+                </p>
+                <ul className="list-disc pl-5">
+                  <li>by the Issuing CA's permitted names, which keep DNS and email names to your Organization's zones;</li>
+                  <li>by Name Rules, if you add them below;</li>
+                  <li>by a short validity, {daysLabel(DEFAULT_SHARED_CHALLENGE_VALIDITY_DAYS)} unless you set another under Certificate, since nothing revokes these certificates automatically;</li>
+                  <li>and by revoking a lost device's certificate by hand.</li>
+                </ul>
+                <p>The platform makes the Shared Challenge and shows it once, when the profile is created.</p>
+              </AlertDescription>
+            </Alert>
+          )}
+          {intune && (
             <FieldSet>
-              <FieldLegend>Name it and choose its Issuing CA</FieldLegend>
-              <FieldDescription>The platform makes the profile's SCEP RA key, which it keeps, and has the Issuing CA sign its certificate.</FieldDescription>
+              <FieldLegend variant="label">Entra app</FieldLegend>
+              <FieldDescription>
+                Register an app in Microsoft Entra ID with a client secret, give it the application permissions Intune → scep_challenge_provider and Microsoft Graph →
+                Application.Read.All, and grant admin consent. Intune then validates each device's request, and is told what became of it.
+              </FieldDescription>
               <FieldGroup>
-                <Field>
-                  <FieldLabel htmlFor="profile-name">Name</FieldLabel>
-                  <Input id="profile-name" autoFocus value={name} onChange={(e) => setName(e.target.value)} placeholder="Wi-Fi" />
+                <Field data-invalid={tenantId.trim() !== "" && !TENANT.test(tenantId.trim())}>
+                  <FieldLabel htmlFor="intune-tenant">Tenant ID</FieldLabel>
+                  <Input id="intune-tenant" autoFocus value={tenantId} onChange={(e) => setTenantId(e.target.value)} placeholder="00000000-0000-0000-0000-000000000000" />
+                  <FieldDescription>The directory (tenant) ID, or a domain of it such as contoso.onmicrosoft.com.</FieldDescription>
+                </Field>
+                <Field data-invalid={appId.trim() !== "" && !GUID.test(appId.trim())}>
+                  <FieldLabel htmlFor="intune-app">Application (client) ID</FieldLabel>
+                  <Input id="intune-app" value={appId} onChange={(e) => setAppId(e.target.value)} placeholder="00000000-0000-0000-0000-000000000000" />
                 </Field>
                 <Field>
-                  <FieldLabel htmlFor="profile-issuing-ca">Issuing CA</FieldLabel>
-                  <Select value={issuingCaId} onValueChange={setIssuingCaId}>
-                    <SelectTrigger id="profile-issuing-ca" className="w-full">
-                      <SelectValue placeholder={privateCas.isPending ? "Loading…" : issuingCas.length === 0 ? "No active Issuing CA" : "Choose an Issuing CA"} />
-                    </SelectTrigger>
-                    <SelectContent>
-                      {issuingCas.map((i) => (
-                        <SelectItem key={i.id} value={i.id}>
-                          {i.title}
-                        </SelectItem>
-                      ))}
-                    </SelectContent>
-                  </Select>
-                  <FieldDescription>Only an active Issuing CA under an active root can be chosen, and not an ML-DSA one: SCEP clients cannot verify the RA certificate it would sign.</FieldDescription>
+                  <FieldLabel htmlFor="intune-secret">Client secret</FieldLabel>
+                  <Input id="intune-secret" type="password" autoComplete="off" value={appSecret} onChange={(e) => setAppSecret(e.target.value)} />
+                  <FieldDescription>Its value, not its ID. It is stored encrypted and never shown again. Test the connection from the list once the profile is created.</FieldDescription>
                 </Field>
               </FieldGroup>
             </FieldSet>
           )}
+          {takesNameRules && <NameRulesEditor id="profile-name-rules" draft={nameRulesDraft} onChange={setNameRulesDraft} />}
+        </FieldGroup>
+      )}
 
-          {step === "certificate" && (
-            <FieldGroup>
-              <Field data-invalid={!validityOk}>
-                <FieldLabel htmlFor="profile-validity">Validity (days)</FieldLabel>
-                <Input id="profile-validity" inputMode="numeric" autoFocus value={validityDays} onChange={(e) => setChosenValidityDays(e.target.value)} aria-invalid={!validityOk} />
-                <FieldDescription>
-                  Up to {daysLabel(MAX_DEVICE_VALIDITY_DAYS)}, and never past the Issuing CA's end. Unless you set it, {daysLabel(DEFAULT_DEVICE_VALIDITY_DAYS)}, or {daysLabel(DEFAULT_SHARED_CHALLENGE_VALIDITY_DAYS)} with a
-                  Shared Challenge.
-                </FieldDescription>
-              </Field>
-              <Field data-invalid={!retentionOk}>
-                <FieldLabel htmlFor="profile-retention">Retention (days)</FieldLabel>
-                <Input id="profile-retention" inputMode="numeric" value={retentionDays} onChange={(e) => setRetentionDays(e.target.value)} aria-invalid={!retentionOk} />
-                <FieldDescription>How long after it ends a Device Certificate is kept before it is deleted; its Audit Events are kept.</FieldDescription>
-              </Field>
-              <div className="grid gap-6 sm:grid-cols-2">
-                <Choices legend="Key usage" id="profile-ku" values={DEVICE_KEY_USAGES} labels={KEY_USAGE_LABEL} chosen={keyUsage} onChange={setKeyUsage} />
-                <Choices legend="Extended key usage" id="profile-eku" values={DEVICE_EXTENDED_KEY_USAGE_NAMES} labels={EXTENDED_KEY_USAGE_LABEL} chosen={extendedKeyUsage} onChange={setExtendedKeyUsage} />
-              </div>
-            </FieldGroup>
-          )}
-
-          {step === "keys" && (
-            <FieldGroup>
-              <FieldDescription>A device whose request is for any other kind of key is refused.</FieldDescription>
-              <KeyTypeChoices id="profile-keys" chosen={allowedKeyTypes} onChange={setAllowedKeyTypes} />
-            </FieldGroup>
-          )}
-
-          {step === "validator" && (
-            <FieldGroup>
-              <Field>
-                <FieldLabel htmlFor="profile-validator">Enrollment Validator</FieldLabel>
-                {kinds.data && kinds.data.items.length === 0 ? (
-                  <FieldDescription>The platform runs no Enrollment Validator yet, so no profile can be created.</FieldDescription>
-                ) : (
-                  <Select value={kind} onValueChange={setValidatorKind}>
-                    <SelectTrigger id="profile-validator" className="w-full">
-                      <SelectValue placeholder="Loading…" />
-                    </SelectTrigger>
-                    <SelectContent>
-                      {(kinds.data?.items ?? []).map((k) => (
-                        <SelectItem key={k.kind} value={k.kind}>
-                          {validatorLabel(k.kind)}
-                        </SelectItem>
-                      ))}
-                    </SelectContent>
-                  </Select>
-                )}
-                {VALIDATOR_DESCRIPTION[kind] && <FieldDescription>{VALIDATOR_DESCRIPTION[kind]}</FieldDescription>}
-              </Field>
-              {usesSharedChallenge && (
-                <Alert>
-                  <TriangleAlertIcon />
-                  <AlertTitle>Anyone who holds the Shared Challenge can enroll</AlertTitle>
-                  <AlertDescription>
-                    <p>
-                      It sits in the SCEP profile on every device, so whoever copies it from one can enroll under any names. The platform cannot tie a certificate to a device. What they can get is still bounded:
-                    </p>
-                    <ul className="list-disc pl-5">
-                      <li>by the Issuing CA's permitted names, which keep DNS and email names to your Organization's zones;</li>
-                      <li>by Name Rules, if you add them below;</li>
-                      <li>by a short validity, {daysLabel(DEFAULT_SHARED_CHALLENGE_VALIDITY_DAYS)} unless you set another under Certificate, since nothing revokes these certificates automatically;</li>
-                      <li>and by revoking a lost device's certificate by hand.</li>
-                    </ul>
-                    <p>The platform makes the Shared Challenge and shows it once, when the profile is created.</p>
-                  </AlertDescription>
-                </Alert>
-              )}
-              {intune && (
-                <FieldSet>
-                  <FieldLegend variant="label">Entra app</FieldLegend>
-                  <FieldDescription>
-                    Register an app in Microsoft Entra ID with a client secret, give it the application permissions Intune → scep_challenge_provider and Microsoft Graph →
-                    Application.Read.All, and grant admin consent. Intune then validates each device's request, and is told what became of it.
-                  </FieldDescription>
-                  <FieldGroup>
-                    <Field data-invalid={tenantId.trim() !== "" && !TENANT.test(tenantId.trim())}>
-                      <FieldLabel htmlFor="intune-tenant">Tenant ID</FieldLabel>
-                      <Input id="intune-tenant" autoFocus value={tenantId} onChange={(e) => setTenantId(e.target.value)} placeholder="00000000-0000-0000-0000-000000000000" />
-                      <FieldDescription>The directory (tenant) ID, or a domain of it such as contoso.onmicrosoft.com.</FieldDescription>
-                    </Field>
-                    <Field data-invalid={appId.trim() !== "" && !GUID.test(appId.trim())}>
-                      <FieldLabel htmlFor="intune-app">Application (client) ID</FieldLabel>
-                      <Input id="intune-app" value={appId} onChange={(e) => setAppId(e.target.value)} placeholder="00000000-0000-0000-0000-000000000000" />
-                    </Field>
-                    <Field>
-                      <FieldLabel htmlFor="intune-secret">Client secret</FieldLabel>
-                      <Input id="intune-secret" type="password" autoComplete="off" value={appSecret} onChange={(e) => setAppSecret(e.target.value)} />
-                      <FieldDescription>Its value, not its ID. It is stored encrypted and never shown again. Test the connection from the list once the profile is created.</FieldDescription>
-                    </Field>
-                  </FieldGroup>
-                </FieldSet>
-              )}
-              {takesNameRules && <NameRulesEditor id="profile-name-rules" draft={nameRulesDraft} onChange={setNameRulesDraft} />}
-            </FieldGroup>
-          )}
-
-          {step === "review" && (
-            <FieldGroup>
-              <FieldSet>
-                <FieldLegend>Review</FieldLegend>
-                <FieldDescription>Use Back to change anything.</FieldDescription>
-                <Summary
-                  rows={[
-                    { label: "Name", value: name.trim() },
-                    { label: "Issuing CA", value: issuingCas.find((i) => i.id === issuingCaId)?.title ?? "" },
-                    { label: "Validity", value: daysLabel(Number(validityDays)) },
-                    { label: "Retention", value: `${daysLabel(Number(retentionDays))} after it ends` },
-                    { label: "Extended key usage", value: extendedKeyUsage.map((u) => EXTENDED_KEY_USAGE_LABEL[u]).join(", ") },
-                    { label: "Key usage", value: keyUsage.map((u) => KEY_USAGE_LABEL[u]).join(", ") },
-                    { label: "Device keys", value: allowedKeyTypes.map((t) => KEY_TYPE_LABEL[t]).join(", ") },
-                    { label: "Validator", value: validatorLabel(kind) },
-                    ...(intune ? [{ label: "Entra tenant", value: tenantId.trim() }, { label: "Entra app", value: appId.trim() }] : []),
-                    ...(takesNameRules && "rules" in nameRules ? [{ label: "Name Rules", value: nameRulesSummary(nameRules.rules) }] : []),
-                  ]}
-                />
-              </FieldSet>
-              {create.error && <FieldError>{create.error.message}</FieldError>}
-            </FieldGroup>
-          )}
-        </div>
-        <footer className="flex shrink-0 items-center justify-between gap-2 border-t bg-muted/50 p-4">
-          <Button type="button" variant="outline" disabled={index === 0} onClick={() => goTo(index - 1)}>
-            Back
-          </Button>
-          {last ? (
-            <Button key="create" type="submit" disabled={create.isPending}>
-              Create
-            </Button>
-          ) : (
-            <Button key="next" type="button" disabled={!complete[step]} onClick={() => goTo(index + 1)}>
-              Next
-            </Button>
-          )}
-        </footer>
-      </form>
-    </SidebarProvider>
-  );
-}
-
-function Summary({ rows }: { rows: { label: string; value: string }[] }) {
-  return (
-    <div className="rounded-md border p-4">
-      <dl className="grid grid-cols-[9rem_1fr] gap-x-4 gap-y-3 text-sm">
-        {rows.map(({ label, value }) => (
-          <div key={label} className="col-span-2 grid grid-cols-subgrid items-baseline">
-            <dt className="text-muted-foreground">{label}</dt>
-            <dd className="min-w-0 break-words">{value}</dd>
-          </div>
-        ))}
-      </dl>
-    </div>
+      {step === "review" && (
+        <FieldGroup>
+          <FieldSet>
+            <FieldLegend>Review</FieldLegend>
+            <FieldDescription>Use Back to change anything.</FieldDescription>
+            <SummaryRows
+              rows={[
+                { label: "Name", value: name.trim() },
+                { label: "Issuing CA", value: issuingCas.find((i) => i.id === issuingCaId)?.title ?? "" },
+                { label: "Validity", value: daysLabel(Number(validityDays)) },
+                { label: "Retention", value: `${daysLabel(Number(retentionDays))} after it ends` },
+                { label: "Extended key usage", value: extendedKeyUsage.map((u) => EXTENDED_KEY_USAGE_LABEL[u]).join(", ") },
+                { label: "Key usage", value: keyUsage.map((u) => KEY_USAGE_LABEL[u]).join(", ") },
+                { label: "Device keys", value: allowedKeyTypes.map((t) => KEY_TYPE_LABEL[t]).join(", ") },
+                { label: "Validator", value: validatorLabel(kind) },
+                ...(intune ? [{ label: "Entra tenant", value: tenantId.trim() }, { label: "Entra app", value: appId.trim() }] : []),
+                ...(takesNameRules && "rules" in nameRules ? [{ label: "Name Rules", value: nameRulesSummary(nameRules.rules) }] : []),
+              ]}
+            />
+          </FieldSet>
+          {create.error && <FieldError>{create.error.message}</FieldError>}
+        </FieldGroup>
+      )}
+    </SteppedForm>
   );
 }

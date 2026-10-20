@@ -23,7 +23,8 @@ import {
   type SignatureHash,
   type SubjectDetails,
 } from "@/lib/csr-generator";
-import { opensslCommand, safeFileBase } from "@/lib/csr-inspect";
+import { opensslCommand } from "@/lib/csr-inspect";
+import { fileBaseOf } from "@/lib/pki-convert";
 import { nameProblems, normalizedNames, splitNames } from "@/lib/csr-names";
 
 const NO_COMMON_NAME = "__none__";
@@ -84,7 +85,7 @@ export function CsrToolsPage() {
     setWorking(true);
     try {
       const made = await generateCsr({ keyAlgorithm, hash: hash ?? undefined, names: distinct, commonName, subject: { ...subject, country: subject.country.trim().toUpperCase() } });
-      setKeySource({ ...emptyKeySource(), generated: { ...made, fileBase: safeFileBase(distinct[0]), madeFor: inputs } });
+      setKeySource({ ...emptyKeySource(), generated: { ...made, fileBase: fileBaseOf(distinct[0] ?? null, "csr"), madeFor: inputs } });
       setMadeFrom(inputs);
     } catch (err) {
       setError(err instanceof Error ? err.message : "The browser could not make a key.");

@@ -1,4 +1,4 @@
-import { useInfiniteQuery, useQuery } from "@tanstack/react-query";
+import { useInfiniteQuery } from "@tanstack/react-query";
 import { useParams } from "@tanstack/react-router";
 import { createColumnHelper, rowExpandingFeature, tableFeatures, useTable } from "@tanstack/react-table";
 import { useState, type ComponentProps, type FormEvent } from "react";
@@ -9,6 +9,7 @@ import { Button } from "@/components/ui/button";
 import { Input } from "@/components/ui/input";
 import { Label } from "@/components/ui/label";
 import { api, can, type AuditEvent, type AuditFilters } from "@/lib/api";
+import { useOrg } from "@/lib/use-org";
 
 const ROUTE = "/app/organizations/$orgId/audit-log";
 
@@ -54,7 +55,7 @@ const isoOf = (local: string) => (local ? new Date(local).toISOString() : undefi
  */
 export function AuditLogPage() {
   const { orgId } = useParams({ from: ROUTE });
-  const org = useQuery({ queryKey: ["me"], queryFn: api.me, select: (me) => me.organizations.find((o) => o.id === orgId) }).data;
+  const org = useOrg(orgId);
   const allowed = org ? can(org, "audit", "read") : false;
   const [filters, setFilters] = useState<AuditFilters>({});
   const events = useInfiniteQuery({

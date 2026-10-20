@@ -1,7 +1,8 @@
 import { useMutation, useQuery, useQueryClient } from "@tanstack/react-query";
 import { BotIcon, CheckIcon, ClipboardCheckIcon, FileTerminalIcon, GlobeIcon, PlusIcon, RefreshCwIcon, TriangleAlertIcon, type LucideIcon } from "lucide-react";
-import { useEffect, useState, type FormEvent, type ReactNode } from "react";
+import { useEffect, useState, type FormEvent } from "react";
 import { IssuerChoiceFields, useIssuerChoice } from "@/components/issuer-choice";
+import { SummaryRows } from "@/components/summary-rows";
 import { Alert, AlertDescription, AlertTitle } from "@/components/ui/alert";
 import { Button } from "@/components/ui/button";
 import { Dialog, DialogContent, DialogDescription, DialogHeader, DialogTitle, DialogTrigger } from "@/components/ui/dialog";
@@ -298,7 +299,7 @@ function NewDeploymentForm({ org, onDone }: { org: Me["organizations"][number]; 
             <FieldSet>
               <FieldLegend>Review</FieldLegend>
               <FieldDescription>Use Back to change anything. Setting it up asks the Agent to make the key now.</FieldDescription>
-              <Summary
+              <SummaryRows
                 rows={[
                   { label: "Agent", value: chosenAgent?.hostName },
                   { label: "Domain names", value: <ul className="flex flex-col gap-0.5 font-mono text-xs">{parsedNames.map((name) => <li key={name}>{name}</li>)}</ul> },
@@ -333,20 +334,5 @@ function NewDeploymentForm({ org, onDone }: { org: Me["organizations"][number]; 
         )}
       </div>
     </form>
-  );
-}
-
-function Summary({ rows }: { rows: { label: string; value: ReactNode }[] }) {
-  return (
-    <div className="rounded-md border p-4">
-      <dl className="grid grid-cols-[7rem_1fr] gap-x-4 gap-y-3 text-sm">
-        {rows.map(({ label, value }) => (
-          <div key={label} className="col-span-2 grid grid-cols-subgrid items-baseline">
-            <dt className="text-muted-foreground">{label}</dt>
-            <dd className="min-w-0 break-words">{value}</dd>
-          </div>
-        ))}
-      </dl>
-    </div>
   );
 }

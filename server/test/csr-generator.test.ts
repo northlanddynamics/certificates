@@ -10,6 +10,7 @@ import { CLASSICAL_KEY_ALGORITHMS, ML_DSA_KEY_ALGORITHMS, parseCsr, type Classic
 import { MAX_NAMES, normalizeName } from "../src/pki/names";
 import { defaultHash, generateCsr, hashNote, SIGNATURE_HASHES } from "../../web/src/lib/csr-generator";
 import { inspectCsr, matchCsr, opensslCommand, type CsrFacts } from "../../web/src/lib/csr-inspect";
+import { fileBaseOf } from "../../web/src/lib/pki-convert";
 
 const GENERATOR = new URL("../../web/src/lib/csr-generator.ts", import.meta.url);
 const NAME_RULES = new URL("../../web/src/lib/csr-names.ts", import.meta.url);
@@ -274,7 +275,7 @@ describe("opensslCommand", () => {
     try {
       const run = Bun.spawnSync(["sh", "-c", opensslCommand([long], "ecdsa-p256")], { cwd: dir, stderr: "pipe" });
       expect(run.exitCode).toBe(0);
-      expect((await parseCsr(readFileSync(join(dir, `${long}.csr.pem`), "utf8"))).names).toEqual([long]);
+      expect((await parseCsr(readFileSync(join(dir, `${fileBaseOf(long, "csr")}.csr.pem`), "utf8"))).names).toEqual([long]);
     } finally {
       rmSync(dir, { recursive: true, force: true });
     }
@@ -319,6 +320,8 @@ describe("the generator's imports", () => {
       "./csr-names",
       "./csr-generator",
       "./csr-ml-dsa",
+      // File names for a key and a CSR; pure, and held to the same by viewer.test.ts.
+      "./pki-convert",
     ];
     for (const file of [GENERATOR, NAME_RULES, INSPECTOR, ML_DSA_GENERATOR]) {
       const code = readFileSync(file, "utf8").replace(/\/\*[\s\S]*?\*\//g, "").replace(/\/\/.*$/gm, "");

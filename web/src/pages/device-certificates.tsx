@@ -15,6 +15,7 @@ import { InputGroup, InputGroupAddon, InputGroupInput } from "@/components/ui/in
 import { Select, SelectContent, SelectItem, SelectTrigger, SelectValue } from "@/components/ui/select";
 import { DEVICE_KEY_TYPE_LABELS, WEAK_DEVICE_KEY_TYPE } from "../../../server/src/enrollment/enrollment-profile-kinds";
 import { DEVICE_CERTIFICATE_STATUSES, api, can, revocationReasonLabel, revocationReasonsOf, type DeviceCertificate, type DeviceCertificateStatus, type EnrollmentProfile, type Me } from "@/lib/api";
+import { useOrg } from "@/lib/use-org";
 
 const ROUTE = "/app/organizations/$orgId/enrollment-profiles/$id/device-certificates";
 
@@ -63,7 +64,7 @@ const noRows: DeviceCertificate[] = [];
  */
 export function DeviceCertificatesPage() {
   const { orgId, id } = useParams({ from: ROUTE });
-  const org = useQuery({ queryKey: ["me"], queryFn: api.me, select: (me) => me.organizations.find((o) => o.id === orgId) }).data;
+  const org = useOrg(orgId);
   const allowed = org ? can(org, "deviceCertificate", "read") : false;
   const profile = useQuery({ queryKey: ["enrollment-profile", orgId, id], queryFn: () => api.enrollmentProfile(orgId, id), enabled: org ? can(org, "enrollmentProfile", "read") : false });
   const [typed, setTyped] = useState("");

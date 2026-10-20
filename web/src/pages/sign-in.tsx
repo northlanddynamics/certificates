@@ -10,12 +10,8 @@ import { Separator } from "@/components/ui/separator";
 import { ApiError } from "@/lib/api";
 import { authClient, unwrap } from "@/lib/auth-client";
 
-/** Why an SSO sign-in came back here, as the identity provider or the platform put it in the URL. */
-const ssoFailure = () => {
-  const params = new URLSearchParams(window.location.search);
-  const error = params.get("error");
-  return error ? (params.get("error_description") ?? error).replaceAll("_", " ") : null;
-};
+/** Whether an SSO sign-in came back here with an error. Its text is in the URL, where anyone can write one, so it is not shown. */
+const ssoFailed = () => new URLSearchParams(window.location.search).has("error");
 
 /**
  * Sign in with a password (and, once set up, a code from an authenticator app or a backup code), with a passkey alone, or
@@ -45,7 +41,7 @@ export function SignInPage() {
     mutationFn: () =>
       unwrap(authClient.signIn.sso({ email, callbackURL: `${window.location.origin}/`, errorCallbackURL: `${window.location.origin}/sign-in` })),
   });
-  const [returnedWith] = useState(ssoFailure);
+  const [returnedFailed] = useState(ssoFailed);
   const ssoRequired = [signIn.error, withPasskey.error].some((e) => e instanceof ApiError && e.code === "SSO_REQUIRED");
 
   if (secondFactor) return <SecondFactor onSignedIn={done} onBack={() => setSecondFactor(false)} />;
@@ -92,7 +88,7 @@ export function SignInPage() {
         </Button>
         {ssoRequired && <p className="text-sm text-destructive">Your Organization requires SSO. Enter your email and sign in with SSO.</p>}
         {withSso.error && <p className="text-sm text-destructive">{withSso.error instanceof ApiError && withSso.error.status === 404 ? "No SSO connection serves that email's domain." : withSso.error.message}</p>}
-        {returnedWith && !withSso.error && <p className="text-sm text-destructive">Signing in with SSO failed: {returnedWith}.</p>}
+        {returnedFailed && !withSso.error && <p className="text-sm text-destructive">Signing in with SSO failed. Try again, or ask your administrator.</p>}
       </CardContent>
     </Card>
   );

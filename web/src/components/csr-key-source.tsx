@@ -7,7 +7,8 @@ import { Field, FieldContent, FieldDescription, FieldLabel, FieldLegend, FieldSe
 import { RadioGroup, RadioGroupItem } from "@/components/ui/radio-group";
 import { Textarea } from "@/components/ui/textarea";
 import { KEY_ALGORITHM_LABELS, MAX_COMMON_NAME_LENGTH, NO_KEY_ALGORITHMS, generateCsr, type KeyAlgorithm } from "@/lib/csr-generator";
-import { inspectCsr, matchCsr, opensslCommand, safeFileBase, type CsrFacts } from "@/lib/csr-inspect";
+import { inspectCsr, matchCsr, opensslCommand, type CsrFacts } from "@/lib/csr-inspect";
+import { fileBaseOf } from "@/lib/pki-convert";
 import { normalizedNames } from "@/lib/csr-names";
 import { cn } from "@/lib/utils";
 
@@ -325,7 +326,7 @@ export function KeySource({
     setError(null);
     try {
       const made = await generateCsr({ keyAlgorithm, names: distinct, commonName: distinct.find((n) => n.length <= MAX_COMMON_NAME_LENGTH) ?? null });
-      onChange({ ...state, generated: { ...made, fileBase: safeFileBase(distinct[0]), madeFor: madeFor(names, keyAlgorithm) }, keySaved: false, confirmed: false });
+      onChange({ ...state, generated: { ...made, fileBase: fileBaseOf(distinct[0] ?? null, "csr"), madeFor: madeFor(names, keyAlgorithm) }, keySaved: false, confirmed: false });
     } catch (err) {
       setError(err instanceof Error ? err.message : "The browser could not make a key.");
     } finally {

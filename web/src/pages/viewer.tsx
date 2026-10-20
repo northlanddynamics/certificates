@@ -1,5 +1,5 @@
 import { FileSearchIcon, LoaderIcon } from "lucide-react";
-import { useEffect, useState } from "react";
+import { useEffect, useMemo, useState } from "react";
 import { CertificateDetailsView } from "@/components/certificate-details-view";
 import { CsrDetailsView } from "@/components/csr-details-view";
 import { PemConverter } from "@/components/pem-converter";
@@ -23,7 +23,7 @@ type Reading = { status: "empty" } | { status: "reading" } | { status: "refused"
 
 /** What the text holds, as it changes: every CSR and certificate in it, read once the text has any. A reading that arrives after the text has changed again is dropped. */
 function useReading(text: string): Reading {
-  const input = readPkiText(text);
+  const input = useMemo(() => readPkiText(text), [text]);
   const items = input?.kind === "items" ? input.items : null;
   // The items' text, which is what makes a reading this one's.
   const key = items?.map((item) => item.pem).join("\n") ?? null;

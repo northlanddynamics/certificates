@@ -1,6 +1,8 @@
-import { CheckIcon, ClipboardCheckIcon, KeyRoundIcon, NetworkIcon, PlugIcon, PlusIcon, ServerIcon, type LucideIcon } from "lucide-react";
+import { ClipboardCheckIcon, KeyRoundIcon, NetworkIcon, PlugIcon, PlusIcon, ServerIcon, type LucideIcon } from "lucide-react";
 import { useState, type FormEvent, type ReactNode } from "react";
-import { Breadcrumb, BreadcrumbItem, BreadcrumbList, BreadcrumbPage, BreadcrumbSeparator } from "@/components/ui/breadcrumb";
+import { SteppedForm, STEPPED_DIALOG } from "@/components/stepped-form";
+import { SummaryRows } from "@/components/summary-rows";
+import { useCertificateText } from "@/components/use-certificate-text";
 import { Button } from "@/components/ui/button";
 import { Checkbox } from "@/components/ui/checkbox";
 import { Dialog, DialogClose, DialogContent, DialogDescription, DialogFooter, DialogHeader, DialogTitle, DialogTrigger } from "@/components/ui/dialog";
@@ -8,7 +10,6 @@ import { Field, FieldContent, FieldDescription, FieldError, FieldGroup, FieldLab
 import { Input } from "@/components/ui/input";
 import { RadioGroup, RadioGroupItem } from "@/components/ui/radio-group";
 import { Select, SelectContent, SelectItem, SelectTrigger, SelectValue } from "@/components/ui/select";
-import { Sidebar, SidebarContent, SidebarGroup, SidebarGroupContent, SidebarMenu, SidebarMenuButton, SidebarMenuItem, SidebarProvider } from "@/components/ui/sidebar";
 import { Textarea } from "@/components/ui/textarea";
 import { TSIG_ALGORITHMS, api, type Agent, type DnsProvider, type DnsProviderSettings, type DnsProviderType } from "@/lib/api";
 import { useAction } from "@/lib/use-action";
@@ -139,7 +140,7 @@ export function EditDnsProviderDialog({ orgId, provider, relay }: { orgId: strin
 // The steps' own page, as the new Managed Certificate dialog has it.
 function WizardDialogContent({ title, description, children }: { title: string; description: string; children: ReactNode }) {
   return (
-    <DialogContent className="gap-0 overflow-hidden p-0 sm:max-w-[calc(100%-2rem)] md:max-w-[760px] lg:max-w-[860px]">
+    <DialogContent className={STEPPED_DIALOG}>
       <DialogTitle className="sr-only">{title}</DialogTitle>
       <DialogDescription className="sr-only">{description}</DialogDescription>
       {children}
@@ -155,14 +156,13 @@ function ProviderWizard({ orgId, provider, relay, onDone }: { orgId: string; pro
   const [secret, setSecret] = useState("");
   const [user, setUser] = useState("");
   const set = (change: Partial<Fields>) => setFields((f) => ({ ...f, ...change }));
+  const caText = useCertificateText((caCertificate) => set({ caCertificate }));
 
   // The type is chosen once; only an RFC 2136 provider has settings of its own to authenticate with, the other's login being its secret.
   const steps = STEP_ORDER.filter((id) =>
     id === "type" ? !editing : id === "authentication" ? !editing || fields.type === "rfc2136" : id === "relay" ? relay !== null : true,
-  );
-  const [step, setStep] = useState<StepId>(steps[0]!);
-  const index = Math.max(0, steps.indexOf(step));
-  const last = index === steps.length - 1;
+  ).map((id) => ({ id, ...STEPS[id] }));
+  const [step, setStep] = useState<StepId>(steps[0]!.id);
 
   const secretGiven = secret !== "" && (fields.type !== "infoblox" || user.trim() !== "");
   const complete: Record<StepId, boolean> = {
@@ -171,12 +171,6 @@ function ProviderWizard({ orgId, provider, relay, onDone }: { orgId: string; pro
     authentication: (fields.type !== "rfc2136" || fields.keyName.trim() !== "") && (editing || secretGiven),
     relay: true,
     review: true,
-  };
-  // A step may be opened once every step before it is complete.
-  const reachable = (i: number) => steps.slice(0, i).every((id) => complete[id]);
-  const goTo = (i: number) => {
-    const target = steps[i];
-    if (target && reachable(i)) setStep(target);
   };
 
   const relayChanged = editing && relay !== null && (fields.relayAgentIds.length !== provider.relayAgentIds.length || fields.relayAgentIds.some((id) => !provider.relayAgentIds.includes(id)));
@@ -195,207 +189,157 @@ function ProviderWizard({ orgId, provider, relay, onDone }: { orgId: string; pro
   const heading = editing ? `Edit ${provider.name}` : "Add a DNS Provider";
 
   return (
-    <SidebarProvider className="h-[min(600px,85vh)] min-h-0 items-stretch">
-      <Sidebar collapsible="none" className="hidden border-r md:flex">
-        <SidebarContent>
-          <SidebarGroup>
-            <SidebarGroupContent>
-              <SidebarMenu>
-                {steps.map((id, i) => {
-                  const Icon = STEPS[id].icon;
-                  return (
-                    <SidebarMenuItem key={id}>
-                      <SidebarMenuButton isActive={id === step} disabled={!reachable(i)} onClick={() => goTo(i)}>
-                        {i < index && complete[id] ? <CheckIcon className="text-primary" /> : <Icon />}
-                        <span>{STEPS[id].title}</span>
-                      </SidebarMenuButton>
-                    </SidebarMenuItem>
-                  );
-                })}
-              </SidebarMenu>
-            </SidebarGroupContent>
-          </SidebarGroup>
-        </SidebarContent>
-      </Sidebar>
-      <form
-        className="flex min-w-0 flex-1 flex-col"
-        onSubmit={(e: FormEvent) => {
-          e.preventDefault();
-          if (!last) goTo(index + 1);
-          else if (steps.every((id) => complete[id])) save.mutate(undefined);
-        }}
-      >
-        <header className="flex h-14 shrink-0 items-center justify-between gap-2 px-4 pr-12">
-          <Breadcrumb>
-            <BreadcrumbList>
-              <BreadcrumbItem className="hidden md:block">{heading}</BreadcrumbItem>
-              <BreadcrumbSeparator className="hidden md:block" />
-              <BreadcrumbItem>
-                <BreadcrumbPage>{STEPS[steps[index]!].title}</BreadcrumbPage>
-              </BreadcrumbItem>
-            </BreadcrumbList>
-          </Breadcrumb>
-          <span className="text-xs text-muted-foreground">
-            Step {index + 1} of {steps.length}
-          </span>
-        </header>
-        <div className="flex flex-1 flex-col gap-4 overflow-y-auto p-4 pt-0">
-          {step === "type" && (
-            <FieldSet>
-              <FieldLegend>What kind of DNS does it connect to?</FieldLegend>
-              <FieldDescription>It cannot be changed afterwards.</FieldDescription>
-              <RadioGroup value={fields.type} onValueChange={(type) => set({ type: type as DnsProviderType })}>
-                {TYPES.map((t) => (
-                  <FieldLabel key={t.value} htmlFor={`dns-type-${t.value}`}>
-                    <Field orientation="horizontal">
-                      <FieldContent>
-                        <FieldTitle>{t.title}</FieldTitle>
-                        <FieldDescription>{t.description}</FieldDescription>
-                      </FieldContent>
-                      <RadioGroupItem value={t.value} id={`dns-type-${t.value}`} />
-                    </Field>
-                  </FieldLabel>
-                ))}
-              </RadioGroup>
-            </FieldSet>
-          )}
+    <SteppedForm
+      title={heading}
+      steps={steps}
+      step={step}
+      onStep={setStep}
+      complete={complete}
+      submitLabel={editing ? "Save" : "Add"}
+      pending={save.isPending}
+      onSubmit={() => save.mutate(undefined)}
+    >
+      {step === "type" && (
+        <FieldSet>
+          <FieldLegend>What kind of DNS does it connect to?</FieldLegend>
+          <FieldDescription>It cannot be changed afterwards.</FieldDescription>
+          <RadioGroup value={fields.type} onValueChange={(type) => set({ type: type as DnsProviderType })}>
+            {TYPES.map((t) => (
+              <FieldLabel key={t.value} htmlFor={`dns-type-${t.value}`}>
+                <Field orientation="horizontal">
+                  <FieldContent>
+                    <FieldTitle>{t.title}</FieldTitle>
+                    <FieldDescription>{t.description}</FieldDescription>
+                  </FieldContent>
+                  <RadioGroupItem value={t.value} id={`dns-type-${t.value}`} />
+                </Field>
+              </FieldLabel>
+            ))}
+          </RadioGroup>
+        </FieldSet>
+      )}
 
-          {step === "connection" && (
-            <FieldGroup>
+      {step === "connection" && (
+        <FieldGroup>
+          <Field>
+            <FieldLabel htmlFor="dns-name">Name</FieldLabel>
+            <Input id="dns-name" autoFocus value={fields.name} maxLength={100} onChange={(e) => set({ name: e.target.value })} required />
+            <FieldDescription>What you call it here, to tell providers apart.</FieldDescription>
+          </Field>
+          <Field>
+            <FieldLabel htmlFor="dns-zone">Zone</FieldLabel>
+            <Input id="dns-zone" value={fields.zone} placeholder="example.com" onChange={(e) => set({ zone: e.target.value })} required />
+            <FieldDescription>The zone the records are published in, and only there.</FieldDescription>
+          </Field>
+          {fields.type === "rfc2136" ? (
+            <div className="grid grid-cols-[1fr_6rem] gap-4">
               <Field>
-                <FieldLabel htmlFor="dns-name">Name</FieldLabel>
-                <Input id="dns-name" autoFocus value={fields.name} maxLength={100} onChange={(e) => set({ name: e.target.value })} required />
-                <FieldDescription>What you call it here, to tell providers apart.</FieldDescription>
+                <FieldLabel htmlFor="dns-server">Server</FieldLabel>
+                <Input id="dns-server" value={fields.server} placeholder="ns1.example.com" onChange={(e) => set({ server: e.target.value })} required />
               </Field>
               <Field>
-                <FieldLabel htmlFor="dns-zone">Zone</FieldLabel>
-                <Input id="dns-zone" value={fields.zone} placeholder="example.com" onChange={(e) => set({ zone: e.target.value })} required />
-                <FieldDescription>The zone the records are published in, and only there.</FieldDescription>
+                <FieldLabel htmlFor="dns-port">Port</FieldLabel>
+                <Input id="dns-port" type="number" min={1} max={65535} value={fields.port} onChange={(e) => set({ port: e.target.value })} required />
               </Field>
-              {fields.type === "rfc2136" ? (
-                <div className="grid grid-cols-[1fr_6rem] gap-4">
-                  <Field>
-                    <FieldLabel htmlFor="dns-server">Server</FieldLabel>
-                    <Input id="dns-server" value={fields.server} placeholder="ns1.example.com" onChange={(e) => set({ server: e.target.value })} required />
-                  </Field>
-                  <Field>
-                    <FieldLabel htmlFor="dns-port">Port</FieldLabel>
-                    <Input id="dns-port" type="number" min={1} max={65535} value={fields.port} onChange={(e) => set({ port: e.target.value })} required />
-                  </Field>
-                </div>
-              ) : (
-                <>
-                  <Field>
-                    <FieldLabel htmlFor="dns-url">WAPI URL</FieldLabel>
-                    <Input id="dns-url" value={fields.url} placeholder="https://gm.example.com/wapi/v2.12" onChange={(e) => set({ url: e.target.value })} required />
-                    <FieldDescription>With the WAPI version in it.</FieldDescription>
-                  </Field>
-                  <Field>
-                    <FieldLabel htmlFor="dns-view">DNS view</FieldLabel>
-                    <Input id="dns-view" value={fields.view} onChange={(e) => set({ view: e.target.value })} required />
-                  </Field>
-                  <Field>
-                    <FieldLabel htmlFor="dns-ca">Grid certificate authority (optional)</FieldLabel>
-                    <Textarea id="dns-ca" className="font-mono text-xs" rows={4} value={fields.caCertificate} onChange={(e) => set({ caCertificate: e.target.value })} />
-                    <FieldDescription>PEM. Only for a grid whose certificate is not signed by a publicly trusted authority.</FieldDescription>
-                  </Field>
-                </>
-              )}
-            </FieldGroup>
-          )}
-
-          {step === "authentication" && (
-            <FieldGroup>
-              {fields.type === "rfc2136" && (
-                <div className="grid grid-cols-2 gap-4">
-                  <Field>
-                    <FieldLabel htmlFor="dns-key-name">TSIG key name</FieldLabel>
-                    <Input id="dns-key-name" autoFocus value={fields.keyName} onChange={(e) => set({ keyName: e.target.value })} required />
-                  </Field>
-                  <Field>
-                    <FieldLabel htmlFor="dns-algorithm">TSIG algorithm</FieldLabel>
-                    <Select value={fields.algorithm} onValueChange={(algorithm) => set({ algorithm: algorithm as Fields["algorithm"] })}>
-                      <SelectTrigger id="dns-algorithm" className="w-full">
-                        <SelectValue />
-                      </SelectTrigger>
-                      <SelectContent>
-                        {TSIG_ALGORITHMS.map((a) => (
-                          <SelectItem key={a} value={a}>
-                            {a}
-                          </SelectItem>
-                        ))}
-                      </SelectContent>
-                    </Select>
-                  </Field>
-                </div>
-              )}
-              {!editing && (
-                <FieldSet>
-                  <FieldLegend>Secret</FieldLegend>
-                  <FieldDescription>Stored encrypted. It can be replaced or tested later, but it is never shown again.</FieldDescription>
-                  <SecretFields type={fields.type} secret={secret} user={user} onSecret={setSecret} onUser={setUser} />
-                </FieldSet>
-              )}
-            </FieldGroup>
-          )}
-
-          {step === "relay" && relay && (
-            <FieldSet>
-              <FieldLegend>Where should its operations run?</FieldLegend>
-              <FieldDescription>
-                By default the platform talks to the DNS server itself. Choose Agents to reach DNS inside your network instead: any chosen Agent that is online carries out the operation.
-              </FieldDescription>
-              <div className="flex max-h-72 flex-col gap-3 overflow-y-auto rounded-md border p-3">
-                {(() => {
-                  const choices = relay.agents.filter((a) => a.status !== "revoked" || fields.relayAgentIds.includes(a.id));
-                  return choices.length === 0 ? (
-                    <span className="text-sm text-muted-foreground">No Agent is registered, so the platform runs the operations itself.</span>
-                  ) : (
-                    choices.map((a) => (
-                      <Field key={a.id} orientation="horizontal">
-                        <Checkbox
-                          id={`dns-relay-${a.id}`}
-                          checked={fields.relayAgentIds.includes(a.id)}
-                          onCheckedChange={(on) => set({ relayAgentIds: on === true ? [...fields.relayAgentIds, a.id] : fields.relayAgentIds.filter((id) => id !== a.id) })}
-                        />
-                        <FieldLabel htmlFor={`dns-relay-${a.id}`} className="font-normal">
-                          {a.hostName} <span className="text-muted-foreground">({a.status})</span>
-                        </FieldLabel>
-                      </Field>
-                    ))
-                  );
-                })()}
-              </div>
-            </FieldSet>
-          )}
-
-          {step === "review" && (
-            <FieldGroup>
-              <FieldSet>
-                <FieldLegend>Review</FieldLegend>
-                <FieldDescription>{editing ? "Saving changes it at once." : "Test the connection from the list once it is added."} Use Back to change anything.</FieldDescription>
-                <Summary fields={fields} editing={editing} agents={relay?.agents ?? []} />
-              </FieldSet>
-              {save.error && <FieldError>{save.error.message}</FieldError>}
-            </FieldGroup>
-          )}
-        </div>
-        <footer className="flex shrink-0 items-center justify-between gap-2 border-t bg-muted/50 p-4">
-          <Button type="button" variant="outline" disabled={index === 0} onClick={() => goTo(index - 1)}>
-            Back
-          </Button>
-          {last ? (
-            <Button key="save" type="submit" disabled={save.isPending}>
-              {editing ? "Save" : "Add"}
-            </Button>
+            </div>
           ) : (
-            <Button key="next" type="button" disabled={!complete[steps[index]!]} onClick={() => goTo(index + 1)}>
-              Next
-            </Button>
+            <>
+              <Field>
+                <FieldLabel htmlFor="dns-url">WAPI URL</FieldLabel>
+                <Input id="dns-url" value={fields.url} placeholder="https://gm.example.com/wapi/v2.12" onChange={(e) => set({ url: e.target.value })} required />
+                <FieldDescription>With the WAPI version in it.</FieldDescription>
+              </Field>
+              <Field>
+                <FieldLabel htmlFor="dns-view">DNS view</FieldLabel>
+                <Input id="dns-view" value={fields.view} onChange={(e) => set({ view: e.target.value })} required />
+              </Field>
+              <Field>
+                <FieldLabel htmlFor="dns-ca">Grid certificate authority (optional)</FieldLabel>
+                <Textarea id="dns-ca" className="font-mono text-xs" rows={4} value={fields.caCertificate} onChange={(e) => caText.accept(e.target.value)} />
+                <FieldDescription>PEM. Only for a grid whose certificate is not signed by a publicly trusted authority.</FieldDescription>
+                {caText.notice}
+              </Field>
+            </>
           )}
-        </footer>
-      </form>
-    </SidebarProvider>
+        </FieldGroup>
+      )}
+
+      {step === "authentication" && (
+        <FieldGroup>
+          {fields.type === "rfc2136" && (
+            <div className="grid grid-cols-2 gap-4">
+              <Field>
+                <FieldLabel htmlFor="dns-key-name">TSIG key name</FieldLabel>
+                <Input id="dns-key-name" autoFocus value={fields.keyName} onChange={(e) => set({ keyName: e.target.value })} required />
+              </Field>
+              <Field>
+                <FieldLabel htmlFor="dns-algorithm">TSIG algorithm</FieldLabel>
+                <Select value={fields.algorithm} onValueChange={(algorithm) => set({ algorithm: algorithm as Fields["algorithm"] })}>
+                  <SelectTrigger id="dns-algorithm" className="w-full">
+                    <SelectValue />
+                  </SelectTrigger>
+                  <SelectContent>
+                    {TSIG_ALGORITHMS.map((a) => (
+                      <SelectItem key={a} value={a}>
+                        {a}
+                      </SelectItem>
+                    ))}
+                  </SelectContent>
+                </Select>
+              </Field>
+            </div>
+          )}
+          {!editing && (
+            <FieldSet>
+              <FieldLegend>Secret</FieldLegend>
+              <FieldDescription>Stored encrypted. It can be replaced or tested later, but it is never shown again.</FieldDescription>
+              <SecretFields type={fields.type} secret={secret} user={user} onSecret={setSecret} onUser={setUser} />
+            </FieldSet>
+          )}
+        </FieldGroup>
+      )}
+
+      {step === "relay" && relay && (
+        <FieldSet>
+          <FieldLegend>Where should its operations run?</FieldLegend>
+          <FieldDescription>
+            By default the platform talks to the DNS server itself. Choose Agents to reach DNS inside your network instead: any chosen Agent that is online carries out the operation.
+          </FieldDescription>
+          <div className="flex max-h-72 flex-col gap-3 overflow-y-auto rounded-md border p-3">
+            {(() => {
+              const choices = relay.agents.filter((a) => a.status !== "revoked" || fields.relayAgentIds.includes(a.id));
+              return choices.length === 0 ? (
+                <span className="text-sm text-muted-foreground">No Agent is registered, so the platform runs the operations itself.</span>
+              ) : (
+                choices.map((a) => (
+                  <Field key={a.id} orientation="horizontal">
+                    <Checkbox
+                      id={`dns-relay-${a.id}`}
+                      checked={fields.relayAgentIds.includes(a.id)}
+                      onCheckedChange={(on) => set({ relayAgentIds: on === true ? [...fields.relayAgentIds, a.id] : fields.relayAgentIds.filter((id) => id !== a.id) })}
+                    />
+                    <FieldLabel htmlFor={`dns-relay-${a.id}`} className="font-normal">
+                      {a.hostName} <span className="text-muted-foreground">({a.status})</span>
+                    </FieldLabel>
+                  </Field>
+                ))
+              );
+            })()}
+          </div>
+        </FieldSet>
+      )}
+
+      {step === "review" && (
+        <FieldGroup>
+          <FieldSet>
+            <FieldLegend>Review</FieldLegend>
+            <FieldDescription>{editing ? "Saving changes it at once." : "Test the connection from the list once it is added."} Use Back to change anything.</FieldDescription>
+            <Summary fields={fields} editing={editing} agents={relay?.agents ?? []} />
+          </FieldSet>
+          {save.error && <FieldError>{save.error.message}</FieldError>}
+        </FieldGroup>
+      )}
+    </SteppedForm>
   );
 }
 
@@ -425,18 +369,7 @@ function Summary({ fields, editing, agents }: { fields: Fields; editing: boolean
         ),
     },
   ];
-  return (
-    <div className="rounded-md border p-4">
-      <dl className="grid grid-cols-[8rem_1fr] gap-x-4 gap-y-3 text-sm">
-        {rows.map(({ label, value }) => (
-          <div key={label} className="col-span-2 grid grid-cols-subgrid items-baseline">
-            <dt className="text-muted-foreground">{label}</dt>
-            <dd className="min-w-0 break-words">{value}</dd>
-          </div>
-        ))}
-      </dl>
-    </div>
-  );
+  return <SummaryRows rows={rows} />;
 }
 
 /** Replaces a provider's secret without showing the one it has: write-only, so there is nothing to fill in. */

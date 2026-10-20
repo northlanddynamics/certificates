@@ -8,6 +8,7 @@ import { useCertificateFacts, useManagedCertificatePage } from "@/lib/use-manage
 import { IssuerControls } from "./issuer-controls";
 import { KeyAndCsrCard } from "./key-and-csr-card";
 import { NameChange } from "./name-change-controls";
+import { date } from "@/lib/utils";
 import { Owners } from "./owner-controls";
 import { Renewal } from "./renewal-controls";
 import { revokedLine } from "./revocation-controls";
@@ -15,13 +16,13 @@ import { revokedLine } from "./revocation-controls";
 const KEY_CUSTODY_LABELS = { owner: "Owner", agent: "Agent" } as const;
 
 const DAY = 24 * 60 * 60 * 1000;
-const date = (iso: string) => new Date(iso).toLocaleDateString();
 
 /** How much of a Certificate's life is left, in days: "N of M days left", or that it has ended. */
 function daysLeft({ notBefore, notAfter }: Certificate, now = Date.now()) {
   const total = Math.round((Date.parse(notAfter) - Date.parse(notBefore)) / DAY);
-  const left = Math.ceil((Date.parse(notAfter) - now) / DAY);
-  return left <= 0 ? "Expired" : `${left} of ${total} days left`;
+  const remaining = Date.parse(notAfter) - now;
+  // Whole days, rounded down, as the PEM Parser counts them.
+  return remaining <= 0 ? "Expired" : `${Math.floor(remaining / DAY)} of ${total} days left`;
 }
 
 function Fact({ label, children }: { label: string; children: ReactNode }) {
