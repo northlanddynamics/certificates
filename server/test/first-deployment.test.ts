@@ -647,10 +647,10 @@ describe("parameter values", () => {
     ["a value with a carriage return in it", { SITE_ID: "a\rb" }, "SITE_ID", "newline"],
   ])("%s is refused with 400 naming the parameter, and nothing is set up", async (_what, parameters, name, problem) => {
     await readyToIssue();
-    const agent = await agentIn();
+    const request = await withParameters(await agentIn(), parameters);
     const before = (await auditOf()).length;
 
-    const refused = await setUp(acmeOrg, await withParameters(agent, parameters));
+    const refused = await setUp(acmeOrg, request);
 
     expect(refused.status).toBe(400);
     expect(refused.body.error).toContain(name);
