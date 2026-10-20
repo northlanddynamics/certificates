@@ -704,11 +704,10 @@ describe("parameter values", () => {
     const created = await setUp(acmeOrg, await withParameters(await agentIn(), { SITE_ID: SITE }));
     for (const role of ["approver", "member"]) {
       const cookie = await join(role);
-      for (const path of ["/deployments", `/deployments/${created.body.id}`, `/managed-certificates/${created.body.managedCertificateId}`]) {
-        const res = await h.app.request(`http://localhost/api/organizations/${acmeOrg.orgId}${path}`, { headers: { cookie } });
-        expect([403, 404]).toContain(res.status);
-        expect(await res.text()).not.toContain(SITE);
-      }
+      const read = (path: string) => h.app.request(`http://localhost/api/organizations/${acmeOrg.orgId}${path}`, { headers: { cookie } });
+      for (const path of ["/deployments", `/deployments/${created.body.id}`]) expect((await read(path)).status).toBe(403);
+      // The Managed Certificate an Approver may see does not carry them.
+      expect(await (await read(`/managed-certificates/${created.body.managedCertificateId}`)).text()).not.toContain(SITE);
     }
   });
 });
