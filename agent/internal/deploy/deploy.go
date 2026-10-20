@@ -1,7 +1,7 @@
 // Package deploy carries out a Deployment on the Agent: it checks what it was given (the Certificate is the one named, its
 // key is here, the script is the one whose hash the platform audited: ADR 0004), puts the Certificate's files where the
 // script can read them, runs the Bash or PowerShell script with their paths and the Managed Certificate's identifiers in its
-// environment, and reports how it went. A script that fails its checks is not run.
+// environment with the Deployment's parameter values, and reports how it went. A script that fails its checks is not run.
 package deploy
 
 import (
@@ -12,10 +12,13 @@ import (
 	"encoding/pem"
 	"errors"
 	"fmt"
+	"maps"
 	"os"
 	"os/exec"
 	"path/filepath"
+	"regexp"
 	"runtime"
+	"slices"
 	"strings"
 	"sync"
 	"time"
@@ -29,6 +32,12 @@ const OutputLimit = 32 * 1024
 
 // DefaultTimeout is how long a script may run before it is stopped.
 const DefaultTimeout = 10 * time.Minute
+
+// ParameterPrefix is put before each parameter's name to make the variable the script reads it from.
+const ParameterPrefix = "DEPLOY_PARAM_"
+
+// parameterName is the form a parameter's name takes, so that no name can reach another variable or break the environment.
+var parameterName = regexp.MustCompile(`^[A-Z][A-Z0-9_]*$`)
 
 // Work is what a `deployment.run` work item carries.
 type Work struct {
@@ -45,6 +54,8 @@ type Work struct {
 		Hash        string `json:"hash"`
 		Content     string `json:"content"`
 	} `json:"script"`
+	// Parameters are the Deployment's values by name; an unset optional parameter is not among them.
+	Parameters map[string]string `json:"parameters"`
 }
 
 // Result is how a run went. ExitCode is nil when the script was not started, and then Output says why.
@@ -91,6 +102,10 @@ func (r Runner) Run(ctx context.Context, w Work) Result {
 	if err != nil {
 		return notRun(now, "the key for this Certificate is not available on this Agent, so the script was not run: %v", err)
 	}
+	parameters, err := parameterEnv(w.Parameters)
+	if err != nil {
+		return notRun(now, "%v, so the script was not run", err)
+	}
 	files, err := r.writeCertificate(w.ManagedCertificateID, certs)
 	if err != nil {
 		return notRun(now, "the Certificate's files could not be written, so the script was not run: %v", err)
@@ -124,6 +139,8 @@ func (r Runner) Run(ctx context.Context, w Work) Result {
 		"CERT_NAMES="+strings.Join(w.Names, ","),
 		"CERT_NOT_AFTER="+w.Certificate.NotAfter,
 	)
+	// After the inherited environment, so that a value wins over an Agent variable of the same name.
+	cmd.Env = append(cmd.Env, parameters...)
 	// One writer for both, so that the output is in the order it was written; it keeps the first OutputLimit bytes.
 	out := &limited{limit: OutputLimit}
 	cmd.Stdout, cmd.Stderr = out, out
@@ -152,6 +169,19 @@ func (r Runner) Run(ctx context.Context, w Work) Result {
 	}
 	result.Output, result.OutputTruncated = out.result()
 	return result
+}
+
+// parameterEnv is the parameters as environment entries, in the order of their names, or why one cannot be given.
+func parameterEnv(values map[string]string) ([]string, error) {
+	names := slices.Sorted(maps.Keys(values))
+	env := make([]string, 0, len(names))
+	for _, name := range names {
+		if !parameterName.MatchString(name) {
+			return nil, fmt.Errorf("the parameter name %q is not one a script can be given", name)
+		}
+		env = append(env, ParameterPrefix+name+"="+values[name])
+	}
+	return env, nil
 }
 
 func parseChain(chainPEM string) (all []*pem.Block, leaf *x509.Certificate, err error) {
