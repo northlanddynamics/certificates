@@ -9,7 +9,7 @@ import { generateCsr } from "../../web/src/lib/csr-generator";
 import { parseCertificateDetails, type CertificateDetails } from "../../web/src/lib/certificate-details";
 import { parseCsrDetails, type CsrDetails } from "../../web/src/lib/csr-details";
 import { conversionsOf, fileBaseOf, type ConversionFormat } from "../../web/src/lib/pki-convert";
-import { MAX_CSR_LENGTH, isPkcs7Der, kindOfDer, readPkiText, textOfPkiFile, type PkiItem } from "../../web/src/lib/pki-input";
+import { MAX_CSR_LENGTH, containsPrivateKey, isPkcs7Der, kindOfDer, readPkiText, textOfPkiFile, type PkiItem } from "../../web/src/lib/pki-input";
 import { verifyMlDsaCertificate, verifyMlDsaCsr } from "../../web/src/lib/csr-ml-dsa";
 
 const fixture = (name: string) => readFileSync(new URL(`./fixtures/agent/${name}.csr.pem`, import.meta.url), "utf8");
@@ -371,6 +371,15 @@ describe("readPkiText", () => {
     for (const text of [keyPem, `${csrPem}\n${keyPem}`, `${certificate.toString("pem")}\n${keyPem}`, keyPem.replace("PRIVATE KEY", "RSA PRIVATE KEY")]) {
       expect(readPkiText(text)).toMatchObject({ kind: "refused", clear: true });
     }
+  });
+
+  test("knows a private key by its header, whatever its kind, and a certificate or a CSR is not one", async () => {
+    const { csrPem, keyPem } = await generateCsr({ keyAlgorithm: "ecdsa-p256", names: ["a.example.com"] });
+    const { certificate } = await selfSigned();
+    for (const label of ["PRIVATE KEY", "RSA PRIVATE KEY", "EC PRIVATE KEY", "ENCRYPTED PRIVATE KEY"]) expect(containsPrivateKey(`-----BEGIN ${label}-----\nMIG`)).toBe(true);
+    expect(containsPrivateKey(`${certificate.toString("pem")}\n${keyPem}`)).toBe(true);
+    expect(containsPrivateKey(csrPem)).toBe(false);
+    expect(containsPrivateKey(certificate.toString("pem"))).toBe(false);
   });
 
   test("names what else it is when it is neither", async () => {

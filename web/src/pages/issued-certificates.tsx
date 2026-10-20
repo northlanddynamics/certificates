@@ -11,9 +11,8 @@ import { Table, TableBody, TableCell, TableHead, TableHeader, TableRow } from "@
 import { can, type Certificate, type ManagedCertificate, type Me } from "@/lib/api";
 import { caLabel } from "@/lib/managed-certificate";
 import { useCertificateFacts, useCertificates, useManagedCertificatePage } from "@/lib/use-managed-certificate";
+import { date } from "@/lib/utils";
 import { RevokeDialog, revokedLine } from "./revocation-controls";
-
-const date = (iso: string) => new Date(iso).toLocaleDateString();
 
 type CertificateState = { label: "Current" | "Superseded" | "Expired" | "Revoked"; variant: "default" | "secondary" | "destructive" | "outline" };
 

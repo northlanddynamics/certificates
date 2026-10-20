@@ -11,6 +11,7 @@ import { Dialog, DialogClose, DialogContent, DialogDescription, DialogFooter, Di
 import { Input } from "@/components/ui/input";
 import { Label } from "@/components/ui/label";
 import { api, can, type AuditForwarder } from "@/lib/api";
+import { useOrg } from "@/lib/use-org";
 import { useAction } from "@/lib/use-action";
 
 const ROUTE = "/app/organizations/$orgId/audit-forwarding";
@@ -63,7 +64,7 @@ function DeliveryStatus({ forwarder: f }: { forwarder: AuditForwarder }) {
  */
 export function AuditForwardingPage() {
   const { orgId } = useParams({ from: ROUTE });
-  const org = useQuery({ queryKey: ["me"], queryFn: api.me, select: (me) => me.organizations.find((o) => o.id === orgId) }).data;
+  const org = useOrg(orgId);
   const allowed = org ? can(org, "auditForwarder", "read") : false;
   const mayConfigure = org ? can(org, "auditForwarder", "create") : false;
   const forwarders = useQuery({ queryKey: ["audit-forwarders", orgId], queryFn: () => api.auditForwarders(orgId), enabled: allowed, refetchInterval: 30_000 });
@@ -87,7 +88,7 @@ export function AuditForwardingPage() {
 
 function ForwarderActions({ forwarder }: { forwarder: AuditForwarder }) {
   const { orgId } = useParams({ from: ROUTE });
-  const org = useQuery({ queryKey: ["me"], queryFn: api.me, select: (me) => me.organizations.find((o) => o.id === orgId) }).data;
+  const org = useOrg(orgId);
   return <div className="flex justify-end">{org && can(org, "auditForwarder", "delete") && <RemoveForwarder orgId={orgId} forwarder={forwarder} />}</div>;
 }
 

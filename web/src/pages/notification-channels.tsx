@@ -11,6 +11,7 @@ import { Dialog, DialogClose, DialogContent, DialogDescription, DialogFooter, Di
 import { Input } from "@/components/ui/input";
 import { Label } from "@/components/ui/label";
 import { api, can, type NotificationChannel } from "@/lib/api";
+import { useOrg } from "@/lib/use-org";
 import { useAction } from "@/lib/use-action";
 
 const ROUTE = "/app/organizations/$orgId/notification-channels";
@@ -45,7 +46,7 @@ const noRows: NotificationChannel[] = [];
  */
 export function NotificationChannelsPage() {
   const { orgId } = useParams({ from: ROUTE });
-  const org = useQuery({ queryKey: ["me"], queryFn: api.me, select: (me) => me.organizations.find((o) => o.id === orgId) }).data;
+  const org = useOrg(orgId);
   const allowed = org ? can(org, "notificationChannel", "read") : false;
   const mayConfigure = org ? can(org, "notificationChannel", "create") : false;
   const channels = useQuery({ queryKey: ["notification-channels", orgId], queryFn: () => api.notificationChannels(orgId), enabled: allowed });
@@ -69,7 +70,7 @@ export function NotificationChannelsPage() {
 
 function ChannelActions({ channel }: { channel: NotificationChannel }) {
   const { orgId } = useParams({ from: ROUTE });
-  const org = useQuery({ queryKey: ["me"], queryFn: api.me, select: (me) => me.organizations.find((o) => o.id === orgId) }).data;
+  const org = useOrg(orgId);
   return <div className="flex justify-end">{org && can(org, "notificationChannel", "delete") && <RemoveChannel orgId={orgId} channel={channel} />}</div>;
 }
 

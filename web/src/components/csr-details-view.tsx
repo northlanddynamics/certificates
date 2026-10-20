@@ -8,7 +8,7 @@ import { Button } from "@/components/ui/button";
 import { Card, CardContent, CardHeader, CardTitle } from "@/components/ui/card";
 import { Collapsible, CollapsibleContent, CollapsibleTrigger } from "@/components/ui/collapsible";
 import type { CsrDetails, CsrFitCheck, SignatureCheck } from "@/lib/csr-details";
-import { safeFileBase } from "@/lib/csr-inspect";
+import { fileBaseOf } from "@/lib/pki-convert";
 import { cn } from "@/lib/utils";
 
 function Fit({ check }: { check: CsrFitCheck }) {
@@ -51,7 +51,7 @@ const SIGNATURE_NOTES: Record<SignatureCheck, string> = {
 };
 
 export function CsrDetailsView({ details }: { details: CsrDetails }) {
-  const fileBase = safeFileBase(details.distinctNames[0]);
+  const fileBase = fileBaseOf(details.distinctNames[0] ?? null, "csr");
   return (
     <div className="flex flex-col gap-6">
       <Verdict details={details} />

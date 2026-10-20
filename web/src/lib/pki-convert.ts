@@ -3,7 +3,7 @@
 // and never what they say, and a signature stays valid. Pure, with no fetch, so what is converted goes nowhere; it holds
 // no private key and will not take one.
 import * as x509 from "@peculiar/x509";
-import { wrapPem, type PkiItem } from "./pki-input";
+import { base64OfBytes, bytesOfBase64, wrapPem, type PkiItem } from "./pki-input";
 
 export type ConversionFormat = "pem" | "der" | "base64" | "pkcs7-pem" | "pkcs7-der";
 
@@ -20,9 +20,7 @@ export interface Conversion {
 }
 
 const bodyOf = (pem: string) => pem.replace(/-----[A-Z0-9 ]+-----|\s+/g, "");
-const derOf = (pem: string) => Uint8Array.from(atob(bodyOf(pem)), (c) => c.charCodeAt(0));
 const pkcs7DerOf = (items: PkiItem[]) => new Uint8Array(new x509.X509Certificates(items.map((item) => new x509.X509Certificate(item.pem))).export("raw"));
-const base64Of = (bytes: Uint8Array) => btoa(Array.from(bytes, (byte) => String.fromCharCode(byte)).join(""));
 
 /**
  * What `items` can be converted to. One CSR or certificate can be PEM, DER or bare base64; certificates can also be a
@@ -52,7 +50,7 @@ export function conversionsOf(items: PkiItem[]): Conversion[] {
         description: "The binary form, as Windows and Java read it (.der, .cer).",
         extension: ".der",
         text: false,
-        make: () => derOf(first.pem),
+        make: () => bytesOfBase64(bodyOf(first.pem)),
       },
       {
         format: "base64",
@@ -72,7 +70,7 @@ export function conversionsOf(items: PkiItem[]): Conversion[] {
         description: `${only ? "The certificate" : "The certificates"} as a PKCS#7 bundle in PEM (BEGIN PKCS7), as Windows and Java import.`,
         extension: ".p7b",
         text: true,
-        make: () => `${wrapPem("PKCS7", base64Of(pkcs7DerOf(items)))}\n`,
+        make: () => `${wrapPem("PKCS7", base64OfBytes(pkcs7DerOf(items)))}\n`,
       },
       {
         format: "pkcs7-der",

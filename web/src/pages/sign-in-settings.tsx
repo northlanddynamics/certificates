@@ -6,6 +6,7 @@ import { useState, type FormEvent } from "react";
 import { toast } from "sonner";
 import { ConfirmDialog } from "@/components/confirm-dialog";
 import { DataTable } from "@/components/data-table/data-table";
+import { useCertificateText } from "@/components/use-certificate-text";
 import { Badge } from "@/components/ui/badge";
 import { Button } from "@/components/ui/button";
 import { Card, CardAction, CardContent, CardHeader, CardTitle } from "@/components/ui/card";
@@ -16,6 +17,7 @@ import { Label } from "@/components/ui/label";
 import { Select, SelectContent, SelectItem, SelectTrigger, SelectValue } from "@/components/ui/select";
 import { Textarea } from "@/components/ui/textarea";
 import { api, can, type LoginPolicy, type Me, type SsoConnection, type SsoConnectionChange } from "@/lib/api";
+import { useOrg } from "@/lib/use-org";
 import { useAction } from "@/lib/use-action";
 
 const ROUTE = "/app/organizations/$orgId/sign-in-settings";
@@ -34,7 +36,7 @@ const noRows: SsoConnection[] = [];
  */
 export function SignInSettingsPage() {
   const { orgId } = useParams({ from: ROUTE });
-  const org = useQuery({ queryKey: ["me"], queryFn: api.me, select: (me) => me.organizations.find((o) => o.id === orgId) }).data;
+  const org = useOrg(orgId);
 
   return (
     <div className="flex flex-col gap-6">
@@ -324,6 +326,7 @@ function ConnectionForm({ orgId, existing, onDone }: { orgId: string; existing?:
   const [entityId, setEntityId] = useState(existing?.saml?.entityId ?? "");
   const [ssoUrl, setSsoUrl] = useState(existing?.saml?.ssoUrl ?? "");
   const [certificate, setCertificate] = useState("");
+  const certificateText = useCertificateText(setCertificate);
   const save = useAction(
     () => {
       if (!existing) {
@@ -389,10 +392,11 @@ function ConnectionForm({ orgId, existing, onDone }: { orgId: string; existing?:
               className="font-mono text-xs"
               rows={5}
               value={certificate}
-              onChange={(e) => setCertificate(e.target.value)}
+              onChange={(e) => certificateText.accept(e.target.value)}
               placeholder={existing?.saml ? `${existing.saml.certificate.subject}, valid until ${new Date(existing.saml.certificate.notAfter).toLocaleDateString()}` : "-----BEGIN CERTIFICATE-----"}
               required={!existing}
             />
+            {certificateText.notice}
           </div>
         </>
       )}

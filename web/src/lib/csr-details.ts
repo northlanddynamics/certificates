@@ -3,11 +3,11 @@
 // `fit` are a copy of that function's, which server/test/csr-viewer.test.ts holds the two to. Pure, with no fetch, so a
 // pasted CSR goes nowhere (ADR 0002 keeps keys off the platform; this keeps CSRs off it too until they are submitted).
 import * as x509 from "@peculiar/x509";
+import { SUBJECT_ALTERNATIVE_NAME } from "./csr-inspect";
 import { MAX_NAMES, normalizeName } from "./csr-names";
 import { weakSignatureWarning } from "./csr-signature";
 import {
   NAME_TYPE_LABELS,
-  SUBJECT_ALTERNATIVE_NAME,
   digest,
   extensionsOf,
   isCaExtension,

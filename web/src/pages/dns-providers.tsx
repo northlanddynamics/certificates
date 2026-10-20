@@ -6,6 +6,7 @@ import { DataTable } from "@/components/data-table/data-table";
 import { Badge } from "@/components/ui/badge";
 import { Button } from "@/components/ui/button";
 import { api, can, type Agent, type DnsProvider } from "@/lib/api";
+import { useOrg } from "@/lib/use-org";
 import { AddDnsProviderDialog, EditDnsProviderDialog, ReplaceSecretDialog, TYPE_LABEL } from "./dns-provider-dialogs";
 
 const ROUTE = "/app/organizations/$orgId/dns-providers";
@@ -25,7 +26,7 @@ const endpointOf = (p: DnsProvider) => (p.type === "rfc2136" ? `${p.settings.ser
  */
 export function DnsProvidersPage() {
   const { orgId } = useParams({ from: ROUTE });
-  const org = useQuery({ queryKey: ["me"], queryFn: api.me, select: (me) => me.organizations.find((o) => o.id === orgId) }).data;
+  const org = useOrg(orgId);
   const allowed = org ? can(org, "dnsProvider", "read") : false;
   const mayRelay = org ? can(org, "agent", "read") : false;
   const providers = useQuery({ queryKey: ["dns-providers", orgId], queryFn: () => api.dnsProviders(orgId), enabled: allowed });

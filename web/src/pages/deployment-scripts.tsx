@@ -14,6 +14,7 @@ import { Label } from "@/components/ui/label";
 import { Table, TableBody, TableCell, TableHead, TableHeader, TableRow } from "@/components/ui/table";
 import { Textarea } from "@/components/ui/textarea";
 import { api, can, type DeploymentScript } from "@/lib/api";
+import { useOrg } from "@/lib/use-org";
 import { useAction } from "@/lib/use-action";
 
 const ROUTE = "/app/organizations/$orgId/deployment-scripts";
@@ -58,7 +59,7 @@ const noRows: DeploymentScript[] = [];
  */
 export function DeploymentScriptsPage() {
   const { orgId } = useParams({ from: ROUTE });
-  const org = useQuery({ queryKey: ["me"], queryFn: api.me, select: (me) => me.organizations.find((o) => o.id === orgId) }).data;
+  const org = useOrg(orgId);
   const allowed = org ? can(org, "deploymentScript", "read") : false;
   const [interpreter, setInterpreter] = useState<string[]>([]);
   const [pagination, setPagination] = useState<PaginationState>({ pageIndex: 0, pageSize: 25 });
@@ -126,7 +127,7 @@ export function DeploymentScriptsPage() {
 
 function ScriptActions({ script }: { script: DeploymentScript }) {
   const { orgId } = useParams({ from: ROUTE });
-  const org = useQuery({ queryKey: ["me"], queryFn: api.me, select: (me) => me.organizations.find((o) => o.id === orgId) }).data;
+  const org = useOrg(orgId);
   return (
     <div className="flex items-center justify-end gap-2">
       <VersionsDialog orgId={orgId} script={script} />

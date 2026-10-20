@@ -10,7 +10,8 @@ import { DataTablePagination } from "@/components/data-table/data-table-paginati
 import { Badge } from "@/components/ui/badge";
 import { Button } from "@/components/ui/button";
 import { Dialog, DialogClose, DialogContent, DialogDescription, DialogFooter, DialogHeader, DialogTitle, DialogTrigger } from "@/components/ui/dialog";
-import { api, can, type Agent, type Me } from "@/lib/api";
+import { api, can, type Agent } from "@/lib/api";
+import { useOrg } from "@/lib/use-org";
 import { useAction } from "@/lib/use-action";
 
 const ROUTE = "/app/organizations/$orgId/agents";
@@ -53,7 +54,7 @@ const VERSION_FACETS = [{ value: "outdated", label: "Outdated" }];
  */
 export function AgentsPage() {
   const { orgId } = useParams({ from: ROUTE });
-  const org = useQuery({ queryKey: ["me"], queryFn: api.me, select: (me) => me.organizations.find((o) => o.id === orgId) }).data;
+  const org = useOrg(orgId);
   const [status, setStatus] = useState<string[]>([]);
   const [os, setOs] = useState<string[]>([]);
   const [version, setVersion] = useState<string[]>([]);
@@ -135,7 +136,7 @@ export function AgentsPage() {
 
 function RevokeAgent({ agent }: { agent: Agent }) {
   const { orgId } = useParams({ from: ROUTE });
-  const org: Me["organizations"][number] | undefined = useQuery({ queryKey: ["me"], queryFn: api.me, select: (me) => me.organizations.find((o) => o.id === orgId) }).data;
+  const org = useOrg(orgId);
   const [open, setOpen] = useState(false);
   const revoke = useAction(() => api.revokeAgent(orgId, agent.id), ["agents"], () => setOpen(false));
   if (!org || !can(org, "agent", "revoke") || agent.status === "revoked") return null;

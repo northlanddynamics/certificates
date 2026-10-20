@@ -10,6 +10,7 @@ import { Badge } from "@/components/ui/badge";
 import { Button } from "@/components/ui/button";
 import { Dialog, DialogContent, DialogDescription, DialogHeader, DialogTitle, DialogTrigger } from "@/components/ui/dialog";
 import { api, can, type Deployment, type DeploymentRun, type DeploymentState } from "@/lib/api";
+import { useOrg } from "@/lib/use-org";
 import { useAction } from "@/lib/use-action";
 import { NewDeploymentDialog } from "./new-deployment-dialog";
 
@@ -50,7 +51,7 @@ function RunResult({ run }: { run: DeploymentRun }) {
  */
 export function DeploymentsPage() {
   const { orgId } = useParams({ from: ROUTE });
-  const org = useQuery({ queryKey: ["me"], queryFn: api.me, select: (me) => me.organizations.find((o) => o.id === orgId) }).data;
+  const org = useOrg(orgId);
   const allowed = org ? can(org, "deployment", "read") : false;
   const [state, setState] = useState<string[]>([]);
   const [agentId, setAgentId] = useState<string[]>([]);
@@ -196,7 +197,7 @@ export function DeploymentsPage() {
 
 function DeploymentActions({ deployment }: { deployment: Deployment }) {
   const { orgId } = useParams({ from: ROUTE });
-  const org = useQuery({ queryKey: ["me"], queryFn: api.me, select: (me) => me.organizations.find((o) => o.id === orgId) }).data;
+  const org = useOrg(orgId);
   const runAgain = useAction(() => api.runDeploymentAgain(orgId, deployment.id), ["deployments"]);
   // There is a Certificate to run it for once it has been issued, which a run (successful or not) or the Agent's waiting shows.
   const hasCertificate = deployment.state === "awaiting_deployment" || deployment.state === "deployed" || deployment.state === "deployment_failed";
