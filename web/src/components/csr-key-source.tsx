@@ -6,7 +6,7 @@ import { Checkbox } from "@/components/ui/checkbox";
 import { Field, FieldContent, FieldDescription, FieldLabel, FieldLegend, FieldSet, FieldTitle } from "@/components/ui/field";
 import { RadioGroup, RadioGroupItem } from "@/components/ui/radio-group";
 import { Textarea } from "@/components/ui/textarea";
-import { KEY_ALGORITHM_LABELS, MAX_COMMON_NAME_LENGTH, NO_KEY_ALGORITHMS, generateCsr, isGenerated, type KeyAlgorithm } from "@/lib/csr-generator";
+import { KEY_ALGORITHM_LABELS, MAX_COMMON_NAME_LENGTH, NO_KEY_ALGORITHMS, generateCsr, type KeyAlgorithm } from "@/lib/csr-generator";
 import { inspectCsr, matchCsr, opensslCommand, safeFileBase, type CsrFacts } from "@/lib/csr-inspect";
 import { normalizedNames } from "@/lib/csr-names";
 import { cn } from "@/lib/utils";
@@ -282,7 +282,7 @@ const MODES: { mode: KeySourceMode; title: string; icon: typeof KeyRoundIcon }[]
  * How the CSR for a form's names is provided. The key algorithm is the form's: fixed, unless the form passes
  * `onKeyAlgorithmChange`, when it is chosen here from `keyAlgorithms` (what the CA takes) and a pasted CSR's own is
  * taken. `onNamesChange` lets a pasted CSR's names replace the form's. With `saveInline` the generated key is saved
- * here; otherwise the form has a step for it. A key that cannot be made here (ML-DSA) is made with a command or pasted.
+ * here; otherwise the form has a step for it.
  */
 export function KeySource({
   names,
@@ -320,14 +320,7 @@ export function KeySource({
     if (onKeyAlgorithmChange && pastedKeyAlgorithm && pastedKeyAlgorithm !== keyAlgorithm && (taken.length === 0 || taken.includes(pastedKeyAlgorithm))) onKeyAlgorithmChange(pastedKeyAlgorithm);
   }, [onKeyAlgorithmChange, pastedKeyAlgorithm, keyAlgorithm, taken]);
 
-  // The key cannot be made here, so it is made with the command instead.
-  const generatable = isGenerated(keyAlgorithm);
-  useEffect(() => {
-    if (!generatable && state.mode === "generate") onChange({ ...state, mode: "command" });
-  }, [generatable, state, onChange]);
-
   async function generate() {
-    if (!isGenerated(keyAlgorithm)) return;
     setWorking(true);
     setError(null);
     try {
@@ -345,21 +338,20 @@ export function KeySource({
       <RadioGroup value={state.mode} onValueChange={(mode) => onChange({ ...state, mode: mode as KeySourceMode })} className="grid gap-2 sm:grid-cols-3">
         {MODES.map(({ mode, title, icon: Icon }) => (
           <FieldLabel key={mode} htmlFor={`${idPrefix}-mode-${mode}`}>
-            <Field orientation="horizontal" data-disabled={mode === "generate" && !generatable}>
+            <Field orientation="horizontal">
               <FieldContent>
                 <FieldTitle>
                   <Icon className="size-4" />
                   {title}
                 </FieldTitle>
               </FieldContent>
-              <RadioGroupItem value={mode} id={`${idPrefix}-mode-${mode}`} disabled={mode === "generate" && !generatable} />
+              <RadioGroupItem value={mode} id={`${idPrefix}-mode-${mode}`} />
             </Field>
           </FieldLabel>
         ))}
       </RadioGroup>
 
       {onKeyAlgorithmChange && state.mode !== "paste" && <KeyAlgorithmChoice value={keyAlgorithm} options={keyAlgorithms} onChange={onKeyAlgorithmChange} idPrefix={`${idPrefix}-alg`} />}
-      {!generatable && <FieldDescription>An {KEY_ALGORITHM_LABELS[keyAlgorithm]} key cannot be made in this browser yet: run the command, or paste a CSR made elsewhere.</FieldDescription>}
 
       {state.mode === "generate" && (
         <div className="flex flex-col gap-3">

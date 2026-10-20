@@ -6,7 +6,7 @@ The same principle applies to the secrets the platform must hold (DNS Provider c
 
 ## Addendum: the CSR Generator
 
-The web app's code runs in the user's browser, and what the platform serves is not the platform. The CSR Generator makes a key pair and a CSR there, with WebCrypto, and never sends the key anywhere: it has no route on the server, and only the CSR is submitted, to the forms that already took one. The key is offered to the user to download or copy, and is dropped from the page's state when they leave it or make another. The platform still never generates, stores or relays a private key.
+The web app's code runs in the user's browser, and what the platform serves is not the platform. The CSR Generator makes a key pair and a CSR there, with WebCrypto (or, for ML-DSA in a browser whose WebCrypto has none, with a pure-JS library bundled with the app), and never sends the key anywhere: it has no route on the server, and only the CSR is submitted, to the forms that already took one. The key is offered to the user to download or copy, and is dropped from the page's state when they leave it or make another. The platform still never generates, stores or relays a private key.
 
 ## Addendum: relayed DNS Provider credentials
 

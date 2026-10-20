@@ -53,7 +53,7 @@ Where a Managed Certificate's private key is generated and held: by the Owner, w
 _Avoid_: key mode, key ownership
 
 **CSR Generator**:
-A tool in the web app that makes a key pair and a CSR in the user's browser, for an Owner who keeps their own key. The key is made with WebCrypto, never sent to the platform, and offered to the user to download or copy; only the CSR is ever submitted. It stands on its own under Tools in the Organization sidebar, and is the way to make the CSR that Key Custody: Owner asks for.
+A tool in the web app that makes a key pair and a CSR in the user's browser, for an Owner who keeps their own key. The key is made with the browser's WebCrypto (for ML-DSA, where the browser has none, with a pure-JS library loaded only then), never sent to the platform, and offered to the user to download or copy; only the CSR is ever submitted. It stands on its own under Tools in the Organization sidebar, and is the way to make the CSR that Key Custody: Owner asks for.
 _Avoid_: key generator, CSR wizard
 
 **Approval**:

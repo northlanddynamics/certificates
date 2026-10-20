@@ -9,16 +9,17 @@ import { Input } from "@/components/ui/input";
 import { Select, SelectContent, SelectItem, SelectTrigger, SelectValue } from "@/components/ui/select";
 import { Textarea } from "@/components/ui/textarea";
 import {
-  CLASSICAL_KEY_ALGORITHMS,
   DEFAULT_KEY_ALGORITHM,
+  KEY_ALGORITHMS,
   KEY_ALGORITHM_LABELS,
   MAX_COMMON_NAME_LENGTH,
   SIGNATURE_HASHES,
   defaultHash,
   generateCsr,
   hashNote,
+  isClassical,
   isRsa,
-  type ClassicalKeyAlgorithm,
+  type KeyAlgorithm,
   type SignatureHash,
   type SubjectDetails,
 } from "@/lib/csr-generator";
@@ -42,10 +43,12 @@ const SUBJECT_FIELDS: [keyof Subject, string, string][] = [
  */
 export function CsrToolsPage() {
   const [typedNames, setTypedNames] = useState("");
-  const [keyAlgorithm, setKeyAlgorithm] = useState<ClassicalKeyAlgorithm>(DEFAULT_KEY_ALGORITHM);
+  const [keyAlgorithm, setKeyAlgorithm] = useState<KeyAlgorithm>(DEFAULT_KEY_ALGORITHM);
   const [hashChoice, setHashChoice] = useState<SignatureHash | null>(null);
-  // Every hash is valid for every key algorithm, so a choice outlives a change of key; until one is made the key's default applies.
-  const hash = hashChoice ?? defaultHash(keyAlgorithm);
+  // Every hash is valid for every classical key algorithm, so a choice outlives a change of key; until one is made the key's default applies.
+  // ML-DSA signs with no hash, so it has none to choose.
+  const classical = isClassical(keyAlgorithm);
+  const hash = classical ? (hashChoice ?? defaultHash(keyAlgorithm)) : null;
   const [commonNameChoice, setCommonNameChoice] = useState<string | null>(null);
   const [subject, setSubject] = useState<Subject>({ organization: "", organizationalUnit: "", country: "", state: "", locality: "" });
   const [keySource, setKeySource] = useState<KeySourceState>(emptyKeySource());
@@ -65,7 +68,7 @@ export function CsrToolsPage() {
   const chosen = commonNameChoice && commonNames.includes(commonNameChoice) ? commonNameChoice : undefined;
   const commonName = commonNameChoice === NO_COMMON_NAME ? null : (chosen ?? firstName ?? null);
   const countryProblem = subject.country !== "" && !/^[A-Za-z]{2}$/.test(subject.country.trim()) ? "Country is exactly two letters, such as US." : null;
-  const note = hashNote(keyAlgorithm, hash);
+  const note = classical && hash ? hashNote(keyAlgorithm, hash) : null;
   const inputs = JSON.stringify([distinct, keyAlgorithm, hash, commonName, subject]);
   const generated = keySource.generated;
   const stale = generated !== null && madeFrom !== inputs;
@@ -80,7 +83,7 @@ export function CsrToolsPage() {
     setError(null);
     setWorking(true);
     try {
-      const made = await generateCsr({ keyAlgorithm, hash, names: distinct, commonName, subject: { ...subject, country: subject.country.trim().toUpperCase() } });
+      const made = await generateCsr({ keyAlgorithm, hash: hash ?? undefined, names: distinct, commonName, subject: { ...subject, country: subject.country.trim().toUpperCase() } });
       setKeySource({ ...emptyKeySource(), generated: { ...made, fileBase: safeFileBase(distinct[0]), madeFor: inputs } });
       setMadeFrom(inputs);
     } catch (err) {
@@ -115,7 +118,7 @@ export function CsrToolsPage() {
                   <FieldError key={p}>{p}</FieldError>
                 ))}
               </Field>
-              <KeyAlgorithmChoice value={keyAlgorithm} options={CLASSICAL_KEY_ALGORITHMS} onChange={setKeyAlgorithm} idPrefix="csr-key-algorithm" />
+              <KeyAlgorithmChoice value={keyAlgorithm} options={KEY_ALGORITHMS} onChange={setKeyAlgorithm} idPrefix="csr-key-algorithm" />
               <Field>
                 <FieldLabel htmlFor="csr-common-name">Common name (CN)</FieldLabel>
                 <Select value={commonName ?? NO_COMMON_NAME} onValueChange={setCommonNameChoice} disabled={commonNames.length === 0}>
@@ -165,32 +168,35 @@ export function CsrToolsPage() {
                 </CollapsibleContent>
               </Collapsible>
 
-              <Collapsible className="group/advanced">
-                <CollapsibleTrigger asChild>
-                  <Button type="button" variant="ghost" size="sm" className="-ml-2">
-                    <ChevronDownIcon className="transition-transform group-data-[state=closed]/advanced:-rotate-90" />
-                    Advanced
-                  </Button>
-                </CollapsibleTrigger>
-                <CollapsibleContent className="pt-3">
-                  <Field>
-                    <FieldLabel htmlFor="csr-hash">Signature algorithm</FieldLabel>
-                    <Select value={hash} onValueChange={(v) => setHashChoice(v as SignatureHash)}>
-                      <SelectTrigger id="csr-hash" className="w-full sm:w-80">
-                        <SelectValue />
-                      </SelectTrigger>
-                      <SelectContent>
-                        {SIGNATURE_HASHES.map((h) => (
-                          <SelectItem key={h} value={h}>
-                            {isRsa(keyAlgorithm) ? `RSASSA-PKCS1-v1_5 with ${h}` : `ECDSA with ${h}`}
-                          </SelectItem>
-                        ))}
-                      </SelectContent>
-                    </Select>
-                    {note && <FieldDescription role="note">{note} You can still use it.</FieldDescription>}
-                  </Field>
-                </CollapsibleContent>
-              </Collapsible>
+              {/* ML-DSA signs with no hash, so there is no signature choice to show. */}
+              {classical && hash && (
+                <Collapsible className="group/advanced">
+                  <CollapsibleTrigger asChild>
+                    <Button type="button" variant="ghost" size="sm" className="-ml-2">
+                      <ChevronDownIcon className="transition-transform group-data-[state=closed]/advanced:-rotate-90" />
+                      Advanced
+                    </Button>
+                  </CollapsibleTrigger>
+                  <CollapsibleContent className="pt-3">
+                    <Field>
+                      <FieldLabel htmlFor="csr-hash">Signature algorithm</FieldLabel>
+                      <Select value={hash} onValueChange={(v) => setHashChoice(v as SignatureHash)}>
+                        <SelectTrigger id="csr-hash" className="w-full sm:w-80">
+                          <SelectValue />
+                        </SelectTrigger>
+                        <SelectContent>
+                          {SIGNATURE_HASHES.map((h) => (
+                            <SelectItem key={h} value={h}>
+                              {isRsa(keyAlgorithm) ? `RSASSA-PKCS1-v1_5 with ${h}` : `ECDSA with ${h}`}
+                            </SelectItem>
+                          ))}
+                        </SelectContent>
+                      </Select>
+                      {note && <FieldDescription role="note">{note} You can still use it.</FieldDescription>}
+                    </Field>
+                  </CollapsibleContent>
+                </Collapsible>
+              )}
             </FieldGroup>
           </CardContent>
         </Card>
@@ -218,7 +224,7 @@ export function CsrToolsPage() {
                   )}
                 </dd>
                 <dt className="text-muted-foreground">Key</dt>
-                <dd>{KEY_ALGORITHM_LABELS[keyAlgorithm]}, signed with {hash}</dd>
+                <dd>{KEY_ALGORITHM_LABELS[keyAlgorithm]}{hash && `, signed with ${hash}`}</dd>
               </dl>
               {distinct.length > 0 && (
                 <Collapsible className="group/openssl">

@@ -1,5 +1,6 @@
-// Makes a key pair and a CSR in the browser, with WebCrypto, so the private key never leaves it (ADR 0002). Pure: it
-// imports nothing from api.ts and does not use fetch, so there is nowhere in it for the key to be sent.
+// Makes a key pair and a CSR in the browser, with WebCrypto (or, for ML-DSA in a browser without it, noble), so the
+// private key never leaves it (ADR 0002). Pure: it imports nothing from api.ts and does not use fetch, so there is
+// nowhere in it for the key to be sent.
 import * as x509 from "@peculiar/x509";
 
 /** ECDSA and RSA: the key algorithms made here, as the server names them. */
@@ -24,10 +25,11 @@ export const KEY_ALGORITHM_LABELS: Record<KeyAlgorithm, string> = {
 /** None known yet: a stable empty list, for a default that does not change between renders. */
 export const NO_KEY_ALGORITHMS: readonly KeyAlgorithm[] = [];
 
-export const isMlDsa = (keyAlgorithm: KeyAlgorithm) => keyAlgorithm.startsWith("ml-dsa-");
+export type MlDsaKeyAlgorithm = Extract<KeyAlgorithm, `ml-dsa-${string}`>;
+export const isMlDsa = (keyAlgorithm: KeyAlgorithm): keyAlgorithm is MlDsaKeyAlgorithm => keyAlgorithm.startsWith("ml-dsa-");
 
-/** Whether a key of the algorithm can be made here; not yet an ML-DSA one. */
-export const isGenerated = (keyAlgorithm: KeyAlgorithm): keyAlgorithm is ClassicalKeyAlgorithm => (CLASSICAL_KEY_ALGORITHMS as readonly string[]).includes(keyAlgorithm);
+/** Whether the algorithm is one of the classical ones, which sign with a chosen hash; ML-DSA signs with none. */
+export const isClassical = (keyAlgorithm: KeyAlgorithm): keyAlgorithm is ClassicalKeyAlgorithm => (CLASSICAL_KEY_ALGORITHMS as readonly string[]).includes(keyAlgorithm);
 
 // No SHA-1, MD5 or RSA-PSS: a CA would refuse them.
 export const SIGNATURE_HASHES = ["SHA-256", "SHA-384", "SHA-512"] as const;
@@ -55,14 +57,19 @@ export interface SubjectDetails {
 }
 
 export interface CsrInput {
-  keyAlgorithm: ClassicalKeyAlgorithm;
+  keyAlgorithm: KeyAlgorithm;
   /** The DNS names the CSR asks for, as subject alternative names. Already checked against the name rules. */
   names: string[];
   /** One of `names`, or none: the subject's CN. */
   commonName?: string | null;
   subject?: SubjectDetails;
-  /** Defaults to the key algorithm's own. */
+  /** Defaults to the key algorithm's own; ignored for ML-DSA, which signs with no hash. */
   hash?: SignatureHash;
+}
+
+export interface GenerateOptions {
+  /** Makes an ML-DSA key with noble even where WebCrypto could: for a test of the path a browser without ML-DSA takes. */
+  forceNoble?: boolean;
 }
 
 export interface GeneratedCsr {
@@ -96,16 +103,46 @@ const subjectName = (commonName: string | null | undefined, subject: SubjectDeta
   return fields.filter((f): f is [string, string] => !!f[1]?.trim()).map(([type, value]) => ({ [type]: [value.trim()] }));
 };
 
-/** A new key pair and a CSR signed with it. The key is made extractable only so it can be exported here, once. */
-export async function generateCsr(input: CsrInput): Promise<GeneratedCsr> {
+/** The subject alternative names a CSR asks for, all DNS names. */
+export const sanExtension = (names: string[]) => new x509.SubjectAlternativeNameExtension(names.map((value) => ({ type: "dns" as const, value })));
+
+/** RFC 9881's seed form: a 54-byte PrivateKeyInfo whose privateKey is `[0] IMPLICIT OCTET STRING` of the 32-byte seed. */
+const isSeedForm = (pkcs8: ArrayBuffer) => pkcs8.byteLength === 54 && new Uint8Array(pkcs8)[20] === 0x80 && new Uint8Array(pkcs8)[21] === 0x20;
+
+/** An ML-DSA key and CSR made by the browser's WebCrypto; null when it cannot make the key (detected by trying), or does not export it in the seed form. */
+async function generateNativeMlDsa(input: CsrInput & { keyAlgorithm: MlDsaKeyAlgorithm }, name: x509.JsonName): Promise<GeneratedCsr | null> {
+  const algorithm = { name: input.keyAlgorithm.toUpperCase() };
+  let keys: CryptoKeyPair;
+  try {
+    keys = (await crypto.subtle.generateKey(algorithm, true, ["sign", "verify"])) as CryptoKeyPair;
+  } catch {
+    return null;
+  }
+  const pkcs8 = await crypto.subtle.exportKey("pkcs8", keys.privateKey);
+  if (!isSeedForm(pkcs8)) return null;
+  const csr = await x509.Pkcs10CertificateRequestGenerator.create({ name, keys, signingAlgorithm: algorithm, extensions: [sanExtension(input.names)] });
+  return { keyPem: x509.PemConverter.encode(pkcs8, "PRIVATE KEY"), csrPem: csr.toString("pem") };
+}
+
+/**
+ * A new key pair and a CSR signed with it. The key is made extractable only so it can be exported here, once. An
+ * ML-DSA key is made by the browser's WebCrypto where it can, and otherwise by noble, which is loaded only then.
+ */
+export async function generateCsr(input: CsrInput, options: GenerateOptions = {}): Promise<GeneratedCsr> {
+  const name = subjectName(input.commonName, input.subject);
+  if (isMlDsa(input.keyAlgorithm)) {
+    const mlDsa = { ...input, keyAlgorithm: input.keyAlgorithm };
+    const native = options.forceNoble ? null : await generateNativeMlDsa(mlDsa, name);
+    return native ?? (await import("./csr-ml-dsa")).generateMlDsaCsrWithNoble(mlDsa.keyAlgorithm, name, input.names);
+  }
   const hash = input.hash ?? defaultHash(input.keyAlgorithm);
   const keys = (await crypto.subtle.generateKey(keyParams(input.keyAlgorithm, hash), true, ["sign", "verify"])) as CryptoKeyPair;
   const algorithm = isRsa(input.keyAlgorithm) ? { name: "RSASSA-PKCS1-v1_5", hash } : { name: "ECDSA", hash };
   const csr = await x509.Pkcs10CertificateRequestGenerator.create({
-    name: subjectName(input.commonName, input.subject),
+    name,
     keys,
     signingAlgorithm: algorithm,
-    extensions: [new x509.SubjectAlternativeNameExtension(input.names.map((value) => ({ type: "dns" as const, value })))],
+    extensions: [sanExtension(input.names)],
   });
   const pkcs8 = await crypto.subtle.exportKey("pkcs8", keys.privateKey);
   return { keyPem: x509.PemConverter.encode(pkcs8, "PRIVATE KEY"), csrPem: csr.toString("pem") };

@@ -2,8 +2,8 @@
 // WebCrypto, and hold it to what the server accepts: a CSR the real parseCsr takes, and names the real normalizeName agrees with.
 import { describe, expect, test } from "bun:test";
 import * as x509 from "@peculiar/x509";
-import { mkdtempSync, readFileSync, rmSync } from "node:fs";
-import { createPrivateKey } from "node:crypto";
+import { mkdtempSync, readFileSync, rmSync, writeFileSync } from "node:fs";
+import { createPrivateKey, createPublicKey, sign as cryptoSign, verify as cryptoVerify } from "node:crypto";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { CLASSICAL_KEY_ALGORITHMS, ML_DSA_KEY_ALGORITHMS, parseCsr, type ClassicalKeyAlgorithm } from "../src/pki/csr";
@@ -14,6 +14,7 @@ import { inspectCsr, matchCsr, opensslCommand, type CsrFacts } from "../../web/s
 const GENERATOR = new URL("../../web/src/lib/csr-generator.ts", import.meta.url);
 const NAME_RULES = new URL("../../web/src/lib/csr-names.ts", import.meta.url);
 const INSPECTOR = new URL("../../web/src/lib/csr-inspect.ts", import.meta.url);
+const ML_DSA_GENERATOR = new URL("../../web/src/lib/csr-ml-dsa.ts", import.meta.url);
 
 describe("generateCsr", () => {
   for (const keyAlgorithm of CLASSICAL_KEY_ALGORITHMS) {
@@ -28,6 +29,76 @@ describe("generateCsr", () => {
       expect(key.asymmetricKeyType).toBe(keyAlgorithm.startsWith("rsa") ? "rsa" : "ec");
     }, 60_000);
   }
+
+  // The key file is RFC 9881's seed form, the one OpenSSL 3.5 and Bun read; the CSR must be signed by that very key.
+  const SEED_FORM_TAIL = "8020";
+  for (const keyAlgorithm of ML_DSA_KEY_ALGORITHMS) {
+    for (const path of ["noble", "native"] as const) {
+      test(`a ${keyAlgorithm} CSR made on the ${path} path is accepted by parseCsr, and its key is the seed-form key that signed it`, async () => {
+        const names = ["example.com", "*.example.com"];
+        const { csrPem, keyPem } = await generateCsr(
+          { keyAlgorithm, names, commonName: "example.com", subject: { organization: "Example Inc", country: "US" } },
+          { forceNoble: path === "noble" },
+        );
+        const parsed = await parseCsr(csrPem);
+        expect(parsed.keyAlgorithm).toBe(keyAlgorithm);
+        expect([...parsed.names].sort()).toEqual(["*.example.com", "example.com"]);
+        const csr = new x509.Pkcs10CertificateRequest(csrPem);
+        expect(csr.subjectName.getField("O")).toEqual(["Example Inc"]);
+        expect(csr.signatureAlgorithm.name).toBe(keyAlgorithm.toUpperCase());
+
+        expect(keyPem.startsWith("-----BEGIN PRIVATE KEY-----")).toBe(true);
+        const der = Buffer.from(keyPem.replace(/-----[A-Z ]+-----|\s/g, ""), "base64");
+        expect(der.length).toBe(54);
+        expect(der.subarray(-34, -32).toString("hex")).toBe(SEED_FORM_TAIL);
+        // Re-imported from its seed, the key is the CSR's: it signs what the CSR's public key verifies.
+        const key = createPrivateKey(keyPem);
+        expect(key.asymmetricKeyType).toBe(keyAlgorithm);
+        const message = new TextEncoder().encode("proof of possession");
+        const signature = cryptoSign(null, message, key);
+        expect(cryptoVerify(null, message, createPublicKey({ key: Buffer.from(csr.publicKey.rawData), format: "der", type: "spki" }), signature)).toBe(true);
+      }, 60_000);
+    }
+  }
+
+  test("a key is the one for the algorithm asked for, on both paths, and a hash is ignored for ML-DSA", async () => {
+    for (const forceNoble of [true, false]) {
+      const { csrPem } = await generateCsr({ keyAlgorithm: "ml-dsa-44", names: ["a.example.com"], hash: "SHA-512" }, { forceNoble });
+      expect((await parseCsr(csrPem)).keyAlgorithm).toBe("ml-dsa-44");
+    }
+  });
+
+  test("falls back to noble when the browser's WebCrypto cannot make an ML-DSA key, and does not when it can", async () => {
+    const real = crypto.subtle.generateKey.bind(crypto.subtle);
+    const realExport = crypto.subtle.exportKey.bind(crypto.subtle);
+    const asked: string[] = [];
+    let exported = 0;
+    let native = false;
+    const spy = (algorithm: { name: string }, ...rest: unknown[]) => {
+      asked.push(algorithm.name);
+      if (algorithm.name.startsWith("ML-DSA") && !native) return Promise.reject(new Error("NotSupportedError"));
+      return (real as (...a: unknown[]) => Promise<unknown>)(algorithm, ...rest);
+    };
+    const original = crypto.subtle.generateKey;
+    const originalExport = crypto.subtle.exportKey;
+    crypto.subtle.generateKey = spy as typeof crypto.subtle.generateKey;
+    crypto.subtle.exportKey = ((...args: Parameters<typeof realExport>) => (args[0] === "pkcs8" && exported++, realExport(...args))) as typeof crypto.subtle.exportKey;
+    try {
+      const without = await generateCsr({ keyAlgorithm: "ml-dsa-65", names: ["a.example.com"] });
+      expect((await parseCsr(without.csrPem)).keyAlgorithm).toBe("ml-dsa-65");
+      // Noble made that key, so WebCrypto exported no private key.
+      expect(exported).toBe(0);
+      native = true;
+      const withNative = await generateCsr({ keyAlgorithm: "ml-dsa-65", names: ["a.example.com"] });
+      expect((await parseCsr(withNative.csrPem)).keyAlgorithm).toBe("ml-dsa-65");
+    } finally {
+      crypto.subtle.generateKey = original;
+      crypto.subtle.exportKey = originalExport;
+    }
+    // The browser's own key was the one used: its private key was exported, as the seed-form file.
+    expect(exported).toBe(1);
+    expect(asked).toEqual(["ML-DSA-65", "ML-DSA-65"]);
+  });
 
   test("signs with the chosen hash, and with the key algorithm's default when none is chosen", async () => {
     const names = ["example.com"];
@@ -156,6 +227,47 @@ describe("opensslCommand", () => {
     }, 60_000);
   }
 
+  // OpenSSL 3.5 is the first with ML-DSA; where the machine has an older one these are skipped, not failed.
+  const hasMlDsaOpenssl = (() => {
+    const out = Bun.spawnSync(["openssl", "version"]).stdout.toString();
+    const [, major, minor] = /^OpenSSL (\d+)\.(\d+)/.exec(out) ?? [];
+    return Number(major) > 3 || (Number(major) === 3 && Number(minor) >= 5);
+  })();
+  for (const keyAlgorithm of ML_DSA_KEY_ALGORITHMS) {
+    test.skipIf(!hasMlDsaOpenssl)(`makes a ${keyAlgorithm} key and a CSR parseCsr accepts with exactly the names`, async () => {
+      const names = ["www.example.com", "*.example.com"];
+      const dir = mkdtempSync(join(tmpdir(), "openssl-command-"));
+      try {
+        const run = Bun.spawnSync(["sh", "-c", opensslCommand(names, keyAlgorithm)], { cwd: dir, stderr: "pipe" });
+        expect(run.exitCode).toBe(0);
+        const parsed = await parseCsr(readFileSync(join(dir, "www.example.com.csr.pem"), "utf8"));
+        expect(parsed.keyAlgorithm).toBe(keyAlgorithm);
+        expect([...parsed.names].sort()).toEqual([...names].sort());
+      } finally {
+        rmSync(dir, { recursive: true, force: true });
+      }
+    }, 60_000);
+
+    for (const path of ["noble", "native"] as const) {
+      test.skipIf(!hasMlDsaOpenssl)(`OpenSSL reads the ${keyAlgorithm} key and CSR the ${path} path makes, and the key is the CSR's`, async () => {
+        const { csrPem, keyPem } = await generateCsr({ keyAlgorithm, names: ["example.com"], commonName: "example.com" }, { forceNoble: path === "noble" });
+        const dir = mkdtempSync(join(tmpdir(), "openssl-reads-"));
+        try {
+          writeFileSync(join(dir, "key.pem"), keyPem);
+          writeFileSync(join(dir, "req.csr"), csrPem);
+          const sh = (command: string) => Bun.spawnSync(["sh", "-c", command], { cwd: dir, stderr: "pipe" });
+          expect(sh("openssl req -in req.csr -verify -noout").exitCode).toBe(0);
+          const fromKey = sh("openssl pkey -in key.pem -pubout").stdout.toString();
+          const fromCsr = sh("openssl req -in req.csr -pubkey -noout").stdout.toString();
+          expect(fromKey).toContain("BEGIN PUBLIC KEY");
+          expect(fromKey).toBe(fromCsr);
+        } finally {
+          rmSync(dir, { recursive: true, force: true });
+        }
+      }, 60_000);
+    }
+  }
+
   test("leaves out the CN when no name fits in one", async () => {
     const long = `${"a".repeat(60)}.${"b".repeat(10)}.example.com`;
     const dir = mkdtempSync(join(tmpdir(), "openssl-command-"));
@@ -196,9 +308,19 @@ describe("the web name rules", () => {
 });
 
 describe("the generator's imports", () => {
-  test("are the X.509 library and the name rules alone, and nothing sends anything, so there is nowhere for the key to go", () => {
-    const allowed = ["@peculiar/x509", "./csr-names", "./csr-generator"];
-    for (const file of [GENERATOR, NAME_RULES, INSPECTOR]) {
+  test("are the X.509 library, its ASN.1 schemas, noble and the name rules alone, and nothing sends anything, so there is nowhere for the key to go", () => {
+    const allowed = [
+      "@peculiar/x509",
+      "@peculiar/asn1-schema",
+      "@peculiar/asn1-csr",
+      "@peculiar/asn1-pkcs9",
+      "@peculiar/asn1-x509",
+      "@noble/post-quantum/ml-dsa.js",
+      "./csr-names",
+      "./csr-generator",
+      "./csr-ml-dsa",
+    ];
+    for (const file of [GENERATOR, NAME_RULES, INSPECTOR, ML_DSA_GENERATOR]) {
       const code = readFileSync(file, "utf8").replace(/\/\*[\s\S]*?\*\//g, "").replace(/\/\/.*$/gm, "");
       const imported = [...code.matchAll(/(?:from|import)\s*\(?\s*["']([^"']+)["']/g)].map((m) => m[1]!);
       for (const specifier of imported) expect(allowed).toContain(specifier);
