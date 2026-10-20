@@ -765,10 +765,12 @@ describe("editing the parameter values", () => {
 
   test.each([
     ["a required parameter with no value", { POOL: "green" }, "SITE_ID", "required"],
+    ["a required parameter left blank", { SITE_ID: "  " }, "SITE_ID", "required"],
     ["a parameter the version does not declare", { SITE_ID: SITE, SITEID: "7" }, "SITEID", "not a parameter"],
     ["a value over 1 KiB", { SITE_ID: "x".repeat(1025) }, "SITE_ID", "KiB"],
     ["a value with a NUL in it", { SITE_ID: "a\u0000b" }, "SITE_ID", "NUL"],
     ["a value with a newline in it", { SITE_ID: SITE, POOL: "a\nb" }, "POOL", "newline"],
+    ["a value with a carriage return in it", { SITE_ID: "a\rb" }, "SITE_ID", "newline"],
   ])("%s is refused with 400 naming the parameter, and the values are unchanged", async (_what, parameters, name, problem) => {
     await readyToIssue();
     const agent = await agentIn();
