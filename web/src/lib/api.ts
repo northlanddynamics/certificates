@@ -11,6 +11,8 @@ export class ApiError extends Error {
     message: string,
     /** The machine-readable reason, when the server gives one (Better Auth does, such as "SSO_REQUIRED"). */
     readonly code?: string,
+    /** What is wrong with each field at fault, by name, when the server says: such as `parameters` for refused parameter values. */
+    readonly fields?: { parameters?: Record<string, string> },
   ) {
     super(message);
   }
@@ -24,7 +26,7 @@ async function call<T>(path: string, init?: { method?: string; body?: unknown })
     body: init?.body ? JSON.stringify(init.body) : undefined,
   });
   const data = res.status === 204 ? null : await res.json().catch(() => null);
-  if (!res.ok) throw new ApiError(res.status, data?.error ?? data?.message ?? res.statusText, data?.code);
+  if (!res.ok) throw new ApiError(res.status, data?.error ?? data?.message ?? res.statusText, data?.code, data?.parameters ? { parameters: data.parameters } : undefined);
   return data as T;
 }
 
@@ -426,11 +428,22 @@ export type DnsProvider = { id: string; name: string; relayAgentIds: string[] } 
 );
 export type DnsProviderType = DnsProvider["type"];
 export type DnsProviderSettings = DnsProvider["settings"];
+/** A value a Deployment Script version asks for, declared in its `# deploy-params:begin` section; the script finds it in `DEPLOY_PARAM_` and the name. */
+export interface ScriptParameter {
+  name: string;
+  /** The name when the declaration gives none. */
+  label: string;
+  description: string;
+  required: boolean;
+  default?: string;
+}
 /** One version of a Deployment Script, identified by the SHA-256 of its content. */
 export interface DeploymentScriptVersion {
   version: number;
   hash: string;
   size: number;
+  /** What its parameter section declares, in its order: none for a version without one. */
+  parameters: ScriptParameter[];
   uploadedBy: string;
   uploadedAt: string;
 }
@@ -472,11 +485,15 @@ export interface Deployment {
   /** The Agent has been asked to run the script and has not yet reported. */
   runPending: boolean;
   lastRun: DeploymentRun | null;
+  /** The values the script is given, by parameter name; a parameter left unset is absent. */
+  parameters: Record<string, string>;
 }
 export interface NewDeployment {
   agentId: string;
   scriptId: string;
   scriptVersion?: number;
+  /** Values for the parameters the script version declares, by name; the server applies defaults and checks them. */
+  parameters?: Record<string, string>;
   names: string[];
   keyAlgorithm: string;
   /** An ACME CA in an environment, or an Issuing CA of one of the Organization's Private CAs. */

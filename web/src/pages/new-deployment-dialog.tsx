@@ -2,6 +2,7 @@ import { useMutation, useQuery, useQueryClient } from "@tanstack/react-query";
 import { BotIcon, CheckIcon, ClipboardCheckIcon, FileTerminalIcon, GlobeIcon, PlusIcon, RefreshCwIcon, TriangleAlertIcon, type LucideIcon } from "lucide-react";
 import { useEffect, useState, type FormEvent } from "react";
 import { IssuerChoiceFields, useIssuerChoice } from "@/components/issuer-choice";
+import { ParameterFields, missingParameters, shownValues } from "@/components/parameter-fields";
 import { SummaryRows } from "@/components/summary-rows";
 import { Alert, AlertDescription, AlertTitle } from "@/components/ui/alert";
 import { Button } from "@/components/ui/button";
@@ -11,7 +12,7 @@ import { Input } from "@/components/ui/input";
 import { RadioGroup, RadioGroupItem } from "@/components/ui/radio-group";
 import { Select, SelectContent, SelectItem, SelectTrigger, SelectValue } from "@/components/ui/select";
 import { Textarea } from "@/components/ui/textarea";
-import { api, can, type Me, type RenewalPolicy } from "@/lib/api";
+import { ApiError, api, can, type Me, type RenewalPolicy } from "@/lib/api";
 import { KEY_ALGORITHM_LABELS, isMlDsa, type KeyAlgorithm } from "@/lib/csr-generator";
 import { nameProblems, splitNames } from "@/lib/csr-names";
 import { permitsOnlyLabel } from "@/lib/private-ca";
@@ -68,6 +69,8 @@ function NewDeploymentForm({ org, onDone }: { org: Me["organizations"][number]; 
   }, [choice.keyAlgorithms, keyAlgorithm]);
   const [scriptId, setScriptId] = useState("");
   const [version, setVersion] = useState(LATEST);
+  // What was typed for each parameter name, kept across a version switch so a name both versions declare keeps its value.
+  const [typed, setTyped] = useState<Record<string, string>>({});
   const [mode, setMode] = useState<RenewalPolicy["mode"]>("automatic");
   const [days, setDays] = useState("30");
 
@@ -77,6 +80,10 @@ function NewDeploymentForm({ org, onDone }: { org: Me["organizations"][number]; 
   const usable = agents.data?.items.filter((a) => a.status !== "revoked") ?? [];
   const chosenAgent = usable.find((a) => a.id === agentId);
   const chosenScript = scripts.data?.items.find((s) => s.id === scriptId);
+  const versions = script.data?.versions ?? [];
+  const chosenVersion = version === LATEST ? (script.data?.latestVersion ?? chosenScript?.latestVersion) : versions.find((v) => v.version === Number(version));
+  const declared = chosenVersion?.parameters ?? [];
+  const parameters = shownValues(declared, typed);
 
   const parsedNames = splitNames(names);
   const problems = nameProblems(parsedNames);
@@ -85,7 +92,7 @@ function NewDeploymentForm({ org, onDone }: { org: Me["organizations"][number]; 
   const complete: Record<StepId, boolean> = {
     agent: chosenAgent !== undefined,
     certificate: problems.length === 0 && choice.validityOk,
-    script: chosenScript !== undefined,
+    script: chosenScript !== undefined && chosenVersion !== undefined && missingParameters(declared, parameters).length === 0,
     renewal: mode === "manual" || daysValid,
     review: true,
   };
@@ -103,6 +110,7 @@ function NewDeploymentForm({ org, onDone }: { org: Me["organizations"][number]; 
         agentId,
         scriptId,
         ...(version !== LATEST && { scriptVersion: Number(version) }),
+        parameters,
         names: parsedNames,
         keyAlgorithm,
         ...choice.request,
@@ -112,8 +120,12 @@ function NewDeploymentForm({ org, onDone }: { org: Me["organizations"][number]; 
       await Promise.all([queryClient.invalidateQueries({ queryKey: ["deployments"] }), queryClient.invalidateQueries({ queryKey: ["inventory"] })]);
       onDone();
     },
+    // The server is the authority on the values: one it refuses is shown against its field, on the step that has it.
+    onError: (error) => {
+      if (error instanceof ApiError && Object.keys(error.fields?.parameters ?? {}).some((name) => declared.some((p) => p.name === name))) setStep("script");
+    },
   });
-  const versions = script.data?.versions ?? [];
+  const parameterProblems = create.error instanceof ApiError ? create.error.fields?.parameters : undefined;
 
   return (
     <form
@@ -218,6 +230,8 @@ function NewDeploymentForm({ org, onDone }: { org: Me["organizations"][number]; 
                 onValueChange={(value) => {
                   setScriptId(value);
                   setVersion(LATEST);
+                  setTyped({});
+                  create.reset();
                 }}
               >
                 <SelectTrigger id="new-deployment-script" className="w-full">
@@ -240,7 +254,13 @@ function NewDeploymentForm({ org, onDone }: { org: Me["organizations"][number]; 
             {chosenScript && (
               <Field>
                 <FieldLabel htmlFor="new-deployment-version">Version</FieldLabel>
-                <Select value={version} onValueChange={setVersion}>
+                <Select
+                  value={version}
+                  onValueChange={(value) => {
+                    setVersion(value);
+                    create.reset();
+                  }}
+                >
                   <SelectTrigger id="new-deployment-version" className="w-full">
                     <SelectValue />
                   </SelectTrigger>
@@ -255,6 +275,22 @@ function NewDeploymentForm({ org, onDone }: { org: Me["organizations"][number]; 
                 </Select>
                 <FieldDescription>The Deployment keeps to this version; a later version is not run unless you set up another Deployment.</FieldDescription>
               </Field>
+            )}
+            {declared.length > 0 && (
+              <FieldSet>
+                <FieldLegend variant="label">Parameters</FieldLegend>
+                <FieldDescription>What this version asks for. The values are kept in plain text on the Deployment and given to the script at every run: put nothing secret here.</FieldDescription>
+                <ParameterFields
+                  declared={declared}
+                  typed={typed}
+                  problems={parameterProblems}
+                  idPrefix="new-deployment"
+                  onChange={(name, value) => {
+                    setTyped((t) => ({ ...t, [name]: value }));
+                    create.reset();
+                  }}
+                />
+              </FieldSet>
             )}
           </FieldGroup>
         )}
@@ -310,6 +346,22 @@ function NewDeploymentForm({ org, onDone }: { org: Me["organizations"][number]; 
                     label: "Script",
                     value: chosenScript && `${chosenScript.name}, version ${version === LATEST ? chosenScript.latestVersion.version : version}`,
                   },
+                  ...(declared.length > 0
+                    ? [
+                        {
+                          label: "Parameters",
+                          value: (
+                            <ul className="flex flex-col gap-0.5 font-mono text-xs">
+                              {declared.map((p) => (
+                                <li key={p.name}>
+                                  {p.name} = {parameters[p.name]?.trim() ? parameters[p.name] : p.default?.trim() ? `${p.default} (default)` : <span className="font-sans text-muted-foreground">not set</span>}
+                                </li>
+                              ))}
+                            </ul>
+                          ),
+                        },
+                      ]
+                    : []),
                   { label: "Renewal", value: mode === "automatic" ? `Automatic, ${days} days before expiry` : "Manual" },
                 ]}
               />

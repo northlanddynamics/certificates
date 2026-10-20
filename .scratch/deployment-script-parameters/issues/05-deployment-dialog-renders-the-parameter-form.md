@@ -12,3 +12,7 @@
 - [ ] A required input left blank blocks submit; a server `400` is shown against the field at fault
 - [ ] Created through the dialog, the Deployment's script receives the values
 - [ ] Checked by hand in the app (no web test runner)
+
+## Comments
+
+- Implemented in `web/src/components/parameter-fields.tsx` (shared with ticket 06) and `web/src/pages/new-deployment-dialog.tsx`. A cleared field with a default sends blank, so the server applies the default, matching `parameterValues` on the server; the default shows as the placeholder. A `400` naming a declared parameter returns to the Script step with the problem shown against that field. Typecheck, CI and the hand check in the app are left to the PR: this environment cannot run them.
