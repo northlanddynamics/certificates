@@ -66,7 +66,7 @@ Each resource's verbs, as of this writing. New ones may be added within version 
 | `agent_registration_token` | `created` |
 | `agent` | `registered`, `credential_rotated`, `revoked` |
 | `deployment_script` | `uploaded` |
-| `deployment` | `created`, `key_generated`, `key_failed`, `key_requested`, `run_requested` |
+| `deployment` | `created`, `key_generated`, `key_failed`, `key_requested`, `run_requested`, `parameters_changed` |
 | `deployment_run` | `succeeded`, `failed` |
 | `notification_channel` | `created`, `deleted` |
 | `audit_forwarder` | `created`, `deleted` |

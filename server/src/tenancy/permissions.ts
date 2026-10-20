@@ -42,8 +42,8 @@ const statements = {
   deploymentScript: ["read", "upload"],
   // Deployments: an Agent making the key for a Managed Certificate and running a Deployment Script to put its Certificates to
   // use, which is running code on hosts, so only Organization Administrators hold any of this. `create` sets one up, `read`
-  // sees them and their runs, `run` has an Agent run one again for its current Certificate.
-  deployment: ["read", "create", "run"],
+  // sees them and their runs, `run` has an Agent run one again for its current Certificate, `update` replaces its parameter values.
+  deployment: ["read", "create", "run", "update"],
   // Notification channels: email addresses and webhooks a Managed Certificate's notices can go to. `read` lists them (names
   // and kinds, never a webhook's URL), so anyone who may subscribe one may choose it; `create` and `delete` configure them.
   notificationChannel: ["read", "create", "delete"],

@@ -235,6 +235,25 @@ describe("parameter values", () => {
     ]);
     expect((await runsOf(d.id)).map((r) => r.status)).toEqual(["succeeded", "succeeded"]);
   });
+
+  test("a Renewal after the values are edited gives the Agent the new values", async () => {
+    await readyToIssue();
+    const agent = await agentIn();
+    const content = ["#!/usr/bin/env bash", "# deploy-params:begin", '# [{ "name": "SITE_ID", "required": true }, { "name": "PORT", "default": "443" }]', "# deploy-params:end", "true", ""].join("\n");
+    const script = await api("/deployment-scripts", { name: "bind-site", interpreter: "bash", content });
+    expect(script.status).toBe(201);
+    const d = await deployed(agent, { scriptId: script.body.id, parameters: { SITE_ID: "site-7" } });
+
+    expect((await api(`/deployments/${d.id}/parameters`, { SITE_ID: "site-8", PORT: "8443" }, "PUT")).status).toBe(200);
+    h.setNow(await dueOf(d.managedCertificateId));
+    expect(await schedule()).toBe(1);
+    await agentWorks(agent);
+
+    expect(agent.deployed.map((r) => r.item.payload.parameters)).toEqual([
+      { SITE_ID: "site-7", PORT: "443" },
+      { SITE_ID: "site-8", PORT: "8443" },
+    ]);
+  });
 });
 
 describe("a new key the Agent cannot make", () => {
