@@ -1,22 +1,22 @@
 import { ClipboardPasteIcon, UploadIcon, XIcon } from "lucide-react";
 import { useEffect, useRef, useState, type DragEvent } from "react";
 import { InputGroup, InputGroupAddon, InputGroupButton, InputGroupText, InputGroupTextarea } from "@/components/ui/input-group";
-import { readCsrFile, readCsrText } from "@/lib/csr-input";
+import { readPkiFile, readPkiText } from "@/lib/pki-input";
 
 const isEditable = (target: EventTarget | null) => target instanceof HTMLElement && (target.isContentEditable || ["INPUT", "TEXTAREA", "SELECT"].includes(target.tagName));
 
 /**
- * Takes a CSR typed, pasted (into the box, or anywhere on the page), chosen as a file, or dropped on the box, whether
+ * Takes a CSR or a certificate typed, pasted (into the box, or anywhere on the page), chosen as a file, or dropped on the box, whether
  * PEM or DER, and hands its text up. A private key is never kept: it is cleared and the user is told. Nothing is sent
  * anywhere; the text goes only to `onChange`.
  */
-export function CsrDropField({ id, value, onChange }: { id: string; value: string; onChange: (text: string) => void }) {
+export function PemDropField({ id, value, onChange }: { id: string; value: string; onChange: (text: string) => void }) {
   const [dragging, setDragging] = useState(false);
   const [notice, setNotice] = useState<string | null>(null);
   const fileInput = useRef<HTMLInputElement>(null);
   // The latest handler, so the page-level listener below is added once.
   const accept = (text: string) => {
-    const read = readCsrText(text);
+    const read = readPkiText(text);
     if (read?.kind === "refused" && read.clear) {
       onChange("");
       setNotice(read.problem);
@@ -28,7 +28,7 @@ export function CsrDropField({ id, value, onChange }: { id: string; value: strin
   const acceptRef = useRef(accept);
   acceptRef.current = accept;
 
-  // Pasting with nothing focused, as after opening the page with a CSR on the clipboard, fills the box all the same.
+  // Pasting with nothing focused, as after opening the page with a CSR or certificate on the clipboard, fills the box all the same.
   useEffect(() => {
     const onPaste = (e: ClipboardEvent) => {
       if (isEditable(e.target)) return;
@@ -40,7 +40,7 @@ export function CsrDropField({ id, value, onChange }: { id: string; value: strin
   }, []);
 
   async function acceptFile(file: File) {
-    const read = await readCsrFile(file);
+    const read = await readPkiFile(file);
     if ("problem" in read) setNotice(read.problem);
     else accept(read.text);
   }
@@ -73,18 +73,18 @@ export function CsrDropField({ id, value, onChange }: { id: string; value: strin
           spellCheck={false}
           autoComplete="off"
           className="max-h-72 min-h-48 font-mono text-xs field-sizing-fixed"
-          placeholder={"-----BEGIN CERTIFICATE REQUEST-----\n\nPaste a CSR here, or drop a .csr or .pem file on this box."}
-          aria-label="CSR (PEM or DER file)"
+          placeholder={"-----BEGIN CERTIFICATE REQUEST-----\n  or\n-----BEGIN CERTIFICATE-----\n\nPaste a CSR or a certificate here, or drop a file on this box."}
+          aria-label="CSR or certificate (PEM)"
           value={value}
           onChange={(e) => accept(e.target.value)}
         />
-        {dragging && <div className="pointer-events-none absolute inset-0 flex items-center justify-center rounded-lg bg-background/80 text-sm font-medium">Drop to read this CSR</div>}
+        {dragging && <div className="pointer-events-none absolute inset-0 flex items-center justify-center rounded-lg bg-background/80 text-sm font-medium">Drop to read this file</div>}
         <InputGroupAddon align="block-end" className="flex-wrap border-t">
           <input
             ref={fileInput}
             type="file"
             hidden
-            accept=".csr,.pem,.req,.txt,.der"
+            accept=".csr,.req,.pem,.crt,.cer,.cert,.der,.txt"
             onChange={(e) => {
               const file = e.target.files?.[0];
               // So that choosing the same file again reads it again.

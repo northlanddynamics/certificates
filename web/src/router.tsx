@@ -12,7 +12,7 @@ import { AgentsPage } from "./pages/agents";
 import { ApiKeysPage } from "./pages/api-keys";
 import { CertificatesPage } from "./pages/certificates";
 import { CsrToolsPage } from "./pages/csr-tools";
-import { CsrViewerPage } from "./pages/csr-viewer";
+import { ViewerPage } from "./pages/viewer";
 import { DeploymentScriptsPage } from "./pages/deployment-scripts";
 import { DeploymentsPage } from "./pages/deployments";
 import { DnsProvidersPage } from "./pages/dns-providers";
@@ -207,10 +207,10 @@ const csrToolsRoute = createRoute({
   component: CsrToolsPage,
 });
 
-const csrViewerRoute = createRoute({
+const viewerRoute = createRoute({
   getParentRoute: () => appRoute,
-  path: "/organizations/$orgId/tools/csr-viewer",
-  component: CsrViewerPage,
+  path: "/organizations/$orgId/tools/viewer",
+  component: ViewerPage,
 });
 
 const platformOrganizationsRoute = createRoute({
@@ -233,7 +233,7 @@ const routeTree = rootRoute.addChildren([
       certificateUnknownTabRoute,
     ]),
     membersRoute, teamsRoute, apiKeysRoute, agentsRoute, deploymentsRoute, deploymentScriptsRoute, acmeAccountsRoute, privateCasRoute, enrollmentProfilesRoute, deviceCertificatesRoute, dnsProvidersRoute, notificationChannelsRoute, auditLogRoute, auditForwardingRoute, signInSettingsRoute,
-    loginPolicyRedirectRoute, ssoConnectionsRedirectRoute, csrToolsRoute, csrViewerRoute,
+    loginPolicyRedirectRoute, ssoConnectionsRedirectRoute, csrToolsRoute, viewerRoute,
     accountSecurityRoute,
     platformOrganizationsRoute,
   ]),

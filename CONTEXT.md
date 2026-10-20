@@ -56,9 +56,9 @@ _Avoid_: key mode, key ownership
 A tool in the web app that makes a key pair and a CSR in the user's browser, for an Owner who keeps their own key. The key is made with the browser's WebCrypto (for ML-DSA, where the browser has none, with a pure-JS library loaded only then), never sent to the platform, and offered to the user to download or copy; only the CSR is ever submitted. It stands on its own under Tools in the Organization sidebar, and is the way to make the CSR that Key Custody: Owner asks for.
 _Avoid_: key generator, CSR wizard
 
-**CSR Viewer**:
-A tool in the web app that reads a CSR pasted, dropped or chosen as a file (PEM or DER) and shows everything it asks for (subject, names, key, signature, requested extensions) and whether the platform would take it, by the rules the server applies. It runs in the user's browser and sends the CSR nowhere, and it never keeps a private key pasted into it. It stands under Tools beside the CSR Generator.
-_Avoid_: CSR parser, CSR decoder
+**Viewer**:
+A tool in the web app that reads a CSR or an X.509 certificate, pasted, dropped or chosen as a file (PEM or DER), without being told which, and shows what it holds. For a CSR that is its subject, names, key, signature and requested extensions, and whether the platform would take it, by the rules the server applies; for a certificate, who it is for and from, when it is valid, and its names, key, signature and extensions. A file with several, such as a chain, is shown one at a time. It runs in the user's browser and sends nothing, never keeps a private key pasted into it, and does not build chains, so a certificate its issuer signed has its signature left unchecked. It stands under Tools beside the CSR Generator.
+_Avoid_: CSR parser, CSR decoder, certificate decoder
 
 **Approval**:
 An Approver's authorization of a Managed Certificate's names; required when a non-administrator creates a Managed Certificate or changes its names, but never for Renewal or for changes made by an Organization Administrator. While a name change is pending Approval, Renewal continues with the last approved names.

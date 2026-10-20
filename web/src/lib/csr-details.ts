@@ -1,65 +1,28 @@
-// Reads everything a CSR says, for the CSR Viewer: its subject, names, key, signature, requested extensions and
+// Reads everything a CSR says, for the Viewer: its subject, names, key, signature, requested extensions and
 // attributes, and whether the platform would take it. It decides nothing: the server's parseCsr does, and the rules in
-// `fit` are a copy of that function's, which server/test/csr-generator.test.ts holds the two to. Pure, with no fetch, so a
+// `fit` are a copy of that function's, which server/test/csr-viewer.test.ts holds the two to. Pure, with no fetch, so a
 // pasted CSR goes nowhere (ADR 0002 keeps keys off the platform; this keeps CSRs off it too until they are submitted).
 import * as x509 from "@peculiar/x509";
-import { KEY_ALGORITHM_LABELS, type KeyAlgorithm } from "./csr-generator";
-import { keyOf } from "./csr-inspect";
 import { MAX_NAMES, normalizeName } from "./csr-names";
 import { weakSignatureWarning } from "./csr-signature";
+import {
+  NAME_TYPE_LABELS,
+  SUBJECT_ALTERNATIVE_NAME,
+  digest,
+  extensionsOf,
+  isCaExtension,
+  signatureLabel,
+  subjectFields,
+  summarizeKey,
+  type KeySummary,
+  type PkiExtension,
+  type SignatureCheck,
+  type SubjectField,
+} from "./pki-common";
 
-// By OID: looked up by class, an extension is not found when two copies of the library are loaded.
-const SUBJECT_ALTERNATIVE_NAME = "2.5.29.17";
+export type { SignatureCheck } from "./pki-common";
+
 const EXTENSION_REQUEST = "1.2.840.113549.1.9.14";
-
-const SUBJECT_LABELS: Record<string, string> = {
-  CN: "Common name",
-  O: "Organization",
-  OU: "Organizational unit",
-  C: "Country",
-  ST: "State or province",
-  L: "Locality",
-  E: "Email",
-  DC: "Domain component",
-  SERIALNUMBER: "Serial number",
-  STREET: "Street",
-  T: "Title",
-};
-
-const NAME_TYPE_LABELS: Record<string, string> = { dns: "DNS", ip: "IP", email: "Email", url: "URI", dn: "Directory name", guid: "GUID", upn: "UPN", id: "Registered ID" };
-
-const EXTENSION_LABELS: Record<string, string> = {
-  "2.5.29.14": "Subject key identifier",
-  "2.5.29.15": "Key usage",
-  "2.5.29.17": "Subject alternative names",
-  "2.5.29.19": "Basic constraints",
-  "2.5.29.32": "Certificate policies",
-  "2.5.29.37": "Extended key usage",
-  "1.3.6.1.5.5.7.1.24": "TLS feature",
-  "1.3.6.1.4.1.311.20.2": "Microsoft certificate template name",
-  "1.3.6.1.4.1.311.21.7": "Microsoft certificate template",
-};
-
-const EXTENDED_KEY_USAGE_LABELS: Record<string, string> = {
-  "1.3.6.1.5.5.7.3.1": "TLS server authentication",
-  "1.3.6.1.5.5.7.3.2": "TLS client authentication",
-  "1.3.6.1.5.5.7.3.3": "Code signing",
-  "1.3.6.1.5.5.7.3.4": "Email protection",
-  "1.3.6.1.5.5.7.3.8": "Time stamping",
-  "1.3.6.1.5.5.7.3.9": "OCSP signing",
-};
-
-const KEY_USAGE_LABELS: [x509.KeyUsageFlags, string][] = [
-  [x509.KeyUsageFlags.digitalSignature, "Digital signature"],
-  [x509.KeyUsageFlags.nonRepudiation, "Non-repudiation"],
-  [x509.KeyUsageFlags.keyEncipherment, "Key encipherment"],
-  [x509.KeyUsageFlags.dataEncipherment, "Data encipherment"],
-  [x509.KeyUsageFlags.keyAgreement, "Key agreement"],
-  [x509.KeyUsageFlags.keyCertSign, "Certificate signing"],
-  [x509.KeyUsageFlags.cRLSign, "CRL signing"],
-  [x509.KeyUsageFlags.encipherOnly, "Encipher only"],
-  [x509.KeyUsageFlags.decipherOnly, "Decipher only"],
-];
 
 const ATTRIBUTE_LABELS: Record<string, string> = {
   "1.2.840.113549.1.9.2": "Unstructured name",
@@ -70,16 +33,6 @@ const CHALLENGE_PASSWORD = "1.2.840.113549.1.9.7";
 
 /** The platform's key algorithms in words, for a refusal; a copy of the server's SUPPORTED. */
 const SUPPORTED = "ECDSA (P-256, P-384), RSA (2048, 3072, 4096) and ML-DSA (ML-DSA-44, ML-DSA-65, ML-DSA-87)";
-
-export type SignatureCheck = "valid" | "invalid" | "unchecked";
-
-export interface CsrSubjectField {
-  /** As the library names it: CN, O, or an OID it does not know. */
-  type: string;
-  /** In words, where it is known; else the type again. */
-  label: string;
-  value: string;
-}
 
 export interface CsrName {
   /** Where it was asked for: a subject alternative name, or the subject's CN. */
@@ -93,14 +46,6 @@ export interface CsrName {
   /** The CN repeats a name already asked for. */
   repeat: boolean;
   problem: string | null;
-}
-
-export interface CsrExtension {
-  oid: string;
-  label: string;
-  critical: boolean;
-  /** What it asks for, in words. */
-  summary: string;
 }
 
 export interface CsrAttribute {
@@ -118,21 +63,13 @@ export interface CsrFitCheck {
 }
 
 export interface CsrDetails {
-  subject: CsrSubjectField[];
+  subject: SubjectField[];
   names: CsrName[];
   /** The platform's view of the names: DNS only, normalised, without repeats. Empty when any name is refused. */
   distinctNames: string[];
-  key: {
-    /** One the platform accepts, or null for any other. */
-    algorithm: KeyAlgorithm | null;
-    /** In words, such as "RSA 2048" or "ECDSA P-521". */
-    label: string;
-    /** SHA-256 of the public key's DER SubjectPublicKeyInfo, lower-case hex: what a certificate or private key made for it also has. */
-    sha256: string;
-    publicKeyPem: string;
-  };
+  key: KeySummary;
   signature: { algorithm: string; check: SignatureCheck };
-  extensions: CsrExtension[];
+  extensions: PkiExtension[];
   attributes: CsrAttribute[];
   /** Things worth knowing that do not stop the platform taking it. */
   warnings: string[];
@@ -148,9 +85,6 @@ export interface CsrDetails {
 
 export type CsrReading = { ok: true; details: CsrDetails } | { ok: false; error: string };
 
-const hex = (bytes: ArrayBuffer) => [...new Uint8Array(bytes)].map((b) => b.toString(16).padStart(2, "0")).join("");
-const sha256 = async (data: ArrayBuffer) => hex(await crypto.subtle.digest("SHA-256", data));
-
 /** An ML-DSA signature is checked by the browser's WebCrypto where it can, and otherwise by noble, loaded only then. */
 async function checkSignature(csr: x509.Pkcs10CertificateRequest, mlDsa: boolean): Promise<SignatureCheck> {
   if (await csr.verify().catch(() => false)) return "valid";
@@ -160,22 +94,6 @@ async function checkSignature(csr: x509.Pkcs10CertificateRequest, mlDsa: boolean
   } catch {
     return "unchecked";
   }
-}
-
-/** A key the platform does not accept, in words: its curve or size where WebCrypto can name it. */
-async function otherKeyLabel(publicKey: x509.PublicKey): Promise<string> {
-  const p521 = await crypto.subtle.importKey("spki", publicKey.rawData, { name: "ECDSA", namedCurve: "P-521" }, true, ["verify"]).then(() => true, () => false);
-  if (p521) return "ECDSA P-521";
-  const name = publicKey.algorithm.name;
-  return name ? `${name} key` : "an unrecognised key";
-}
-
-function signatureLabel(csr: x509.Pkcs10CertificateRequest): string {
-  const { name, hash } = csr.signatureAlgorithm as { name: string; hash?: { name: string } };
-  if (name === "1.2.840.113549.1.1.4") return "RSA PKCS#1 v1.5 with MD5";
-  if (name === "RSASSA-PKCS1-v1_5") return `RSA PKCS#1 v1.5 with ${hash?.name ?? "an unknown hash"}`;
-  if (name === "ECDSA") return `ECDSA with ${hash?.name ?? "an unknown hash"}`;
-  return name;
 }
 
 function namesOf(csr: x509.Pkcs10CertificateRequest): CsrName[] {
@@ -194,41 +112,6 @@ function namesOf(csr: x509.Pkcs10CertificateRequest): CsrName[] {
   });
 }
 
-function extensionSummary(extension: x509.Extension): string {
-  switch (extension.type) {
-    case SUBJECT_ALTERNATIVE_NAME: {
-      const items = new x509.SubjectAlternativeNameExtension(extension.rawData).names.items;
-      return `${items.length} ${items.length === 1 ? "name" : "names"}, listed above`;
-    }
-    case "2.5.29.15": {
-      const flags = new x509.KeyUsagesExtension(extension.rawData).usages;
-      return KEY_USAGE_LABELS.filter(([flag]) => (flags & flag) !== 0).map(([, label]) => label).join(", ") || "None";
-    }
-    case "2.5.29.37":
-      return new x509.ExtendedKeyUsageExtension(extension.rawData).usages.map((usage) => EXTENDED_KEY_USAGE_LABELS[String(usage)] ?? String(usage)).join(", ") || "None";
-    case "2.5.29.19": {
-      const { ca, pathLength } = new x509.BasicConstraintsExtension(extension.rawData);
-      return ca ? `CA${pathLength === undefined ? "" : `, path length ${pathLength}`}` : "Not a CA";
-    }
-    case "2.5.29.14":
-      return new x509.SubjectKeyIdentifierExtension(extension.rawData).keyId;
-    default:
-      return `${extension.value.byteLength} bytes`;
-  }
-}
-
-function extensionsOf(csr: x509.Pkcs10CertificateRequest): CsrExtension[] {
-  return csr.extensions.map((extension) => {
-    let summary: string;
-    try {
-      summary = extensionSummary(extension);
-    } catch {
-      summary = `${extension.value.byteLength} bytes, which could not be read`;
-    }
-    return { oid: extension.type, label: EXTENSION_LABELS[extension.type] ?? extension.type, critical: extension.critical, summary };
-  });
-}
-
 // The extensions are shown on their own, so the attribute that carries them is not.
 function attributesOf(csr: x509.Pkcs10CertificateRequest): CsrAttribute[] {
   return csr.attributes
@@ -240,7 +123,7 @@ function attributesOf(csr: x509.Pkcs10CertificateRequest): CsrAttribute[] {
     }));
 }
 
-function fitOf(check: SignatureCheck, key: CsrDetails["key"], names: CsrName[], distinctNames: string[]): CsrFitCheck[] {
+function fitOf(check: SignatureCheck, key: KeySummary, names: CsrName[], distinctNames: string[]): CsrFitCheck[] {
   const refused = names.filter((name) => name.problem);
   const namesText =
     names.length === 0
@@ -276,35 +159,36 @@ export async function parseCsrDetails(pem: string): Promise<CsrReading> {
   }
   try {
     const mlDsa = csr.publicKey.algorithm.name.startsWith("ML-DSA");
-    const [check, key, fingerprint, keySha256] = await Promise.all([checkSignature(csr, mlDsa), keyOf(csr.publicKey), sha256(csr.rawData), sha256(csr.publicKey.rawData)]);
+    const [check, key, fingerprint] = await Promise.all([checkSignature(csr, mlDsa), summarizeKey(csr.publicKey), digest("SHA-256", csr.rawData)]);
     const names = namesOf(csr);
     const distinctNames = [...new Set(names.map((name) => name.normalized).filter((name): name is string => name !== null))];
-    const details: Omit<CsrDetails, "fit" | "acceptable" | "warnings"> = {
-      subject: csr.subjectName.toJSON().flatMap((rdn) => Object.entries(rdn).flatMap(([type, values]) => values.map((value) => ({ type, label: SUBJECT_LABELS[type] ?? type, value })))),
-      names,
-      distinctNames,
-      key: {
-        algorithm: key.keyAlgorithm,
-        label: key.keyAlgorithm ? key.keyLabel : key.keyLabel.startsWith("RSA ") ? key.keyLabel : await otherKeyLabel(csr.publicKey),
-        sha256: keySha256,
-        publicKeyPem: x509.PemConverter.encode(csr.publicKey.rawData, "PUBLIC KEY"),
-      },
-      signature: { algorithm: signatureLabel(csr), check },
-      extensions: extensionsOf(csr),
-      attributes: attributesOf(csr),
-      fingerprint,
-      derLength: csr.rawData.byteLength,
-      pem: csr.toString("pem"),
-    };
-    const fit = fitOf(check, details.key, names, distinctNames);
+    const extensions = extensionsOf(csr.extensions);
+    const fit = fitOf(check, key, names, distinctNames);
     const warnings: string[] = [];
-    const weak = weakSignatureWarning(details.pem);
+    const pemText = csr.toString("pem");
+    const weak = weakSignatureWarning(pemText);
     if (weak) warnings.push(weak);
     if (names.length > 0 && !names.some((name) => name.source === "san"))
       warnings.push("It has no subject alternative names, only a common name. Browsers ignore the common name, so a certificate issued for it would not work for them.");
-    if (details.extensions.some((extension) => extension.oid === "2.5.29.19" && extension.summary.startsWith("CA")))
-      warnings.push("It asks for a CA certificate (basic constraints CA:TRUE). A certificate authority would normally refuse that for a TLS certificate.");
-    return { ok: true, details: { ...details, fit, warnings, acceptable: fit.every((check) => check.ok !== false) } };
+    if (extensions.some(isCaExtension)) warnings.push("It asks for a CA certificate (basic constraints CA:TRUE). A certificate authority would normally refuse that for a TLS certificate.");
+    return {
+      ok: true,
+      details: {
+        subject: subjectFields(csr.subjectName),
+        names,
+        distinctNames,
+        key,
+        signature: { algorithm: signatureLabel(csr.signatureAlgorithm), check },
+        extensions,
+        attributes: attributesOf(csr),
+        warnings,
+        fit,
+        acceptable: fit.every((item) => item.ok !== false),
+        fingerprint,
+        derLength: csr.rawData.byteLength,
+        pem: pemText,
+      },
+    };
   } catch {
     return { ok: false, error: "This CSR is well formed but something in it could not be read." };
   }
