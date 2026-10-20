@@ -73,7 +73,7 @@ describe("uploading", () => {
       id: expect.any(String),
       name: "install-cert",
       interpreter: "bash",
-      latestVersion: { version: 1, hash: HELLO.hash, size: 11, uploadedBy: "admin@acme.test", uploadedAt: "2026-01-01T00:00:00.000Z" },
+      latestVersion: { version: 1, hash: HELLO.hash, size: 11, parameters: [], uploadedBy: "admin@acme.test", uploadedAt: "2026-01-01T00:00:00.000Z" },
     });
   });
 
@@ -102,7 +102,7 @@ describe("versions", () => {
       id,
       name: "install-cert",
       interpreter: "bash",
-      latestVersion: { version: 2, hash: GOODBYE.hash, size: 13, uploadedBy: "admin@acme.test", uploadedAt: "2026-01-02T00:00:00.000Z" },
+      latestVersion: { version: 2, hash: GOODBYE.hash, size: 13, parameters: [], uploadedBy: "admin@acme.test", uploadedAt: "2026-01-02T00:00:00.000Z" },
     });
     expect((await h.api(`${scriptsOf()}/${id}`, { cookie: acmeOrg.cookie })).body.versions.map((v: any) => [v.version, v.hash])).toEqual([
       [2, GOODBYE.hash],
@@ -224,7 +224,7 @@ describe("viewing the library", () => {
     const old = await h.api(`${scriptsOf()}/${id}/versions/${HELLO.hash}`, { cookie: acmeOrg.cookie });
 
     expect(old.status).toBe(200);
-    expect(old.body).toEqual({ version: 1, hash: HELLO.hash, size: 11, uploadedBy: "admin@acme.test", uploadedAt: "2026-01-01T00:00:00.000Z", content: HELLO.content });
+    expect(old.body).toEqual({ version: 1, hash: HELLO.hash, size: 11, parameters: [], uploadedBy: "admin@acme.test", uploadedAt: "2026-01-01T00:00:00.000Z", content: HELLO.content });
     expect((await h.api(`${scriptsOf()}/${id}/versions/${"0".repeat(64)}`, { cookie: acmeOrg.cookie })).status).toBe(404);
   });
 
@@ -317,5 +317,106 @@ describe("who may see and upload", () => {
     for (const path of [scriptsOf(), `${scriptsOf()}/${id}`, `${scriptsOf()}/${id}/versions/${HELLO.hash}`]) {
       expect((await h.api(path, { cookie })).status).toBe(403);
     }
+  });
+});
+
+describe("declared parameters", () => {
+  /** A Bash script whose parameter section holds `declaration`, each of its lines commented out as the format asks. */
+  const declaring = (declaration: string) =>
+    ["#!/bin/bash", "# deploy-params:begin", ...declaration.split("\n").map((line) => (line ? `# ${line}` : "#")), "# deploy-params:end", 'echo "$DEPLOY_PARAM_SITE_ID"', ""].join("\n");
+  const SITE_AND_PORT = declaring(`[
+  { "name": "SITE_ID", "label": "Site id", "description": "The IIS site the Certificate is bound to.", "required": true },
+  { "name": "PORT", "description": "The HTTPS port.", "required": false, "default": "443" }
+]`);
+
+  test("a script's parameter section is returned, as declared, when the script and the version are read", async () => {
+    const created = await upload({ name: "bind-site", interpreter: "bash", content: SITE_AND_PORT });
+    expect(created.status).toBe(201);
+    const { id, latestVersion } = created.body;
+
+    const parameters = [
+      { name: "SITE_ID", label: "Site id", description: "The IIS site the Certificate is bound to.", required: true },
+      // The label falls back to the name.
+      { name: "PORT", label: "PORT", description: "The HTTPS port.", required: false, default: "443" },
+    ];
+    const script = await h.api(`${scriptsOf()}/${id}`, { cookie: acmeOrg.cookie });
+    expect(script.body.latestVersion.parameters).toEqual(parameters);
+    expect(script.body.versions[0].parameters).toEqual(parameters);
+    const version = await h.api(`${scriptsOf()}/${id}/versions/${latestVersion.hash}`, { cookie: acmeOrg.cookie });
+    expect(version.body.parameters).toEqual(parameters);
+    expect(version.body.content).toBe(SITE_AND_PORT);
+  });
+
+  const param = (name: string, extra: object = {}) => ({ name, label: name, description: "", required: false, ...extra });
+  const twenty = Array.from({ length: 20 }, (_, i) => param(`P${i + 1}`));
+
+  test.each([
+    ["a section with no end line", ["#!/bin/bash", "# deploy-params:begin", '# [{ "name": "SITE_ID" }]', "echo hi", ""].join("\n"), "deploy-params:end"],
+    ["a line inside the section that is not a comment", ["# deploy-params:begin", '[{ "name": "SITE_ID" }]', "# deploy-params:end", ""].join("\n"), "line 2"],
+    ["a second parameter section", declaring('[{ "name": "SITE_ID" }]') + declaring('[{ "name": "PORT" }]'), "more than one"],
+    ["an end line with no section begun", ["echo hi", "# deploy-params:end", ""].join("\n"), "deploy-params:begin"],
+    ["a section that is not JSON", declaring('[{ name: "SITE_ID" }]'), "not JSON"],
+    ["a section that is not an array", declaring('{ "name": "SITE_ID" }'), "array"],
+    ["a parameter with no name", declaring('[{ "label": "Site" }]'), "name"],
+    ["a field the format does not have", declaring('[{ "name": "SITE_ID", "requried": true }]'), "requried"],
+    ["a required flag that is not true or false", declaring('[{ "name": "SITE_ID", "required": "yes" }]'), "required"],
+    ["the same name twice", declaring('[{ "name": "SITE_ID" }, { "name": "SITE_ID" }]'), "SITE_ID"],
+    ["a lower-case name", declaring('[{ "name": "site_id" }]'), "site_id"],
+    ["a name starting with a digit", declaring('[{ "name": "1SITE" }]'), "1SITE"],
+    ["a name starting with an underscore", declaring('[{ "name": "_SITE" }]'), "_SITE"],
+    ["a name with a character a variable cannot have", declaring('[{ "name": "SITE-ID" }]'), "SITE-ID"],
+    ["a name that already carries the prefix", declaring('[{ "name": "DEPLOY_PARAM_SITE" }]'), "DEPLOY_PARAM_SITE"],
+    ["more than 20 parameters", declaring(JSON.stringify([...twenty, param("P21")])), "20"],
+    ["a default with a newline in it", declaring('[{ "name": "SITE_ID", "default": "a\\nb" }]'), "SITE_ID"],
+    ["a default over 1 KiB", declaring(JSON.stringify([param("SITE_ID", { default: "x".repeat(1025) })])), "SITE_ID"],
+  ])("an upload with %s is refused with 422 naming the problem, and nothing is stored", async (_what, content, named) => {
+    const refused = await upload({ name: "bind-site", interpreter: "bash", content });
+    expect(refused.status).toBe(422);
+    expect(refused.body.error).toContain(named);
+    const { id } = await uploadHello();
+    const again = await addVersion(id, content);
+    expect(again.status).toBe(422);
+    expect(again.body.error).toContain(named);
+
+    expect((await h.api(scriptsOf(), { cookie: acmeOrg.cookie })).body.items.map((s: any) => [s.name, s.latestVersion.version])).toEqual([["install-cert", 1]]);
+    expect((await auditOf()).filter((e) => e.action === "deployment_script.uploaded")).toHaveLength(1);
+  });
+
+  test("20 parameters are accepted", async () => {
+    const created = await upload({ name: "many", interpreter: "bash", content: declaring(JSON.stringify(twenty)) });
+
+    expect(created.status).toBe(201);
+    expect(created.body.latestVersion.parameters).toEqual(twenty);
+  });
+
+  test("a script with no parameter section declares none, and a new version may add a section", async () => {
+    const { id } = await uploadHello();
+    expect((await h.api(`${scriptsOf()}/${id}/versions/${HELLO.hash}`, { cookie: acmeOrg.cookie })).body.parameters).toEqual([]);
+
+    const added = await addVersion(id, SITE_AND_PORT);
+
+    expect(added.status).toBe(201);
+    expect(added.body.latestVersion.parameters.map((p: any) => p.name)).toEqual(["SITE_ID", "PORT"]);
+    const versions = (await h.api(`${scriptsOf()}/${id}`, { cookie: acmeOrg.cookie })).body.versions;
+    expect(versions.map((v: any) => [v.version, v.parameters.length])).toEqual([[2, 2], [1, 0]]);
+  });
+
+  test("a PowerShell script declares parameters the same way, and Windows line endings are read", async () => {
+    const content = declaring('[{ "name": "SITE_ID", "required": true }]').replace(/^#!.*\n/, "").replaceAll("\n", "\r\n");
+
+    const created = await upload({ name: "bind-site", interpreter: "powershell", content });
+
+    expect(created.status).toBe(201);
+    expect(created.body.latestVersion.parameters).toEqual([param("SITE_ID", { required: true })]);
+  });
+
+  test("the section is part of the content, so declaring different parameters is a different version", async () => {
+    const { id } = (await upload({ name: "bind-site", interpreter: "bash", content: SITE_AND_PORT })).body;
+
+    const changed = await addVersion(id, SITE_AND_PORT.replace('"443"', '"8443"'));
+
+    expect(changed.status).toBe(201);
+    expect(changed.body.latestVersion.hash).not.toBe((await h.api(`${scriptsOf()}/${id}`, { cookie: acmeOrg.cookie })).body.versions[1].hash);
+    expect(changed.body.latestVersion.parameters[1].default).toBe("8443");
   });
 });

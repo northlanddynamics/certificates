@@ -1,0 +1,1 @@
+ALTER TABLE "deployment_script_version" ADD COLUMN "parameters" jsonb DEFAULT '[]'::jsonb NOT NULL;

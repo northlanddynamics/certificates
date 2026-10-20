@@ -4,10 +4,10 @@
 
 **Blocked by:** None (can start immediately).
 
-**Status:** ready-for-agent
+**Status:** resolved
 
-- [ ] A valid section is stored on the version and returned by the script read and the version read
-- [ ] Names must match `^[A-Z][A-Z0-9_]*$`, be unique within the script, not start with `DEPLOY_PARAM_`, and number at most 20
-- [ ] A malformed section, a duplicate name, an invalid name or more than 20 parameters refuses the upload with `422` naming the problem
-- [ ] A script with no section uploads as before and reads back with no parameters; existing versions read back with no parameters
-- [ ] Verified through the HTTP API (Seam A) in the deployment-scripts tests
+- [x] A valid section is stored on the version and returned by the script read and the version read
+- [x] Names must match `^[A-Z][A-Z0-9_]*$`, be unique within the script, not start with `DEPLOY_PARAM_`, and number at most 20
+- [x] A malformed section, a duplicate name, an invalid name or more than 20 parameters refuses the upload with `422` naming the problem
+- [x] A script with no section uploads as before and reads back with no parameters; existing versions read back with no parameters
+- [x] Verified through the HTTP API (Seam A) in the deployment-scripts tests

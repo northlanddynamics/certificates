@@ -5,6 +5,7 @@ import type { AcmeEnvironment } from "../../issuance/acme/certificate-authority"
 import type { RevocationReason } from "../../pki/revocation-reasons";
 import type { DcvMethod, DcvScope } from "../../issuance/dcv/dcv-plan";
 import type { ScriptInterpreter } from "../../deployment/deployment-script-kinds";
+import type { ScriptParameter } from "../../deployment/script-parameters";
 import type { DnsProviderType } from "../../issuance/dcv/dns-provider-kinds";
 import type { IssuanceFailureCode } from "../../issuance/issuance-failure";
 import type { IssuanceKind } from "../../issuance/issuance-kinds";
@@ -920,6 +921,8 @@ export const deploymentScriptVersion = pgTable(
     content: text("content").notNull(),
     /** The content's length in bytes. */
     size: integer("size").notNull(),
+    /** What the content's parameter section declares, read at upload: none for a script without one. */
+    parameters: jsonb("parameters").$type<ScriptParameter[]>().notNull().default([]),
     uploadedById: text("uploaded_by_id").notNull(),
     uploadedByEmail: text("uploaded_by_email").notNull(),
     uploadedAt: timestamp("uploaded_at", { withTimezone: true }).notNull(),
