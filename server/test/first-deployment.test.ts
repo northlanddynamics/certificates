@@ -706,6 +706,7 @@ describe("parameter values", () => {
       const cookie = await join(role);
       for (const path of ["/deployments", `/deployments/${created.body.id}`, `/managed-certificates/${created.body.managedCertificateId}`]) {
         const res = await h.app.request(`http://localhost/api/organizations/${acmeOrg.orgId}${path}`, { headers: { cookie } });
+        expect([403, 404]).toContain(res.status);
         expect(await res.text()).not.toContain(SITE);
       }
     }
