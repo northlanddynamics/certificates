@@ -32,7 +32,11 @@ const makeColumns = (orgId: string) => columnHelper.columns([
     header: "SANs",
     cell: ({ cell }) => <span className="block max-w-80 truncate text-muted-foreground">{cell.getValue()}</span>,
   }),
-  columnHelper.accessor("environment", { header: "Environment", cell: ({ cell }) => <Badge variant="outline" className="capitalize">{cell.getValue()}</Badge> }),
+  // One from a Private CA has no ACME environment.
+  columnHelper.accessor("environment", {
+    header: "Environment",
+    cell: ({ cell }) => (cell.getValue() ? <Badge variant="outline" className="capitalize">{cell.getValue()}</Badge> : <span className="text-muted-foreground">—</span>),
+  }),
   columnHelper.accessor((m) => keyAlgorithmLabel(m.keyAlgorithm), { id: "keyAlgorithm", header: "Key algorithm" }),
   columnHelper.accessor((m) => status(m).label, {
     id: "status",
