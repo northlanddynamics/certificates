@@ -1,8 +1,8 @@
 // The ACME CAs an Organization can use, its ACME account with each, and the write-only secret behind it. The CA is Pebble and the
 // ACME client is the real one; the account's key is a secret that no API returns (ADR 0002).
-import { afterAll, beforeAll, beforeEach, describe, expect, test } from "bun:test";
+import { afterAll, beforeAll, beforeEach, describe, expect, spyOn, test } from "bun:test";
 import acme from "acme-client";
-import { PASSWORD, PEBBLE_DIRECTORY, createHarness, type Harness } from "./support/harness";
+import { PASSWORD, PEBBLE_DIRECTORY, PEBBLE_EAB_DIRECTORY, PEBBLE_EAB_KEY, createHarness, type Harness } from "./support/harness";
 
 let h: Harness;
 let operator: string;
@@ -38,6 +38,19 @@ const auditOf = async (cookie = acmeOrg.cookie, orgId = acmeOrg.orgId) =>
 
 /** The base64 body of a PEM, which is what would show if a key leaked in any encoding that keeps it intact. */
 const pemBody = (pem: string) => pem.replace(/-----[^-]+-----|\s/g, "");
+
+/** Every response the platform's own API gives about the Organization, as one string. */
+async function everythingReadable(cookie: string, orgId: string) {
+  const spec = (await h.api("/api/openapi.json")).body;
+  const found: string[] = [];
+  for (const [path, ops] of Object.entries<any>(spec.paths)) {
+    if (!ops.get) continue;
+    const url = path.replace("{orgId}", orgId);
+    if (url.includes("{")) continue; // needs an id this sweep does not have
+    found.push(JSON.stringify((await h.api(url, { cookie })).body));
+  }
+  return found.join("\n");
+}
 
 async function join(email: string, role: string, orgId = acmeOrg.orgId) {
   const invited = await h.api("/api/auth/organization/invite-member", { cookie: acmeOrg.cookie, body: { email, role, organizationId: orgId } });
@@ -123,8 +136,8 @@ describe("the ACME CAs", () => {
     const listed = await acmeCas(acmeOrg.cookie);
     expect(listed.status).toBe(200);
     expect(listed.body.items).toEqual([
-      { id: "letsencrypt-staging", name: "Let's Encrypt Staging", directoryUrl: PEBBLE_DIRECTORY, tag: "staging", builtIn: true, hasAccount: false },
-      { id: "letsencrypt-production", name: "Let's Encrypt Production", directoryUrl: PEBBLE_DIRECTORY, tag: "production", builtIn: true, hasAccount: false },
+      { id: "letsencrypt-staging", name: "Let's Encrypt Staging", directoryUrl: PEBBLE_DIRECTORY, tag: "staging", builtIn: true, hasAccount: false, externalAccountBinding: null },
+      { id: "letsencrypt-production", name: "Let's Encrypt Production", directoryUrl: PEBBLE_DIRECTORY, tag: "production", builtIn: true, hasAccount: false, externalAccountBinding: null },
     ]);
     // The same for every Organization.
     expect((await acmeCas(globex.cookie, globex.orgId)).body).toEqual(listed.body);
@@ -164,7 +177,7 @@ describe("adding a custom ACME CA", () => {
     const created = await customCa({ contactEmail: "pki@acme.test" });
     expect(created.status).toBe(201);
     expect(created.body).toEqual({
-      acmeCa: { id: expect.any(String), name: "Internal CA", directoryUrl: PEBBLE_DIRECTORY, tag: "staging", builtIn: false, hasAccount: true },
+      acmeCa: { id: expect.any(String), name: "Internal CA", directoryUrl: PEBBLE_DIRECTORY, tag: "staging", builtIn: false, hasAccount: true, externalAccountBinding: null },
       account: { id: expect.any(String), acmeCaId: created.body.acmeCa.id, accountUrl: expect.stringContaining("/my-account/"), contactEmail: "pki@acme.test" },
     });
     expect(h.createdAccountKeys).toHaveLength(1);
@@ -306,7 +319,7 @@ describe("adding a custom ACME CA", () => {
         action: "acme_ca.created",
         target: { type: "acme_ca", id: body.acmeCa.id },
         actor: { id: expect.any(String), email: "admin@acme.test" },
-        detail: { name: "Internal CA", directoryUrl: PEBBLE_DIRECTORY, tag: "production" },
+        detail: { name: "Internal CA", directoryUrl: PEBBLE_DIRECTORY, tag: "production", externalAccountBinding: null },
       }),
       expect.objectContaining({
         action: "acme_account.created",
@@ -316,6 +329,93 @@ describe("adding a custom ACME CA", () => {
       }),
     ]);
     expect(JSON.stringify(await auditOf())).not.toContain(pemBody(h.createdAccountKeys[0]!));
+  });
+});
+
+describe("External Account Binding", () => {
+  // A CA that requires it (the second Pebble) registers only an account bound with a key id and HMAC key it issued.
+  const eabCa = (externalAccountBinding?: unknown, body: Record<string, unknown> = {}) =>
+    customCa({ name: "Commercial CA", directoryUrl: PEBBLE_EAB_DIRECTORY, tag: "production", externalAccountBinding, ...body });
+  const wrongHmacKey = "pM_tQXbIwoXQ_LIC6jrMnM-Ty_2y8Fi9kpGX2Ikbi28";
+
+  test("a CA that requires it registers the account when given the key id and HMAC key, and administrators see the key id", async () => {
+    const created = await eabCa(PEBBLE_EAB_KEY);
+    expect(created.status).toBe(201);
+    expect(created.body.acmeCa).toEqual({
+      id: expect.any(String),
+      name: "Commercial CA",
+      directoryUrl: PEBBLE_EAB_DIRECTORY,
+      tag: "production",
+      builtIn: false,
+      hasAccount: true,
+      externalAccountBinding: { keyId: PEBBLE_EAB_KEY.keyId },
+    });
+    expect((await acmeCasOf()).find((ca) => ca.id === created.body.acmeCa.id)).toEqual(created.body.acmeCa);
+    expect((await admin().test(created.body.account.id)).body).toEqual({ ok: true });
+
+    // Like the directory URL, it is configuration: not shown to anyone else.
+    const member = await join("member@acme.test", "member");
+    expect((await acmeCasOf(member)).find((ca) => ca.id === created.body.acmeCa.id)).toEqual({ ...created.body.acmeCa, directoryUrl: null, externalAccountBinding: null });
+  });
+
+  test("a CA that requires it refuses the registration when it is absent or wrong, with the CA's reason, and nothing is saved", async () => {
+    for (const binding of [undefined, { keyId: PEBBLE_EAB_KEY.keyId, hmacKey: wrongHmacKey }, { keyId: "no-such-kid", hmacKey: PEBBLE_EAB_KEY.hmacKey }]) {
+      const refused = await eabCa(binding);
+      expect(refused.status).toBe(422);
+      expect(refused.body.error).toBeTruthy();
+    }
+    expect((await eabCa(undefined)).body.error).toMatch(/external account/i);
+    expect((await acmeCasOf()).filter((ca) => !ca.builtIn)).toEqual([]);
+    expect((await admin().list()).body.items).toEqual([]);
+    expect(h.createdAccountKeys).toEqual([]);
+    expect((await auditOf()).map((e) => e.action).filter((a) => a.startsWith("acme_"))).toEqual([]);
+
+    // Given the right one, it is added.
+    expect((await eabCa(PEBBLE_EAB_KEY)).status).toBe(201);
+  });
+
+  test("the key id and HMAC key are given together, and the HMAC key is base64url", async () => {
+    for (const binding of [{ keyId: PEBBLE_EAB_KEY.keyId }, { hmacKey: PEBBLE_EAB_KEY.hmacKey }, { keyId: "", hmacKey: PEBBLE_EAB_KEY.hmacKey }, { keyId: PEBBLE_EAB_KEY.keyId, hmacKey: "not base64url!" }]) {
+      const res = await eabCa(binding);
+      expect(res.status).toBe(400);
+      expect(JSON.stringify(res.body)).not.toContain(PEBBLE_EAB_KEY.hmacKey);
+    }
+    expect(h.createdAccountKeys).toEqual([]);
+  });
+
+  test("adding the CA is audited with the key id, and never the HMAC key", async () => {
+    const { body } = await eabCa(PEBBLE_EAB_KEY);
+    const [created] = (await auditOf()).filter((e) => e.action === "acme_ca.created");
+    expect(created!.detail).toEqual({ name: "Commercial CA", directoryUrl: PEBBLE_EAB_DIRECTORY, tag: "production", externalAccountBinding: { keyId: PEBBLE_EAB_KEY.keyId } });
+    expect(created!.target).toEqual({ type: "acme_ca", id: body.acmeCa.id });
+  });
+
+  test("the HMAC key is a secret: no response, to anyone, Audit Event, error or log contains it", async () => {
+    const logged: unknown[] = [];
+    const spies = (["log", "info", "warn", "error", "debug"] as const).map((level) => spyOn(console, level).mockImplementation((...args: unknown[]) => void logged.push(...args)));
+    try {
+      const created = await eabCa(PEBBLE_EAB_KEY);
+      const wrong = await eabCa({ keyId: PEBBLE_EAB_KEY.keyId, hmacKey: wrongHmacKey }, { name: "Another" });
+      const tested = await admin().test(created.body.account.id);
+      const approver = await join("approver@acme.test", "approver");
+      const seen = [
+        JSON.stringify(created.body),
+        JSON.stringify(wrong.body),
+        JSON.stringify(tested.body),
+        JSON.stringify(await auditOf()),
+        await everythingReadable(acmeOrg.cookie, acmeOrg.orgId),
+        await everythingReadable(approver, acmeOrg.orgId),
+        logged.map((v) => (v instanceof Error ? `${v.message}\n${v.stack}` : typeof v === "string" ? v : JSON.stringify(v))).join("\n"),
+      ].join("\n");
+      expect(seen).toContain(PEBBLE_EAB_KEY.keyId);
+      for (const hmacKey of [PEBBLE_EAB_KEY.hmacKey, wrongHmacKey]) {
+        expect(seen).not.toContain(hmacKey);
+        expect(seen).not.toContain(hmacKey.slice(0, 16));
+        expect(seen).not.toContain(Buffer.from(hmacKey, "base64url").toString("base64").slice(0, 16));
+      }
+    } finally {
+      for (const spy of spies) spy.mockRestore();
+    }
   });
 });
 
@@ -366,19 +466,6 @@ describe("who may manage ACME accounts", () => {
 });
 
 describe("the account key is write-only", () => {
-  /** Every response the platform's own API gives about the Organization, as one string. */
-  async function everythingReadable(cookie: string, orgId: string) {
-    const spec = (await h.api("/api/openapi.json")).body;
-    const found: string[] = [];
-    for (const [path, ops] of Object.entries<any>(spec.paths)) {
-      if (!ops.get) continue;
-      const url = path.replace("{orgId}", orgId);
-      if (url.includes("{")) continue; // needs an id this sweep does not have
-      found.push(JSON.stringify((await h.api(url, { cookie })).body));
-    }
-    return found.join("\n");
-  }
-
   test("no response, to anyone, contains the key; neither does the audit log", async () => {
     const created = await admin().create();
     const [key] = h.createdAccountKeys;

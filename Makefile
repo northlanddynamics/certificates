@@ -2,7 +2,7 @@
 # first use, and runs the API (:3000) and the web UI (:5173) together. Compatible with the GNU Make 3.81 that macOS ships.
 
 COMPOSE   ?= docker compose
-SERVICES  ?= postgres pebble bind
+SERVICES  ?= postgres pebble pebble-eab bind
 WEB_PORT  ?= 5173
 API_PORT  ?= 3000
 
@@ -62,7 +62,7 @@ env: .env ## Write .env with generated secrets, if it does not exist
 		> $@
 	@echo "wrote .env"
 
-infra: ## Start Postgres (:5433), Pebble (:14000) and BIND (:5354), and wait until they are up
+infra: ## Start Postgres (:5433), Pebble (:14000, and :14001 with EAB required) and BIND (:5354), and wait until they are up
 	@docker info >/dev/null 2>&1 || { echo "Docker is not running"; exit 1; }
 	$(COMPOSE) up -d --wait $(SERVICES)
 

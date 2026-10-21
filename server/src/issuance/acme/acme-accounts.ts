@@ -1,7 +1,8 @@
 // The ACME CAs an Organization can use (acme-cas.ts), and its ACME Account with each, at most one per ACME CA. A custom
 // ACME CA is created together with its account, in one change: one the CA will not register is not saved. The
 // account's key is a secret (secrets.ts): it is generated and kept by the platform, and no route returns it. It can be
-// replaced with a key the CA accepts for the account, or tested, and that is all.
+// replaced with a key the CA accepts for the account, or tested, and that is all. So is the HMAC key of the External
+// Account Binding a custom ACME CA may require: given once, when the CA is added, and never returned.
 import { OpenAPIHono, createRoute, z } from "@hono/zod-openapi";
 import { and, asc, eq } from "drizzle-orm";
 import { createPrivateKey } from "node:crypto";
@@ -42,15 +43,20 @@ const AcmeCaShown = z.object({
   directoryUrl: z.string().nullable().openapi({ description: "Where its ACME directory is served: its configuration, shown only to those who may read the ACME accounts, and none for anyone else." }),
   tag: z.enum(ACME_CA_TAGS).nullable().openapi({ description: "What it is for, `staging` or `production`, as a label that changes nothing about how it issues; none for an untagged one." }),
   builtIn: z.boolean().openapi({ description: "Built into the platform, the same for every Organization and read-only: Let's Encrypt Staging and Production. A custom one is the Organization's own." }),
+  externalAccountBinding: z
+    .object({ keyId: z.string() })
+    .nullable()
+    .openapi({ description: "The key id of the External Account Binding its account was registered with, shown like the directory URL; never its HMAC key. None when there was none." }),
   hasAccount: z.boolean().openapi({ description: "Whether the Organization has an ACME account with it, without which a Managed Certificate on it cannot be issued. A custom one always has." }),
 });
-const toAcmeCa = ({ id, name, directoryUrl, tag, builtIn }: AcmeCa, { configurationShown, hasAccount }: { configurationShown: boolean; hasAccount: boolean }) => ({
+const toAcmeCa = ({ id, name, directoryUrl, tag, externalAccountKeyId, builtIn }: AcmeCa, { configurationShown, hasAccount }: { configurationShown: boolean; hasAccount: boolean }) => ({
   id,
   name,
   directoryUrl: configurationShown ? directoryUrl : null,
   tag,
   builtIn,
   hasAccount,
+  externalAccountBinding: configurationShown && externalAccountKeyId ? { keyId: externalAccountKeyId } : null,
 });
 
 const alreadyRegistered = (ca: AcmeCa) => new HttpError(409, `the Organization already has an ACME account with ${ca.name}`);
@@ -63,6 +69,17 @@ const NewAcmeCa = z.object({
     .refine((url) => url.startsWith("https://"), "the directory URL must be https")
     .openapi({ description: "Where the CA's ACME directory is served: https, and not at a loopback or link-local address (refused with 422). Fixed once created." }),
   tag: z.enum(ACME_CA_TAGS).nullable().default(null).openapi({ description: "What it is for, `staging` or `production`, or none: a label that changes nothing about how it issues." }),
+  externalAccountBinding: z
+    .object({
+      keyId: z.string().trim().min(1).max(1000),
+      hmacKey: z
+        .string()
+        .trim()
+        .regex(/^[A-Za-z0-9_-]+={0,2}$/, "the HMAC key must be base64url, as the CA gives it")
+        .openapi({ description: "Write-only: kept as a secret and never returned." }),
+    })
+    .optional()
+    .openapi({ description: "For a CA that requires External Account Binding: the key id and HMAC key it issued, given together. Fixed once created." }),
   contactEmail: z.email().optional(),
   termsOfServiceAgreed: z.literal(true),
 });
@@ -137,13 +154,14 @@ export function registerAcmeAccounts(ctx: {
       description:
         "One change: the platform registers an account with the CA under a key it generates and keeps (never returned), and saves the CA and the account only once the CA has accepted it. " +
         "A CA that refuses is 422 with its reason, one that does not answer is 502, and either way nothing is saved. Names are unique within the Organization, the built-in ones' included (409). " +
+        "A CA that requires External Account Binding is given its key id and HMAC key; the HMAC key is kept as a secret and never returned. " +
         "The caller must agree to the CA's terms of service.",
       request: { params: OrgParam, body: { content: { "application/json": { schema: NewAcmeCa } } } },
       responses: { 201: json(z.object({ acmeCa: AcmeCaShown, account: Account }), "Created"), ...errors(400, 401, 403, 404, 409, 422, 502) },
     }),
     async (c) => {
       const { orgId } = c.req.valid("param");
-      const { name, directoryUrl, tag, contactEmail } = c.req.valid("json");
+      const { name, directoryUrl, tag, externalAccountBinding, contactEmail } = c.req.valid("json");
       const actor = await requireUser(c);
       await authorize(actor, orgId, { acmeAccount: ["create"] });
       // Checked before the CA is asked, so that a name taken already leaves no account behind at the CA.
@@ -151,15 +169,19 @@ export function registerAcmeAccounts(ctx: {
       if (sameName || BUILT_IN_ACME_CAS.some((ca) => ca.name === name)) throw nameTaken(name);
 
       // Not saved yet, so it has no id; registering needs only where it is, and it is checked there as a custom one.
-      const created = await ca.createAccount({ id: "", name, directoryUrl, tag, builtIn: false }, { contactEmail }).catch((err) => caFailure(err));
+      const externalAccountKeyId = externalAccountBinding?.keyId ?? null;
+      const created = await ca
+        .createAccount({ id: "", name, directoryUrl, tag, externalAccountKeyId, builtIn: false }, { contactEmail, externalAccountBinding })
+        .catch((err) => caFailure(err));
       try {
         const { caRow, accountRow } = await unitOfWork.run(actor, async (tx, change) => {
-          const [caRow] = await tx.insert(acmeCaTable).values({ organizationId: orgId, name, directoryUrl, tag }).returning();
+          const externalAccountSecretId = externalAccountBinding ? await secrets.create(tx, orgId, externalAccountBinding.hmacKey) : null;
+          const [caRow] = await tx.insert(acmeCaTable).values({ organizationId: orgId, name, directoryUrl, tag, externalAccountKeyId, externalAccountSecretId }).returning();
           await change.audit({
             organizationId: orgId,
             action: "acme_ca.created",
             target: { type: "acme_ca", id: caRow!.id },
-            detail: { name, directoryUrl, tag },
+            detail: { name, directoryUrl, tag, externalAccountBinding: externalAccountKeyId ? { keyId: externalAccountKeyId } : null },
           });
           return { caRow: caRow!, accountRow: await saveAccount(tx, change, orgId, caRow!.id, created, contactEmail) };
         });

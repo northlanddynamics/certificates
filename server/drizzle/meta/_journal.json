@@ -351,6 +351,13 @@
       "when": 1792615223698,
       "tag": "0049_custom_acme_cas",
       "breakpoints": true
+    },
+    {
+      "idx": 50,
+      "version": "7",
+      "when": 1792623004785,
+      "tag": "0050_acme_ca_external_account_binding",
+      "breakpoints": true
     }
   ]
 }

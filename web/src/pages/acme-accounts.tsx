@@ -35,6 +35,11 @@ const columns = columnHelper.columns([
           {row.original.ca.name} <AcmeCaTagBadge tag={row.original.ca.tag} />
         </span>
         {row.original.ca.directoryUrl && <span className="break-all font-mono text-xs text-muted-foreground">{row.original.ca.directoryUrl}</span>}
+        {row.original.ca.externalAccountBinding && (
+          <span className="break-all text-xs text-muted-foreground">
+            External Account Binding key id <span className="font-mono">{row.original.ca.externalAccountBinding.keyId}</span>
+          </span>
+        )}
         {row.original.ca.builtIn && <span className="text-xs text-muted-foreground">Built in; it cannot be changed.</span>}
       </span>
     ),
@@ -141,13 +146,23 @@ function RegisterAccountForm({ orgId, acmeCas, onDone }: { orgId: string; acmeCa
   const [name, setName] = useState("");
   const [directoryUrl, setDirectoryUrl] = useState("");
   const [tag, setTag] = useState<AcmeCaTag | "">("");
+  const [eabKeyId, setEabKeyId] = useState("");
+  const [eabHmacKey, setEabHmacKey] = useState("");
   const [contactEmail, setContactEmail] = useState("");
   const [agreed, setAgreed] = useState(false);
   const chosen = acmeCas.find((ca) => ca.id === acmeCaId);
   const register = useAction(
     async () => {
       if (chosen) await api.registerAcmeAccount(orgId, { acmeCaId, contactEmail: contactEmail.trim() || undefined });
-      else await api.createAcmeCa(orgId, { name: name.trim(), directoryUrl: directoryUrl.trim(), tag: tag || null, contactEmail: contactEmail.trim() || undefined });
+      else
+        await api.createAcmeCa(orgId, {
+          name: name.trim(),
+          directoryUrl: directoryUrl.trim(),
+          tag: tag || null,
+          // Given together or not at all; the server says so when only one is.
+          externalAccountBinding: eabKeyId.trim() || eabHmacKey.trim() ? { keyId: eabKeyId.trim(), hmacKey: eabHmacKey.trim() } : undefined,
+          contactEmail: contactEmail.trim() || undefined,
+        });
     },
     ["acme-accounts", "acme-cas"],
     onDone,
@@ -205,6 +220,20 @@ function RegisterAccountForm({ orgId, acmeCas, onDone }: { orgId: string; acmeCa
             </select>
             <p className="text-xs text-muted-foreground">A label of what it is for, shown beside its name; it changes nothing about how it issues.</p>
           </div>
+          <fieldset className="flex flex-col gap-3 rounded-md border p-3">
+            <legend className="px-1 text-sm">External Account Binding (optional)</legend>
+            <p className="text-xs text-muted-foreground">
+              For a CA that requires one: the key id and HMAC key it gave you. The HMAC key is kept as a secret and never shown again. Neither can be changed once the CA is added.
+            </p>
+            <div className="flex flex-col gap-2">
+              <Label htmlFor="acme-ca-eab-key-id">Key id</Label>
+              <Input id="acme-ca-eab-key-id" autoComplete="off" required={eabHmacKey.trim() !== ""} value={eabKeyId} onChange={(e) => setEabKeyId(e.target.value)} />
+            </div>
+            <div className="flex flex-col gap-2">
+              <Label htmlFor="acme-ca-eab-hmac-key">HMAC key</Label>
+              <Input id="acme-ca-eab-hmac-key" type="password" autoComplete="off" required={eabKeyId.trim() !== ""} value={eabHmacKey} onChange={(e) => setEabHmacKey(e.target.value)} />
+            </div>
+          </fieldset>
         </>
       )}
       <div className="flex flex-col gap-2">

@@ -45,6 +45,12 @@ export const PEBBLE_DIRECTORY = process.env.PEBBLE_DIRECTORY ?? "https://localho
 const PEBBLE_CA = readFileSync(new URL("./pebble/minica.pem", import.meta.url), "utf8");
 /** Where Pebble serves the root its chains end in; it makes a new one each time it starts. */
 export const PEBBLE_MANAGEMENT = process.env.PEBBLE_MANAGEMENT ?? "https://localhost:15000";
+/**
+ * A second Pebble that requires External Account Binding (`docker compose up -d pebble-eab`): it registers an account
+ * only when bound with this key id and HMAC key (docker/pebble-eab/pebble-config.json). Its certificate is from the same root.
+ */
+export const PEBBLE_EAB_DIRECTORY = process.env.PEBBLE_EAB_DIRECTORY ?? "https://localhost:14001/dir";
+export const PEBBLE_EAB_KEY = { keyId: "certs-test-kid", hmacKey: "odoro-yNhycSmBodN4t1vTvqUf5_LKkun8G6P7DWVFQ" };
 const pebbleRoots = async () => [await (await fetch(`${PEBBLE_MANAGEMENT}/roots/0`, { tls: { ca: PEBBLE_CA } })).text()];
 
 /** BIND (`docker compose up -d bind`): rfc2136.test takes dynamic updates signed with this key; readonly.test takes none. */
@@ -220,8 +226,8 @@ export async function createHarness(overrides: Partial<AppDeps> = {}, { database
     trustedCa: [PEBBLE_CA, directoryProxy.ca],
     roots: { "letsencrypt-staging": () => caRoots.current(), "letsencrypt-production": () => caRoots.current() },
     pollMs: { min: 200, max: 1000 },
-    // Pebble, and the directories that stand for a CA offering less, are on localhost, which a custom ACME CA's directory may otherwise not be.
-    allowedDirectoryOrigins: [new URL(PEBBLE_DIRECTORY).origin, directoryProxy.origin],
+    // Pebble, the one requiring EAB, and the directories that stand for a CA offering less, are on localhost, which a custom ACME CA's directory may otherwise not be.
+    allowedDirectoryOrigins: [new URL(PEBBLE_DIRECTORY).origin, new URL(PEBBLE_EAB_DIRECTORY).origin, directoryProxy.origin],
   });
   const bindTxt = createTxtResolver([`${BIND.server}:${BIND.port}`]);
   const dcvResolver = { current: bindTxt };

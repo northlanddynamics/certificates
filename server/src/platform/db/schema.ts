@@ -328,9 +328,17 @@ export const acmeCa = pgTable(
     name: text("name").notNull(),
     directoryUrl: text("directory_url").notNull(),
     tag: text("tag").$type<AcmeCaTag>(),
+    /** The External Account Binding its account was registered with, if the CA required one: the key id, shown to administrators, and the HMAC key, a secret. */
+    externalAccountKeyId: text("external_account_key_id"),
+    externalAccountSecretId: uuid("external_account_secret_id"),
     createdAt: timestamp("created_at", { withTimezone: true }).notNull().defaultNow(),
   },
-  (t) => [unique("acme_ca_organization_name_unique").on(t.organizationId, t.name), check("acme_ca_tag", sql`${t.tag} in ('staging', 'production')`)],
+  (t) => [
+    unique("acme_ca_organization_name_unique").on(t.organizationId, t.name),
+    check("acme_ca_tag", sql`${t.tag} in ('staging', 'production')`),
+    check("acme_ca_external_account_binding", sql`(${t.externalAccountKeyId} is null) = (${t.externalAccountSecretId} is null)`),
+    foreignKey({ name: "acme_ca_external_account_secret_fk", columns: [t.externalAccountSecretId, t.organizationId], foreignColumns: [secret.id, secret.organizationId] }),
+  ],
 );
 
 /** An Organization's account with an ACME CA (acme-cas.ts), at most one per ACME CA. Its key is a secret and is never returned. */
