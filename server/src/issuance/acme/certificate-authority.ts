@@ -29,6 +29,15 @@ export interface CaAccount {
   accountKey: string;
 }
 
+/**
+ * What binds a new account to one the Organization holds with the CA outside ACME (RFC 8555, section 7.3.4), for a CA
+ * that requires it: the key id the CA issued and its HMAC key (base64url), a secret.
+ */
+export interface ExternalAccountBinding {
+  keyId: string;
+  hmacKey: string;
+}
+
 /** What a CA's DNS challenges are answered with while an order is placed; DCV (dcv.ts) is the implementation. */
 export interface DnsChallengeResponder {
   /** Publishes the challenge `value` for `domain` and resolves once it is in place for the CA to see. */
@@ -48,8 +57,8 @@ export interface RenewalInfo {
 export interface AcmeCertificateAuthority {
   /** What a built-in ACME CA (Let's Encrypt) is called in a Certificate's record of where it came from; a custom one goes by its own name. */
   readonly name: string;
-  /** Registers a new account under a new key, with the Organization's agreement to the CA's terms of service. */
-  createAccount(ca: AcmeCa, input: { contactEmail?: string }): Promise<CaAccount>;
+  /** Registers a new account under a new key, with the Organization's agreement to the CA's terms of service, bound to `input.externalAccountBinding` when given. */
+  createAccount(ca: AcmeCa, input: { contactEmail?: string; externalAccountBinding?: ExternalAccountBinding }): Promise<CaAccount>;
   /** Resolves when the CA accepts `account.accountKey` as the key of `account.accountUrl`; throws a CertificateAuthorityError when not. */
   checkAccount(ca: AcmeCa, account: CaAccount): Promise<void>;
   /**
@@ -167,10 +176,15 @@ export function createAcmeCertificateAuthority({ trustedCa, roots = {}, pollMs, 
     async roots(ca) {
       return roots[ca.id]?.() ?? (ca.id === "letsencrypt-production" ? [...rootCertificates] : []);
     },
-    async createAccount(ca, { contactEmail }) {
+    async createAccount(ca, { contactEmail, externalAccountBinding }) {
       await reach(ca);
       const accountKey = (await acme.crypto.createPrivateEcdsaKey("P-256")).toString();
-      const client = new acme.Client({ directoryUrl: ca.directoryUrl, accountKey });
+      const client = new acme.Client({
+        directoryUrl: ca.directoryUrl,
+        accountKey,
+        // Only the CA's own reason comes back from a refusal, never the HMAC key: acme-client signs with it and sends only the signature.
+        ...(externalAccountBinding && { externalAccountBinding: { kid: externalAccountBinding.keyId, hmacKey: externalAccountBinding.hmacKey } }),
+      });
       try {
         await client.createAccount({ termsOfServiceAgreed: true, contact: contactEmail ? [`mailto:${contactEmail}`] : undefined });
       } catch (err) {

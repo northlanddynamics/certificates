@@ -1,8 +1,9 @@
 // The ACME CAs an Organization can issue from: a directory URL and what is shown of it. Let's Encrypt Staging and Let's
 // Encrypt Production are built in, the same for every Organization, and never change; they are defined here, by stable
 // ids, and not stored. An Organization may add custom ones of its own (`acme_ca`, by a UUID), each created together with
-// its ACME Account (acme-accounts.ts). An ACME Account and a Managed Certificate's issuer (issuer.ts) refer to an ACME
-// CA by its id. Its environment tag is a label of intent and changes nothing about how it issues.
+// its ACME Account (acme-accounts.ts), with the External Account Binding a CA may require for that. An ACME Account and
+// a Managed Certificate's issuer (issuer.ts) refer to an ACME CA by its id. Its environment tag is a label of intent and
+// changes nothing about how it issues.
 import { z } from "@hono/zod-openapi";
 import { and, asc, eq } from "drizzle-orm";
 import type { Db } from "../../platform/db/client";
@@ -18,13 +19,15 @@ export interface AcmeCa {
   directoryUrl: string;
   /** What it is for, as a label; none for an untagged one. */
   tag: AcmeCaTag | null;
+  /** The key id of the External Account Binding its account was registered with, for a CA that requires one; its HMAC key is a secret, kept apart. */
+  externalAccountKeyId: string | null;
   /** Built into the platform, shared by every Organization and read-only. */
   builtIn: boolean;
 }
 
 export const BUILT_IN_ACME_CAS = [
-  { id: "letsencrypt-staging", name: "Let's Encrypt Staging", directoryUrl: "https://acme-staging-v02.api.letsencrypt.org/directory", tag: "staging", builtIn: true },
-  { id: "letsencrypt-production", name: "Let's Encrypt Production", directoryUrl: "https://acme-v02.api.letsencrypt.org/directory", tag: "production", builtIn: true },
+  { id: "letsencrypt-staging", name: "Let's Encrypt Staging", directoryUrl: "https://acme-staging-v02.api.letsencrypt.org/directory", tag: "staging", externalAccountKeyId: null, builtIn: true },
+  { id: "letsencrypt-production", name: "Let's Encrypt Production", directoryUrl: "https://acme-v02.api.letsencrypt.org/directory", tag: "production", externalAccountKeyId: null, builtIn: true },
 ] as const satisfies readonly AcmeCa[];
 export type BuiltInAcmeCaId = (typeof BUILT_IN_ACME_CAS)[number]["id"];
 
@@ -44,7 +47,7 @@ export interface AcmeCas {
 }
 
 /** A custom ACME CA as the ACME CA it is. */
-export const customAcmeCa = ({ id, name, directoryUrl, tag }: typeof acmeCa.$inferSelect): AcmeCa => ({ id, name, directoryUrl, tag, builtIn: false });
+export const customAcmeCa = ({ id, name, directoryUrl, tag, externalAccountKeyId }: typeof acmeCa.$inferSelect): AcmeCa => ({ id, name, directoryUrl, tag, externalAccountKeyId, builtIn: false });
 
 /** The ACME CAs, with the built-in ones' directories at `directoryUrls` where given (read each time, so tests may repoint them at Pebble). */
 export function createAcmeCas({ db, directoryUrls = {} }: { db: Db; directoryUrls?: Partial<Record<BuiltInAcmeCaId, string>> }): AcmeCas {

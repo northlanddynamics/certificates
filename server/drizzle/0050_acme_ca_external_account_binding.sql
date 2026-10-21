@@ -1,0 +1,4 @@
+ALTER TABLE "acme_ca" ADD COLUMN "external_account_key_id" text;--> statement-breakpoint
+ALTER TABLE "acme_ca" ADD COLUMN "external_account_secret_id" uuid;--> statement-breakpoint
+ALTER TABLE "acme_ca" ADD CONSTRAINT "acme_ca_external_account_secret_fk" FOREIGN KEY ("external_account_secret_id","organization_id") REFERENCES "public"."secret"("id","organization_id") ON DELETE no action ON UPDATE no action;--> statement-breakpoint
+ALTER TABLE "acme_ca" ADD CONSTRAINT "acme_ca_external_account_binding" CHECK (("acme_ca"."external_account_key_id" is null) = ("acme_ca"."external_account_secret_id" is null));

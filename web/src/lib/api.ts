@@ -414,6 +414,8 @@ export interface AcmeCa {
   builtIn: boolean;
   /** Whether the Organization has an account with it, without which nothing can be issued from it. */
   hasAccount: boolean;
+  /** The key id of the External Account Binding its account was registered with (configuration, like the directory); its HMAC key is never returned. */
+  externalAccountBinding: { keyId: string } | null;
 }
 /** An Organization's account with an ACME CA, at most one per ACME CA; its key is never returned. */
 export interface AcmeAccount {
@@ -845,7 +847,7 @@ export const api = {
   registerAcmeAccount: (orgId: string, body: { acmeCaId: string; contactEmail?: string }) =>
     call<AcmeAccount>(`/api/organizations/${orgId}/acme-accounts`, { body: { ...body, termsOfServiceAgreed: true } }),
   /** Adds a custom ACME CA and registers the Organization's account with it, in one step: nothing is saved if the CA refuses. */
-  createAcmeCa: (orgId: string, body: { name: string; directoryUrl: string; tag: AcmeCaTag | null; contactEmail?: string }) =>
+  createAcmeCa: (orgId: string, body: { name: string; directoryUrl: string; tag: AcmeCaTag | null; externalAccountBinding?: { keyId: string; hmacKey: string }; contactEmail?: string }) =>
     call<{ acmeCa: AcmeCa; account: AcmeAccount }>(`/api/organizations/${orgId}/acme-cas`, { body: { ...body, termsOfServiceAgreed: true } }),
   testAcmeAccount: (orgId: string, accountId: string) =>
     call<{ ok: boolean; error?: string }>(`/api/organizations/${orgId}/acme-accounts/${accountId}/test`, { method: "POST", body: {} }),

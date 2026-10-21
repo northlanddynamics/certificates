@@ -33,6 +33,19 @@ services:
       # Its management interface, from which tests read the root its chains end in (/roots/0).
       - "15000:15000"
 
+  # A second Pebble that requires External Account Binding, as some commercial CAs do: its directory is
+  # https://localhost:14001/dir, and it registers only an account bound with the key id and HMAC key in
+  # docker/pebble-eab/pebble-config.json (the tests' PEBBLE_EAB_KEY). Only registration is tested against it.
+  pebble-eab:
+    image: ghcr.io/letsencrypt/pebble:latest
+    command: -config /eab/pebble-config.json -dnsserver bind:53
+    depends_on:
+      - bind
+    volumes:
+      - ./docker/pebble-eab:/eab:ro
+    ports:
+      - "14001:14000"
+
   # An RFC 2136 DNS server (BIND), the DNS Provider's counterpart in tests: its zone rfc2136.test accepts dynamic updates
   # signed with the TSIG key in docker/bind/named.conf. Served on localhost:5354, TCP and UDP. The names under delegating.test
   # delegate their _acme-challenge to validation.rfc2136.test by CNAME, for the Delegated DCV tests. It is recursive, so the

@@ -12,7 +12,7 @@ make help   # the other targets: setup, server, web, migrate, creds, test, check
 `make dev` writes `.env` once (generated `AUTH_SECRET`, `LOCAL_KMS_KEY` and Operator password; `make creds` shows the Operator's) and keeps it: `LOCAL_KMS_KEY` wraps each Organization's data key, so a new one would make stored secrets in an existing database unreadable. `make clean` resets both the database and `.env`. To run an Agent against it, make a registration token on the Agents page, then `make agent-register TOKEN=agt_...` once and `make agent-run` in another terminal (state under `.dev/`). The same steps by hand:
 
 ```bash
-docker compose up -d --wait        # Postgres on localhost:5433 (databases: certs, certs_test); Pebble on localhost:14000; BIND on localhost:5354
+docker compose up -d --wait        # Postgres on localhost:5433 (databases: certs, certs_test); Pebble on localhost:14000 (and :14001 requiring EAB); BIND on localhost:5354
 bun install
 export DATABASE_URL=postgres://postgres:postgres@localhost:5433/certs
 export AUTH_SECRET=$(openssl rand -hex 32)
@@ -108,6 +108,8 @@ bun run test          # Seam A: the Hono app in-process against the real Postgre
 ```
 
 Pebble, Let's Encrypt's ACME test server, stands in for the CA (`docker compose up -d pebble`; `PEBBLE_DIRECTORY` overrides `https://localhost:14000/dir`). The tests trust its root, `server/test/support/pebble/minica.pem`. Pebble checks DNS-01 challenges against BIND (`-dnsserver bind:53` in `docker-compose.yml`), so issuing in the tests runs the real path: the platform publishes the challenge record through an RFC 2136 DNS Provider, and the CA reads it back from the same server.
+
+A second Pebble, `pebble-eab` (`docker compose up -d pebble-eab`; `PEBBLE_EAB_DIRECTORY` overrides `https://localhost:14001/dir`), requires External Account Binding, as some commercial CAs do. It registers only accounts bound with the key id and HMAC key in `docker/pebble-eab/pebble-config.json`, which the tests know as `PEBBLE_EAB_KEY`.
 
 BIND, built from `docker/bind` (`docker compose up -d --build bind`), is the RFC 2136 DNS server that the DNS Provider tests update with TSIG-signed requests (`BIND_HOST` and `BIND_PORT` override `127.0.0.1:5354`). Its image keeps its config and zones in volumes, so after changing `docker/bind` recreate it with `docker compose up -d --build --force-recreate -V bind`.
 
