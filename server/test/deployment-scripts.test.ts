@@ -428,7 +428,7 @@ describe("declared parameters", () => {
       .map(([, interpreter, content]) => ({ interpreter: interpreter!, content: content! }));
     expect(examples.map((e) => e.interpreter)).toEqual(["bash", "powershell"]);
 
-    const declared = [];
+    const declared: unknown[] = [];
     for (const [i, { interpreter, content }] of examples.entries()) {
       const created = await upload({ name: `example-${i + 1}`, interpreter, content });
       expect(created.status).toBe(201);

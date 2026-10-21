@@ -4,12 +4,12 @@
 
 **Blocked by:** 02 (Create a Deployment with parameter values), 03 (The Agent hands parameters to the script), 04 (Edit a Deployment's parameter values).
 
-**Status:** ready-for-agent
+**Status:** resolved
 
-- [ ] The guide's old "no way to pass values per Deployment" text is gone and the new contract matches what shipped
-- [ ] The worked example's section format parses with the upload code
-- [ ] ADR 0010 states the plain-text decision, why, and the Agent-environment alternative for secrets
-- [ ] `CONTEXT.md` defines Deployment Parameter in the glossary's style
+- [x] The guide's old "no way to pass values per Deployment" text is gone and the new contract matches what shipped
+- [x] The worked example's section format parses with the upload code
+- [x] ADR 0010 states the plain-text decision, why, and the Agent-environment alternative for secrets
+- [x] `CONTEXT.md` defines Deployment Parameter in the glossary's style
 
 ## Comments
 

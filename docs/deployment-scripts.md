@@ -22,7 +22,7 @@ The exit code says whether it succeeded: 0 is a success, anything else a failed 
 
 ## Deployment Parameters
 
-A script that serves many targets declares the values it needs from each one, its Deployment Parameters, and each Deployment gives them: one script then installs to any site, port or pool. Values are plain text, stored on the Deployment and visible to every Organization Administrator, so a parameter is no place for a secret (ADR 0010). A password, an API token or a key the script needs comes from the Agent service's environment on the host, which the script inherits, as before.
+A script that puts Certificates in many places declares the values that differ between them, its Deployment Parameters, and each Deployment gives them: one script then serves any site, port or pool. Values are plain text, stored on the Deployment and visible to every Organization Administrator, so a parameter is no place for a secret (ADR 0010). A password, an API token or a key the script needs comes from the Agent service's environment on the host, which the script inherits, as before.
 
 ### Declaring them
 
@@ -36,7 +36,7 @@ The parameters are declared in the script, in one comment block from a `# deploy
 | `required` | optional | `true` or `false`, default `false` |
 | `default` | optional | A string, the value used when none is given; it obeys the rules for values below |
 
-A script declares at most 20 parameters, and no other field (no type, pattern or list of options: every value is text). The block is part of the content, so it is inside the hash: changing a declaration is uploading a new version, and a version's parameters never change. An upload whose block cannot be used is refused with `422`, saying why: a second block, a missing or stray end line, a line inside the block that is not a comment, JSON that does not parse or is not an array of parameters, an unknown field, an invalid or repeated name, more than 20 parameters, or a default that breaks the rules for values. Reading a script or one of its versions returns `parameters`, what it declares, in order.
+A script declares at most 20 parameters, and no other field (no type, pattern or list of options: every value is text). The block is part of the content, so it is inside the hash: changing a declaration is uploading a new version, and a version's parameters never change. An upload whose block cannot be used is refused with `422`, saying why: a second block, a missing or stray end line, a line inside the block that is neither blank nor a comment, JSON that does not parse or is not an array of parameters, an unknown field, an invalid or repeated name, more than 20 parameters, or a default that breaks the rules for values. Reading a script or one of its versions returns `parameters`, what it declares, in order.
 
 ### Giving the values
 
@@ -56,7 +56,7 @@ The Agent gives each value as the variable `DEPLOY_PARAM_` and the name: `SITE_I
 
 Two things to write into every script that has parameters:
 
-- **Guard the required ones.** An Agent older than Deployment Parameters ignores them and runs the script without them, and nothing tells the platform so. Check each required parameter at the top and fail if it is missing, as the examples do, so such a run fails loudly rather than installing to the wrong place. For the same reason, fall back to the default in the script too.
+- **Guard the required ones.** An Agent older than Deployment Parameters ignores them and runs the script without them, and nothing tells the platform so. Check each required parameter at the top and fail if it is missing, as the examples do, so such a run fails loudly rather than putting the Certificate in the wrong place. For the same reason, fall back to the default in the script too.
 - **Do not print them.** The output is stored with the run and read by every Organization Administrator, so a script that echoes its parameters, its environment (`env`, `set -x`, `Get-ChildItem env:`) or a secret makes a second copy of them there.
 
 ### Worked example: Bash
