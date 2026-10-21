@@ -2,7 +2,7 @@ import { keepPreviousData, useQuery } from "@tanstack/react-query";
 import { useParams } from "@tanstack/react-router";
 import { createColumnHelper, rowPaginationFeature, tableFeatures, useTable, type PaginationState } from "@tanstack/react-table";
 import { BookOpenIcon, CircleCheckIcon, InfoIcon, PlusIcon, TriangleAlertIcon, XIcon } from "lucide-react";
-import { useState, type FormEvent, type ReactNode } from "react";
+import { Suspense, lazy, useState, type FormEvent, type ReactNode } from "react";
 import { DataTable } from "@/components/data-table/data-table";
 import { DataTableFacetedFilter } from "@/components/data-table/data-table-faceted-filter";
 import { DataTablePagination } from "@/components/data-table/data-table-pagination";
@@ -16,7 +16,6 @@ import { Input } from "@/components/ui/input";
 import { Label } from "@/components/ui/label";
 import { Table, TableBody, TableCell, TableHead, TableHeader, TableRow } from "@/components/ui/table";
 import { Tabs, TabsContent, TabsList, TabsTrigger } from "@/components/ui/tabs";
-import { Textarea } from "@/components/ui/textarea";
 import { api, can, type DeploymentScript, type ScriptParameter } from "@/lib/api";
 import { EXAMPLE_SCRIPTS, exampleContent } from "@/lib/deployment-script-examples";
 import { ENV_PREFIX, readDeclaration } from "@/lib/script-parameters";
@@ -326,7 +325,7 @@ function UploadForm({ orgId, start, onDone }: { orgId: string; start?: Deploymen
           ))}
         </div>
       )}
-      <ContentWithDeclaration orgId={orgId} id="script-content" value={content} onChange={setContent} />
+      <ContentWithDeclaration orgId={orgId} id="script-content" interpreter={interpreter} value={content} onChange={setContent} />
       {upload.error && <p className="text-sm text-destructive">{upload.error.message}</p>}
       <DialogFooter>
         <DialogClose asChild>
@@ -378,7 +377,7 @@ function NewVersionForm({ orgId, script, onDone }: { orgId: string; script: Depl
         upload.mutate(undefined);
       }}
     >
-      <ContentWithDeclaration orgId={orgId} id="version-content" value={content} onChange={setEdited} />
+      <ContentWithDeclaration orgId={orgId} id="version-content" interpreter={script.interpreter} value={content} onChange={setEdited} />
       {latest.error && <p className="text-sm text-destructive">{latest.error.message}</p>}
       {upload.error && <p className="text-sm text-destructive">{upload.error.message}</p>}
       <DialogFooter>
@@ -395,18 +394,41 @@ function NewVersionForm({ orgId, script, onDone }: { orgId: string; script: Depl
   );
 }
 
+/** The editor, coloured for the interpreter: loaded only once a dialog that edits a script opens. */
+const ScriptEditor = lazy(() => import("@/components/script-editor"));
+
 /** The script's content, beside what its parameter section declares as it is typed, read as the upload will read it. */
-function ContentWithDeclaration({ orgId, id, value, onChange }: { orgId: string; id: string; value: string; onChange: (value: string) => void }) {
+function ContentWithDeclaration({
+  orgId,
+  id,
+  interpreter,
+  value,
+  onChange,
+}: {
+  orgId: string;
+  id: string;
+  interpreter: DeploymentScript["interpreter"];
+  value: string;
+  onChange: (value: string) => void;
+}) {
   return (
     <div className="grid gap-4 md:grid-cols-[minmax(0,1fr)_18rem]">
       <div className="flex min-w-0 flex-col gap-2">
         <div className="flex items-baseline justify-between gap-2">
-          <Label htmlFor={id}>Script</Label>
+          <Label id={`${id}-label`}>Script</Label>
           <GuideLink orgId={orgId} guide="deployment-scripts" section="declare" newTab className="text-xs font-medium text-primary underline-offset-4 hover:underline">
             Parameter section format
           </GuideLink>
         </div>
-        <Textarea id={id} className="h-96 font-mono text-xs" wrap="off" spellCheck={false} value={value} onChange={(e) => onChange(e.target.value)} />
+        <Suspense fallback={<div className="h-96 rounded-md border bg-muted/30" aria-busy="true" />}>
+          <ScriptEditor
+            value={value}
+            onChange={onChange}
+            interpreter={interpreter}
+            labelledBy={`${id}-label`}
+            className="h-96 min-w-0 overflow-hidden rounded-md border focus-within:border-ring focus-within:ring-[3px] focus-within:ring-ring/50"
+          />
+        </Suspense>
       </div>
       <DeclarationPanel orgId={orgId} content={value} />
     </div>
