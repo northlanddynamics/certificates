@@ -11,7 +11,7 @@ import { Button } from "@/components/ui/button";
 import { Table, TableBody, TableCell, TableHead, TableHeader, TableRow } from "@/components/ui/table";
 import { Tabs, TabsContent, TabsList, TabsTrigger } from "@/components/ui/tabs";
 import { can, type DeploymentScript } from "@/lib/api";
-import { CERT_VARIABLES, EXAMPLE_SCRIPTS, exampleContent } from "@/lib/deployment-script-examples";
+import { CERT_VARIABLES, EXAMPLE_SCRIPTS, exampleContent, type ExampleScript } from "@/lib/deployment-script-examples";
 import { ENV_PREFIX, MAX_PARAMETERS } from "@/lib/script-parameters";
 import { useOrg } from "@/lib/use-org";
 import { UploadDialog } from "./deployment-scripts";
@@ -218,18 +218,19 @@ export function DeploymentScriptGuidePage() {
 
         <GuideSection guide="deployment-scripts" id="example">
           <p className="text-muted-foreground">
-            Takes a required, a defaulted and an optional parameter, picks up the Certificate and key, and leaves one marked place for your own deployment.
+            Three scripts to start from, each picking up the Certificate and key, reading its Deployment Parameters and marking the step that is your own deployment.
           </p>
-          <Tabs defaultValue="bash">
-            <div className="flex flex-wrap items-center justify-between gap-2">
-              <TabsList>
-                <TabsTrigger value="bash">Bash</TabsTrigger>
-                <TabsTrigger value="powershell">PowerShell</TabsTrigger>
-              </TabsList>
-            </div>
-            {(["bash", "powershell"] as const).map((interpreter) => (
-              <TabsContent key={interpreter} value={interpreter} className="mt-4">
-                <Example interpreter={interpreter} mayUpload={mayUpload} orgId={orgId} />
+          <Tabs defaultValue={EXAMPLE_SCRIPTS[0]!.id} className="min-w-0">
+            <TabsList className="h-auto flex-wrap">
+              {EXAMPLE_SCRIPTS.map((example) => (
+                <TabsTrigger key={example.id} value={example.id}>
+                  {example.title} <span className="text-muted-foreground">· {example.interpreter === "bash" ? "Bash" : "PowerShell"}</span>
+                </TabsTrigger>
+              ))}
+            </TabsList>
+            {EXAMPLE_SCRIPTS.map((example) => (
+              <TabsContent key={example.id} value={example.id} className="mt-4">
+                <Example example={example} mayUpload={mayUpload} orgId={orgId} />
               </TabsContent>
             ))}
           </Tabs>
@@ -314,16 +315,17 @@ function Code({ text, label }: { text: string; label: string }) {
 }
 
 /** One example, a step at a time, with the place for the author's own deployment marked. */
-function Example({ interpreter, mayUpload, orgId }: { interpreter: DeploymentScript["interpreter"]; mayUpload: boolean; orgId: string }) {
-  const example = EXAMPLE_SCRIPTS[interpreter];
+function Example({ example, mayUpload, orgId }: { example: ExampleScript; mayUpload: boolean; orgId: string }) {
+  const { interpreter } = example;
   const content = exampleContent(example);
   return (
     <div className="flex flex-col gap-4">
+      <p className="text-muted-foreground">{example.summary}</p>
       <div className="flex flex-wrap items-center justify-end gap-2">
         <Button variant="outline" size="sm" onClick={() => navigator.clipboard.writeText(content).then(() => toast.success("Copied the script"), () => toast.error("Could not copy the script"))}>
           Copy the whole script
         </Button>
-        {mayUpload && <UploadDialog orgId={orgId} start={interpreter} trigger={<Button size="sm">Use as a new script</Button>} />}
+        {mayUpload && <UploadDialog orgId={orgId} start={example.id} trigger={<Button size="sm">Use as a new script</Button>} />}
       </div>
       <ol className="flex flex-col gap-4">
         {example.steps.map((step, i) => (

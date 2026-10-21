@@ -1,7 +1,8 @@
-// The worked examples of the Deployment Scripts guide, which the upload form also offers to start from. Each is a
-// script in steps, so that the guide can explain it a step at a time and the form can join it into one; the step that
-// is `yours` is where the author puts their own deployment. server/test/script-parameters-web.test.ts checks that each
-// joined script's parameter section is one the platform takes.
+// The worked examples of the Deployment Scripts guide, which the upload form also offers to start from, and which
+// docs/deployment-scripts.md shows as they are. Each is a script in steps, so that the guide can explain it a step at a
+// time and the form can join it into one; the step that is `yours` is where the author's own deployment is.
+// server/test/script-parameters-web.test.ts checks that each joined script's parameter section is one the platform
+// takes, and that the docs carry each one exactly.
 import type { DeploymentScript } from "./api";
 
 export interface ExampleStep {
@@ -14,82 +15,109 @@ export interface ExampleStep {
 }
 
 export interface ExampleScript {
+  id: "nginx" | "app-files" | "iis";
+  /** What it deploys to, as its tab and button name it. */
+  title: string;
+  /** What it does, and what it shows of Deployment Parameters. */
+  summary: string;
   interpreter: DeploymentScript["interpreter"];
   /** A name to upload it under. */
   name: string;
   steps: ExampleStep[];
 }
 
-const bash: ExampleScript = {
+const nginx: ExampleScript = {
+  id: "nginx",
+  title: "nginx site",
+  summary: "Installs the Certificate and its key for one nginx site, then reloads nginx. It takes a required, a defaulted and an optional parameter.",
   interpreter: "bash",
   name: "nginx-site",
   steps: [
     {
       title: "Declare what the script needs",
-      code: `#!/usr/bin/env bash
-# Put a Certificate on an nginx site, on this host or another.
-#
+      code: `#!/bin/bash
+# Installs the Certificate and its key for one nginx site, then reloads the service.
 # deploy-params:begin
 # [
-#   { "name": "SITE_NAME", "label": "Site name", "required": true,
-#     "description": "The nginx site the Certificate is for, as in sites-enabled." },
-#   { "name": "TARGET_HOST", "label": "Target host",
-#     "description": "Leave blank to deploy on the Agent's own host." },
-#   { "name": "CERT_DIR", "label": "Certificate directory",
-#     "default": "/etc/ssl/platform" },
-#   { "name": "RELOAD", "label": "Reload nginx", "default": "yes",
-#     "description": "yes or no." }
+#   { "name": "SITE", "label": "Site", "description": "The site's directory under /etc/nginx/certs.", "required": true },
+#   { "name": "SERVICE", "label": "Service", "description": "The systemd unit to reload once the files are in place.", "default": "nginx" },
+#   { "name": "KEY_OWNER", "description": "The user to give the key file to; it stays the Agent's when blank." }
 # ]
 # deploy-params:end
 set -euo pipefail`,
     },
     {
       title: "Guard the required ones",
-      note: "The platform refuses a Deployment without them, but an Agent that predates script parameters runs the script without any.",
-      code: `# An Agent that predates script parameters runs scripts without them:
-# stop here, loudly, rather than deploy to the wrong place.
-: "\${DEPLOY_PARAM_SITE_NAME:?SITE_NAME is required: update the Agent}"`,
+      note: "The platform refuses a Deployment without them, but an Agent that predates Deployment Parameters runs the script without any.",
+      code: `# An Agent that predates Deployment Parameters runs this without them: stop rather than install to the wrong place.
+: "\${DEPLOY_PARAM_SITE:?is not set, so this Agent may predate Deployment Parameters}"
+dir="/etc/nginx/certs/$DEPLOY_PARAM_SITE"`,
     },
     {
-      title: "Read the rest, with a fallback for each",
-      code: `# A blank optional parameter is absent, and set -u stops on an unset
-# variable, so always read them with :-
-site="$DEPLOY_PARAM_SITE_NAME"
-target="\${DEPLOY_PARAM_TARGET_HOST:-}"
-cert_dir="\${DEPLOY_PARAM_CERT_DIR:-/etc/ssl/platform}"
-reload="\${DEPLOY_PARAM_RELOAD:-yes}"`,
-    },
-    {
-      title: "Pick up the Certificate and key",
-      code: `key="$CERT_KEY_FILE"              # the private key, made on this host
-fullchain="$CERT_FULLCHAIN_FILE"  # the leaf, then the intermediates
-echo "Deploying $CERT_FINGERPRINT for $CERT_NAMES, valid until $CERT_NOT_AFTER"`,
-    },
-    {
-      title: "Your deployment goes here",
-      note: "Put $key and $fullchain where the service reads them, then reload it. Credentials for other hosts come from the Agent's own environment, never from a parameter.",
+      title: "Your deployment: put the files where nginx reads them",
+      note: "This is where the Certificate is put to use; change these lines for your server. $CERT_FULLCHAIN_FILE and $CERT_KEY_FILE are the files to place, and an optional parameter is read with :- so that set -u allows it unset.",
       yours: true,
-      code: `# --- your deployment ---------------------------------------------------
-# For example, to another host over SSH, with a key path set in the
-# Agent service's environment as NGINX_DEPLOY_SSH_KEY:
-#
-#   dest="$target:$cert_dir/$site"
-#   scp -i "$NGINX_DEPLOY_SSH_KEY" "$fullchain" "$dest/fullchain.pem"
-#   scp -i "$NGINX_DEPLOY_SSH_KEY" "$key"       "$dest/privkey.pem"
-#   if [ "$reload" = yes ]; then
-#     ssh -i "$NGINX_DEPLOY_SSH_KEY" "$target" 'nginx -t && systemctl reload nginx'
-#   fi
-# ------------------------------------------------------------------------`,
+      code: `install -d -m 0755 "$dir"
+install -m 0644 "$CERT_FULLCHAIN_FILE" "$dir/fullchain.pem"
+install -m 0600 "$CERT_KEY_FILE" "$dir/privkey.pem"
+if [ -n "\${DEPLOY_PARAM_KEY_OWNER:-}" ]; then
+  chown "$DEPLOY_PARAM_KEY_OWNER" "$dir/privkey.pem"
+fi`,
     },
     {
-      title: "Exit with the outcome",
-      code: `echo "Deployed $CERT_FINGERPRINT"   # output is stored: never print parameter values or secrets
-exit 0                              # any other code marks the Deployment Run failed`,
+      title: "Reload, and say what was installed",
+      note: "The default is used here too, for an Agent that predates Deployment Parameters. The output is stored with the run: never print parameter values or secrets.",
+      code: `systemctl reload "\${DEPLOY_PARAM_SERVICE:-nginx}"
+echo "installed $CERT_FINGERPRINT"`,
     },
   ],
 };
 
-const powershell: ExampleScript = {
+const appFiles: ExampleScript = {
+  id: "app-files",
+  title: "Application files",
+  summary: "Copies the Certificate and its key into an application's directory, then restarts its Windows service when one is named. It takes a required and an optional parameter.",
+  interpreter: "powershell",
+  name: "app-files",
+  steps: [
+    {
+      title: "Declare what the script needs",
+      code: `# Copies the Certificate and its key into an application's directory, then restarts its service.
+# deploy-params:begin
+# [
+#   { "name": "TARGET_DIR", "label": "Directory", "description": "Where the application reads certificate.pem and key.pem.", "required": true },
+#   { "name": "SERVICE", "label": "Service", "description": "The Windows service to restart; none is restarted when blank." }
+# ]
+# deploy-params:end
+$ErrorActionPreference = 'Stop'`,
+    },
+    {
+      title: "Guard the required ones",
+      note: "The platform refuses a Deployment without them, but an Agent that predates Deployment Parameters runs the script without any.",
+      code: `# An Agent that predates Deployment Parameters runs this without them: stop rather than write to the wrong place.
+if (-not $env:DEPLOY_PARAM_TARGET_DIR) { throw 'TARGET_DIR is not set, so this Agent may predate Deployment Parameters' }`,
+    },
+    {
+      title: "Your deployment: copy the files where the application reads them",
+      note: "This is where the Certificate is put to use; change these lines for your application. $env:CERT_FULLCHAIN_FILE and $env:CERT_KEY_FILE are the files to place.",
+      yours: true,
+      code: `New-Item -ItemType Directory -Force -Path $env:DEPLOY_PARAM_TARGET_DIR | Out-Null
+Copy-Item $env:CERT_FULLCHAIN_FILE (Join-Path $env:DEPLOY_PARAM_TARGET_DIR 'certificate.pem') -Force
+Copy-Item $env:CERT_KEY_FILE (Join-Path $env:DEPLOY_PARAM_TARGET_DIR 'key.pem') -Force`,
+    },
+    {
+      title: "Restart, and say what was installed",
+      note: "An optional parameter left blank is absent, so a plain test tells unset from set. The output is stored with the run: never print parameter values or secrets.",
+      code: `if ($env:DEPLOY_PARAM_SERVICE) { Restart-Service -Name $env:DEPLOY_PARAM_SERVICE }
+Write-Output "installed $env:CERT_FINGERPRINT"`,
+    },
+  ],
+};
+
+const iis: ExampleScript = {
+  id: "iis",
+  title: "IIS site",
+  summary: "Binds the Certificate to an IIS site. It takes a required, a defaulted and an optional parameter, and leaves the binding itself for you to write.",
   interpreter: "powershell",
   name: "iis-binding",
   steps: [
@@ -111,7 +139,7 @@ $ErrorActionPreference = 'Stop'`,
     {
       title: "Guard the required ones",
       note: "The platform refuses a Deployment without them, but an Agent that predates script parameters runs the script without any.",
-      code: `# An Agent that predates script parameters runs scripts without them.
+      code: `# An Agent that predates Deployment Parameters runs scripts without them.
 if ([string]::IsNullOrEmpty($env:DEPLOY_PARAM_SITE_NAME)) {
   throw 'SITE_NAME is required: update the Agent'
 }`,
@@ -148,7 +176,9 @@ exit 0                                         # a throw or any other code fails
   ],
 };
 
-export const EXAMPLE_SCRIPTS: Record<DeploymentScript["interpreter"], ExampleScript> = { bash, powershell };
+/** The examples, in the order the guide and the upload form offer them. */
+export const EXAMPLE_SCRIPTS: ExampleScript[] = [nginx, appFiles, iis];
+export const exampleById = (id: ExampleScript["id"]) => EXAMPLE_SCRIPTS.find((e) => e.id === id)!;
 
 /** The example as one script, ready to upload. */
 export const exampleContent = (example: ExampleScript) => `${example.steps.map((s) => s.code).join("\n\n")}\n`;

@@ -76,17 +76,26 @@ describe("the web parameter section reader", () => {
 });
 
 describe("the guide's example scripts", () => {
-  for (const example of Object.values(EXAMPLE_SCRIPTS)) {
-    test(`the ${example.interpreter} example's section is one the platform takes, with a required parameter and a default`, () => {
+  for (const example of EXAMPLE_SCRIPTS) {
+    test(`the ${example.title} example's section is one the platform takes, with a required parameter and an optional one`, () => {
       const parameters = declaredParameters(exampleContent(example));
-      expect(parameters.length).toBeGreaterThan(1);
       expect(parameters.some((p) => p.required)).toBe(true);
-      expect(parameters.some((p) => p.default !== undefined)).toBe(true);
+      expect(parameters.some((p) => !p.required)).toBe(true);
       expect(example.steps.filter((s) => s.yours)).toHaveLength(1);
       // Every parameter it declares, it reads.
       for (const p of parameters) expect(exampleContent(example)).toContain(`DEPLOY_PARAM_${p.name}`);
     });
+
+    test(`docs/deployment-scripts.md shows the ${example.title} example exactly as the app offers it`, () => {
+      const docs = readFileSync(new URL("../../docs/deployment-scripts.md", import.meta.url), "utf8");
+      expect(docs).toContain("```" + example.interpreter + "\n" + exampleContent(example) + "```");
+    });
   }
+
+  test("between them, show a default, a Bash script and a PowerShell one", () => {
+    expect(EXAMPLE_SCRIPTS.some((e) => declaredParameters(exampleContent(e)).some((p) => p.default !== undefined))).toBe(true);
+    expect(new Set(EXAMPLE_SCRIPTS.map((e) => e.interpreter))).toEqual(new Set(["bash", "powershell"]));
+  });
 
   test("name every variable the Agent sets for a run", () => {
     const agent = readFileSync(new URL("../../agent/internal/deploy/deploy.go", import.meta.url), "utf8");

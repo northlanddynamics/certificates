@@ -18,7 +18,7 @@ import { Label } from "@/components/ui/label";
 import { Table, TableBody, TableCell, TableHead, TableHeader, TableRow } from "@/components/ui/table";
 import { Tabs, TabsContent, TabsList, TabsTrigger } from "@/components/ui/tabs";
 import { api, can, type DeploymentScript, type ScriptParameter } from "@/lib/api";
-import { EXAMPLE_SCRIPTS, exampleContent } from "@/lib/deployment-script-examples";
+import { EXAMPLE_SCRIPTS, exampleById, exampleContent, type ExampleScript } from "@/lib/deployment-script-examples";
 import { ENV_PREFIX, readDeclaration } from "@/lib/script-parameters";
 import { useOrg } from "@/lib/use-org";
 import { useAction } from "@/lib/use-action";
@@ -257,7 +257,7 @@ function Versions({ orgId, script }: { orgId: string; script: DeploymentScript }
 }
 
 /** The button that uploads a new script, and its dialog; `start` fills it with the guide's example in that interpreter. */
-export function UploadDialog({ orgId, start, trigger }: { orgId: string; start?: DeploymentScript["interpreter"]; trigger?: ReactNode }) {
+export function UploadDialog({ orgId, start, trigger }: { orgId: string; start?: ExampleScript["id"]; trigger?: ReactNode }) {
   const [open, setOpen] = useState(false);
   return (
     <Dialog open={open} onOpenChange={setOpen}>
@@ -281,15 +281,16 @@ export function UploadDialog({ orgId, start, trigger }: { orgId: string; start?:
   );
 }
 
-function UploadForm({ orgId, start, onDone }: { orgId: string; start?: DeploymentScript["interpreter"]; onDone: () => void }) {
-  const [name, setName] = useState(start ? EXAMPLE_SCRIPTS[start].name : "");
-  const [interpreter, setInterpreter] = useState<DeploymentScript["interpreter"]>(start ?? "bash");
-  const [content, setContent] = useState(start ? exampleContent(EXAMPLE_SCRIPTS[start]) : "");
+function UploadForm({ orgId, start, onDone }: { orgId: string; start?: ExampleScript["id"]; onDone: () => void }) {
+  const started = start ? exampleById(start) : undefined;
+  const [name, setName] = useState(started?.name ?? "");
+  const [interpreter, setInterpreter] = useState<DeploymentScript["interpreter"]>(started?.interpreter ?? "bash");
+  const [content, setContent] = useState(started ? exampleContent(started) : "");
   // Starting from an example takes its interpreter, and its name unless one is typed.
-  const startFrom = (example: DeploymentScript["interpreter"]) => {
-    setInterpreter(example);
-    setContent(exampleContent(EXAMPLE_SCRIPTS[example]));
-    if (!name.trim()) setName(EXAMPLE_SCRIPTS[example].name);
+  const startFrom = (example: ExampleScript) => {
+    setInterpreter(example.interpreter);
+    setContent(exampleContent(example));
+    if (!name.trim()) setName(example.name);
   };
   const upload = useAction(() => api.uploadDeploymentScript(orgId, { name: name.trim(), interpreter, content }), ["deployment-scripts"], onDone);
   return (
@@ -317,9 +318,9 @@ function UploadForm({ orgId, start, onDone }: { orgId: string; start?: Deploymen
       {!content.trim() && (
         <div className="flex flex-wrap items-center gap-2 text-sm">
           <span className="text-muted-foreground">Start from an example:</span>
-          {INTERPRETERS.map((i) => (
-            <Button key={i} type="button" variant="outline" size="sm" onClick={() => startFrom(i)}>
-              {EXAMPLE_SCRIPTS[i].name} ({INTERPRETER_LABEL[i]})
+          {EXAMPLE_SCRIPTS.map((example) => (
+            <Button key={example.id} type="button" variant="outline" size="sm" onClick={() => startFrom(example)}>
+              {example.title} ({INTERPRETER_LABEL[example.interpreter]})
             </Button>
           ))}
         </div>
@@ -581,12 +582,21 @@ function NoScripts({ orgId, mayUpload }: { orgId: string; mayUpload: boolean }) 
     <div className="flex flex-col items-center gap-3 py-6 text-center whitespace-normal">
       <p className="font-medium">No Deployment Script is uploaded yet.</p>
       <p className="max-w-md text-muted-foreground">
-        Start from a working example, which takes parameters, picks up the Certificate and key, and marks where your own deployment goes.
+        Start from a working example, which takes Deployment Parameters, picks up the Certificate and key, and marks where your own deployment goes.
       </p>
       {mayUpload && (
         <div className="flex flex-wrap justify-center gap-2">
-          {INTERPRETERS.map((i) => (
-            <UploadDialog key={i} orgId={orgId} start={i} trigger={<Button variant="outline">Start from the {INTERPRETER_LABEL[i]} example</Button>} />
+          {EXAMPLE_SCRIPTS.map((example) => (
+            <UploadDialog
+              key={example.id}
+              orgId={orgId}
+              start={example.id}
+              trigger={
+                <Button variant="outline">
+                  {example.title} ({INTERPRETER_LABEL[example.interpreter]})
+                </Button>
+              }
+            />
           ))}
         </div>
       )}

@@ -12,8 +12,7 @@ const SCRIPTS = {
   "a lone CR": "echo one\recho two\n",
   "no line end at all": "echo one",
   "no trailing line end": "echo one\r\necho two",
-  "the Bash example": exampleContent(EXAMPLE_SCRIPTS.bash),
-  "the PowerShell example, with CRLF": exampleContent(EXAMPLE_SCRIPTS.powershell).replaceAll("\n", "\r\n"),
+  ...Object.fromEntries(EXAMPLE_SCRIPTS.flatMap((e) => [[`the ${e.title} example`, exampleContent(e)], [`the ${e.title} example, with CRLF`, exampleContent(e).replaceAll("\n", "\r\n")]])),
 };
 
 describe("the script editor", () => {
