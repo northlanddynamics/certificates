@@ -1,4 +1,5 @@
 import { useMutation } from "@tanstack/react-query";
+import { Link } from "@tanstack/react-router";
 import { CircleAlertIcon, ClockIcon } from "lucide-react";
 import { useState, type FormEvent, type ReactNode } from "react";
 import { Alert, AlertAction, AlertDescription, AlertTitle } from "@/components/ui/alert";
@@ -8,6 +9,10 @@ import { Field, FieldLabel } from "@/components/ui/field";
 import { Textarea } from "@/components/ui/textarea";
 import { api, can, type ManagedCertificate, type Me } from "@/lib/api";
 import { ISSUANCE_KIND_WORDS, isOwner } from "@/lib/managed-certificate";
+import { GuideLink } from "@/components/guide";
+
+/** The failures DCV itself reports, as `DcvFailureCode` in server/src/issuance/dcv/dcv.ts names them: the DCV guide explains each. */
+const DCV_FAILURES = ["no_dns_provider", "dns_update_rejected", "dns_provider_unreachable", "cname_missing", "record_not_visible"];
 
 const when = (iso: string) => new Date(iso).toLocaleString();
 
@@ -146,6 +151,21 @@ export function AlertStrip({ org, m, userId, onChanged }: { org: Me["organizatio
               {failedAt && <span className="text-muted-foreground"> ({when(failedAt)})</span>}
             </p>
             {m.renewal.failing?.nextAttemptAt && <p>Next attempt {when(m.renewal.failing.nextAttemptAt)}.</p>}
+            {DCV_FAILURES.includes(failure.code) && (
+              <p>
+                {m.issuer.kind === "acme" && can(org, "dcvRule", "read") && (
+                  <>
+                    <Link to="/organizations/$orgId/certificates/$id" params={{ orgId: org.id, id: m.id }} hash="dcv" className="font-medium underline underline-offset-4">
+                      How each name is validated
+                    </Link>
+                    {" · "}
+                  </>
+                )}
+                <GuideLink orgId={org.id} guide="dcv" section="fails">
+                  When DCV fails
+                </GuideLink>
+              </p>
+            )}
             {retry.error && <p>{retry.error.message}</p>}
           </AlertDescription>
           {mayRetry && (

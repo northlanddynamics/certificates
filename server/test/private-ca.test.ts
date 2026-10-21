@@ -6,7 +6,7 @@ import { afterAll, beforeAll, beforeEach, describe, expect, test } from "bun:tes
 import * as x509 from "@peculiar/x509";
 import acme from "acme-client";
 import { webcrypto } from "node:crypto";
-import { PASSWORD, createHarness, type Harness } from "./support/harness";
+import { PASSWORD, PKI_BASE_URL, createHarness, type Harness } from "./support/harness";
 
 let h: Harness;
 let operator: string;
@@ -911,5 +911,30 @@ describe("a Name Change's validity", () => {
     const { names, csr } = await request(["app.example.com", "www.example.com"]);
     const refused = await h.api(`${mcs()}/${acmeMc.body.id}/name-change`, { cookie: org.cookie, body: { names, csr, validityDays: 30 } });
     expect(refused.status).toBe(400);
+  });
+});
+
+// Kept last: the second harness shares the database with the first.
+describe("where the Private CAs publish", () => {
+  test("the list says the PKI base URL every Certificate names, and that the operator set it", async () => {
+    const res = await h.api(cas(), { cookie: org.cookie });
+
+    expect(res.status).toBe(200);
+    expect(res.body.publication).toEqual({ baseUrl: PKI_BASE_URL, configured: true });
+  });
+
+  test("without PKI_BASE_URL it is the address the API is served at, and says it was not set", async () => {
+    const unset = await createHarness({ pkiBaseURL: undefined });
+    try {
+      const op = await unset.createOperator("op2@platform.test", PASSWORD);
+      const other = await unset.createOrgWithAdmin(op, "initech", "admin@initech.test");
+
+      const res = await unset.api(cas(other.orgId), { cookie: other.cookie });
+
+      expect(res.status).toBe(200);
+      expect(res.body.publication).toEqual({ baseUrl: "http://localhost", configured: false });
+    } finally {
+      await unset.close();
+    }
   });
 });

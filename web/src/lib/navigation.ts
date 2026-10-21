@@ -1,4 +1,4 @@
-import { BadgeCheckIcon, BellIcon, BuildingIcon, PlugIcon, ScrollTextIcon, SendIcon, BotIcon, GlobeIcon, LandmarkIcon, FileKey2Icon, FileSearchIcon, FileTerminalIcon, KeyRoundIcon, LogInIcon, RocketIcon, ShieldCheckIcon, ShieldEllipsisIcon, ShieldUserIcon, TabletSmartphoneIcon, UserRoundIcon, UsersIcon, type LucideIcon } from "lucide-react";
+import { BadgeCheckIcon, BellIcon, BuildingIcon, PlugIcon, ScrollTextIcon, SendIcon, BotIcon, GlobeIcon, LandmarkIcon, FileKey2Icon, FileSearchIcon, FileTerminalIcon, KeyRoundIcon, LogInIcon, RocketIcon, SearchCheckIcon, ShieldCheckIcon, ShieldEllipsisIcon, ShieldUserIcon, TabletSmartphoneIcon, UserRoundIcon, UsersIcon, type LucideIcon } from "lucide-react";
 import { can, type Me } from "@/lib/api";
 
 type Org = Me["organizations"][number];
@@ -62,6 +62,7 @@ export function organizationNavGroups(org: Org): NavGroup[] {
           items: [
             ...(can(org, "acmeAccount", "read") ? [{ title: "ACME accounts", url: `${base}/acme-accounts`, icon: LandmarkIcon }] : []),
             ...(can(org, "dnsProvider", "read") ? [{ title: "DNS Providers", url: `${base}/dns-providers`, icon: GlobeIcon }] : []),
+            ...(can(org, "dcvRule", "read") ? [{ title: "DCV", url: `${base}/dcv`, icon: SearchCheckIcon }] : []),
           ],
         },
       ],

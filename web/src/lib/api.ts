@@ -1,6 +1,9 @@
 // The server's own list of the reasons each kind of issuer takes, from a module that imports only types.
 import { ISSUING_CA_REVOCATION_REASONS, REVOCATION_REASONS_OF, type RevocationReason } from "../../../server/src/pki/revocation-reasons";
 import type { KeyAlgorithm } from "./csr-generator";
+import type { PkiPublication } from "./pki-publication";
+
+export type { PkiPublication };
 import type { DeviceExtendedKeyUsage, DeviceKeyType, DeviceKeyUsage } from "../../../server/src/enrollment/enrollment-profile-kinds";
 
 // The web UI talks only to the platform's HTTP API (described by /api/openapi.json).
@@ -428,6 +431,37 @@ export type DnsProvider = { id: string; name: string; relayAgentIds: string[] } 
 );
 export type DnsProviderType = DnsProvider["type"];
 export type DnsProviderSettings = DnsProvider["settings"];
+/** A zone of the Organization's, on one of its DNS Providers, that Delegated names' `_acme-challenge` CNAMEs point into. */
+export interface ValidationZone {
+  id: string;
+  name: string;
+  dnsProviderId: string;
+}
+/** How DCV is done for one name (and its wildcard) or for a zone (the name and everything beneath it). */
+export interface DcvRule {
+  id: string;
+  scope: "name" | "zone";
+  domain: string;
+  method: "direct" | "delegated";
+  /** Direct only: the DNS Provider to publish through; none means whichever publishes the name. */
+  dnsProviderId: string | null;
+  /** Delegated only: the Validation Zone the challenge record is written in. */
+  validationZoneId: string | null;
+}
+export type NewDcvRule = Omit<DcvRule, "id">;
+/** What DCV will do for a name under the Organization's rules now, and the CNAME a Delegated one needs. */
+export interface DcvPreview {
+  name: string;
+  challengeName: string;
+  method: DcvRule["method"];
+  rule: { id: string; scope: DcvRule["scope"]; domain: string } | null;
+  /** None when no DNS Provider can publish the record, which fails DCV. */
+  dnsProvider: { id: string; name: string } | null;
+  validationZone: { id: string; name: string } | null;
+  cname: { name: string; type: "CNAME"; value: string } | null;
+  /** Asked for with `lookup`: what the CNAME points to now; null when the name needs none. */
+  dns?: { pointsTo: string[]; matches: boolean } | null;
+}
 /** A value a Deployment Script version asks for, declared in its `# deploy-params:begin` section; the script finds it in `DEPLOY_PARAM_` and the name. */
 export interface ScriptParameter {
   name: string;
@@ -719,6 +753,15 @@ export const api = {
     call<Page<ApiKey>>(`/api/organizations/${orgId}/api-keys?${new URLSearchParams({ page: String(paging.page), pageSize: String(paging.pageSize) })}`),
   createApiKey: (orgId: string, body: { name: string; type: ApiKey["type"]; expiresInDays?: number }) =>
     call<ApiKey & { key: string }>(`/api/organizations/${orgId}/api-keys`, { body }),
+  validationZones: (orgId: string) => call<{ items: ValidationZone[] }>(`/api/organizations/${orgId}/validation-zones`),
+  createValidationZone: (orgId: string, body: { name: string; dnsProviderId: string }) => call<ValidationZone>(`/api/organizations/${orgId}/validation-zones`, { body }),
+  deleteValidationZone: (orgId: string, id: string) => call(`/api/organizations/${orgId}/validation-zones/${id}`, { method: "DELETE" }),
+  dcvRules: (orgId: string) => call<{ items: DcvRule[] }>(`/api/organizations/${orgId}/dcv-rules`),
+  createDcvRule: (orgId: string, body: NewDcvRule) => call<DcvRule>(`/api/organizations/${orgId}/dcv-rules`, { body }),
+  deleteDcvRule: (orgId: string, id: string) => call(`/api/organizations/${orgId}/dcv-rules/${id}`, { method: "DELETE" }),
+  /** How DCV is done for `name`; with `lookup`, whether its CNAME is in DNS yet. */
+  dcvPreview: (orgId: string, name: string, { lookup = false } = {}) =>
+    call<DcvPreview>(`/api/organizations/${orgId}/dcv/preview?${new URLSearchParams({ name, ...(lookup && { lookup: "true" }) })}`),
   revokeApiKey: (orgId: string, keyId: string) => call(`/api/organizations/${orgId}/api-keys/${keyId}`, { method: "DELETE" }),
   /** One page of the Agents, oldest first, narrowed to those that are any of `status` and run any of `os`, and to the outdated if asked; `page` is from 1. */
   agents: (orgId: string, filters: { status: string[]; os: string[]; outdated: boolean }, paging: { page: number; pageSize: number }) => {
@@ -763,7 +806,7 @@ export const api = {
   setDeploymentParameters: (orgId: string, id: string, parameters: Record<string, string>) =>
     call<Deployment>(`/api/organizations/${orgId}/deployments/${id}/parameters`, { method: "PUT", body: parameters }),
   runDeploymentAgain: (orgId: string, id: string) => call<Deployment>(`/api/organizations/${orgId}/deployments/${id}/runs`, { method: "POST", body: {} }),
-  privateCas: (orgId: string) => call<{ items: PrivateCa[] }>(`/api/organizations/${orgId}/private-cas`),
+  privateCas: (orgId: string) => call<{ items: PrivateCa[]; publication: PkiPublication }>(`/api/organizations/${orgId}/private-cas`),
   createPrivateCa: (orgId: string, body: NewPrivateCa) => call<PrivateCa>(`/api/organizations/${orgId}/private-cas`, { body }),
   addIssuingCa: (orgId: string, id: string, body: NewIssuingCa) => call<IssuingCa>(`/api/organizations/${orgId}/private-cas/${id}/issuing-cas`, { body }),
   updateIssuingCa: (orgId: string, id: string, issuingCaId: string, body: { permittedNames?: PermittedNames; validity?: PrivateCaValidity }) =>
