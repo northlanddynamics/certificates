@@ -11,8 +11,10 @@ import { Button } from "@/components/ui/button";
 import { Input } from "@/components/ui/input";
 import { Tabs, TabsContent, TabsList, TabsTrigger } from "@/components/ui/tabs";
 import { Table, TableBody, TableCell, TableHead, TableHeader, TableRow } from "@/components/ui/table";
-import { api, can, ownerLabel, type InventoryFilters, type ManagedCertificate, type Me } from "@/lib/api";
+import { api, can, ownerLabel, type AcmeCa, type AcmeCaTag, type InventoryFilters, type ManagedCertificate, type Me } from "@/lib/api";
 import { KEY_ALGORITHMS, KEY_ALGORITHM_LABELS } from "@/lib/csr-generator";
+import { AcmeCaTagBadge } from "@/components/acme-ca-tag";
+import { ACME_CA_TAG_LABELS, useAcmeCas } from "@/lib/acme-cas";
 import { issuerLabel, keyAlgorithmLabel, status } from "@/lib/managed-certificate";
 import { chosenValidityLabel } from "@/lib/private-ca";
 
@@ -21,7 +23,7 @@ type Org = Me["organizations"][number];
 // Paging, narrowing and ordering are the server's (Page<T>); the table lays out the page it was given, and a row opens to its details.
 const features = tableFeatures({ rowPaginationFeature });
 const columnHelper = createColumnHelper<typeof features, ManagedCertificate>();
-const makeColumns = (orgId: string) => columnHelper.columns([
+const makeColumns = (orgId: string, acmeCas: AcmeCa[] | undefined) => columnHelper.columns([
   columnHelper.accessor((m) => m.commonName ?? "—", {
     id: "commonName",
     header: "Common name",
@@ -32,7 +34,12 @@ const makeColumns = (orgId: string) => columnHelper.columns([
     header: "SANs",
     cell: ({ cell }) => <span className="block max-w-80 truncate text-muted-foreground">{cell.getValue()}</span>,
   }),
-  columnHelper.accessor("environment", { header: "Environment", cell: ({ cell }) => <Badge variant="outline" className="capitalize">{cell.getValue()}</Badge> }),
+  // The tag of its ACME CA, as that CA has it now; none for one from a Private CA.
+  columnHelper.accessor((m) => (m.acmeCaId ? (acmeCas?.find((ca) => ca.id === m.acmeCaId)?.tag ?? null) : null), {
+    id: "tag",
+    header: "Environment",
+    cell: ({ cell }) => <AcmeCaTagBadge tag={cell.getValue()} />,
+  }),
   columnHelper.accessor((m) => keyAlgorithmLabel(m.keyAlgorithm), { id: "keyAlgorithm", header: "Key algorithm" }),
   columnHelper.accessor((m) => status(m).label, {
     id: "status",
@@ -58,7 +65,7 @@ function ManagedCertificateLink({ orgId, id, children }: { orgId: string; id: st
 }
 
 /** The inventory's facets: each is a list of values, and the filter the server takes for them. */
-const STATUS_FACETS: [keyof Omit<InventoryFilters, "keyCustody" | "environment" | "keyAlgorithm">, string][] = [
+const STATUS_FACETS: [keyof Omit<InventoryFilters, "keyCustody" | "tag" | "keyAlgorithm">, string][] = [
   ["expiringSoon", "Expiring soon"],
   ["renewalFailing", "Renewal failing"],
   ["agentOffline", "Agent offline"],
@@ -68,14 +75,14 @@ const STATUS_FACETS: [keyof Omit<InventoryFilters, "keyCustody" | "environment" 
 ];
 interface Facets {
   status: string[];
-  environment: string[];
+  tag: string[];
   keyAlgorithm: string[];
   keyCustody: string[];
 }
-const NO_FACETS: Facets = { status: [], environment: [], keyAlgorithm: [], keyCustody: [] };
+const NO_FACETS: Facets = { status: [], tag: [], keyAlgorithm: [], keyCustody: [] };
 const toFilters = (facets: Facets): InventoryFilters => ({
   ...Object.fromEntries(facets.status.map((name) => [name, true])),
-  environment: facets.environment as InventoryFilters["environment"],
+  tag: facets.tag as AcmeCaTag[],
   keyAlgorithm: facets.keyAlgorithm,
   keyCustody: facets.keyCustody[0] as InventoryFilters["keyCustody"],
 });
@@ -97,7 +104,8 @@ export function ManagedCertificates({ org }: { org: Org }) {
     void queryClient.invalidateQueries({ queryKey: ["approvals", org.id] });
     return queryClient.invalidateQueries({ queryKey: ["inventory", org.id] });
   };
-  const columns = useMemo(() => makeColumns(org.id), [org.id]);
+  const acmeCas = useAcmeCas(org.id).data?.items;
+  const columns = useMemo(() => makeColumns(org.id, acmeCas), [org.id, acmeCas]);
   const table = useTable({
     features,
     columns,
@@ -132,12 +140,9 @@ export function ManagedCertificates({ org }: { org: Org }) {
         />
         <DataTableFacetedFilter
           title="Environment"
-          options={[
-            { value: "staging", label: "Staging" },
-            { value: "production", label: "Production" },
-          ]}
-          value={facets.environment}
-          onChange={(environment) => narrow({ environment })}
+          options={Object.entries(ACME_CA_TAG_LABELS).map(([value, label]) => ({ value, label }))}
+          value={facets.tag}
+          onChange={(tag) => narrow({ tag })}
         />
         <DataTableFacetedFilter
           title="Key algorithm"
@@ -196,6 +201,7 @@ export function ManagedCertificates({ org }: { org: Org }) {
 
 function ApprovalQueue({ org, onDecided: decided }: { org: Org; onDecided: () => void }) {
   const queue = useQuery({ queryKey: ["approvals", org.id], queryFn: () => api.approvalQueue(org.id) });
+  const acmeCas = useAcmeCas(org.id).data?.items;
   const approve = useMutation({ mutationFn: (id: string) => api.approve(org.id, id), onSuccess: decided });
   const reject = useMutation({
     mutationFn: ({ id, reason }: { id: string; reason: string }) => api.reject(org.id, id, reason),
@@ -219,7 +225,7 @@ function ApprovalQueue({ org, onDecided: decided }: { org: Org; onDecided: () =>
       id: m.id,
       names: m.names.join(", "),
       request: "New",
-      detail: `${keyAlgorithmLabel(m.keyAlgorithm)}, ${issuerLabel(m.issuer)}${m.issuer.kind === "private_ca" ? `, valid for ${chosenValidityLabel(m.validityDays)}` : ""}`,
+      detail: `${keyAlgorithmLabel(m.keyAlgorithm)}, ${issuerLabel(m.issuer, acmeCas)}${m.issuer.kind === "private_ca" ? `, valid for ${chosenValidityLabel(m.validityDays)}` : ""}`,
       proposedBy: m.approval.proposedBy?.email,
       label: m.names.join(", "),
       approve: () => approve.mutate(m.id),

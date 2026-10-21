@@ -1,7 +1,6 @@
 import { bigint, boolean, check, customType, integer, foreignKey, index, jsonb, pgTable, primaryKey, text, timestamp, unique, uniqueIndex, uuid } from "drizzle-orm/pg-core";
 import { sql } from "drizzle-orm";
 import type { AuditForwarderKind } from "../../audit/audit-forwarder-kinds";
-import type { AcmeEnvironment } from "../../issuance/acme/certificate-authority";
 import type { RevocationReason } from "../../pki/revocation-reasons";
 import type { DcvMethod, DcvScope } from "../../issuance/dcv/dcv-plan";
 import type { ScriptInterpreter } from "../../deployment/deployment-script-kinds";
@@ -141,8 +140,8 @@ export const managedCertificate = pgTable(
     keyCustody: text("key_custody").$type<KeyCustody>().notNull(),
     /** Its issuer (issuer.ts): the kind of CA its Certificates come from, and that kind's reference in the columns below. */
     issuerKind: text("issuer_kind").$type<IssuerKind>().notNull().default("acme"),
-    /** The ACME kind's reference: which of the Organization's ACME accounts, by environment, Certificates are obtained through. */
-    environment: text("environment").$type<AcmeEnvironment>(),
+    /** The ACME kind's reference: the ACME CA (acme-cas.ts), by id, whose ACME Account of the Organization Certificates are obtained through. */
+    acmeCaId: text("acme_ca_id"),
     /** The Private CA kind's reference: the Issuing CA, of one of the Organization's Private CAs, its Certificates are issued from. */
     issuingCaId: uuid("issuing_ca_id"),
     /**
@@ -176,7 +175,7 @@ export const managedCertificate = pgTable(
     index("managed_certificate_org_idx").on(t.organizationId),
     check(
       "managed_certificate_issuer_kind",
-      sql`(${t.issuerKind} = 'acme' and ${t.environment} is not null and ${t.issuingCaId} is null) or (${t.issuerKind} = 'private_ca' and ${t.issuingCaId} is not null and ${t.environment} is null)`,
+      sql`(${t.issuerKind} = 'acme' and ${t.acmeCaId} is not null and ${t.issuingCaId} is null) or (${t.issuerKind} = 'private_ca' and ${t.issuingCaId} is not null and ${t.acmeCaId} is null)`,
     ),
     check("managed_certificate_validity", sql`${t.validityDays} is null or (${t.issuerKind} = 'private_ca' and ${t.validityDays} >= 1)`),
     foreignKey({ columns: [t.issuingCaId, t.organizationId], foreignColumns: [issuingCa.id, issuingCa.organizationId] }),
@@ -314,7 +313,7 @@ export const secret = pgTable(
   (t) => [unique("secret_id_organization_unique").on(t.id, t.organizationId)],
 );
 
-/** An Organization's account with a CA, in one of its environments. Its key is a secret and is never returned. */
+/** An Organization's account with an ACME CA (acme-cas.ts), at most one per ACME CA. Its key is a secret and is never returned. */
 export const acmeAccount = pgTable(
   "acme_account",
   {
@@ -322,14 +321,15 @@ export const acmeAccount = pgTable(
     organizationId: text("organization_id")
       .notNull()
       .references(() => organization.id),
-    environment: text("environment").$type<AcmeEnvironment>().notNull(),
+    /** The ACME CA, by id: a built-in one's, as it has no row. */
+    acmeCaId: text("acme_ca_id").notNull(),
     accountUrl: text("account_url").notNull(),
     contactEmail: text("contact_email"),
     secretId: uuid("secret_id").notNull(),
     createdAt: timestamp("created_at", { withTimezone: true }).notNull().defaultNow(),
   },
   (t) => [
-    unique("acme_account_organization_environment_unique").on(t.organizationId, t.environment),
+    unique("acme_account_organization_acme_ca_unique").on(t.organizationId, t.acmeCaId),
     foreignKey({ columns: [t.secretId, t.organizationId], foreignColumns: [secret.id, secret.organizationId] }),
   ],
 );
@@ -473,11 +473,11 @@ export const certificate = pgTable(
     chainPem: text("chain_pem").notNull(),
     /**
      * The CA it came from (what that CA calls itself), and the issuer (issuer.ts) it came from: its kind, and for ACME the
-     * environment and account used there, for a Private CA the Issuing CA that signed it.
+     * ACME CA and the account used there, for a Private CA the Issuing CA that signed it.
      */
     ca: text("ca").notNull(),
     issuerKind: text("issuer_kind").$type<IssuerKind>().notNull().default("acme"),
-    environment: text("environment").$type<AcmeEnvironment>(),
+    acmeCaId: text("acme_ca_id"),
     acmeAccountId: uuid("acme_account_id").references(() => acmeAccount.id),
     issuingCaId: uuid("issuing_ca_id"),
     issuedAt: timestamp("issued_at", { withTimezone: true }).notNull(),
@@ -487,7 +487,7 @@ export const certificate = pgTable(
     unique("certificate_organization_fingerprint_unique").on(t.organizationId, t.fingerprint),
     check(
       "certificate_issuer_kind",
-      sql`(${t.issuerKind} = 'acme' and ${t.environment} is not null and ${t.acmeAccountId} is not null and ${t.issuingCaId} is null) or (${t.issuerKind} = 'private_ca' and ${t.issuingCaId} is not null and ${t.environment} is null and ${t.acmeAccountId} is null)`,
+      sql`(${t.issuerKind} = 'acme' and ${t.acmeCaId} is not null and ${t.acmeAccountId} is not null and ${t.issuingCaId} is null) or (${t.issuerKind} = 'private_ca' and ${t.issuingCaId} is not null and ${t.acmeCaId} is null and ${t.acmeAccountId} is null)`,
     ),
     foreignKey({ columns: [t.issuingCaId, t.organizationId], foreignColumns: [issuingCa.id, issuingCa.organizationId] }),
     index("certificate_managed_certificate_idx").on(t.managedCertificateId, t.createdAt),

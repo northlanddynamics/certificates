@@ -3,7 +3,7 @@ import "reflect-metadata"; // @peculiar/x509 needs a Reflect polyfill loaded bef
 import { Pool } from "pg";
 import { createApp } from "../app";
 import { agentContract, serializeContract } from "./agent-contract";
-import { createLetsEncrypt } from "../issuance/acme/certificate-authority";
+import { createAcmeCertificateAuthority } from "../issuance/acme/certificate-authority";
 import { createLocalKms } from "../platform/crypto/kms";
 import { ConsoleMailer } from "../platform/mailer";
 
@@ -16,7 +16,7 @@ const { app } = createApp({
   baseURL: "http://localhost",
   secret: "unused-unused-unused-unused-unused",
   kms: createLocalKms(Buffer.alloc(32).toString("base64")),
-  certificateAuthority: createLetsEncrypt(),
+  certificateAuthority: createAcmeCertificateAuthority(),
 });
 await Bun.write(new URL("../../../agent/contract/openapi.json", import.meta.url), serializeContract(agentContract(app)));
 await pool.end();

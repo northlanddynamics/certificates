@@ -3,7 +3,7 @@
 // caller may see.
 import { z } from "@hono/zod-openapi";
 import { and, eq, inArray, isNotNull, isNull, sql, type SQL } from "drizzle-orm";
-import { ACME_ENVIRONMENTS, type AcmeEnvironment } from "../issuance/acme/certificate-authority";
+import { ACME_CA_TAGS, BUILT_IN_ACME_CAS } from "../issuance/acme/acme-cas";
 import { KEY_ALGORITHMS, KEY_CUSTODIES, type KeyAlgorithm } from "../pki/csr";
 import { agent, certificate, deployment, issuance, managedCertificate } from "../platform/db/schema";
 import { agentOffline } from "../agents/agents";
@@ -54,7 +54,10 @@ export const INVENTORY_FILTERS = {
   pendingApproval: filter(on.meta({ description: "Proposals waiting for Approval." }), () => eq(managedCertificate.approvalStatus, "pending")),
   noOwners: filter(on.meta({ description: "Managed Certificates with no Owners." }), () => hasNoOwners()),
   keyCustody: filter(z.enum(KEY_CUSTODIES).meta({ description: "Whose private key is held this way." }), (value) => eq(managedCertificate.keyCustody, value)),
-  environment: filter(anyOf(ACME_ENVIRONMENTS).meta({ description: "Issued through one of these ACME environments, comma-separated." }), (value) => inArray(managedCertificate.environment, value.split(",") as unknown as AcmeEnvironment[])),
+  tag: filter(anyOf(ACME_CA_TAGS).meta({ description: "Issued from an ACME CA tagged with one of these, comma-separated." }), (value) => {
+    const tags: string[] = value.split(",");
+    return inArray(managedCertificate.acmeCaId, BUILT_IN_ACME_CAS.filter((ca) => tags.includes(ca.tag)).map((ca) => ca.id));
+  }),
   keyAlgorithm: filter(anyOf(KEY_ALGORITHMS).meta({ description: "Whose key is of one of these algorithms, comma-separated." }), (value) => inArray(managedCertificate.keyAlgorithm, value.split(",") as unknown as KeyAlgorithm[])),
   archived: filter(
     on.meta({ description: "Only archived Managed Certificates, which are otherwise left out." }),

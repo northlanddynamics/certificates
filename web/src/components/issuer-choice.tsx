@@ -3,37 +3,41 @@ import { useState } from "react";
 import { Field, FieldContent, FieldDescription, FieldError, FieldLabel, FieldTitle } from "@/components/ui/field";
 import { Input } from "@/components/ui/input";
 import { RadioGroup, RadioGroupItem } from "@/components/ui/radio-group";
-import { api, type NewManagedCertificate } from "@/lib/api";
+import { AcmeCaTagBadge } from "@/components/acme-ca-tag";
+import { DEFAULT_ACME_CA_ID, acmeCaName, useAcmeCas } from "@/lib/acme-cas";
+import { api, type AcmeCa, type NewManagedCertificate } from "@/lib/api";
 import { KEY_ALGORITHM_LABELS, NO_KEY_ALGORITHMS } from "@/lib/csr-generator";
 import { commonNameOf, daysLabel, findIssuingCa, isValidityDays, permittedNamesLabel, validityLabel } from "@/lib/private-ca";
 
-type Environment = "staging" | "production";
-/** The issuer chosen: an ACME environment, or an Issuing CA of one of the Organization's Private CAs by id. */
+/** The issuer chosen: an ACME CA by id, or an Issuing CA of one of the Organization's Private CAs by id. */
 export type IssuerChoice = NewManagedCertificate["issuer"];
 /** The issuer as a radio button's value, and back. */
-const issuerValue = (i: IssuerChoice) => (i.kind === "acme" ? `acme:${i.environment}` : `private_ca:${i.issuingCaId}`);
+const issuerValue = (i: IssuerChoice) => (i.kind === "acme" ? `acme:${i.acmeCaId}` : `private_ca:${i.issuingCaId}`);
 const issuerOfValue = (value: string): IssuerChoice => {
-  const [kind, ref] = value.split(":") as [string, string];
-  return kind === "acme" ? { kind: "acme", environment: ref as Environment } : { kind: "private_ca", issuingCaId: ref };
+  const [kind, ref] = value.split(/:(.*)/s) as [string, string];
+  return kind === "acme" ? { kind: "acme", acmeCaId: ref } : { kind: "private_ca", issuingCaId: ref };
 };
 
-/** The ACME environments, `trying` naming what staging is for, such as "an Issuance". */
-const environments = (trying: string): { value: Environment; title: string; description: string }[] => [
-  { value: "staging", title: "Staging", description: `The CA's test service. Certificates are not trusted by browsers; use it to try ${trying} first.` },
-  { value: "production", title: "Production", description: "The CA's live service. Certificates are publicly trusted, and the CA's rate limits apply." },
-];
+/** What an ACME CA is for, by its tag, `trying` naming what a staging one is for, such as "an Issuance"; nothing for an untagged one. */
+const acmeCaDescription = (ca: AcmeCa, trying: string) =>
+  ca.tag === "staging"
+    ? `A test service. Certificates are not trusted by browsers; use it to try ${trying} first.`
+    : ca.tag === "production"
+      ? "A live service. Certificates are publicly trusted, and the CA's rate limits apply."
+      : undefined;
 
 /** The key algorithms, and which ones each kind of CA takes, as the server says; they do not change while the app runs. */
 export const useKeyAlgorithms = () => useQuery({ queryKey: ["key-algorithms"], queryFn: () => api.keyAlgorithms(), staleTime: Infinity });
 
 /**
- * The state of choosing where Certificates are issued from: an ACME environment (staging to begin with) or an active
- * Issuing CA under an active root, and for an Issuing CA a validity (empty for its default). The ACME accounts and the
- * Private CAs are fetched only for whoever may read them.
+ * The state of choosing where Certificates are issued from: an ACME CA (Let's Encrypt Staging to begin with) or an
+ * active Issuing CA under an active root, and for an Issuing CA a validity (empty for its default). Anyone may list the
+ * ACME CAs; the ACME accounts and the Private CAs are fetched only for whoever may read them.
  */
 export function useIssuerChoice(orgId: string, { canReadAccounts, canReadPrivateCas }: { canReadAccounts: boolean; canReadPrivateCas: boolean }) {
-  const [issuer, setIssuer] = useState<IssuerChoice>({ kind: "acme", environment: "staging" });
+  const [issuer, setIssuer] = useState<IssuerChoice>({ kind: "acme", acmeCaId: DEFAULT_ACME_CA_ID });
   const [validityDays, setValidityDays] = useState("");
+  const acmeCas = useAcmeCas(orgId);
   const accounts = useQuery({ queryKey: ["acme-accounts", orgId], queryFn: () => api.acmeAccounts(orgId), enabled: canReadAccounts });
   const privateCas = useQuery({ queryKey: ["private-cas", orgId], queryFn: () => api.privateCas(orgId), enabled: canReadPrivateCas });
   const keyAlgorithms = useKeyAlgorithms();
@@ -48,14 +52,16 @@ export function useIssuerChoice(orgId: string, { canReadAccounts, canReadPrivate
   // The validity chosen, in days; none for the Issuing CA's default.
   const chosenValidity = validityDays.trim() === "" ? null : Number(validityDays);
   const validityOk = !chosenCa || chosenValidity === null || isValidityDays(validityDays, chosenCa.validity.maximumDays);
-  // Whether the chosen ACME environment has an account to issue through; unknown (undefined) until the accounts are read.
-  const registered = issuer.kind !== "acme" || accounts.data?.items.some((a) => a.environment === issuer.environment);
-  const title = issuer.kind === "acme" ? environments("").find((e) => e.value === issuer.environment)?.title : chosenCa?.name;
+  // Whether the chosen ACME CA has an account to issue through; unknown (undefined) until the accounts are read.
+  const registered = issuer.kind !== "acme" || accounts.data?.items.some((a) => a.acmeCaId === issuer.acmeCaId);
+  const title = issuer.kind === "acme" ? acmeCaName(acmeCas.data?.items, issuer.acmeCaId) : chosenCa?.name;
   return {
     issuer,
     setIssuer,
     validityDays,
     setValidityDays,
+    /** The ACME CAs, the built-in ones first; none until they are read. */
+    acmeCas: acmeCas.data?.items ?? [],
     activeCas,
     chosenCa,
     /** The key algorithms the chosen CA takes; none until known. */
@@ -73,20 +79,22 @@ export function useIssuerChoice(orgId: string, { canReadAccounts, canReadPrivate
   };
 }
 
-/** The radio buttons for each ACME environment and each Issuing CA grouped by its Private CA, then the validity for an Issuing CA. `idPrefix` keeps the ids apart between forms. */
+/** The radio buttons for each ACME CA, with its tag, and each Issuing CA grouped by its Private CA, then the validity for an Issuing CA. `idPrefix` keeps the ids apart between forms. */
 export function IssuerChoiceFields({ choice, idPrefix, trying }: { choice: ReturnType<typeof useIssuerChoice>; idPrefix: string; trying: string }) {
-  const { issuer, setIssuer, validityDays, setValidityDays, activeCas, chosenCa, validityOk, registered, accountsKnown } = choice;
+  const { issuer, setIssuer, validityDays, setValidityDays, acmeCas, activeCas, chosenCa, validityOk, registered, accountsKnown } = choice;
   return (
     <>
       <RadioGroup value={issuerValue(issuer)} onValueChange={(value) => setIssuer(issuerOfValue(value))}>
-        {environments(trying).map((env) => (
-          <FieldLabel key={env.value} htmlFor={`${idPrefix}-env-${env.value}`}>
+        {acmeCas.map((ca) => (
+          <FieldLabel key={ca.id} htmlFor={`${idPrefix}-acme-${ca.id}`}>
             <Field orientation="horizontal">
               <FieldContent>
-                <FieldTitle>{env.title}</FieldTitle>
-                <FieldDescription>{env.description}</FieldDescription>
+                <FieldTitle>
+                  {ca.name} <AcmeCaTagBadge tag={ca.tag} />
+                </FieldTitle>
+                {acmeCaDescription(ca, trying) && <FieldDescription>{acmeCaDescription(ca, trying)}</FieldDescription>}
               </FieldContent>
-              <RadioGroupItem value={`acme:${env.value}`} id={`${idPrefix}-env-${env.value}`} />
+              <RadioGroupItem value={`acme:${ca.id}`} id={`${idPrefix}-acme-${ca.id}`} />
             </Field>
           </FieldLabel>
         ))}
@@ -135,7 +143,9 @@ export function IssuerChoiceFields({ choice, idPrefix, trying }: { choice: Retur
         </Field>
       )}
       {issuer.kind === "acme" && accountsKnown && !registered && (
-        <FieldError>The Organization has no {issuer.environment} ACME account yet, so Issuance would fail. An Organization Administrator can register one under ACME accounts.</FieldError>
+        <FieldError>
+          The Organization has no ACME account with {acmeCaName(acmeCas, issuer.acmeCaId)} yet, so Issuance would fail. An Organization Administrator can register one under ACME accounts.
+        </FieldError>
       )}
     </>
   );

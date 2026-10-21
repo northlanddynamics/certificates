@@ -163,7 +163,7 @@ function NewManagedCertificateForm({
           <FieldLegend>Where should it be issued from?</FieldLegend>
           <FieldDescription>
             {direct ? "Issuance starts as soon as it is created." : "An Approver must approve it before any Certificate is issued."} An ACME CA issues it under the
-            Organization's account for the environment you choose, after checking control of the names (DCV); an Issuing CA of one of the Organization's Private CAs issues it
+            Organization's account with the ACME CA you choose, after checking control of the names (DCV); an Issuing CA of one of the Organization's Private CAs issues it
             with no DCV.
           </FieldDescription>
           <IssuerChoiceFields choice={choice} idPrefix="new-mc" trying="an Issuance" />

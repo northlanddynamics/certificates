@@ -103,8 +103,8 @@ export interface InventoryFilters {
   noOwners?: boolean;
   archived?: boolean;
   keyCustody?: ManagedCertificate["keyCustody"];
-  /** Any of these. */
-  environment?: ManagedCertificate["environment"][];
+  /** Issued from an ACME CA with any of these tags. */
+  tag?: AcmeCaTag[];
   /** Any of these. */
   keyAlgorithm?: string[];
 }
@@ -192,9 +192,9 @@ export interface ManagedCertificate {
   keyAlgorithm: string;
   /** Who holds the private key: the Owner, who submitted a CSR, or one Agent, through its one Deployment. */
   keyCustody: "owner" | "agent";
-  /** The ACME environment, as in `issuer`; none for one issued from a Private CA. */
-  environment: "staging" | "production" | null;
-  /** Where its Certificates come from: an ACME CA through the Organization's account in an environment, or one of its Private CAs. */
+  /** The ACME CA, as in `issuer`; none for one issued from a Private CA. */
+  acmeCaId: string | null;
+  /** Where its Certificates come from: an ACME CA through the Organization's account with it, or one of its Private CAs. */
   issuer: Issuer;
   /** For one issued from a Private CA, how many days its Certificates are valid for; none for the Private CA's default (and always for an ACME CA). */
   validityDays: number | null;
@@ -235,8 +235,8 @@ export interface Certificate {
   notAfter: string;
   names: string[];
   ca: string;
-  /** The ACME environment and account it was issued through; none for a Certificate from a Private CA. */
-  environment: "staging" | "production" | null;
+  /** The ACME CA and account it was issued through; none for a Certificate from a Private CA. */
+  acmeCaId: string | null;
   acmeAccountId: string | null;
   /** The Issuing CA, of a Private CA, that signed it; none for a Certificate from an ACME CA. */
   issuingCaId: string | null;
@@ -262,10 +262,10 @@ export interface CertificateFacts extends Certificate {
   signatureAlgorithm: string;
   /** The leaf and the intermediates the CA served, leaf first. */
   chain: ChainCertificate[];
-  acmeAccount: { id: string; environment: AcmeAccount["environment"] } | null;
+  acmeAccount: { id: string; acmeCaId: string } | null;
 }
 export type Issuer =
-  | { kind: "acme"; environment: "staging" | "production" }
+  | { kind: "acme"; acmeCaId: string }
   | { kind: "private_ca"; issuingCa: { id: string; subject: string }; privateCa: { id: string; name: string } };
 /** An Organization's own CA, whose keys are in the KMS: a root and the Issuing CAs under it. */
 export interface PrivateCa {
@@ -402,10 +402,21 @@ export interface NameRules {
   allowedSanTypes: ("dns" | "email" | "ip" | "url" | "upn")[];
   sanPatterns: Partial<Record<"dns" | "email" | "ip" | "url" | "upn", string[]>>;
 }
-/** An Organization's account with a CA; its key is never returned. */
+export type AcmeCaTag = "staging" | "production";
+/** An ACME CA the Organization can use: built in (Let's Encrypt Staging and Production, read-only) or, later, its own. */
+export interface AcmeCa {
+  id: string;
+  name: string;
+  /** Its configuration: shown only to those who may read the ACME accounts. */
+  directoryUrl: string | null;
+  /** What it is for, as a label that changes nothing about how it issues. */
+  tag: AcmeCaTag | null;
+  builtIn: boolean;
+}
+/** An Organization's account with an ACME CA, at most one per ACME CA; its key is never returned. */
 export interface AcmeAccount {
   id: string;
-  environment: "staging" | "production";
+  acmeCaId: string;
   accountUrl: string;
   contactEmail: string | null;
 }
@@ -498,7 +509,7 @@ export interface NewDeployment {
   parameters?: Record<string, string>;
   names: string[];
   keyAlgorithm: string;
-  /** An ACME CA in an environment, or an Issuing CA of one of the Organization's Private CAs. */
+  /** An ACME CA, or an Issuing CA of one of the Organization's Private CAs. */
   issuer: NewManagedCertificate["issuer"];
   /** For an Issuing CA only: how many days its Certificates are valid for; its default when not given. */
   validityDays?: number;
@@ -534,7 +545,7 @@ export interface NewManagedCertificate {
   names: string[];
   keyAlgorithm: string;
   csr: string;
-  issuer: { kind: "acme"; environment: "staging" | "production" } | { kind: "private_ca"; issuingCaId: string };
+  issuer: { kind: "acme"; acmeCaId: string } | { kind: "private_ca"; issuingCaId: string };
   /** For a Private CA issuer only; its Issuing CA's default when not given. */
   validityDays?: number;
   owners?: OwnerRef[];
@@ -826,8 +837,10 @@ export const api = {
   /** Every key algorithm, and which ones a Private CA's keys (under each kind of root) and a Managed Certificate on an ACME CA may have. */
   keyAlgorithms: () =>
     call<{ keyAlgorithms: KeyAlgorithm[]; privateCaKeyAlgorithms: Record<PrivateCa["kind"], KeyAlgorithm[]>; acmeKeyAlgorithms: KeyAlgorithm[] }>("/api/key-algorithms"),
+  /** The ACME CAs the Organization can use, the built-in ones first, Let's Encrypt Staging before Production; anyone in it may list them. */
+  acmeCas: (orgId: string) => call<{ items: AcmeCa[] }>(`/api/organizations/${orgId}/acme-cas`),
   acmeAccounts: (orgId: string) => call<{ items: AcmeAccount[] }>(`/api/organizations/${orgId}/acme-accounts`),
-  registerAcmeAccount: (orgId: string, body: { environment: AcmeAccount["environment"]; contactEmail?: string }) =>
+  registerAcmeAccount: (orgId: string, body: { acmeCaId: string; contactEmail?: string }) =>
     call<AcmeAccount>(`/api/organizations/${orgId}/acme-accounts`, { body: { ...body, termsOfServiceAgreed: true } }),
   testAcmeAccount: (orgId: string, accountId: string) =>
     call<{ ok: boolean; error?: string }>(`/api/organizations/${orgId}/acme-accounts/${accountId}/test`, { method: "POST", body: {} }),

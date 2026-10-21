@@ -2,6 +2,7 @@ import { useParams } from "@tanstack/react-router";
 import type { ReactNode } from "react";
 import { Card, CardContent, CardHeader, CardTitle } from "@/components/ui/card";
 import type { Certificate, ManagedCertificate } from "@/lib/api";
+import { acmeCaName, useAcmeCas } from "@/lib/acme-cas";
 import { caLabel, issuerLabel, keyAlgorithmLabel } from "@/lib/managed-certificate";
 import { chosenValidityLabel } from "@/lib/private-ca";
 import { useCertificateFacts, useManagedCertificatePage } from "@/lib/use-managed-certificate";
@@ -41,6 +42,7 @@ export function ManagedCertificateOverview() {
   const m = certificate.data;
   // What the current Certificate says about itself (its issuer); the rest is on the Managed Certificate already.
   const facts = useCertificateFacts(orgId, id, m?.currentCertificate?.id);
+  const acmeCas = useAcmeCas(orgId).data?.items;
   if (!org || !m) return null;
 
   const current = m.currentCertificate;
@@ -59,7 +61,7 @@ export function ManagedCertificateOverview() {
                 ))}
               </ul>
             </Fact>
-            <Fact label="Issued from">{issuerLabel(m.issuer)}</Fact>
+            <Fact label="Issued from">{issuerLabel(m.issuer, acmeCas)}</Fact>
             {m.issuer.kind === "private_ca" && <Fact label="Validity">{chosenValidityLabel(m.validityDays)}</Fact>}
             <Fact label="Key algorithm">{keyAlgorithmLabel(m.keyAlgorithm)}</Fact>
             <Fact label="Key Custody">{KEY_CUSTODY_LABELS[m.keyCustody]}</Fact>
@@ -90,9 +92,9 @@ export function ManagedCertificateOverview() {
                 {date(current.notBefore)} to {date(current.notAfter)} ({daysLeft(current)})
               </Fact>
               <Fact label="CA">{caLabel(current.ca)}</Fact>
-              {current.environment && (
+              {current.acmeCaId && (
                 <Fact label="ACME Account">
-                  <span className="capitalize">{current.environment}</span> <span className="font-mono text-xs text-muted-foreground">{current.acmeAccountId}</span>
+                  {acmeCaName(acmeCas, current.acmeCaId)} <span className="font-mono text-xs text-muted-foreground">{current.acmeAccountId}</span>
                 </Fact>
               )}
               {current.revocation && (

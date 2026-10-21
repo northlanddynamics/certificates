@@ -8,7 +8,7 @@ import { OpenAPIHono, createRoute, z } from "@hono/zod-openapi";
 import { and, asc, desc, eq } from "drizzle-orm";
 import { silentSince } from "../agents/agents";
 import type { Authorizer } from "../tenancy/authorization";
-import { ACME_ENVIRONMENTS } from "../issuance/acme/certificate-authority";
+import { AcmeCaId, type AcmeCas } from "../issuance/acme/acme-cas";
 import { certificateFacts } from "../pki/certificate-facts";
 import { KEY_ALGORITHMS } from "../pki/csr";
 import type { Db } from "../platform/db/client";
@@ -35,11 +35,12 @@ export function registerManagedCertificates(ctx: {
   unitOfWork: UnitOfWork;
   issuances: Issuances;
   reader: ManagedCertificateReader;
+  acmeCas: AcmeCas;
   clock: () => Date;
   /** How long an Agent may be silent before it counts as offline, for the inventory's `agentOffline` filter. */
   agentOfflineAfterSeconds: number;
 }) {
-  const { app, db, requireUser, authorize, unitOfWork, issuances, reader, clock, agentOfflineAfterSeconds } = ctx;
+  const { app, db, requireUser, authorize, unitOfWork, issuances, reader, acmeCas, clock, agentOfflineAfterSeconds } = ctx;
   const { findManagedCertificate, findReadable, visibleTo, certificatesOf, withState } = reader;
 
   app.openapi(
@@ -86,7 +87,7 @@ export function registerManagedCertificates(ctx: {
         "The Owner keeps the private key and submits a CSR for it. The CSR must be for the key algorithm given and ask for exactly the names given. " +
         "An Organization Administrator creates it outright and Issuance starts at once; anyone else proposes it, and it waits for an Approver to approve it, which starts Issuance. " +
         "Issuance runs in the background: the response shows it running, and the Managed Certificate shows the Certificate or the cause of the failure when it ends. " +
-        "Its issuer is an ACME CA (staging unless `environment` says otherwise) or, given `issuer`, an active Issuing CA of one of the Organization's Private CAs, which issues with no DCV. " +
+        "Its issuer is an ACME CA (Let's Encrypt Staging unless `acmeCaId` says otherwise; 422 for one the Organization cannot use) or, given `issuer`, an active Issuing CA of one of the Organization's Private CAs, which issues with no DCV. " +
           "Names outside the Issuing CA's permitted name rules are refused with 422, which names them, as is a `validityDays` above its maximum; `validityDays` with an ACME CA is refused with 400.",
       request: {
         params: OrgParam,
@@ -99,7 +100,7 @@ export function registerManagedCertificates(ctx: {
                   description: "The algorithm of the Owner's key, which the CSR is for. ML-DSA ones only on an ML-DSA Private CA, and only those there (422 otherwise): a chain is all ML-DSA or none of it. A Private CA's `certificateKeyAlgorithms` lists what it takes.",
                 }),
                 csr: csrField,
-                environment: z.enum(ACME_ENVIRONMENTS).optional().openapi({ description: "Which of the Organization's ACME accounts to issue through, when `issuer` is not given; staging unless given." }),
+                acmeCaId: AcmeCaId.optional().openapi({ description: "Which ACME CA to issue from, through the Organization's ACME account with it, when `issuer` is not given; Let's Encrypt Staging unless given." }),
                 issuer: IssuerField.optional(),
                 validityDays: validityDaysField
                   .optional()
@@ -122,7 +123,7 @@ export function registerManagedCertificates(ctx: {
       if (needsApproval) await authorize(actor, orgId, { managedCertificate: ["propose"] });
 
       const { names, csr } = await checkNamesAndCsr(body);
-      const issuer = await issuerAsked(db, orgId, body, names);
+      const issuer = await issuerAsked(db, acmeCas, orgId, body, names);
 
       const created = await unitOfWork.run(actor, async (tx, change) => {
         const [row] = await tx
@@ -257,7 +258,7 @@ export function registerManagedCertificates(ctx: {
       const row = (await certificatesOf(orgId, mc.id)).find((r) => r.id === certificateId);
       if (!row) throw new HttpError(404, "Certificate not found");
       const revocations = await revocationsOf(db, [row.id]);
-      return c.json({ ...toCertificate(row, revocations.get(row.id)), ...certificateFacts(row.chainPem), acmeAccount: row.acmeAccountId && row.environment ? { id: row.acmeAccountId, environment: row.environment } : null }, 200);
+      return c.json({ ...toCertificate(row, revocations.get(row.id)), ...certificateFacts(row.chainPem), acmeAccount: row.acmeAccountId && row.acmeCaId ? { id: row.acmeAccountId, acmeCaId: row.acmeCaId } : null }, 200);
     },
   );
 }

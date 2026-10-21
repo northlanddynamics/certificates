@@ -88,7 +88,7 @@ describe("a Certificate's facts", () => {
       issuer: expect.stringMatching(/^CN=Pebble Intermediate CA [0-9a-f]+$/),
       signatureAlgorithm: "ECDSA with SHA-256",
       ca: "lets-encrypt",
-      acmeAccount: { id: account.id, environment: "staging" },
+      acmeAccount: { id: account.id, acmeCaId: "letsencrypt-staging" },
       revocation: null,
     });
     expect(res.body.serial).toMatch(/^[0-9A-F]+$/);

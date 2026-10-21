@@ -6,7 +6,6 @@ import { and, desc, eq, inArray, or, type SQL } from "drizzle-orm";
 import { APPROVAL_STATUSES } from "./approval";
 import { AGENT_STATUSES, agentStatus } from "../agents/agents";
 import type { Authorizer } from "../tenancy/authorization";
-import { ACME_ENVIRONMENTS } from "../issuance/acme/certificate-authority";
 import { commonNameOf } from "../pki/certificate-facts";
 import { KEY_ALGORITHMS, KEY_CUSTODIES } from "../pki/csr";
 import type { Db } from "../platform/db/client";
@@ -50,7 +49,7 @@ export const Certificate = z.object({
   notAfter: z.string(),
   names: z.array(z.string()),
   ca: z.string(),
-  environment: z.enum(ACME_ENVIRONMENTS).nullable().openapi({ description: "The ACME environment it was issued through; none for a Certificate from a Private CA." }),
+  acmeCaId: z.string().nullable().openapi({ description: "The ACME CA it was issued from; none for a Certificate from a Private CA." }),
   acmeAccountId: z.string().nullable().openapi({ description: "The ACME account it was issued through; none for a Certificate from a Private CA." }),
   issuingCaId: z.string().nullable().openapi({ description: "The Issuing CA, of a Private CA, that signed it; none for a Certificate from an ACME CA." }),
   issuedAt: z.string(),
@@ -73,7 +72,7 @@ export const CertificateFacts = Certificate.extend({
   signatureAlgorithm: z.string().openapi({ description: "How the CA signed it, such as `ECDSA with SHA-256` or `ML-DSA-65`." }),
   chain: z.array(ChainCertificate).openapi({ description: "The leaf and the intermediates the CA served, leaf first." }),
   acmeAccount: z
-    .object({ id: z.string(), environment: z.enum(ACME_ENVIRONMENTS) })
+    .object({ id: z.string(), acmeCaId: z.string() })
     .nullable()
     .openapi({ description: "The Organization's ACME account it was issued through; none for a Certificate from a Private CA." }),
 });
@@ -107,10 +106,10 @@ export const Renewal = z.object({
 
 const Issuer = z
   .discriminatedUnion("kind", [
-    z.object({ kind: z.literal("acme"), environment: z.enum(ACME_ENVIRONMENTS) }),
+    z.object({ kind: z.literal("acme"), acmeCaId: z.string() }),
     z.object({ kind: z.literal("private_ca"), issuingCa: z.object({ id: z.string(), subject: z.string() }), privateCa: z.object({ id: z.string(), name: z.string() }) }),
   ])
-  .openapi({ description: "Where its Certificates come from: `acme`, through the Organization's ACME account in `environment`; `private_ca`, from `issuingCa`, an Issuing CA of the Organization's Private CA `privateCa`, with no DCV." });
+  .openapi({ description: "Where its Certificates come from: `acme`, through the Organization's ACME account with the ACME CA `acmeCaId`; `private_ca`, from `issuingCa`, an Issuing CA of the Organization's Private CA `privateCa`, with no DCV." });
 
 export const Approval = z.object({
   status: z.enum(APPROVAL_STATUSES).openapi({ description: "`not_required` for one an Organization Administrator created." }),
@@ -131,7 +130,7 @@ export const ManagedCertificate = z.object({
   commonName: z.string().nullable().openapi({ description: "The common name in the subject of `currentCertificate`; none before one is issued, or when its subject has none. The names are its subject alternative names." }),
   keyAlgorithm: z.enum(KEY_ALGORITHMS),
   keyCustody: z.enum(KEY_CUSTODIES).openapi({ description: "`owner`: the Owner holds the private key and submitted a CSR. `agent`: one Agent made the key and holds it, through its one Deployment." }),
-  environment: z.enum(ACME_ENVIRONMENTS).nullable().openapi({ description: "The ACME environment, as in `issuer`; none for one issued from a Private CA." }),
+  acmeCaId: z.string().nullable().openapi({ description: "The ACME CA, as in `issuer`; none for one issued from a Private CA." }),
   issuer: Issuer,
   validityDays: z
     .number()
@@ -177,7 +176,7 @@ export const toCertificate = (row: typeof certificate.$inferSelect, revocation: 
   notAfter: row.notAfter.toISOString(),
   names: row.names,
   ca: row.ca,
-  environment: row.environment,
+  acmeCaId: row.acmeCaId,
   acmeAccountId: row.acmeAccountId,
   issuingCaId: row.issuingCaId,
   issuedAt: row.issuedAt.toISOString(),
@@ -296,7 +295,7 @@ export function createManagedCertificateReader({ db, authorize, clock, agentOffl
         commonName: current ? commonNameOf(current.chainPem) : null,
         keyAlgorithm: row.keyAlgorithm,
         keyCustody: row.keyCustody,
-        environment: row.environment,
+        acmeCaId: row.acmeCaId,
         issuer: issuerShown(issuerOf(row), issuingCas),
         validityDays: row.validityDays,
         createdAt: row.createdAt.toISOString(),

@@ -4,7 +4,8 @@
 import { Pool } from "pg";
 import { readFileSync } from "node:fs";
 import { createApp, type AppDeps } from "../../src/app";
-import { CertificateAuthorityError, createLetsEncrypt, type AcmeEnvironment, type RevocationReason } from "../../src/issuance/acme/certificate-authority";
+import { CertificateAuthorityError, createAcmeCertificateAuthority, type RevocationReason } from "../../src/issuance/acme/certificate-authority";
+import type { BuiltInAcmeCaId } from "../../src/issuance/acme/acme-cas";
 import { createTxtResolver, type TxtResolver } from "../../src/issuance/dcv/dcv";
 import type { DeviceCertificateRevocations } from "../../src/enrollment/device-certificate-revocation";
 import type { DeviceEnrollment } from "../../src/enrollment/device-enrollment";
@@ -87,8 +88,8 @@ export interface Harness {
   forwardAudit(): Promise<number>;
   /** One pass of notifications at the harness's clock: notices Agents gone silent and Certificates nearing their end, then sends what is queued. Returns how many were sent. */
   deliverNotices(): Promise<number>;
-  /** Where the CA's environments are served; every one is Pebble unless a test points one elsewhere. */
-  caDirectories: Record<AcmeEnvironment, string>;
+  /** Where the built-in ACME CAs are served, by id; every one is Pebble unless a test points one elsewhere. */
+  caDirectories: Record<BuiltInAcmeCaId, string>;
   /** Reads TXT records straight from BIND, as the CA's DNS checks do: what is really published. */
   bindTxt: TxtResolver;
   /** What DCV uses to see that a challenge record is published: BIND, unless a test sets `current` to something else. */
@@ -195,7 +196,7 @@ export async function createHarness(overrides: Partial<AppDeps> = {}, { database
     }),
   });
   let now = new Date("2026-01-01T00:00:00Z");
-  const caDirectories: Record<AcmeEnvironment, string> = { staging: PEBBLE_DIRECTORY, production: PEBBLE_DIRECTORY };
+  const caDirectories: Record<BuiltInAcmeCaId, string> = { "letsencrypt-staging": PEBBLE_DIRECTORY, "letsencrypt-production": PEBBLE_DIRECTORY };
   const createdAccountKeys: string[] = [];
   const caRoots = { current: pebbleRoots };
   const ari: Harness["ari"] = { enabled: false, asked: [], replaces: [], failing: false };
@@ -205,10 +206,9 @@ export async function createHarness(overrides: Partial<AppDeps> = {}, { database
   const scep: ScepConfig = { ...SCEP_DEFAULTS, trustForwardedFor: true };
   const localKms = createLocalKms(TEST_KMS_KEY);
   // The real ACME client against Pebble; it only notes the keys it generated.
-  const letsEncrypt = createLetsEncrypt({
-    directoryUrls: caDirectories,
+  const letsEncrypt = createAcmeCertificateAuthority({
     trustedCa: PEBBLE_CA,
-    roots: { staging: () => caRoots.current(), production: () => caRoots.current() },
+    roots: { "letsencrypt-staging": () => caRoots.current(), "letsencrypt-production": () => caRoots.current() },
     pollMs: { min: 200, max: 1000 },
   });
   const bindTxt = createTxtResolver([`${BIND.server}:${BIND.port}`]);
@@ -226,26 +226,27 @@ export async function createHarness(overrides: Partial<AppDeps> = {}, { database
         return localKms.sign(key, context, digest);
       },
     },
+    builtInAcmeDirectories: caDirectories,
     certificateAuthority: {
       ...letsEncrypt,
-      async createAccount(environment, input) {
-        const account = await letsEncrypt.createAccount(environment, input);
+      async createAccount(ca, input) {
+        const account = await letsEncrypt.createAccount(ca, input);
         createdAccountKeys.push(account.accountKey);
         return account;
       },
-      async issue(environment, account, request) {
+      async issue(ca, account, request) {
         const replaces = ari.replacing ?? request.replaces;
         ari.replaces.push(replaces);
-        return letsEncrypt.issue(environment, account, { ...request, replaces });
+        return letsEncrypt.issue(ca, account, { ...request, replaces });
       },
-      async revoke(environment, account, request) {
-        await letsEncrypt.revoke(environment, account, request);
+      async revoke(ca, account, request) {
+        await letsEncrypt.revoke(ca, account, request);
         revocations.push(request);
       },
-      async renewalInfo(environment, certificate) {
+      async renewalInfo(ca, certificate) {
         ari.asked.push(certificate);
         if (ari.failing) throw new CertificateAuthorityError("unreachable", "could not reach the CA for its renewal information");
-        return ari.enabled ? letsEncrypt.renewalInfo(environment, certificate) : null;
+        return ari.enabled ? letsEncrypt.renewalInfo(ca, certificate) : null;
       },
     },
     dcv: { resolver: { lookupTxt: (name) => dcvResolver.current.lookupTxt(name), lookupCname: (name) => dcvResolver.current.lookupCname(name) }, visibilityTimeoutMs: 1500, pollIntervalMs: 50 },
@@ -284,7 +285,7 @@ export async function createHarness(overrides: Partial<AppDeps> = {}, { database
     validatorDouble.reset();
     intune.reset();
     createdAccountKeys.length = 0;
-    caDirectories.staging = caDirectories.production = PEBBLE_DIRECTORY;
+    caDirectories["letsencrypt-staging"] = caDirectories["letsencrypt-production"] = PEBBLE_DIRECTORY;
     now = new Date("2026-01-01T00:00:00Z");
   };
   await reset();

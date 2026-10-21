@@ -126,7 +126,7 @@ export const currentCertificates = (db: Db) =>
       notBefore: certificate.notBefore,
       notAfter: certificate.notAfter,
       issuerKind: certificate.issuerKind,
-      environment: certificate.environment,
+      acmeCaId: certificate.acmeCaId,
       acmeAccountId: certificate.acmeAccountId,
       issuingCaId: certificate.issuingCaId,
       chainPem: certificate.chainPem,

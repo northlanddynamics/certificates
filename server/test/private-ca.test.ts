@@ -371,11 +371,11 @@ describe("issuing a Managed Certificate from a Private CA", () => {
     // No ACME account and no DNS Provider: nothing of ACME could issue it.
     const created = await h.api(mcs(), { cookie: org.cookie, body: { ...(await request(["app.internal.acme", "*.svc.internal.acme"])), ...fromCa(ca.issuing.id) } });
     expect(created.status).toBe(201);
-    expect(created.body).toMatchObject({ issuer: { kind: "private_ca", issuingCa: { id: ca.issuing.id, subject: "CN=Acme Internal TLS, O=Acme" }, privateCa: { id: ca.id, name: "Internal TLS" } }, environment: null, approval: { status: "not_required" } });
+    expect(created.body).toMatchObject({ issuer: { kind: "private_ca", issuingCa: { id: ca.issuing.id, subject: "CN=Acme Internal TLS, O=Acme" }, privateCa: { id: ca.id, name: "Internal TLS" } }, acmeCaId: null, approval: { status: "not_required" } });
 
     const mc = await ended(created.body.id);
     expect(mc.issuance).toMatchObject({ status: "succeeded", failure: null });
-    expect(mc.currentCertificate).toMatchObject({ ca: "Internal TLS", issuingCaId: ca.issuing.id, environment: null, acmeAccountId: null, names: ["app.internal.acme", "*.svc.internal.acme"] });
+    expect(mc.currentCertificate).toMatchObject({ ca: "Internal TLS", issuingCaId: ca.issuing.id, acmeCaId: null, acmeAccountId: null, names: ["app.internal.acme", "*.svc.internal.acme"] });
 
     const [leaf, issuing, root, ...rest] = await downloaded(mc.id);
     expect(rest).toEqual([]);
@@ -551,13 +551,13 @@ describe("which Private CA a Managed Certificate may name", () => {
     expect((await h.api(mcs(globex.orgId), { cookie: globex.cookie })).body.items).toEqual([]);
   });
 
-  test("not one that does not exist, and not both a Private CA and an ACME environment", async () => {
+  test("not one that does not exist, and not both a Private CA and an ACME CA", async () => {
     const ca = await createCa();
     const body = await request(["app.internal.acme"]);
 
     expect((await h.api(mcs(), { cookie: org.cookie, body: { ...body, ...fromCa("00000000-0000-0000-0000-000000000000") } })).status).toBe(422);
     expect((await h.api(mcs(), { cookie: org.cookie, body: { ...body, ...fromCa("not-an-id") } })).status).toBe(422);
-    expect((await h.api(mcs(), { cookie: org.cookie, body: { ...body, ...fromCa(ca.issuing.id), environment: "staging" } })).status).toBe(400);
+    expect((await h.api(mcs(), { cookie: org.cookie, body: { ...body, ...fromCa(ca.issuing.id), acmeCaId: "letsencrypt-staging" } })).status).toBe(400);
   });
 });
 
@@ -783,7 +783,7 @@ describe("the validity of a Certificate from a Private CA", () => {
   });
 
   test("can be chosen only for a Managed Certificate issued from a Private CA", async () => {
-    const res = await h.api(mcs(), { cookie: org.cookie, body: { ...(await request(["app.example.com"])), issuer: { kind: "acme", environment: "staging" }, validityDays: 30 } });
+    const res = await h.api(mcs(), { cookie: org.cookie, body: { ...(await request(["app.example.com"])), issuer: { kind: "acme", acmeCaId: "letsencrypt-staging" }, validityDays: 30 } });
 
     expect(res.status).toBe(400);
     expect(res.body.error).toContain("Private CA");
@@ -905,7 +905,7 @@ describe("a Name Change's validity", () => {
     }
     expect((await h.api(`${mcs()}/${mc.id}`, { cookie: org.cookie })).body).toMatchObject({ names: ["app.internal.acme"], validityDays: null, pendingNameChange: null });
 
-    const acmeMc = await h.api(mcs(), { cookie: org.cookie, body: { ...(await request(["app.example.com"])), environment: "staging" } });
+    const acmeMc = await h.api(mcs(), { cookie: org.cookie, body: { ...(await request(["app.example.com"])), acmeCaId: "letsencrypt-staging" } });
     expect(acmeMc.status).toBe(201);
     await h.settleIssuances();
     const { names, csr } = await request(["app.example.com", "www.example.com"]);

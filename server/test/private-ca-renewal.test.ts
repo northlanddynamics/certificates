@@ -167,7 +167,7 @@ describe("a Deployment whose Agent holds the key, from a Private CA", () => {
     expect((await api(`/managed-certificates/${mcId}`)).body).toMatchObject({
       keyCustody: "agent",
       issuer: { kind: "private_ca", issuingCa: { id: ca.issuing.id }, privateCa: { id: ca.id } },
-      environment: null,
+      acmeCaId: null,
       validityDays: 30,
     });
     expect((await auditOf()).find((e) => e.action === "managed_certificate.created")!.detail).toMatchObject({

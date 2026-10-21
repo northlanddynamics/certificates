@@ -1,14 +1,12 @@
-// The ACME CA, the ACME kind of issuer (issuer.ts), with Let's Encrypt (production and staging) as its only
-// implementation. It holds no state: callers pass in the account they act as. It knows about accounts, about obtaining a
-// Certificate for a CSR by answering DNS challenges (DCV), revoking one, and ACME Renewal Information (ARI).
+// The ACME kind of issuer (issuer.ts): talking to an ACME CA (acme-cas.ts) at its directory. It holds no state: callers
+// pass in the ACME CA and the account they act as. It knows about accounts, about obtaining a Certificate for a CSR by
+// answering DNS challenges (DCV), revoking one, and ACME Renewal Information (ARI).
 import { AuthorityKeyIdentifierExtension, X509Certificate } from "@peculiar/x509";
 import acme from "acme-client";
 import { Agent } from "node:https";
 import { rootCertificates } from "node:tls";
 import { REVOCATION_REASONS, type RevocationReason } from "../../pki/revocation-reasons";
-
-export const ACME_ENVIRONMENTS = ["staging", "production"] as const;
-export type AcmeEnvironment = (typeof ACME_ENVIRONMENTS)[number];
+import type { AcmeCa } from "./acme-cas";
 
 // Why a Certificate is revoked, by the name of its RFC 5280 reason code (section 5.3.1); an ACME CA is only ever given
 // those of REVOCATION_REASONS_OF.acme, which Let's Encrypt honours from a subscriber (revocation-reasons.ts).
@@ -50,9 +48,9 @@ export interface AcmeCertificateAuthority {
   /** What the CA calls itself in a Certificate's record of where it came from. */
   readonly name: string;
   /** Registers a new account under a new key, with the Organization's agreement to the CA's terms of service. */
-  createAccount(environment: AcmeEnvironment, input: { contactEmail?: string }): Promise<CaAccount>;
+  createAccount(ca: AcmeCa, input: { contactEmail?: string }): Promise<CaAccount>;
   /** Resolves when the CA accepts `account.accountKey` as the key of `account.accountUrl`; throws a CertificateAuthorityError when not. */
-  checkAccount(environment: AcmeEnvironment, account: CaAccount): Promise<void>;
+  checkAccount(ca: AcmeCa, account: CaAccount): Promise<void>;
   /**
    * Places an order for the names in `request.csr`, answers the CA's DNS challenges through `request.responder`, and
    * finalizes the order with the CSR. Resolves with the Certificate and the intermediates the CA served (PEM, the
@@ -61,44 +59,37 @@ export interface AcmeCertificateAuthority {
    * order renews, which a CA with ARI treats as a coordinated Renewal; an order the CA will not take for it is placed
    * again without.
    */
-  issue(environment: AcmeEnvironment, account: CaAccount, request: { csr: string; responder: DnsChallengeResponder; replaces?: string }): Promise<string>;
+  issue(ca: AcmeCa, account: CaAccount, request: { csr: string; responder: DnsChallengeResponder; replaces?: string }): Promise<string>;
   /**
    * Tells the CA to revoke the Certificate (PEM, its chain or the leaf alone) for `request.reason`, acting as the account
    * that obtained it. Resolves once the CA has revoked it; throws a CertificateAuthorityError when the CA says no (it is
    * revoked already, or not this account's) or does not answer.
    */
-  revoke(environment: AcmeEnvironment, account: CaAccount, request: { certificate: string; reason: RevocationReason }): Promise<void>;
+  revoke(ca: AcmeCa, account: CaAccount, request: { certificate: string; reason: RevocationReason }): Promise<void>;
   /**
    * What the CA's ARI says about the Certificate (PEM, its chain or the leaf alone); null when the CA offers none, or
    * does not know the Certificate. Throws a CertificateAuthorityError when the CA does not answer.
    */
-  renewalInfo(environment: AcmeEnvironment, certificate: string): Promise<RenewalInfo | null>;
+  renewalInfo(ca: AcmeCa, certificate: string): Promise<RenewalInfo | null>;
   /**
    * The root certificates (PEM) the CA's chains end in, as far as the platform knows them. A CA serves a Certificate
    * with its intermediates and leaves the root out, so an export that includes the root takes it from here.
    */
-  roots(environment: AcmeEnvironment): Promise<string[]>;
+  roots(ca: AcmeCa): Promise<string[]>;
 }
 
-export interface LetsEncryptConfig {
-  /** Directory URLs by environment; the real Let's Encrypt ones unless overridden (tests point them at Pebble). */
-  directoryUrls?: Partial<Record<AcmeEnvironment, string>>;
+export interface AcmeConfig {
   /** A PEM CA certificate to trust besides the system's, for a test CA with a private root such as Pebble. */
   trustedCa?: string;
   /**
-   * The roots of each environment's chains, for exports that include the root. Production defaults to the system's
-   * trusted roots, which hold Let's Encrypt's; staging's roots are in none, so a deployment that exports staging
-   * chains with their root gives them here.
+   * The roots of each ACME CA's chains, by its id, for exports that include the root. Let's Encrypt Production defaults
+   * to the system's trusted roots, which hold Let's Encrypt's; staging's roots are in none, so a deployment that exports
+   * staging chains with their root gives them here. Any other ACME CA has none unless given.
    */
-  roots?: Partial<Record<AcmeEnvironment, () => Promise<string[]>>>;
+  roots?: Partial<Record<string, () => Promise<string[]>>>;
   /** How long to wait between looks at an order or a challenge the CA is still working on (acme-client's 5 to 30 seconds unless overridden). */
   pollMs?: { min: number; max: number };
 }
-
-const LETS_ENCRYPT_DIRECTORIES: Record<AcmeEnvironment, string> = {
-  staging: "https://acme-staging-v02.api.letsencrypt.org/directory",
-  production: "https://acme-v02.api.letsencrypt.org/directory",
-};
 
 /** The ARI identifier of a Certificate (RFC 9773): its authority key identifier and serial number, each base64url, joined by a dot. */
 export function certificateId(pem: string): string {
@@ -126,31 +117,30 @@ function retryAfterMs(header: string | null): number | null {
   return Number.isNaN(at) ? null : Math.max(0, at - Date.now());
 }
 
-export function createLetsEncrypt({ directoryUrls = {}, trustedCa, roots = {}, pollMs }: LetsEncryptConfig = {}): AcmeCertificateAuthority {
+export function createAcmeCertificateAuthority({ trustedCa, roots = {}, pollMs }: AcmeConfig = {}): AcmeCertificateAuthority {
   // acme-client makes its requests through one shared axios instance, so this is process-wide.
   if (trustedCa) acme.axios.defaults.httpsAgent = new Agent({ ca: [...rootCertificates, trustedCa] });
-  const directoryUrl = (environment: AcmeEnvironment) => directoryUrls[environment] ?? LETS_ENCRYPT_DIRECTORIES[environment];
 
   // acme-client reports a network failure as an unrelated TypeError (and, under Bun, its axios never gives up on a
   // refused connection), so reachability is checked first, by itself.
-  async function reach(environment: AcmeEnvironment): Promise<{ renewalInfo?: string }> {
+  async function reach(ca: AcmeCa): Promise<{ renewalInfo?: string }> {
     try {
-      const res = await fetch(directoryUrl(environment), { signal: AbortSignal.timeout(10_000), tls: trustedCa ? { ca: trustedCa } : undefined });
+      const res = await fetch(ca.directoryUrl, { signal: AbortSignal.timeout(10_000), tls: trustedCa ? { ca: trustedCa } : undefined });
       if (!res.ok) throw new Error(`HTTP ${res.status}`);
       return await res.json();
     } catch (err: any) {
-      throw unreachable(environment, err);
+      throw unreachable(ca, err);
     }
   }
 
   // Whatever the CA says no to comes back from acme-client as an Error carrying the CA's own explanation.
   const rejected = (err: unknown) => new CertificateAuthorityError("rejected", err instanceof Error ? err.message : String(err));
 
-  const unreachable = (environment: AcmeEnvironment, err: any) => new CertificateAuthorityError("unreachable", `could not reach the ${environment} CA: ${err?.code ?? err?.message}`);
+  const unreachable = (ca: AcmeCa, err: any) => new CertificateAuthorityError("unreachable", `could not reach ${ca.name}: ${err?.code ?? err?.message}`);
 
-  const clientFor = (environment: AcmeEnvironment, { accountUrl, accountKey }: CaAccount) =>
+  const clientFor = (ca: AcmeCa, { accountUrl, accountKey }: CaAccount) =>
     new acme.Client({
-      directoryUrl: directoryUrl(environment),
+      directoryUrl: ca.directoryUrl,
       accountKey,
       accountUrl,
       // Left out when not set: acme-client would take an explicit undefined over its default.
@@ -159,13 +149,13 @@ export function createLetsEncrypt({ directoryUrls = {}, trustedCa, roots = {}, p
 
   return {
     name: "lets-encrypt",
-    async roots(environment) {
-      return roots[environment]?.() ?? (environment === "production" ? [...rootCertificates] : []);
+    async roots(ca) {
+      return roots[ca.id]?.() ?? (ca.id === "letsencrypt-production" ? [...rootCertificates] : []);
     },
-    async createAccount(environment, { contactEmail }) {
-      await reach(environment);
+    async createAccount(ca, { contactEmail }) {
+      await reach(ca);
       const accountKey = (await acme.crypto.createPrivateEcdsaKey("P-256")).toString();
-      const client = new acme.Client({ directoryUrl: directoryUrl(environment), accountKey });
+      const client = new acme.Client({ directoryUrl: ca.directoryUrl, accountKey });
       try {
         await client.createAccount({ termsOfServiceAgreed: true, contact: contactEmail ? [`mailto:${contactEmail}`] : undefined });
       } catch (err) {
@@ -173,9 +163,9 @@ export function createLetsEncrypt({ directoryUrls = {}, trustedCa, roots = {}, p
       }
       return { accountUrl: client.getAccountUrl(), accountKey };
     },
-    async checkAccount(environment, { accountUrl, accountKey }) {
-      await reach(environment);
-      const client = clientFor(environment, { accountUrl, accountKey });
+    async checkAccount(ca, { accountUrl, accountKey }) {
+      await reach(ca);
+      const client = clientFor(ca, { accountUrl, accountKey });
       try {
         const account = await client.updateAccount({});
         if (account.status !== "valid") throw new Error(`the account is ${account.status}`);
@@ -183,38 +173,38 @@ export function createLetsEncrypt({ directoryUrls = {}, trustedCa, roots = {}, p
         throw rejected(err);
       }
     },
-    async renewalInfo(environment, certificatePem) {
-      const { renewalInfo } = await reach(environment);
+    async renewalInfo(ca, certificatePem) {
+      const { renewalInfo } = await reach(ca);
       if (!renewalInfo) return null;
       let res: Response;
       try {
         res = await fetch(`${renewalInfo.replace(/\/$/, "")}/${certificateId(certificatePem)}`, { signal: AbortSignal.timeout(10_000), tls: trustedCa ? { ca: trustedCa } : undefined });
       } catch (err) {
-        throw unreachable(environment, err);
+        throw unreachable(ca, err);
       }
       // A CA that does not know the Certificate has no information about it.
       if (res.status === 404) return null;
-      if (!res.ok) throw new CertificateAuthorityError("rejected", `the ${environment} CA's renewal information answered HTTP ${res.status}`);
+      if (!res.ok) throw new CertificateAuthorityError("rejected", `${ca.name}'s renewal information answered HTTP ${res.status}`);
       const body = (await res.json().catch(() => null)) as { suggestedWindow?: { start?: string; end?: string } } | null;
       const start = new Date(body?.suggestedWindow?.start ?? NaN);
       const end = new Date(body?.suggestedWindow?.end ?? NaN);
-      if (Number.isNaN(start.getTime()) || Number.isNaN(end.getTime())) throw new CertificateAuthorityError("rejected", `the ${environment} CA's renewal information has no suggested window`);
+      if (Number.isNaN(start.getTime()) || Number.isNaN(end.getTime())) throw new CertificateAuthorityError("rejected", `${ca.name}'s renewal information has no suggested window`);
       return { window: { start, end }, retryAfterMs: retryAfterMs(res.headers.get("retry-after")) };
     },
-    async revoke(environment, account, { certificate, reason }) {
-      await reach(environment);
+    async revoke(ca, account, { certificate, reason }) {
+      await reach(ca);
       const leaf = certificate.match(/-----BEGIN CERTIFICATE-----[^-]+-----END CERTIFICATE-----/)?.[0];
       if (!leaf) throw new CertificateAuthorityError("rejected", "there is no certificate to revoke");
       try {
-        await clientFor(environment, account).revokeCertificate(leaf, { reason: REVOCATION_REASONS[reason] });
+        await clientFor(ca, account).revokeCertificate(leaf, { reason: REVOCATION_REASONS[reason] });
       } catch (err: any) {
-        if (err?.isAxiosError && !err.response) throw unreachable(environment, err);
+        if (err?.isAxiosError && !err.response) throw unreachable(ca, err);
         throw rejected(err);
       }
     },
-    async issue(environment, account, { csr, responder, replaces }) {
-      const directory = await reach(environment);
-      const client = clientFor(environment, account);
+    async issue(ca, account, { csr, responder, replaces }) {
+      const directory = await reach(ca);
+      const client = clientFor(ca, account);
       // Only a CA that offers ARI is told what an order replaces.
       if (replaces && directory.renewalInfo) {
         // acme-client's auto mode takes no extra order fields, so the order it places is given the one it needs. A Renewal
@@ -262,7 +252,7 @@ export function createLetsEncrypt({ directoryUrls = {}, trustedCa, roots = {}, p
       } catch (err: any) {
         if (fromResponder.has(err)) throw err;
         // acme-client reports a connection lost half way through as a bare axios error.
-        if (err?.isAxiosError && !err.response) throw new CertificateAuthorityError("unreachable", `lost the connection to the ${environment} CA: ${err.code ?? err.message}`);
+        if (err?.isAxiosError && !err.response) throw new CertificateAuthorityError("unreachable", `lost the connection to ${ca.name}: ${err.code ?? err.message}`);
         throw rejected(err);
       }
     },
