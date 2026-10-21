@@ -1,13 +1,16 @@
 import { keepPreviousData, useMutation, useQuery, useQueryClient } from "@tanstack/react-query";
 import { Link, useParams } from "@tanstack/react-router";
 import { createColumnHelper, rowPaginationFeature, tableFeatures, useTable, type PaginationState } from "@tanstack/react-table";
-import { XIcon } from "lucide-react";
+import { CircleHelpIcon, XIcon } from "lucide-react";
 import { useMemo, useState, type FormEvent } from "react";
 import { DataTable } from "@/components/data-table/data-table";
 import { DataTableFacetedFilter } from "@/components/data-table/data-table-faceted-filter";
 import { DataTablePagination } from "@/components/data-table/data-table-pagination";
 import { ParameterFields, missingParameters, namesDeclared, shownValues } from "@/components/parameter-fields";
+import { ParameterHelpSheet } from "@/components/parameter-help-sheet";
+import { GuideLink } from "@/components/guide";
 import { SummaryRows } from "@/components/summary-rows";
+import { Alert, AlertDescription, AlertTitle } from "@/components/ui/alert";
 import { Badge } from "@/components/ui/badge";
 import { Button } from "@/components/ui/button";
 import { Dialog, DialogContent, DialogDescription, DialogHeader, DialogTitle, DialogTrigger } from "@/components/ui/dialog";
@@ -315,7 +318,10 @@ function EditParameters({ orgId, deployment, declared, onDone }: { orgId: string
           save.reset();
         }}
       />
-      <p className="text-sm text-muted-foreground">The script is given the new values from the Deployment's next run.</p>
+      <div className="flex flex-wrap items-center justify-between gap-2">
+        <p className="text-sm text-muted-foreground">The script is given the new values from the Deployment's next run.</p>
+        <ParameterHelpSheet orgId={orgId} script={`${deployment.script.name} v${deployment.script.version}`} declared={declared} values={values} />
+      </div>
       {save.error && !namesDeclared(declared, problems) && <FieldError>{save.error.message}</FieldError>}
       <div className="flex justify-end gap-2">
         <Button type="button" variant="outline" onClick={onDone}>
@@ -376,6 +382,15 @@ function Runs({ orgId, deployment }: { orgId: string; deployment: Deployment }) 
               Script v{run.script.version} <span className="font-mono text-xs">{shortHash(run.script.hash)}</span>
             </span>
           </div>
+          {run.exitCode === null && (
+            <span className="text-xs text-muted-foreground">
+              The Agent did not start the script.{" "}
+              <GuideLink orgId={orgId} guide="deployment-scripts" section="how">
+                What the Agent checks first
+              </GuideLink>
+            </span>
+          )}
+          <UnseenParameterHint orgId={orgId} deployment={deployment} run={run} />
           {run.output && (
             <pre aria-label="Output" className="max-h-60 overflow-auto rounded-md border bg-muted p-3 font-mono text-xs whitespace-pre-wrap">
               {run.output}
@@ -385,5 +400,35 @@ function Runs({ orgId, deployment }: { orgId: string; deployment: Deployment }) 
         </section>
       ))}
     </div>
+  );
+}
+
+/**
+ * On a failed run whose output names a parameter's variable that the Deployment gives a value, the likely cause: an Agent
+ * that predates script parameters, which runs the script without them. The platform does not know an Agent's features,
+ * and runs do not record their values, so this is a match on the output against the values the Deployment has now.
+ */
+function UnseenParameterHint({ orgId, deployment, run }: { orgId: string; deployment: Deployment; run: DeploymentRun }) {
+  if (run.status !== "failed" || run.exitCode === null) return null;
+  const named = Object.keys(deployment.parameters).find((name) => run.output.includes(`DEPLOY_PARAM_${name}`));
+  if (named === undefined) return null;
+  return (
+    <Alert>
+      <CircleHelpIcon />
+      <AlertTitle>The script may not have seen a parameter this Deployment sets</AlertTitle>
+      <AlertDescription>
+        <p>
+          The output names <code>DEPLOY_PARAM_{named}</code>, which this Deployment gives a value. An Agent that predates script parameters runs scripts without them: check
+          that {deployment.agent.hostName} is up to date on the{" "}
+          <Link to="/organizations/$orgId/agents" params={{ orgId }} className="font-medium text-primary underline-offset-4 hover:underline">
+            Agents
+          </Link>{" "}
+          page, then run it again.
+        </p>
+        <GuideLink orgId={orgId} guide="deployment-scripts" section="safety">
+          Why scripts guard their parameters
+        </GuideLink>
+      </AlertDescription>
+    </Alert>
   );
 }

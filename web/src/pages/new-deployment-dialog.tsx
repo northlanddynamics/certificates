@@ -3,6 +3,8 @@ import { BotIcon, CheckIcon, ClipboardCheckIcon, FileTerminalIcon, GlobeIcon, Pl
 import { useEffect, useState, type FormEvent } from "react";
 import { IssuerChoiceFields, useIssuerChoice } from "@/components/issuer-choice";
 import { ParameterFields, missingParameters, namesDeclared, shownValues } from "@/components/parameter-fields";
+import { ParameterHelpSheet } from "@/components/parameter-help-sheet";
+import { GuideLink } from "@/components/guide";
 import { SummaryRows } from "@/components/summary-rows";
 import { Alert, AlertDescription, AlertTitle } from "@/components/ui/alert";
 import { Button } from "@/components/ui/button";
@@ -247,9 +249,20 @@ function NewDeploymentForm({ org, onDone }: { org: Me["organizations"][number]; 
               </Select>
               <FieldDescription>
                 What the Agent runs with each Certificate. It finds the key, leaf, chain and full-chain files in <code>CERT_KEY_FILE</code>, <code>CERT_LEAF_FILE</code>,{" "}
-                <code>CERT_CHAIN_FILE</code> and <code>CERT_FULLCHAIN_FILE</code>.
+                <code>CERT_CHAIN_FILE</code> and <code>CERT_FULLCHAIN_FILE</code>.{" "}
+                <GuideLink orgId={orgId} guide="deployment-scripts" section="receives" newTab>
+                  What a script is given
+                </GuideLink>
               </FieldDescription>
-              {scripts.data && scripts.data.items.length === 0 && <FieldError>No Deployment Script is uploaded yet. Upload one under Deployment Scripts.</FieldError>}
+              {scripts.data && scripts.data.items.length === 0 && (
+                <FieldError>
+                  No Deployment Script is uploaded yet. Upload one under Deployment Scripts, or{" "}
+                  <GuideLink orgId={orgId} guide="deployment-scripts" section="example" newTab>
+                    start from the guide's example
+                  </GuideLink>
+                  .
+                </FieldError>
+              )}
             </Field>
             {chosenScript && (
               <Field>
@@ -278,7 +291,12 @@ function NewDeploymentForm({ org, onDone }: { org: Me["organizations"][number]; 
             )}
             {declared.length > 0 && (
               <FieldSet>
-                <FieldLegend variant="label">Parameters</FieldLegend>
+                <div className="flex flex-wrap items-center justify-between gap-2">
+                  <FieldLegend variant="label">Parameters</FieldLegend>
+                  {chosenScript && chosenVersion && (
+                    <ParameterHelpSheet orgId={orgId} script={`${chosenScript.name} v${chosenVersion.version}`} declared={declared} values={parameters} />
+                  )}
+                </div>
                 <FieldDescription>What this version asks for. The values are kept in plain text on the Deployment and given to the script at every run: put nothing secret here.</FieldDescription>
                 <ParameterFields
                   declared={declared}

@@ -9,6 +9,7 @@ import type { Authorizer } from "../../tenancy/authorization";
 import type { Db } from "../../platform/db/client";
 import { dcvRule, dnsProvider, validationZone } from "../../platform/db/schema";
 import { DNS_PROVIDER_KINDS } from "./dns-provider-kinds";
+import type { TxtResolver } from "./dcv";
 import { HttpError, OrgParam, errors, isForeignKeyViolation, isUniqueViolation, json } from "../../platform/http";
 import { normalizeDomain, normalizeName } from "../../pki/names";
 import { DCV_METHODS, DCV_SCOPES, type DcvPlans, type DcvRule } from "./dcv-plan";
@@ -57,8 +58,10 @@ export function registerDcvConfiguration(ctx: {
   authorize: Authorizer["authorize"];
   unitOfWork: UnitOfWork;
   dcvPlans: DcvPlans;
+  /** The resolvers DCV looks records up through, for the preview to say whether a Delegated name's CNAME is in DNS yet. */
+  resolver: Pick<TxtResolver, "lookupCname">;
 }) {
-  const { app, db, requireUser, authorize, unitOfWork, dcvPlans } = ctx;
+  const { app, db, requireUser, authorize, unitOfWork, dcvPlans, resolver } = ctx;
 
   async function zoneOf(orgId: string, zoneId: string) {
     const [row] = isUuid(zoneId) ? await db.select().from(validationZone).where(and(eq(validationZone.organizationId, orgId), eq(validationZone.id, zoneId))) : [];
@@ -91,6 +94,12 @@ export function registerDcvConfiguration(ctx: {
       if (!provider) throw notFound("DNS Provider");
     }
     return { scope: body.scope, domain, method: body.method, dnsProviderId: body.dnsProviderId ?? null, validationZoneId: body.validationZoneId ?? null };
+  }
+
+  /** What the CNAME `cname` names points to now, and whether that is where it should. */
+  async function cnameInDns(cname: { name: string; value: string }) {
+    const pointsTo = await resolver.lookupCname(cname.name);
+    return { pointsTo, matches: pointsTo.includes(cname.value.toLowerCase()) };
   }
 
   const ruleTaken = (rule: { scope: string; domain: string }) => new HttpError(409, `the Organization already has a DCV Rule for the ${rule.scope} ${rule.domain}`);
@@ -309,8 +318,15 @@ export function registerDcvConfiguration(ctx: {
       summary: "How DCV is done for a name, and the CNAME a Delegated name needs",
       description:
         "What DCV will do for `name` under the Organization's rules now. For a Delegated name, `cname` is the exact record the Organization " +
-        "must create in the DNS of the name's own domain: `_acme-challenge.<name>` pointing into the Validation Zone. A wildcard shows its base name's record.",
-      request: { params: OrgParam, query: z.object({ name: z.string().openapi({ param: { name: "name", in: "query" } }) }) },
+        "must create in the DNS of the name's own domain: `_acme-challenge.<name>` pointing into the Validation Zone. A wildcard shows its base name's record. " +
+        "With `lookup=true`, `dns` also says what that name is a CNAME to now, as the platform's resolvers see it.",
+      request: {
+        params: OrgParam,
+        query: z.object({
+          name: z.string().openapi({ param: { name: "name", in: "query" } }),
+          lookup: z.literal("true").optional().openapi({ param: { name: "lookup", in: "query" }, description: "Look the CNAME up in DNS." }),
+        }),
+      },
       responses: {
         200: json(
           z.object({
@@ -321,6 +337,14 @@ export function registerDcvConfiguration(ctx: {
             dnsProvider: z.object({ id: z.string(), name: z.string() }).nullable().openapi({ description: "The DNS Provider the record is written through; null when none can, which fails DCV." }),
             validationZone: z.object({ id: z.string(), name: z.string() }).nullable(),
             cname: z.object({ name: z.string(), type: z.literal("CNAME"), value: z.string() }).nullable(),
+            dns: z
+              .object({
+                pointsTo: z.array(z.string()).openapi({ description: "What the CNAME at `cname.name` points to now; none when it is not there." }),
+                matches: z.boolean().openapi({ description: "Whether it points to `cname.value`, as DCV needs." }),
+              })
+              .nullable()
+              .optional()
+              .openapi({ description: "Only with `lookup=true`: what DNS holds for `cname`; null when the name needs no CNAME." }),
           }),
         ),
         ...errors(400, 401, 403, 404),
@@ -328,7 +352,7 @@ export function registerDcvConfiguration(ctx: {
     }),
     async (c) => {
       const { orgId } = c.req.valid("param");
-      const asked = c.req.valid("query").name;
+      const { name: asked, lookup } = c.req.valid("query");
       await authorize(await requireUser(c), orgId, { dcvRule: ["read"] });
       const name = normalizeName(asked);
       if (name === null) throw new HttpError(400, "name: must be a DNS name, or a wildcard of one");
@@ -342,6 +366,7 @@ export function registerDcvConfiguration(ctx: {
           dnsProvider: plan.dnsProvider,
           validationZone: plan.validationZone,
           cname: plan.cname,
+          ...(lookup && { dns: plan.cname && (await cnameInDns(plan.cname)) }),
         },
         200,
       );

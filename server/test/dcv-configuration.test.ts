@@ -48,7 +48,7 @@ const configuration = (org: { orgId: string; cookie: string }) => {
       change: (id: string, body: unknown) => call(`/dcv-rules/${id}`, "PUT", body),
       remove: (id: string) => call(`/dcv-rules/${id}`, "DELETE"),
     },
-    preview: (name: string) => call(`/dcv/preview?name=${encodeURIComponent(name)}`, "GET"),
+    preview: (name: string, { lookup = false } = {}) => call(`/dcv/preview?name=${encodeURIComponent(name)}${lookup ? "&lookup=true" : ""}`, "GET"),
   };
 };
 const admin = () => configuration(acmeOrg);
@@ -239,6 +239,21 @@ describe("showing how DCV is done for a name, and the CNAME a Delegated name nee
       validationZone: { id: zone.id, name: VALIDATION_ZONE },
       cname: { name: "_acme-challenge.app.delegating.test", type: "CNAME", value: `app.delegating.test.${VALIDATION_ZONE}` },
     });
+  });
+
+  test("asked to look it up, it says what the CNAME points to now, and whether that is the record to create", async () => {
+    const { zone } = await zoneOnBind();
+    await admin().rules.create({ scope: "zone", domain: "delegating.test", method: "delegated", validationZoneId: zone.id });
+    const target = `app.delegating.test.${VALIDATION_ZONE}`;
+    const pointing: Record<string, string[]> = { "_acme-challenge.app.delegating.test": [target], "_acme-challenge.old.delegating.test": ["old.elsewhere.test"] };
+    h.dcvResolver.current = { lookupTxt: async () => [], lookupCname: async (name) => pointing[name] ?? [] };
+
+    expect((await admin().preview("app.delegating.test", { lookup: true })).body.dns).toEqual({ pointsTo: [target], matches: true });
+    expect((await admin().preview("old.delegating.test", { lookup: true })).body.dns).toEqual({ pointsTo: ["old.elsewhere.test"], matches: false });
+    expect((await admin().preview("new.delegating.test", { lookup: true })).body.dns).toEqual({ pointsTo: [], matches: false });
+    // Not asked, it looks nothing up; a Direct name needs no CNAME, so there is nothing to look up.
+    expect((await admin().preview("app.delegating.test")).body).not.toHaveProperty("dns");
+    expect((await admin().preview(`app.${BIND.zone}`, { lookup: true })).body.dns).toBeNull();
   });
 
   test("a wildcard is challenged at its base name, so it shows the same record as the base name", async () => {
