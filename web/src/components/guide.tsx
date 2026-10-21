@@ -1,5 +1,6 @@
 import { Link, useLocation, useRouter } from "@tanstack/react-router";
 import { createContext, useContext, type ReactNode } from "react";
+import { WRAPPING_TABLE } from "@/lib/utils";
 
 /**
  * The in-app guides: each a page of its own beside the page it explains, in sections that the rest of the app links into
@@ -57,6 +58,12 @@ export type Guide = keyof typeof GUIDES;
 export type GuideSection<G extends Guide> = keyof (typeof GUIDES)[G]["sections"] & string;
 
 const LINK = "font-medium underline underline-offset-4 hover:text-primary";
+
+/**
+ * A guide's text wraps wherever it must to stay in its box, however narrow: a long host name or variable in inline code,
+ * and a table's cells, which would otherwise keep the table wider than a phone. Code blocks keep their lines and scroll.
+ */
+const FITS = `[&_code]:[overflow-wrap:anywhere] ${WRAPPING_TABLE}`;
 
 export const isGuide = (value: unknown): value is Guide => typeof value === "string" && value in GUIDES;
 
@@ -159,7 +166,7 @@ export function GuidePage<G extends Guide>({
   const sections = Object.entries(GUIDES[guide].sections);
   if (inPanel) {
     return (
-      <article className="flex min-w-0 flex-col gap-10 text-sm leading-relaxed">
+      <article className={`flex min-w-0 flex-col gap-10 text-sm leading-relaxed ${FITS}`}>
         <header className="flex flex-col gap-3">
           <h2 className="pr-8 text-xl font-semibold">{title}</h2>
           <div className="text-muted-foreground">{lede}</div>
@@ -193,7 +200,7 @@ export function GuidePage<G extends Guide>({
           </a>
         ))}
       </nav>
-      <article className="flex min-w-0 max-w-3xl flex-1 flex-col gap-12 text-sm leading-relaxed">
+      <article className={`flex min-w-0 max-w-3xl flex-1 flex-col gap-12 text-sm leading-relaxed ${FITS}`}>
         <header className="flex flex-col gap-3">
           <Link to={back.to} params={{ orgId: back.orgId }} className="text-sm text-muted-foreground hover:text-foreground">
             ← {back.label}

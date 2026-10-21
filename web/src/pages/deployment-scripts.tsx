@@ -21,6 +21,7 @@ import { api, can, type DeploymentScript, type ScriptParameter } from "@/lib/api
 import { EXAMPLE_SCRIPTS, exampleById, exampleContent, type ExampleScript } from "@/lib/deployment-script-examples";
 import { ENV_PREFIX, readDeclaration } from "@/lib/script-parameters";
 import { useOrg } from "@/lib/use-org";
+import { WRAPPING_TABLE } from "@/lib/utils";
 import { useAction } from "@/lib/use-action";
 
 const ROUTE = "/app/organizations/$orgId/deployment-scripts";
@@ -190,7 +191,7 @@ function Versions({ orgId, script }: { orgId: string; script: DeploymentScript }
   });
   return (
     <div className="flex min-w-0 flex-col gap-4">
-      <div className="rounded-md border">
+      <div className={`rounded-md border ${WRAPPING_TABLE}`}>
         <Table>
           <TableHeader>
             <TableRow>
@@ -488,7 +489,7 @@ const parameterRule = (p: ScriptParameter) => (p.required ? "Required" : p.defau
 function ParameterTable({ parameters }: { parameters: ScriptParameter[] }) {
   if (parameters.length === 0) return <p className="text-sm text-muted-foreground">This version declares no parameters.</p>;
   return (
-    <div className="rounded-md border">
+    <div className={`rounded-md border ${WRAPPING_TABLE}`}>
       <Table>
         <TableHeader>
           <TableRow>

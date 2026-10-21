@@ -15,6 +15,7 @@ import { Table, TableBody, TableCell, TableHead, TableHeader, TableRow } from "@
 import { api, can, type DcvRule, type DnsProvider, type ValidationZone } from "@/lib/api";
 import { useAction } from "@/lib/use-action";
 import { useOrg } from "@/lib/use-org";
+import { WRAPPING_TABLE } from "@/lib/utils";
 
 const ROUTE = "/app/organizations/$orgId/dcv";
 const ANY_PROVIDER = "any";
@@ -67,7 +68,7 @@ export function DcvPage() {
               </h2>
               {org && can(org, "dcvRule", "create") && <NewRuleDialog orgId={orgId} zones={zones.data?.items ?? []} providers={providers.data?.items ?? []} />}
             </div>
-            <div className="rounded-md border">
+            <div className={`rounded-md border ${WRAPPING_TABLE}`}>
               <Table>
                 <TableHeader>
                   <TableRow>
@@ -117,7 +118,7 @@ export function DcvPage() {
               </h2>
               {org && can(org, "validationZone", "create") && <NewZoneDialog orgId={orgId} providers={providers.data?.items ?? []} />}
             </div>
-            <div className="rounded-md border">
+            <div className={`rounded-md border ${WRAPPING_TABLE}`}>
               <Table>
                 <TableHeader>
                   <TableRow>
