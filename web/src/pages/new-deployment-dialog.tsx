@@ -4,7 +4,7 @@ import { useEffect, useState, type FormEvent } from "react";
 import { IssuerChoiceFields, useIssuerChoice } from "@/components/issuer-choice";
 import { ParameterFields, missingParameters, namesDeclared, shownValues } from "@/components/parameter-fields";
 import { ParameterHelpSheet } from "@/components/parameter-help-sheet";
-import { GuideLink } from "@/components/script-guide-link";
+import { GuideLink } from "@/components/guide";
 import { SummaryRows } from "@/components/summary-rows";
 import { Alert, AlertDescription, AlertTitle } from "@/components/ui/alert";
 import { Button } from "@/components/ui/button";
@@ -250,14 +250,14 @@ function NewDeploymentForm({ org, onDone }: { org: Me["organizations"][number]; 
               <FieldDescription>
                 What the Agent runs with each Certificate. It finds the key, leaf, chain and full-chain files in <code>CERT_KEY_FILE</code>, <code>CERT_LEAF_FILE</code>,{" "}
                 <code>CERT_CHAIN_FILE</code> and <code>CERT_FULLCHAIN_FILE</code>.{" "}
-                <GuideLink orgId={orgId} section="receives" newTab>
+                <GuideLink orgId={orgId} guide="deployment-scripts" section="receives" newTab>
                   What a script is given
                 </GuideLink>
               </FieldDescription>
               {scripts.data && scripts.data.items.length === 0 && (
                 <FieldError>
                   No Deployment Script is uploaded yet. Upload one under Deployment Scripts, or{" "}
-                  <GuideLink orgId={orgId} section="example" newTab>
+                  <GuideLink orgId={orgId} guide="deployment-scripts" section="example" newTab>
                     start from the guide's example
                   </GuideLink>
                   .

@@ -7,7 +7,7 @@ import { DataTable } from "@/components/data-table/data-table";
 import { DataTableFacetedFilter } from "@/components/data-table/data-table-faceted-filter";
 import { DataTablePagination } from "@/components/data-table/data-table-pagination";
 import { ScriptEnvironment } from "@/components/script-environment";
-import { GuideLink } from "@/components/script-guide-link";
+import { GuideLink } from "@/components/guide";
 import { Alert, AlertDescription, AlertTitle } from "@/components/ui/alert";
 import { Badge } from "@/components/ui/badge";
 import { Button } from "@/components/ui/button";
@@ -105,7 +105,7 @@ export function DeploymentScriptsPage() {
         <div className="flex flex-wrap items-center gap-2">
           {allowed && (
             <Button variant="outline" asChild>
-              <GuideLink orgId={orgId} className="">
+              <GuideLink orgId={orgId} guide="deployment-scripts" className="">
                 <BookOpenIcon />
                 How to write a script
               </GuideLink>
@@ -236,7 +236,7 @@ function Versions({ orgId, script }: { orgId: string; script: DeploymentScript }
           <TabsContent value="parameters" className="flex flex-col gap-3">
             <p className="text-sm text-muted-foreground">
               A Deployment of this version asks for these values. They are fixed with the version: to change them, upload a new one.{" "}
-              <GuideLink orgId={orgId} section="declare">
+              <GuideLink orgId={orgId} guide="deployment-scripts" section="declare">
                 How parameters are declared
               </GuideLink>
             </p>
@@ -245,7 +245,7 @@ function Versions({ orgId, script }: { orgId: string; script: DeploymentScript }
           <TabsContent value="environment" className="flex flex-col gap-3">
             <p className="text-sm text-muted-foreground">
               What a run of this version is given.{" "}
-              <GuideLink orgId={orgId} section="receives">
+              <GuideLink orgId={orgId} guide="deployment-scripts" section="receives">
                 Every variable, explained
               </GuideLink>
             </p>
@@ -402,7 +402,7 @@ function ContentWithDeclaration({ orgId, id, value, onChange }: { orgId: string;
       <div className="flex min-w-0 flex-col gap-2">
         <div className="flex items-baseline justify-between gap-2">
           <Label htmlFor={id}>Script</Label>
-          <GuideLink orgId={orgId} section="declare" newTab className="text-xs font-medium text-primary underline-offset-4 hover:underline">
+          <GuideLink orgId={orgId} guide="deployment-scripts" section="declare" newTab className="text-xs font-medium text-primary underline-offset-4 hover:underline">
             Parameter section format
           </GuideLink>
         </div>
@@ -425,7 +425,7 @@ function DeclarationPanel({ orgId, content }: { orgId: string; content: string }
           <AlertTitle>The upload would be refused</AlertTitle>
           <AlertDescription>
             <p>{declaration.problem}</p>
-            <GuideLink orgId={orgId} section="refused" newTab>
+            <GuideLink orgId={orgId} guide="deployment-scripts" section="refused" newTab>
               How to fix it
             </GuideLink>
           </AlertDescription>
@@ -526,10 +526,10 @@ function ParametersBanner({ orgId }: { orgId: string }) {
       <AlertDescription>
         <p>A script can declare parameters, such as a site name or a port, and each Deployment gives its own values.</p>
         <span className="flex flex-wrap gap-4">
-          <GuideLink orgId={orgId} section="declare">
+          <GuideLink orgId={orgId} guide="deployment-scripts" section="declare">
             Declaring parameters
           </GuideLink>
-          <GuideLink orgId={orgId} section="example">
+          <GuideLink orgId={orgId} guide="deployment-scripts" section="example">
             See an example script
           </GuideLink>
         </span>
@@ -569,7 +569,7 @@ function NoScripts({ orgId, mayUpload }: { orgId: string; mayUpload: boolean }) 
           ))}
         </div>
       )}
-      <GuideLink orgId={orgId}>Read the guide</GuideLink>
+      <GuideLink orgId={orgId} guide="deployment-scripts">Read the guide</GuideLink>
     </div>
   );
 }

@@ -1,9 +1,9 @@
-import { Link, useParams } from "@tanstack/react-router";
+import { useParams } from "@tanstack/react-router";
 import { ShieldAlertIcon, TriangleAlertIcon } from "lucide-react";
 import type { ReactNode } from "react";
 import { toast } from "sonner";
 import { CopyButton } from "@/components/copy-button";
-import { GUIDE_SECTIONS, type GuideSection } from "@/components/script-guide-link";
+import { GuidePage, GuideSection } from "@/components/guide";
 import { Alert, AlertDescription, AlertTitle } from "@/components/ui/alert";
 import { Badge } from "@/components/ui/badge";
 import { Button } from "@/components/ui/button";
@@ -87,29 +87,14 @@ export function DeploymentScriptGuidePage() {
   if (org && !can(org, "deploymentScript", "read")) return <p className="text-sm text-muted-foreground">Only Organization Administrators see the Deployment Scripts.</p>;
   const mayUpload = org ? can(org, "deploymentScript", "upload") : false;
   return (
-    <div className="flex flex-col gap-6 lg:flex-row lg:items-start lg:gap-10">
-      <nav aria-label="Guide sections" className="flex flex-col gap-1 text-sm lg:sticky lg:top-4 lg:w-52 lg:shrink-0">
-        <span className="px-2 pb-1 text-xs font-medium tracking-wide text-muted-foreground uppercase">On this page</span>
-        {Object.entries(GUIDE_SECTIONS).map(([id, title]) => (
-          <a key={id} href={`#${id}`} className="rounded-md px-2 py-1.5 text-muted-foreground hover:bg-muted hover:text-foreground">
-            {title}
-          </a>
-        ))}
-      </nav>
+    <GuidePage
+      guide="deployment-scripts"
+      title="Writing Deployment Scripts"
+      back={{ to: "/organizations/$orgId/deployment-scripts", label: "Deployment Scripts", orgId }}
+      lede="A Deployment Script is the Bash or PowerShell an Agent runs, on its own host and with its own rights, to put a new key and Certificate where they are needed. One script can serve many targets: it declares the parameters it needs, and each Deployment gives its own values."
+    >
 
-      <article className="flex min-w-0 max-w-3xl flex-1 flex-col gap-12 text-sm leading-relaxed">
-        <header className="flex flex-col gap-3">
-          <Link to="/organizations/$orgId/deployment-scripts" params={{ orgId }} className="text-sm text-muted-foreground hover:text-foreground">
-            ← Deployment Scripts
-          </Link>
-          <h1 className="text-2xl font-semibold">Writing Deployment Scripts</h1>
-          <p className="text-base text-muted-foreground">
-            A Deployment Script is the Bash or PowerShell an Agent runs, on its own host and with its own rights, to put a new key and Certificate where they are needed. One
-            script can serve many targets: it declares the parameters it needs, and each Deployment gives its own values.
-          </p>
-        </header>
-
-        <Section id="how">
+        <GuideSection guide="deployment-scripts" id="how">
           <ol className="grid gap-3 sm:grid-cols-2 lg:grid-cols-5">
             {RUN_STEPS.map((s, i) => (
               <li key={s.title} className="flex flex-col gap-1 rounded-lg border p-3">
@@ -124,9 +109,9 @@ export function DeploymentScriptGuidePage() {
             The same happens on every Renewal and every “Run again”, with the values stored on the Deployment. Exit 0 for success; any other exit code marks the Deployment Run
             failed and tells the Managed Certificate's Subscribers.
           </p>
-        </Section>
+        </GuideSection>
 
-        <Section id="receives">
+        <GuideSection guide="deployment-scripts" id="receives">
           <p className="text-muted-foreground">Set by the Agent for every run, whether or not the script declares parameters.</p>
           <div className="rounded-md border">
             <Table>
@@ -152,9 +137,9 @@ export function DeploymentScriptGuidePage() {
               </TableBody>
             </Table>
           </div>
-        </Section>
+        </GuideSection>
 
-        <Section id="declare">
+        <GuideSection guide="deployment-scripts" id="declare">
           <p>
             Put one comment block anywhere in the script. Between the two marker lines every line is a comment; with each line's leading <code># </code> removed, the block is a
             JSON array. <code>#</code> starts a comment in Bash and PowerShell alike, so the format is the same for both.
@@ -190,9 +175,9 @@ export function DeploymentScriptGuidePage() {
             <li className="rounded-md border p-3">Only the five fields above: any other refuses the upload.</li>
             <li className="rounded-md border p-3">The section is part of the content, so it is inside the hash: to change it, upload a new version.</li>
           </ul>
-        </Section>
+        </GuideSection>
 
-        <Section id="values">
+        <GuideSection guide="deployment-scripts" id="values">
           <p className="text-muted-foreground">For the section above, a Deployment set up with these entries gives the script this environment:</p>
           <div className="rounded-md border">
             <Table>
@@ -228,9 +213,9 @@ export function DeploymentScriptGuidePage() {
             <li>A value the Deployment gives wins over a variable of the same name in the Agent's own environment.</li>
             <li>Editing a Deployment's values takes effect from the next delivery to the Agent; a run already delivered keeps what it was given.</li>
           </ul>
-        </Section>
+        </GuideSection>
 
-        <Section id="example">
+        <GuideSection guide="deployment-scripts" id="example">
           <p className="text-muted-foreground">
             Takes a required, a defaulted and an optional parameter, picks up the Certificate and key, and leaves one marked place for your own deployment.
           </p>
@@ -247,9 +232,9 @@ export function DeploymentScriptGuidePage() {
               </TabsContent>
             ))}
           </Tabs>
-        </Section>
+        </GuideSection>
 
-        <Section id="safety">
+        <GuideSection guide="deployment-scripts" id="safety">
           <div className="grid gap-3 md:grid-cols-2">
             <Alert variant="destructive">
               <ShieldAlertIcon />
@@ -278,9 +263,9 @@ export function DeploymentScriptGuidePage() {
               <AlertDescription>With the Agent's rights, on the Agent's host. Review a script as you would code you deploy, and quote every variable you use.</AlertDescription>
             </Alert>
           </div>
-        </Section>
+        </GuideSection>
 
-        <Section id="refused">
+        <GuideSection guide="deployment-scripts" id="refused">
           <p className="text-muted-foreground">The platform reads the parameter section at upload and refuses a version it cannot use, saying why.</p>
           <div className="rounded-md border">
             <Table>
@@ -300,20 +285,8 @@ export function DeploymentScriptGuidePage() {
               </TableBody>
             </Table>
           </div>
-        </Section>
-      </article>
-    </div>
-  );
-}
-
-function Section({ id, children }: { id: GuideSection; children: ReactNode }) {
-  return (
-    <section id={id} aria-labelledby={`${id}-title`} className="flex scroll-mt-4 flex-col gap-4">
-      <h2 id={`${id}-title`} className="text-lg font-semibold">
-        {GUIDE_SECTIONS[id]}
-      </h2>
-      {children}
-    </section>
+        </GuideSection>
+    </GuidePage>
   );
 }
 

@@ -1,7 +1,8 @@
 import { useParams } from "@tanstack/react-router";
 import type { ReactNode } from "react";
+import { DcvByName } from "@/components/dcv-plan";
 import { Card, CardContent, CardHeader, CardTitle } from "@/components/ui/card";
-import type { Certificate, ManagedCertificate } from "@/lib/api";
+import { can, type Certificate, type ManagedCertificate } from "@/lib/api";
 import { caLabel, issuerLabel, keyAlgorithmLabel } from "@/lib/managed-certificate";
 import { chosenValidityLabel } from "@/lib/private-ca";
 import { useCertificateFacts, useManagedCertificatePage } from "@/lib/use-managed-certificate";
@@ -117,6 +118,18 @@ export function ManagedCertificateOverview() {
           <Owners org={org} m={m} userId={userId} onChanged={refresh} />
         </CardContent>
       </Card>
+
+      {/* An ACME CA asks for DCV of each name: shown to those who may see how it is done, so CNAMEs are made before they are needed. */}
+      {!m.archivedAt && m.issuer.kind === "acme" && can(org, "dcvRule", "read") && (
+        <Card id="dcv" className="scroll-mt-4 lg:col-span-2">
+          <CardHeader>
+            <CardTitle>How each name is validated</CardTitle>
+          </CardHeader>
+          <CardContent className="text-sm">
+            <DcvByName orgId={orgId} names={[...new Set([...m.names, ...(m.pendingNameChange?.names ?? [])])]} />
+          </CardContent>
+        </Card>
+      )}
 
       {!m.archivedAt && m.approval.status !== "pending" && m.approval.status !== "rejected" && (
         <Card>

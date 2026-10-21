@@ -8,7 +8,7 @@ import { DataTableFacetedFilter } from "@/components/data-table/data-table-facet
 import { DataTablePagination } from "@/components/data-table/data-table-pagination";
 import { ParameterFields, missingParameters, namesDeclared, shownValues } from "@/components/parameter-fields";
 import { ParameterHelpSheet } from "@/components/parameter-help-sheet";
-import { GuideLink } from "@/components/script-guide-link";
+import { GuideLink } from "@/components/guide";
 import { SummaryRows } from "@/components/summary-rows";
 import { Alert, AlertDescription, AlertTitle } from "@/components/ui/alert";
 import { Badge } from "@/components/ui/badge";
@@ -385,7 +385,7 @@ function Runs({ orgId, deployment }: { orgId: string; deployment: Deployment }) 
           {run.exitCode === null && (
             <span className="text-xs text-muted-foreground">
               The Agent did not start the script.{" "}
-              <GuideLink orgId={orgId} section="how">
+              <GuideLink orgId={orgId} guide="deployment-scripts" section="how">
                 What the Agent checks first
               </GuideLink>
             </span>
@@ -425,7 +425,7 @@ function UnseenParameterHint({ orgId, deployment, run }: { orgId: string; deploy
           </Link>{" "}
           page, then run it again.
         </p>
-        <GuideLink orgId={orgId} section="safety">
+        <GuideLink orgId={orgId} guide="deployment-scripts" section="safety">
           Why scripts guard their parameters
         </GuideLink>
       </AlertDescription>

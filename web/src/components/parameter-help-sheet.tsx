@@ -1,5 +1,5 @@
 import { CircleHelpIcon } from "lucide-react";
-import { GuideLink } from "@/components/script-guide-link";
+import { GuideLink } from "@/components/guide";
 import { ScriptEnvironment } from "@/components/script-environment";
 import { Button } from "@/components/ui/button";
 import { Sheet, SheetContent, SheetDescription, SheetHeader, SheetTitle, SheetTrigger } from "@/components/ui/sheet";
@@ -42,10 +42,10 @@ export function ParameterHelpSheet({ orgId, script, declared, values }: { orgId:
             ))}
           </dl>
           <div className="flex flex-col gap-2 border-t pt-4">
-            <GuideLink orgId={orgId} section="values" newTab>
+            <GuideLink orgId={orgId} guide="deployment-scripts" section="values" newTab>
               How values reach the script
             </GuideLink>
-            <GuideLink orgId={orgId} section="example" newTab>
+            <GuideLink orgId={orgId} guide="deployment-scripts" section="example" newTab>
               An example script that reads them
             </GuideLink>
           </div>
