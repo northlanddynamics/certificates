@@ -1,8 +1,12 @@
 // The ACME CAs an Organization can issue from: a directory URL and what is shown of it. Let's Encrypt Staging and Let's
 // Encrypt Production are built in, the same for every Organization, and never change; they are defined here, by stable
-// ids, and not stored. An ACME Account (acme-accounts.ts) and a Managed Certificate's issuer (issuer.ts) refer to an ACME
+// ids, and not stored. An Organization may add custom ones of its own (`acme_ca`, by a UUID), each created together with
+// its ACME Account (acme-accounts.ts). An ACME Account and a Managed Certificate's issuer (issuer.ts) refer to an ACME
 // CA by its id. Its environment tag is a label of intent and changes nothing about how it issues.
 import { z } from "@hono/zod-openapi";
+import { and, asc, eq } from "drizzle-orm";
+import type { Db } from "../../platform/db/client";
+import { acmeCa } from "../../platform/db/schema";
 
 export const ACME_CA_TAGS = ["staging", "production"] as const;
 export type AcmeCaTag = (typeof ACME_CA_TAGS)[number];
@@ -28,10 +32,10 @@ export type BuiltInAcmeCaId = (typeof BUILT_IN_ACME_CAS)[number]["id"];
 export const DEFAULT_ACME_CA_ID: BuiltInAcmeCaId = "letsencrypt-staging";
 
 /** An ACME CA's id, in a request; whether it is one the Organization can use is the route's to check. */
-export const AcmeCaId = z.string().min(1).openapi({ description: "An ACME CA's id: `letsencrypt-staging` or `letsencrypt-production` for the built-in ones." });
+export const AcmeCaId = z.string().min(1).openapi({ description: "An ACME CA's id: `letsencrypt-staging` or `letsencrypt-production` for the built-in ones, a UUID for a custom one." });
 
 export interface AcmeCas {
-  /** Every ACME CA the Organization can use, the built-in ones first, staging before production. */
+  /** Every ACME CA the Organization can use, the built-in ones first, staging before production, then its custom ones in the order they were added. */
   list(organizationId: string): Promise<AcmeCa[]>;
   /** The ACME CA by its id, when the Organization can use it; none otherwise. */
   find(organizationId: string, id: string): Promise<AcmeCa | null>;
@@ -39,12 +43,25 @@ export interface AcmeCas {
   get(organizationId: string, id: string): Promise<AcmeCa>;
 }
 
+/** A custom ACME CA as the ACME CA it is. */
+export const customAcmeCa = ({ id, name, directoryUrl, tag }: typeof acmeCa.$inferSelect): AcmeCa => ({ id, name, directoryUrl, tag, builtIn: false });
+
 /** The ACME CAs, with the built-in ones' directories at `directoryUrls` where given (read each time, so tests may repoint them at Pebble). */
-export function createAcmeCas({ directoryUrls = {} }: { directoryUrls?: Partial<Record<BuiltInAcmeCaId, string>> } = {}): AcmeCas {
+export function createAcmeCas({ db, directoryUrls = {} }: { db: Db; directoryUrls?: Partial<Record<BuiltInAcmeCaId, string>> }): AcmeCas {
   const builtIn = (): AcmeCa[] => BUILT_IN_ACME_CAS.map((ca) => ({ ...ca, directoryUrl: directoryUrls[ca.id] ?? ca.directoryUrl }));
-  const find = async (_organizationId: string, id: string) => builtIn().find((ca) => ca.id === id) ?? null;
+  const find = async (organizationId: string, id: string) => {
+    const ca = builtIn().find((ca) => ca.id === id);
+    if (ca) return ca;
+    // Not a UUID can't be a custom one; asking Postgres would only raise a type error.
+    if (!z.uuid().safeParse(id).success) return null;
+    const [row] = await db.select().from(acmeCa).where(and(eq(acmeCa.organizationId, organizationId), eq(acmeCa.id, id)));
+    return row ? customAcmeCa(row) : null;
+  };
   return {
-    list: async () => builtIn(),
+    async list(organizationId) {
+      const custom = await db.select().from(acmeCa).where(eq(acmeCa.organizationId, organizationId)).orderBy(asc(acmeCa.createdAt), asc(acmeCa.id));
+      return [...builtIn(), ...custom.map(customAcmeCa)];
+    },
     find,
     async get(organizationId, id) {
       const ca = await find(organizationId, id);

@@ -30,6 +30,9 @@ const accounts = (cookie: string, orgId: string) => ({
   test: (id: string) => h.api(`${base(orgId)}/${id}/test`, { cookie, method: "POST", body: {} }),
 });
 const admin = () => accounts(acmeOrg.cookie, acmeOrg.orgId);
+const customCa = (body: Record<string, unknown> = {}, cookie = acmeOrg.cookie, orgId = acmeOrg.orgId) =>
+  h.api(`/api/organizations/${orgId}/acme-cas`, { cookie, body: { name: "Internal CA", directoryUrl: PEBBLE_DIRECTORY, tag: "staging", termsOfServiceAgreed: true, ...body } });
+const acmeCasOf = async (cookie = acmeOrg.cookie, orgId = acmeOrg.orgId) => (await h.api(`/api/organizations/${orgId}/acme-cas`, { cookie })).body.items as any[];
 const auditOf = async (cookie = acmeOrg.cookie, orgId = acmeOrg.orgId) =>
   (await h.api(`/api/organizations/${orgId}/audit-events`, { cookie })).body.items as { action: string; target: any; detail: any }[];
 
@@ -138,6 +141,166 @@ describe("the ACME CAs", () => {
     }
     expect((await acmeCas(globex.cookie)).status).toBe(404);
     expect((await acmeCas("")).status).toBe(401);
+  });
+});
+
+describe("adding a custom ACME CA", () => {
+  test("an Organization Administrator adds one, and the Organization's account with it is registered in the same step", async () => {
+    const created = await customCa({ contactEmail: "pki@acme.test" });
+    expect(created.status).toBe(201);
+    expect(created.body).toEqual({
+      acmeCa: { id: expect.any(String), name: "Internal CA", directoryUrl: PEBBLE_DIRECTORY, tag: "staging", builtIn: false },
+      account: { id: expect.any(String), acmeCaId: created.body.acmeCa.id, accountUrl: expect.stringContaining("/my-account/"), contactEmail: "pki@acme.test" },
+    });
+    expect(h.createdAccountKeys).toHaveLength(1);
+
+    // Listed after the built-in ones, with its account; and the account works at the CA.
+    expect((await acmeCasOf()).map((ca) => [ca.name, ca.tag, ca.builtIn])).toEqual([
+      ["Let's Encrypt Staging", "staging", true],
+      ["Let's Encrypt Production", "production", true],
+      ["Internal CA", "staging", false],
+    ]);
+    expect((await admin().list()).body.items).toEqual([created.body.account]);
+    expect((await admin().test(created.body.account.id)).body).toEqual({ ok: true });
+    // It has its account already.
+    expect((await admin().create({ acmeCaId: created.body.acmeCa.id, termsOfServiceAgreed: true })).status).toBe(409);
+  });
+
+  test("the tag is staging, production or none", async () => {
+    expect((await customCa({ name: "Untagged", tag: undefined })).body.acmeCa.tag).toBeNull();
+    expect((await customCa({ name: "Null", tag: null })).body.acmeCa.tag).toBeNull();
+    expect((await customCa({ name: "Production", tag: "production" })).body.acmeCa.tag).toBe("production");
+    expect((await customCa({ name: "Testing", tag: "testing" })).status).toBe(400);
+    expect((await acmeCasOf()).filter((ca) => !ca.builtIn).map((ca) => [ca.name, ca.tag])).toEqual([
+      ["Untagged", null],
+      ["Null", null],
+      ["Production", "production"],
+    ]);
+  });
+
+  test("an Organization may have several, under names unique within it; a name taken leaves nothing at the CA", async () => {
+    expect((await customCa({ name: "First" })).status).toBe(201);
+    expect((await customCa({ name: "Second" })).status).toBe(201);
+    expect(h.createdAccountKeys).toHaveLength(2);
+
+    for (const name of ["First", "  First ", "Let's Encrypt Staging"]) {
+      const taken = await customCa({ name });
+      expect(taken.status).toBe(409);
+      expect(taken.body.error).toContain("already an ACME CA named");
+    }
+    expect(h.createdAccountKeys).toHaveLength(2);
+    expect((await acmeCasOf()).filter((ca) => !ca.builtIn).map((ca) => ca.name)).toEqual(["First", "Second"]);
+
+    // Another Organization may use the same name.
+    expect((await customCa({ name: "First" }, globex.cookie, globex.orgId)).status).toBe(201);
+  });
+
+  test("when the CA refuses the registration, its reason is shown and nothing is saved", async () => {
+    h.registrationRefusal.reason = "urn:ietf:params:acme:error:externalAccountRequired: an external account binding is required";
+    const refused = await customCa();
+    expect(refused.status).toBe(422);
+    expect(refused.body.error).toContain("an external account binding is required");
+    expect((await acmeCasOf()).filter((ca) => !ca.builtIn)).toEqual([]);
+    expect((await admin().list()).body.items).toEqual([]);
+    expect((await auditOf()).map((e) => e.action).filter((a) => a.startsWith("acme_"))).toEqual([]);
+
+    // Nothing is left to stop it being added once the CA accepts.
+    h.registrationRefusal.reason = null;
+    expect((await customCa()).status).toBe(201);
+  });
+
+  test("a directory that does not answer as an ACME directory is a 502, and nothing is saved", async () => {
+    const res = await customCa({ directoryUrl: new URL("/no-such-directory", PEBBLE_DIRECTORY).href });
+    expect(res.status).toBe(502);
+    expect(res.body.error).toContain("could not reach Internal CA");
+    expect((await acmeCasOf()).filter((ca) => !ca.builtIn)).toEqual([]);
+    expect(h.createdAccountKeys).toEqual([]);
+  });
+
+  test("a directory URL that is not https is refused", async () => {
+    for (const directoryUrl of [PEBBLE_DIRECTORY.replace(/^https:/, "http:"), "ftp://ca.example.test/dir", "not a url"]) {
+      const res = await customCa({ directoryUrl });
+      expect(res.status).toBe(400);
+    }
+    expect(JSON.stringify((await customCa({ directoryUrl: "http://ca.example.test/dir" })).body)).toContain("the directory URL must be https");
+    expect((await acmeCasOf()).filter((ca) => !ca.builtIn)).toEqual([]);
+  });
+
+  test("a directory URL at a loopback or link-local address, the metadata address included, is refused with a clear message", async () => {
+    const pebblePort = new URL(PEBBLE_DIRECTORY).port;
+    for (const directoryUrl of [
+      // Pebble itself, by another origin than the one the tests allow: the rule stops it, not the network.
+      `https://127.0.0.1:${pebblePort}/dir`,
+      `https://[::1]:${pebblePort}/dir`,
+      `https://127.0.0.2:${pebblePort}/dir`,
+      `https://0.0.0.0:${pebblePort}/dir`,
+      `https://localhost:${Number(pebblePort) + 1}/dir`,
+      "https://169.254.169.254/latest/meta-data/",
+      "https://[fe80::1]/dir",
+      "https://[::ffff:127.0.0.1]/dir",
+      "https://2130706433/dir",
+    ]) {
+      const res = await customCa({ directoryUrl });
+      expect(res.status).toBe(422);
+      expect(res.body.error).toBe("the directory URL must not point at a loopback or link-local address");
+    }
+    expect((await acmeCasOf()).filter((ca) => !ca.builtIn)).toEqual([]);
+    expect(h.createdAccountKeys).toEqual([]);
+  });
+
+  test("the rule is checked again each time the platform connects to the CA", async () => {
+    const { body } = await customCa();
+    expect((await admin().test(body.account.id)).body).toEqual({ ok: true });
+    // As if its directory had been moved to where it may not be, past the check when it was saved.
+    await h.pool.query(`update acme_ca set directory_url = $1 where id = $2`, [`https://127.0.0.1:${new URL(PEBBLE_DIRECTORY).port}/dir`, body.acmeCa.id]);
+    expect((await admin().test(body.account.id)).body).toEqual({ ok: false, error: "the directory URL must not point at a loopback or link-local address" });
+  });
+
+  test("the terms of service must be agreed to, and a name given", async () => {
+    expect((await customCa({ termsOfServiceAgreed: false })).status).toBe(400);
+    expect((await customCa({ termsOfServiceAgreed: undefined })).status).toBe(400);
+    expect((await customCa({ name: "  " })).status).toBe(400);
+    expect(h.createdAccountKeys).toEqual([]);
+  });
+
+  test("anyone in the Organization sees it listed, to choose it; only an Organization Administrator sees its configuration or adds one", async () => {
+    const { body } = await customCa();
+    for (const role of ["approver", "member"]) {
+      const cookie = await join(`${role}@acme.test`, role);
+      expect((await acmeCasOf(cookie)).find((ca) => ca.id === body.acmeCa.id)).toEqual({ ...body.acmeCa, directoryUrl: null });
+      expect((await customCa({ name: `By ${role}` }, cookie)).status).toBe(403);
+    }
+    expect((await customCa({ name: "By no one" }, "")).status).toBe(401);
+    expect((await customCa({ name: "By an operator" }, operator)).status).toBe(404);
+    expect(h.createdAccountKeys).toHaveLength(1);
+  });
+
+  test("another Organization neither sees it nor can use it", async () => {
+    const { body } = await customCa();
+    expect((await customCa({ name: "Elsewhere" }, globex.cookie)).status).toBe(404);
+    expect((await acmeCasOf(globex.cookie, globex.orgId)).map((ca) => ca.id)).toEqual(["letsencrypt-staging", "letsencrypt-production"]);
+    // Naming it from another Organization finds no such ACME CA.
+    expect((await accounts(globex.cookie, globex.orgId).create({ acmeCaId: body.acmeCa.id, termsOfServiceAgreed: true })).status).toBe(404);
+  });
+
+  test("adding it and registering its account each write an Audit Event, in the same change, without the key", async () => {
+    const { body } = await customCa({ name: "Internal CA", tag: "production", contactEmail: "pki@acme.test" });
+    const events = (await auditOf()).filter((e) => e.action.startsWith("acme_"));
+    expect(events).toEqual([
+      expect.objectContaining({
+        action: "acme_ca.created",
+        target: { type: "acme_ca", id: body.acmeCa.id },
+        actor: { id: expect.any(String), email: "admin@acme.test" },
+        detail: { name: "Internal CA", directoryUrl: PEBBLE_DIRECTORY, tag: "production" },
+      }),
+      expect.objectContaining({
+        action: "acme_account.created",
+        target: { type: "acme_account", id: body.account.id },
+        actor: { id: expect.any(String), email: "admin@acme.test" },
+        detail: { acmeCaId: body.acmeCa.id, accountUrl: body.account.accountUrl, contactEmail: "pki@acme.test" },
+      }),
+    ]);
+    expect(JSON.stringify(await auditOf())).not.toContain(pemBody(h.createdAccountKeys[0]!));
   });
 });
 

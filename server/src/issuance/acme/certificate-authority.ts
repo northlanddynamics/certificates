@@ -7,6 +7,7 @@ import { Agent } from "node:https";
 import { rootCertificates } from "node:tls";
 import { REVOCATION_REASONS, type RevocationReason } from "../../pki/revocation-reasons";
 import type { AcmeCa } from "./acme-cas";
+import { directoryUrlRefusal } from "./directory-url";
 
 // Why a Certificate is revoked, by the name of its RFC 5280 reason code (section 5.3.1); an ACME CA is only ever given
 // those of REVOCATION_REASONS_OF.acme, which Let's Encrypt honours from a subscriber (revocation-reasons.ts).
@@ -89,6 +90,8 @@ export interface AcmeConfig {
   roots?: Partial<Record<string, () => Promise<string[]>>>;
   /** How long to wait between looks at an order or a challenge the CA is still working on (acme-client's 5 to 30 seconds unless overridden). */
   pollMs?: { min: number; max: number };
+  /** Directory origins a custom ACME CA may have although they are loopback or link-local, for a test CA such as Pebble on localhost. */
+  allowedDirectoryOrigins?: string[];
 }
 
 /** The ARI identifier of a Certificate (RFC 9773): its authority key identifier and serial number, each base64url, joined by a dot. */
@@ -117,20 +120,32 @@ function retryAfterMs(header: string | null): number | null {
   return Number.isNaN(at) ? null : Math.max(0, at - Date.now());
 }
 
-export function createAcmeCertificateAuthority({ trustedCa, roots = {}, pollMs }: AcmeConfig = {}): AcmeCertificateAuthority {
+export function createAcmeCertificateAuthority({ trustedCa, roots = {}, pollMs, allowedDirectoryOrigins }: AcmeConfig = {}): AcmeCertificateAuthority {
   // acme-client makes its requests through one shared axios instance, so this is process-wide.
   if (trustedCa) acme.axios.defaults.httpsAgent = new Agent({ ca: [...rootCertificates, trustedCa] });
 
   // acme-client reports a network failure as an unrelated TypeError (and, under Bun, its axios never gives up on a
-  // refused connection), so reachability is checked first, by itself.
+  // refused connection), so reachability is checked first, by itself. A custom ACME CA's directory is checked against
+  // the rules for where it may be (directory-url.ts) each time, by what its name resolves to now; a built-in one is the
+  // platform's own.
   async function reach(ca: AcmeCa): Promise<{ renewalInfo?: string }> {
+    const refuse = async (url: string) => {
+      const refusal = await directoryUrlRefusal(url, { allowedOrigins: allowedDirectoryOrigins });
+      if (refusal) throw new CertificateAuthorityError("rejected", refusal);
+    };
+    if (!ca.builtIn) await refuse(ca.directoryUrl);
+    let directory: Record<string, unknown>;
     try {
-      const res = await fetch(ca.directoryUrl, { signal: AbortSignal.timeout(10_000), tls: trustedCa ? { ca: trustedCa } : undefined });
+      // A custom one's directory is not followed elsewhere by a redirect, which would get round the rules.
+      const res = await fetch(ca.directoryUrl, { signal: AbortSignal.timeout(10_000), tls: trustedCa ? { ca: trustedCa } : undefined, redirect: ca.builtIn ? "follow" : "error" });
       if (!res.ok) throw new Error(`HTTP ${res.status}`);
-      return await res.json();
+      directory = await res.json();
     } catch (err: any) {
       throw unreachable(ca, err);
     }
+    // Nor are the URLs it lists for the rest of the protocol (newNonce, newAccount, renewalInfo, ...) let through if they are where the directory may not be.
+    if (!ca.builtIn) for (const url of Object.values(directory)) if (typeof url === "string") await refuse(url);
+    return directory;
   }
 
   // Whatever the CA says no to comes back from acme-client as an Error carrying the CA's own explanation.

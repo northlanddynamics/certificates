@@ -5,7 +5,7 @@
 import { afterAll, beforeAll, beforeEach, describe, expect, setDefaultTimeout, test } from "bun:test";
 import acme from "acme-client";
 import { randomBytes } from "node:crypto";
-import { BIND, PASSWORD, createHarness, type Harness } from "./support/harness";
+import { BIND, PASSWORD, PEBBLE_DIRECTORY, createHarness, type Harness } from "./support/harness";
 
 setDefaultTimeout(60_000);
 
@@ -416,6 +416,20 @@ describe("filters", () => {
     expect(await filtered("?keyAlgorithm=ecdsa-p256")).toEqual([staging.id, production]);
     expect(await filtered("?keyAlgorithm=rsa-2048,rsa-4096")).toEqual([]);
     expect(await filtered("?keyAlgorithm=rsa-2048,ecdsa-p256&tag=production")).toEqual([production]);
+  });
+
+  test("a custom ACME CA's tag matches as a built-in one's does", async () => {
+    const addCa = async (name: string, tag: string | null) =>
+      (await h.api(`/api/organizations/${org.orgId}/acme-cas`, { cookie: org.cookie, body: { name, directoryUrl: PEBBLE_DIRECTORY, tag, termsOfServiceAgreed: true } })).body.acmeCa.id as string;
+    const [internalProduction, untagged] = [await addCa("Internal production", "production"), await addCa("Untagged", null)];
+    const onCa = async (acmeCaId: string) => (await admin().create({ ...(await request()), acmeCaId })).body.id as string;
+    const staging = (await adminCreates()).id;
+    const [custom, none] = [await onCa(internalProduction), await onCa(untagged)];
+    await h.settleIssuances();
+
+    expect(await filtered("?tag=production")).toEqual([custom]);
+    expect(await filtered("?tag=staging,production")).toEqual([staging, custom]);
+    expect(await filtered("")).toContain(none);
   });
 
   test("the inventory is listed a page at a time, with how many match in all", async () => {

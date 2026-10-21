@@ -837,11 +837,14 @@ export const api = {
   /** Every key algorithm, and which ones a Private CA's keys (under each kind of root) and a Managed Certificate on an ACME CA may have. */
   keyAlgorithms: () =>
     call<{ keyAlgorithms: KeyAlgorithm[]; privateCaKeyAlgorithms: Record<PrivateCa["kind"], KeyAlgorithm[]>; acmeKeyAlgorithms: KeyAlgorithm[] }>("/api/key-algorithms"),
-  /** The ACME CAs the Organization can use, the built-in ones first, Let's Encrypt Staging before Production; anyone in it may list them. */
+  /** The ACME CAs the Organization can use, the built-in ones first, Let's Encrypt Staging before Production, then its custom ones; anyone in it may list them. */
   acmeCas: (orgId: string) => call<{ items: AcmeCa[] }>(`/api/organizations/${orgId}/acme-cas`),
   acmeAccounts: (orgId: string) => call<{ items: AcmeAccount[] }>(`/api/organizations/${orgId}/acme-accounts`),
   registerAcmeAccount: (orgId: string, body: { acmeCaId: string; contactEmail?: string }) =>
     call<AcmeAccount>(`/api/organizations/${orgId}/acme-accounts`, { body: { ...body, termsOfServiceAgreed: true } }),
+  /** Adds a custom ACME CA and registers the Organization's account with it, in one step: nothing is saved if the CA refuses. */
+  createAcmeCa: (orgId: string, body: { name: string; directoryUrl: string; tag: AcmeCaTag | null; contactEmail?: string }) =>
+    call<{ acmeCa: AcmeCa; account: AcmeAccount }>(`/api/organizations/${orgId}/acme-cas`, { body: { ...body, termsOfServiceAgreed: true } }),
   testAcmeAccount: (orgId: string, accountId: string) =>
     call<{ ok: boolean; error?: string }>(`/api/organizations/${orgId}/acme-accounts/${accountId}/test`, { method: "POST", body: {} }),
   dnsProviders: (orgId: string) => call<{ items: DnsProvider[] }>(`/api/organizations/${orgId}/dns-providers`),

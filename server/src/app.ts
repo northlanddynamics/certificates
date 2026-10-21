@@ -299,7 +299,7 @@ export function createApp(deps: AppDeps) {
   });
   registerTeamsOverview({ app, db, requireUser, authorize });
   const secrets = createSecrets(deps.kms);
-  const acmeCas = createAcmeCas({ directoryUrls: deps.builtInAcmeDirectories });
+  const acmeCas = createAcmeCas({ db, directoryUrls: deps.builtInAcmeDirectories });
   registerAcmeAccounts({ app, db, requireUser, authorize, unitOfWork, secrets, certificateAuthority: deps.certificateAuthority, acmeCas });
   const agentGateway = { ...DEFAULT_AGENT_GATEWAY, ...deps.agentGateway };
   const dnsRelayConfig = { ...DEFAULT_DNS_RELAY, ...deps.dnsRelay };

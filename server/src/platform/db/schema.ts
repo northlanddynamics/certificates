@@ -9,6 +9,7 @@ import type { DnsProviderType } from "../../issuance/dcv/dns-provider-kinds";
 import type { IssuanceFailureCode } from "../../issuance/issuance-failure";
 import type { IssuanceKind } from "../../issuance/issuance-kinds";
 import type { IssuerKind } from "../../issuance/issuer-kinds";
+import type { AcmeCaTag } from "../../issuance/acme/acme-cas";
 import type { KeyAlgorithm, KeyCustody, SigningKeyAlgorithm } from "../../pki/csr";
 import type { IssuingCaStatus, PrivateCaKind, PrivateCaStatus } from "../../private-ca/private-ca-kinds";
 import type { DeviceExtendedKeyUsage, DeviceKeyType, DeviceKeyUsage } from "../../enrollment/enrollment-profile-kinds";
@@ -311,6 +312,25 @@ export const secret = pgTable(
   },
   // Lets other tables reference a secret together with its Organization, so none can point at another's.
   (t) => [unique("secret_id_organization_unique").on(t.id, t.organizationId)],
+);
+
+/**
+ * A custom ACME CA of an Organization's own (acme-cas.ts): its directory and what it is tagged for. The built-in ones
+ * are defined in code and have no row. It is created together with the Organization's ACME Account with it.
+ */
+export const acmeCa = pgTable(
+  "acme_ca",
+  {
+    id: uuid("id").primaryKey().defaultRandom(),
+    organizationId: text("organization_id")
+      .notNull()
+      .references(() => organization.id),
+    name: text("name").notNull(),
+    directoryUrl: text("directory_url").notNull(),
+    tag: text("tag").$type<AcmeCaTag>(),
+    createdAt: timestamp("created_at", { withTimezone: true }).notNull().defaultNow(),
+  },
+  (t) => [unique("acme_ca_organization_name_unique").on(t.organizationId, t.name), check("acme_ca_tag", sql`${t.tag} in ('staging', 'production')`)],
 );
 
 /** An Organization's account with an ACME CA (acme-cas.ts), at most one per ACME CA. Its key is a secret and is never returned. */

@@ -9,8 +9,8 @@ import { Button } from "@/components/ui/button";
 import { Dialog, DialogClose, DialogContent, DialogDescription, DialogFooter, DialogHeader, DialogTitle, DialogTrigger } from "@/components/ui/dialog";
 import { Input } from "@/components/ui/input";
 import { Label } from "@/components/ui/label";
-import { api, can, type AcmeAccount, type AcmeCa } from "@/lib/api";
-import { useAcmeCas } from "@/lib/acme-cas";
+import { api, can, type AcmeAccount, type AcmeCa, type AcmeCaTag } from "@/lib/api";
+import { ACME_CA_TAG_LABELS, useAcmeCas } from "@/lib/acme-cas";
 import { useOrg } from "@/lib/use-org";
 import { useAction } from "@/lib/use-action";
 
@@ -51,7 +51,8 @@ const columns = columnHelper.columns([
 /**
  * The ACME CAs the Organization can use, and its account with each: a Managed Certificate is issued under the account
  * with its ACME CA, and fails until there is one. Let's Encrypt Staging and Production are built in, and shown as they
- * are. The account's key is made and kept by the platform and is never shown.
+ * are; an Organization Administrator may add custom ones, each registered with as it is added. The account's key is
+ * made and kept by the platform and is never shown.
  */
 export function AcmeAccountsPage() {
   const { orgId } = useParams({ from: ROUTE });
@@ -68,7 +69,7 @@ export function AcmeAccountsPage() {
     <div className="flex flex-col gap-6">
       <div className="flex items-center justify-between gap-4">
         <h1 className="text-xl font-semibold">ACME accounts</h1>
-        {org && can(org, "acmeAccount", "create") && !loading && missing.length > 0 && <RegisterAccountDialog orgId={orgId} acmeCas={missing} />}
+        {org && can(org, "acmeAccount", "create") && !loading && <RegisterAccountDialog orgId={orgId} acmeCas={missing} />}
       </div>
       <p className="text-sm text-muted-foreground">
         A Managed Certificate is issued under the Organization's account with its ACME CA. Each ACME CA needs an account of its own; register with Let's Encrypt Staging first to try an
@@ -123,7 +124,7 @@ function RegisterAccountDialog({ orgId, acmeCas }: { orgId: string; acmeCas: Acm
       <DialogContent className="sm:max-w-lg">
         <DialogHeader>
           <DialogTitle>Register an ACME account</DialogTitle>
-          <DialogDescription>The platform makes the account's key and keeps it; it is never shown.</DialogDescription>
+          <DialogDescription>With a built-in ACME CA, or a custom one added in the same step. The platform makes the account's key and keeps it; it is never shown.</DialogDescription>
         </DialogHeader>
         {/* Only mounted while open, so each opening starts from a clean form. */}
         {open && <RegisterAccountForm orgId={orgId} acmeCas={acmeCas} onDone={() => setOpen(false)} />}
@@ -132,16 +133,26 @@ function RegisterAccountDialog({ orgId, acmeCas }: { orgId: string; acmeCas: Acm
   );
 }
 
+/** The choice, in the ACME CA list, of adding a custom ACME CA rather than registering with an existing one. */
+const CUSTOM = "custom";
+
 function RegisterAccountForm({ orgId, acmeCas, onDone }: { orgId: string; acmeCas: AcmeCa[]; onDone: () => void }) {
-  const [acmeCaId, setAcmeCaId] = useState(acmeCas[0]!.id);
+  const [acmeCaId, setAcmeCaId] = useState(acmeCas[0]?.id ?? CUSTOM);
+  const [name, setName] = useState("");
+  const [directoryUrl, setDirectoryUrl] = useState("");
+  const [tag, setTag] = useState<AcmeCaTag | "">("");
   const [contactEmail, setContactEmail] = useState("");
   const [agreed, setAgreed] = useState(false);
-  const chosen = acmeCas.find((ca) => ca.id === acmeCaId)!;
+  const chosen = acmeCas.find((ca) => ca.id === acmeCaId);
   const register = useAction(
-    () => api.registerAcmeAccount(orgId, { acmeCaId, contactEmail: contactEmail.trim() || undefined }),
-    ["acme-accounts"],
+    async () => {
+      if (chosen) await api.registerAcmeAccount(orgId, { acmeCaId, contactEmail: contactEmail.trim() || undefined });
+      else await api.createAcmeCa(orgId, { name: name.trim(), directoryUrl: directoryUrl.trim(), tag: tag || null, contactEmail: contactEmail.trim() || undefined });
+    },
+    ["acme-accounts", "acme-cas"],
     onDone,
   );
+  const caName = chosen?.name ?? (name.trim() || "the CA");
   return (
     <form
       className="flex flex-col gap-4"
@@ -158,24 +169,54 @@ function RegisterAccountForm({ orgId, acmeCas, onDone }: { orgId: string; acmeCa
               {ca.name}
             </option>
           ))}
+          <option value={CUSTOM}>A custom ACME CA…</option>
         </select>
       </div>
-      {/* A built-in ACME CA's configuration is shown, not asked for: it cannot be changed. */}
-      <dl className="grid gap-1 rounded-md border p-3 text-sm sm:grid-cols-[7rem_1fr] sm:gap-x-4">
-        <dt className="text-muted-foreground">Directory</dt>
-        <dd className="min-w-0 break-all font-mono text-xs">{chosen.directoryUrl}</dd>
-        <dt className="text-muted-foreground">Tag</dt>
-        <dd>{chosen.tag ? <AcmeCaTagBadge tag={chosen.tag} /> : <span className="text-muted-foreground">None</span>}</dd>
-      </dl>
+      {chosen ? (
+        /* An existing ACME CA's configuration is shown, not asked for: a built-in one cannot be changed. */
+        <dl className="grid gap-1 rounded-md border p-3 text-sm sm:grid-cols-[7rem_1fr] sm:gap-x-4">
+          <dt className="text-muted-foreground">Directory</dt>
+          <dd className="min-w-0 break-all font-mono text-xs">{chosen.directoryUrl}</dd>
+          <dt className="text-muted-foreground">Tag</dt>
+          <dd>{chosen.tag ? <AcmeCaTagBadge tag={chosen.tag} /> : <span className="text-muted-foreground">None</span>}</dd>
+        </dl>
+      ) : (
+        <>
+          <div className="flex flex-col gap-2">
+            <Label htmlFor="acme-ca-name">Name</Label>
+            <Input id="acme-ca-name" required value={name} onChange={(e) => setName(e.target.value)} />
+          </div>
+          <div className="flex flex-col gap-2">
+            <Label htmlFor="acme-ca-directory">Directory URL</Label>
+            <Input id="acme-ca-directory" type="url" required placeholder="https://ca.example.com/acme/directory" value={directoryUrl} onChange={(e) => setDirectoryUrl(e.target.value)} />
+            <p className="text-xs text-muted-foreground">
+              https, and not a loopback or link-local address; a private address is fine. It cannot be changed once the CA is added.
+            </p>
+          </div>
+          <div className="flex flex-col gap-2">
+            <Label htmlFor="acme-ca-tag">Tag (optional)</Label>
+            <select id="acme-ca-tag" className="h-9 rounded-md border bg-transparent px-3 text-sm" value={tag} onChange={(e) => setTag(e.target.value as AcmeCaTag | "")}>
+              <option value="">None</option>
+              {(Object.keys(ACME_CA_TAG_LABELS) as AcmeCaTag[]).map((t) => (
+                <option key={t} value={t}>
+                  {ACME_CA_TAG_LABELS[t]}
+                </option>
+              ))}
+            </select>
+            <p className="text-xs text-muted-foreground">A label of what it is for, shown beside its name; it changes nothing about how it issues.</p>
+          </div>
+        </>
+      )}
       <div className="flex flex-col gap-2">
         <Label htmlFor="acme-contact">Contact email (optional)</Label>
         <Input id="acme-contact" type="email" value={contactEmail} onChange={(e) => setContactEmail(e.target.value)} />
       </div>
       <label className="flex items-start gap-2 text-sm">
         <input type="checkbox" className="mt-1" checked={agreed} onChange={(e) => setAgreed(e.target.checked)} />
-        <span>I agree to {chosen.name}'s terms of service on the Organization's behalf.</span>
+        <span>I agree to {caName}'s terms of service on the Organization's behalf.</span>
       </label>
-      {chosen.tag === "production" && <p className="text-sm text-muted-foreground">This is an account with a production CA, which rate-limits.</p>}
+      {(chosen?.tag ?? tag) === "production" && <p className="text-sm text-muted-foreground">This is an account with a production CA, which may rate-limit.</p>}
+      {!chosen && <p className="text-sm text-muted-foreground">The account is registered with the CA as it is added; if the CA refuses, nothing is saved.</p>}
       {register.error && <p className="text-sm text-destructive">{register.error.message}</p>}
       <DialogFooter>
         <DialogClose asChild>
@@ -184,7 +225,7 @@ function RegisterAccountForm({ orgId, acmeCas, onDone }: { orgId: string; acmeCa
           </Button>
         </DialogClose>
         <Button type="submit" disabled={!agreed || register.isPending}>
-          Register
+          {chosen ? "Register" : "Add and register"}
         </Button>
       </DialogFooter>
     </form>

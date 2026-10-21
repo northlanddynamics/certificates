@@ -1,4 +1,5 @@
-// The ACME CAs an Organization can use (acme-cas.ts), and its ACME Account with each, at most one per ACME CA. The
+// The ACME CAs an Organization can use (acme-cas.ts), and its ACME Account with each, at most one per ACME CA. A custom
+// ACME CA is created together with its account, in one change: one the CA will not register is not saved. The
 // account's key is a secret (secrets.ts): it is generated and kept by the platform, and no route returns it. It can be
 // replaced with a key the CA accepts for the account, or tested, and that is all.
 import { OpenAPIHono, createRoute, z } from "@hono/zod-openapi";
@@ -6,13 +7,13 @@ import { and, asc, eq } from "drizzle-orm";
 import { createPrivateKey } from "node:crypto";
 import type { Authorizer } from "../../tenancy/authorization";
 import { roleCan } from "../../tenancy/permissions";
-import { CertificateAuthorityError, type AcmeCertificateAuthority } from "./certificate-authority";
-import { ACME_CA_TAGS, AcmeCaId, DEFAULT_ACME_CA_ID, type AcmeCa, type AcmeCas } from "./acme-cas";
-import type { Db } from "../../platform/db/client";
-import { acmeAccount } from "../../platform/db/schema";
+import { CertificateAuthorityError, type AcmeCertificateAuthority, type CaAccount } from "./certificate-authority";
+import { ACME_CA_TAGS, AcmeCaId, BUILT_IN_ACME_CAS, DEFAULT_ACME_CA_ID, customAcmeCa, type AcmeCa, type AcmeCas } from "./acme-cas";
+import type { Db, Tx } from "../../platform/db/client";
+import { acmeAccount, acmeCa as acmeCaTable } from "../../platform/db/schema";
 import { HttpError, OrgParam, errors, isUniqueViolation, json } from "../../platform/http";
 import type { Secrets } from "../../platform/crypto/secrets";
-import type { Actor, UnitOfWork } from "../../platform/unit-of-work";
+import type { Actor, Change, UnitOfWork } from "../../platform/unit-of-work";
 
 const AccountParams = OrgParam.extend({ accountId: z.string().openapi({ param: { name: "accountId", in: "path" } }) });
 // Deliberately without any key material: this is every shape the account is ever returned in.
@@ -40,11 +41,23 @@ const AcmeCaShown = z.object({
   name: z.string(),
   directoryUrl: z.string().nullable().openapi({ description: "Where its ACME directory is served: its configuration, shown only to those who may read the ACME accounts, and none for anyone else." }),
   tag: z.enum(ACME_CA_TAGS).nullable().openapi({ description: "What it is for, `staging` or `production`, as a label that changes nothing about how it issues; none for an untagged one." }),
-  builtIn: z.boolean().openapi({ description: "Built into the platform, the same for every Organization and read-only: Let's Encrypt Staging and Production." }),
+  builtIn: z.boolean().openapi({ description: "Built into the platform, the same for every Organization and read-only: Let's Encrypt Staging and Production. A custom one is the Organization's own." }),
 });
 const toAcmeCa = ({ id, name, directoryUrl, tag, builtIn }: AcmeCa, configurationShown: boolean) => ({ id, name, directoryUrl: configurationShown ? directoryUrl : null, tag, builtIn });
 
 const alreadyRegistered = (ca: AcmeCa) => new HttpError(409, `the Organization already has an ACME account with ${ca.name}`);
+const nameTaken = (name: string) => new HttpError(409, `there is already an ACME CA named ${name}`);
+
+const NewAcmeCa = z.object({
+  name: z.string().trim().min(1).max(100),
+  directoryUrl: z
+    .url()
+    .refine((url) => url.startsWith("https://"), "the directory URL must be https")
+    .openapi({ description: "Where the CA's ACME directory is served: https, and not at a loopback or link-local address (refused with 422). Fixed once created." }),
+  tag: z.enum(ACME_CA_TAGS).nullable().default(null).openapi({ description: "What it is for, `staging` or `production`, or none: a label that changes nothing about how it issues." }),
+  contactEmail: z.email().optional(),
+  termsOfServiceAgreed: z.literal(true),
+});
 
 /** The key as PKCS#8 PEM, or null when `pem` is not a private key we can use as an account key (RSA or EC). */
 function normalizeAccountKey(pem: string): string | null {
@@ -69,6 +82,22 @@ export function registerAcmeAccounts(ctx: {
 }) {
   const { app, db, requireUser, authorize, unitOfWork, secrets, certificateAuthority: ca, acmeCas } = ctx;
 
+  /** Saves the account the CA registered, its key as a secret, and audits it, in the change at hand. */
+  async function saveAccount(tx: Tx, change: Change, orgId: string, acmeCaId: string, created: CaAccount, contactEmail: string | undefined) {
+    const secretId = await secrets.create(tx, orgId, created.accountKey);
+    const [row] = await tx
+      .insert(acmeAccount)
+      .values({ organizationId: orgId, acmeCaId, accountUrl: created.accountUrl, contactEmail: contactEmail ?? null, secretId })
+      .returning();
+    await change.audit({
+      organizationId: orgId,
+      action: "acme_account.created",
+      target: { type: "acme_account", id: row!.id },
+      detail: { acmeCaId, accountUrl: created.accountUrl, contactEmail: contactEmail ?? null },
+    });
+    return row!;
+  }
+
 
   app.openapi(
     createRoute({
@@ -77,7 +106,7 @@ export function registerAcmeAccounts(ctx: {
       tags: ["ACME accounts"],
       summary: "The ACME CAs the Organization can use",
       description:
-        "The built-in ones, Let's Encrypt Staging then Production. A Managed Certificate on one issues through the Organization's ACME account with it. " +
+        "The built-in ones, Let's Encrypt Staging then Production, then the Organization's custom ones in the order they were added. A Managed Certificate on one issues through the Organization's ACME account with it. " +
         "Anyone in the Organization may list them, to choose one for a Managed Certificate; only those who may read the ACME accounts see their configuration.",
       request: { params: OrgParam },
       responses: { 200: json(z.object({ items: z.array(AcmeCaShown) })), ...errors(401, 403, 404) },
@@ -87,6 +116,49 @@ export function registerAcmeAccounts(ctx: {
       const { role } = await authorize(await requireUser(c), orgId);
       const configurationShown = roleCan(role, { acmeAccount: ["read"] });
       return c.json({ items: (await acmeCas.list(orgId)).map((ca) => toAcmeCa(ca, configurationShown)) }, 200);
+    },
+  );
+
+  app.openapi(
+    createRoute({
+      method: "post",
+      path: "/api/organizations/{orgId}/acme-cas",
+      tags: ["ACME accounts"],
+      summary: "Add a custom ACME CA and register the Organization's account with it",
+      description:
+        "One change: the platform registers an account with the CA under a key it generates and keeps (never returned), and saves the CA and the account only once the CA has accepted it. " +
+        "A CA that refuses is 422 with its reason, one that does not answer is 502, and either way nothing is saved. Names are unique within the Organization, the built-in ones' included (409). " +
+        "The caller must agree to the CA's terms of service.",
+      request: { params: OrgParam, body: { content: { "application/json": { schema: NewAcmeCa } } } },
+      responses: { 201: json(z.object({ acmeCa: AcmeCaShown, account: Account }), "Created"), ...errors(400, 401, 403, 404, 409, 422, 502) },
+    }),
+    async (c) => {
+      const { orgId } = c.req.valid("param");
+      const { name, directoryUrl, tag, contactEmail } = c.req.valid("json");
+      const actor = await requireUser(c);
+      await authorize(actor, orgId, { acmeAccount: ["create"] });
+      // Checked before the CA is asked, so that a name taken already leaves no account behind at the CA.
+      const [sameName] = await db.select({ id: acmeCaTable.id }).from(acmeCaTable).where(and(eq(acmeCaTable.organizationId, orgId), eq(acmeCaTable.name, name)));
+      if (sameName || BUILT_IN_ACME_CAS.some((ca) => ca.name === name)) throw nameTaken(name);
+
+      // Not saved yet, so it has no id; registering needs only where it is, and it is checked there as a custom one.
+      const created = await ca.createAccount({ id: "", name, directoryUrl, tag, builtIn: false }, { contactEmail }).catch((err) => caFailure(err));
+      try {
+        const { caRow, accountRow } = await unitOfWork.run(actor, async (tx, change) => {
+          const [caRow] = await tx.insert(acmeCaTable).values({ organizationId: orgId, name, directoryUrl, tag }).returning();
+          await change.audit({
+            organizationId: orgId,
+            action: "acme_ca.created",
+            target: { type: "acme_ca", id: caRow!.id },
+            detail: { name, directoryUrl, tag },
+          });
+          return { caRow: caRow!, accountRow: await saveAccount(tx, change, orgId, caRow!.id, created, contactEmail) };
+        });
+        return c.json({ acmeCa: toAcmeCa(customAcmeCa(caRow), true), account: toAccount(accountRow) }, 201);
+      } catch (err) {
+        if (isUniqueViolation(err)) throw nameTaken(name);
+        throw err;
+      }
     },
   );
 
@@ -127,7 +199,7 @@ export function registerAcmeAccounts(ctx: {
       summary: "Register the Organization's account with an ACME CA",
       description:
         "Creates the account under a key the platform generates and keeps; the key is never returned. " +
-        "Let's Encrypt Staging is the default ACME CA; one the Organization cannot use is 404, and one it has an account with already is 409. The caller must agree to the CA's terms of service.",
+        "Let's Encrypt Staging is the default ACME CA; one the Organization cannot use is 404, and one it has an account with already is 409 (a custom ACME CA has its account from when it was added). The caller must agree to the CA's terms of service.",
       request: {
         params: OrgParam,
         body: {
@@ -159,20 +231,7 @@ export function registerAcmeAccounts(ctx: {
 
       const created = await ca.createAccount(acmeCa, { contactEmail }).catch((err) => caFailure(err));
       try {
-        const row = await unitOfWork.run(actor, async (tx, change) => {
-          const secretId = await secrets.create(tx, orgId, created.accountKey);
-          const [row] = await tx
-            .insert(acmeAccount)
-            .values({ organizationId: orgId, acmeCaId, accountUrl: created.accountUrl, contactEmail: contactEmail ?? null, secretId })
-            .returning();
-          await change.audit({
-            organizationId: orgId,
-            action: "acme_account.created",
-            target: { type: "acme_account", id: row!.id },
-            detail: { acmeCaId, accountUrl: created.accountUrl, contactEmail: contactEmail ?? null },
-          });
-          return row!;
-        });
+        const row = await unitOfWork.run(actor, (tx, change) => saveAccount(tx, change, orgId, acmeCaId, created, contactEmail));
         return c.json(toAccount(row), 201);
       } catch (err) {
         if (isUniqueViolation(err)) throw alreadyRegistered(acmeCa);
