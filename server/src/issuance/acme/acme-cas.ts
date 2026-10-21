@@ -1,8 +1,9 @@
 // The ACME CAs an Organization can issue from: a directory URL and what is shown of it. Let's Encrypt Staging and Let's
 // Encrypt Production are built in, the same for every Organization, and never change; they are defined here, by stable
 // ids, and not stored. An Organization may add custom ones of its own (`acme_ca`, by a UUID), each created together with
-// its ACME Account (acme-accounts.ts), with the External Account Binding a CA may require for that. An ACME Account and a Managed Certificate's issuer (issuer.ts) refer to an ACME
-// CA by its id. Its environment tag is a label of intent and changes nothing about how it issues.
+// its ACME Account (acme-accounts.ts), with the External Account Binding a CA may require for that. An ACME Account and
+// a Managed Certificate's issuer (issuer.ts) refer to an ACME CA by its id. Its environment tag is a label of intent and
+// changes nothing about how it issues.
 import { z } from "@hono/zod-openapi";
 import { and, asc, eq } from "drizzle-orm";
 import type { Db } from "../../platform/db/client";

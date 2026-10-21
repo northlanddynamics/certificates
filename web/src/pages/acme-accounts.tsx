@@ -146,8 +146,8 @@ function RegisterAccountForm({ orgId, acmeCas, onDone }: { orgId: string; acmeCa
   const [name, setName] = useState("");
   const [directoryUrl, setDirectoryUrl] = useState("");
   const [tag, setTag] = useState<AcmeCaTag | "">("");
-  const [eabKeyId, setEabKeyId] = useState("");
-  const [eabHmacKey, setEabHmacKey] = useState("");
+  const [externalAccountKeyId, setExternalAccountKeyId] = useState("");
+  const [externalAccountHmacKey, setExternalAccountHmacKey] = useState("");
   const [contactEmail, setContactEmail] = useState("");
   const [agreed, setAgreed] = useState(false);
   const chosen = acmeCas.find((ca) => ca.id === acmeCaId);
@@ -160,7 +160,7 @@ function RegisterAccountForm({ orgId, acmeCas, onDone }: { orgId: string; acmeCa
           directoryUrl: directoryUrl.trim(),
           tag: tag || null,
           // Given together or not at all; the server says so when only one is.
-          externalAccountBinding: eabKeyId.trim() || eabHmacKey.trim() ? { keyId: eabKeyId.trim(), hmacKey: eabHmacKey.trim() } : undefined,
+          externalAccountBinding: externalAccountKeyId.trim() || externalAccountHmacKey.trim() ? { keyId: externalAccountKeyId.trim(), hmacKey: externalAccountHmacKey.trim() } : undefined,
           contactEmail: contactEmail.trim() || undefined,
         });
     },
@@ -227,11 +227,11 @@ function RegisterAccountForm({ orgId, acmeCas, onDone }: { orgId: string; acmeCa
             </p>
             <div className="flex flex-col gap-2">
               <Label htmlFor="acme-ca-eab-key-id">Key id</Label>
-              <Input id="acme-ca-eab-key-id" autoComplete="off" required={eabHmacKey.trim() !== ""} value={eabKeyId} onChange={(e) => setEabKeyId(e.target.value)} />
+              <Input id="acme-ca-eab-key-id" autoComplete="off" required={externalAccountHmacKey.trim() !== ""} value={externalAccountKeyId} onChange={(e) => setExternalAccountKeyId(e.target.value)} />
             </div>
             <div className="flex flex-col gap-2">
               <Label htmlFor="acme-ca-eab-hmac-key">HMAC key</Label>
-              <Input id="acme-ca-eab-hmac-key" type="password" autoComplete="off" required={eabKeyId.trim() !== ""} value={eabHmacKey} onChange={(e) => setEabHmacKey(e.target.value)} />
+              <Input id="acme-ca-eab-hmac-key" type="password" autoComplete="off" required={externalAccountKeyId.trim() !== ""} value={externalAccountHmacKey} onChange={(e) => setExternalAccountHmacKey(e.target.value)} />
             </div>
           </fieldset>
         </>

@@ -374,7 +374,7 @@ describe("External Account Binding", () => {
     expect((await eabCa(PEBBLE_EAB_KEY)).status).toBe(201);
   });
 
-  test("the key id and HMAC key are given together, and the HMAC key is base64url", async () => {
+  test("the key id and HMAC key are given together, and the HMAC key is base64 or base64url", async () => {
     for (const binding of [{ keyId: PEBBLE_EAB_KEY.keyId }, { hmacKey: PEBBLE_EAB_KEY.hmacKey }, { keyId: "", hmacKey: PEBBLE_EAB_KEY.hmacKey }, { keyId: PEBBLE_EAB_KEY.keyId, hmacKey: "not base64url!" }]) {
       const res = await eabCa(binding);
       expect(res.status).toBe(400);
@@ -408,6 +408,10 @@ describe("External Account Binding", () => {
         logged.map((v) => (v instanceof Error ? `${v.message}\n${v.stack}` : typeof v === "string" ? v : JSON.stringify(v))).join("\n"),
       ].join("\n");
       expect(seen).toContain(PEBBLE_EAB_KEY.keyId);
+      // Nor is it stored in the clear: only as a Secret, encrypted.
+      const stored = JSON.stringify((await h.pool.query("select * from acme_ca")).rows) + JSON.stringify((await h.pool.query("select encode(ciphertext, 'escape') from secret")).rows);
+      expect(stored).toContain(PEBBLE_EAB_KEY.keyId);
+      expect(stored).not.toContain(PEBBLE_EAB_KEY.hmacKey);
       for (const hmacKey of [PEBBLE_EAB_KEY.hmacKey, wrongHmacKey]) {
         expect(seen).not.toContain(hmacKey);
         expect(seen).not.toContain(hmacKey.slice(0, 16));

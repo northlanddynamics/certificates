@@ -75,7 +75,8 @@ const NewAcmeCa = z.object({
       hmacKey: z
         .string()
         .trim()
-        .regex(/^[A-Za-z0-9_-]+={0,2}$/, "the HMAC key must be base64url, as the CA gives it")
+        // base64url, as RFC 8555 has it; plain base64, which some CAs hand out, is taken too.
+        .regex(/^[A-Za-z0-9_\-+/]+={0,2}$/, "the HMAC key must be base64 or base64url, as the CA gives it")
         .openapi({ description: "Write-only: kept as a secret and never returned." }),
     })
     .optional()
