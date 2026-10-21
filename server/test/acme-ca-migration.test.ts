@@ -135,6 +135,8 @@ describe("migrating ACME environments to the built-in ACME CAs", () => {
       issuer: { kind: "acme", acmeCaId: "letsencrypt-staging" },
       currentCertificate: { id: old.certificateId, acmeCaId: "letsencrypt-staging", acmeAccountId: old.stagingAccountId, issuingCaId: null },
     });
+    // Certificates are as immutable as before.
+    await expect(h.pool.query(`update certificate set names = '{}'`)).rejects.toThrow("certificate is immutable");
     const tagged = async (tag: string) => (await h.api(`/api/organizations/${org.orgId}/managed-certificates?tag=${tag}`, { cookie: org.cookie })).body.items.map((i: any) => i.id);
     expect(await tagged("staging")).toEqual([old.managedCertificateId]);
     expect(await tagged("production")).toEqual([]);
