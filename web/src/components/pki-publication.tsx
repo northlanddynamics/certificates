@@ -59,7 +59,7 @@ export function PublicationCheck({
     <section aria-label="Where its Certificates send relying parties" className="flex flex-col gap-3 rounded-lg border p-4 text-sm">
       <div className="flex flex-wrap items-baseline justify-between gap-2">
         <h3 className="font-medium">Before you start: where its Certificates send relying parties</h3>
-        <GuideLink orgId={orgId} guide="private-cas" newTab className="text-xs font-medium underline underline-offset-4 hover:text-primary">
+        <GuideLink orgId={orgId} guide="private-cas" className="text-xs font-medium underline underline-offset-4 hover:text-primary">
           Publishing guide
         </GuideLink>
       </div>

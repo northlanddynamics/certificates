@@ -250,14 +250,14 @@ function NewDeploymentForm({ org, onDone }: { org: Me["organizations"][number]; 
               <FieldDescription>
                 What the Agent runs with each Certificate. It finds the key, leaf, chain and full-chain files in <code>CERT_KEY_FILE</code>, <code>CERT_LEAF_FILE</code>,{" "}
                 <code>CERT_CHAIN_FILE</code> and <code>CERT_FULLCHAIN_FILE</code>.{" "}
-                <GuideLink orgId={orgId} guide="deployment-scripts" section="receives" newTab>
+                <GuideLink orgId={orgId} guide="deployment-scripts" section="receives">
                   What a script is given
                 </GuideLink>
               </FieldDescription>
               {scripts.data && scripts.data.items.length === 0 && (
                 <FieldError>
                   No Deployment Script is uploaded yet. Upload one under Deployment Scripts, or{" "}
-                  <GuideLink orgId={orgId} guide="deployment-scripts" section="example" newTab>
+                  <GuideLink orgId={orgId} guide="deployment-scripts" section="example">
                     start from the guide's example
                   </GuideLink>
                   .

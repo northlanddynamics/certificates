@@ -4,7 +4,7 @@ import type { ReactNode } from "react";
 import { toast } from "sonner";
 import { CopyButton } from "@/components/copy-button";
 import { ScriptCode } from "@/components/script-code";
-import { GuidePage, GuideSection } from "@/components/guide";
+import { GuideLink, GuidePage, GuideSection } from "@/components/guide";
 import { Alert, AlertDescription, AlertTitle } from "@/components/ui/alert";
 import { Badge } from "@/components/ui/badge";
 import { Button } from "@/components/ui/button";
@@ -15,8 +15,6 @@ import { CERT_VARIABLES, EXAMPLE_SCRIPTS, exampleContent } from "@/lib/deploymen
 import { ENV_PREFIX, MAX_PARAMETERS } from "@/lib/script-parameters";
 import { useOrg } from "@/lib/use-org";
 import { UploadDialog } from "./deployment-scripts";
-
-const ROUTE = "/app/organizations/$orgId/deployment-scripts/guide";
 
 
 const RUN_STEPS: { title: string; body: ReactNode }[] = [
@@ -83,7 +81,8 @@ const DECLARATION = `# deploy-params:begin
  * a worked example in each interpreter, and what is unsafe. The rest of the app links into its sections by anchor.
  */
 export function DeploymentScriptGuidePage() {
-  const { orgId } = useParams({ from: ROUTE });
+  // Shown as a page or in the help panel over any of the Organization's pages.
+  const orgId = useParams({ strict: false }).orgId ?? "";
   const org = useOrg(orgId);
   if (org && !can(org, "deploymentScript", "read")) return <p className="text-sm text-muted-foreground">Only Organization Administrators see the Deployment Scripts.</p>;
   const mayUpload = org ? can(org, "deploymentScript", "upload") : false;
@@ -132,7 +131,7 @@ export function DeploymentScriptGuidePage() {
                 <TableRow>
                   <TableCell className="font-mono text-xs">{ENV_PREFIX}&lt;NAME&gt;</TableCell>
                   <TableCell className="whitespace-normal">
-                    One for each parameter that has a value (<a href="#values">below</a>)
+                    One for each parameter that has a value (<GuideLink guide="deployment-scripts" section="values">below</GuideLink>)
                   </TableCell>
                 </TableRow>
               </TableBody>

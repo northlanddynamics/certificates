@@ -1,6 +1,7 @@
 import { useQuery } from "@tanstack/react-query";
 import { Link, Navigate, Outlet, useLocation, useParams } from "@tanstack/react-router";
 import { AppSidebar } from "@/components/app-sidebar";
+import { HelpPanel } from "@/components/help-panel";
 import { Breadcrumb, BreadcrumbItem, BreadcrumbList, BreadcrumbPage, BreadcrumbSeparator } from "@/components/ui/breadcrumb";
 import { Separator } from "@/components/ui/separator";
 import { SidebarInset, SidebarProvider, SidebarTrigger } from "@/components/ui/sidebar";
@@ -63,6 +64,7 @@ export function AppShell() {
           </main>
         </SidebarInset>
       </SidebarProvider>
+      <HelpPanel />
     </TooltipProvider>
   );
 }

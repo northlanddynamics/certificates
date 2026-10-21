@@ -42,10 +42,10 @@ export function ParameterHelpSheet({ orgId, script, declared, values }: { orgId:
             ))}
           </dl>
           <div className="flex flex-col gap-2 border-t pt-4">
-            <GuideLink orgId={orgId} guide="deployment-scripts" section="values" newTab>
+            <GuideLink orgId={orgId} guide="deployment-scripts" section="values">
               How values reach the script
             </GuideLink>
-            <GuideLink orgId={orgId} guide="deployment-scripts" section="example" newTab>
+            <GuideLink orgId={orgId} guide="deployment-scripts" section="example">
               An example script that reads them
             </GuideLink>
           </div>

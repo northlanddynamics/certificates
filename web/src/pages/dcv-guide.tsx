@@ -4,8 +4,6 @@ import { Table, TableBody, TableCell, TableHead, TableHeader, TableRow } from "@
 import { can } from "@/lib/api";
 import { useOrg } from "@/lib/use-org";
 
-const ROUTE = "/app/organizations/$orgId/dcv/guide";
-
 /** The guide's worked example: three rules, and what each of six names gets under them. */
 const EXAMPLE_RULES: [string, string, string][] = [
   ["Zone example.com", "Direct", "DNS Provider “public-dns”"],
@@ -31,7 +29,8 @@ const FAILURES: [string, string][] = [
 
 /** How names are validated for an ACME CA: Direct or Delegated, which rule applies to a name, setting up delegation, and failures. */
 export function DcvGuidePage() {
-  const { orgId } = useParams({ from: ROUTE });
+  // Shown as a page or in the help panel over any of the Organization's pages.
+  const orgId = useParams({ strict: false }).orgId ?? "";
   const org = useOrg(orgId);
   if (org && !can(org, "dcvRule", "read")) return <p className="text-sm text-muted-foreground">Only Organization Administrators see how DCV is done.</p>;
   return (

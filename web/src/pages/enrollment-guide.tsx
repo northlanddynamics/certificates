@@ -4,8 +4,6 @@ import { Table, TableBody, TableCell, TableHead, TableHeader, TableRow } from "@
 import { can } from "@/lib/api";
 import { useOrg } from "@/lib/use-org";
 
-const ROUTE = "/app/organizations/$orgId/enrollment-profiles/guide";
-
 const FLOW = [
   { title: "Profiles pushed", body: "Your device management platform sends the device a trusted certificate profile and a SCEP profile." },
   { title: "Request", body: "The device makes a key and sends a CSR to the profile's SCEP URL, with a challenge." },
@@ -37,7 +35,8 @@ const REFUSALS: [string, string][] = [
  * Entra to Intune's profiles, the Shared Challenge and its rotation, and what a refusal means.
  */
 export function EnrollmentGuidePage() {
-  const { orgId } = useParams({ from: ROUTE });
+  // Shown as a page or in the help panel over any of the Organization's pages.
+  const orgId = useParams({ strict: false }).orgId ?? "";
   const org = useOrg(orgId);
   if (org && !can(org, "enrollmentProfile", "read")) return <p className="text-sm text-muted-foreground">Only Organization Administrators see the Enrollment Profiles.</p>;
   return (

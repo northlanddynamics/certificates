@@ -10,8 +10,6 @@ import { publicationUrls } from "@/lib/pki-publication";
 import { TRUST_STORES } from "@/lib/trust-stores";
 import { useOrg } from "@/lib/use-org";
 
-const ROUTE = "/app/organizations/$orgId/private-cas/guide";
-
 const CHECK_STEPS = [
   { title: "Relying party", body: "A server, load balancer, RADIUS server or browser is shown a Certificate." },
   { title: "Reads the addresses", body: "The Certificate names where its CA's revocation list (CRL) and certificate can be fetched." },
@@ -32,7 +30,8 @@ const REACHABLE: [string, string][] = [
  * and rolling over. How the platform itself is served is not theirs to change, so it is not here.
  */
 export function PrivateCaGuidePage() {
-  const { orgId } = useParams({ from: ROUTE });
+  // Shown as a page or in the help panel over any of the Organization's pages.
+  const orgId = useParams({ strict: false }).orgId ?? "";
   const org = useOrg(orgId);
   const allowed = org ? can(org, "privateCa", "read") : false;
   const cas = useQuery({ queryKey: ["private-cas", orgId], queryFn: () => api.privateCas(orgId), enabled: allowed });

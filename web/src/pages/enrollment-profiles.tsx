@@ -702,7 +702,7 @@ function EntraChecklist({ orgId }: { orgId: string }) {
       ))}
       <span className="text-xs text-muted-foreground">
         For your own tracking: the platform cannot see Entra.{" "}
-        <GuideLink orgId={orgId} guide="enrollment-profiles" section="intune" newTab>
+        <GuideLink orgId={orgId} guide="enrollment-profiles" section="intune">
           Step by step
         </GuideLink>
       </span>
@@ -873,7 +873,7 @@ function IntuneSetupPanel({ orgId, profile, onDone }: { orgId: string; profile: 
         <AlertTitle>The first enrollment is the real test</AlertTitle>
         <AlertDescription>
           It is what proves <code>scep_challenge_provider</code> and admin consent. A refused one is recorded in the Audit log as <code>enrollment.refused</code>, with its reason.{" "}
-          <GuideLink orgId={orgId} guide="enrollment-profiles" section="refused" newTab>
+          <GuideLink orgId={orgId} guide="enrollment-profiles" section="refused">
             Why devices are refused
           </GuideLink>
         </AlertDescription>
@@ -1067,7 +1067,7 @@ function NewProfileForm({ orgId, onDone }: { orgId: string; onDone: (created: Cr
               </RadioGroup>
             )}
             <FieldDescription>
-              <GuideLink orgId={orgId} guide="enrollment-profiles" section="choose" newTab>
+              <GuideLink orgId={orgId} guide="enrollment-profiles" section="choose">
                 Compare them
               </GuideLink>
             </FieldDescription>

@@ -415,7 +415,7 @@ function ContentWithDeclaration({
       <div className="flex min-w-0 flex-col gap-2">
         <div className="flex items-baseline justify-between gap-2">
           <Label id={`${id}-label`}>Script</Label>
-          <GuideLink orgId={orgId} guide="deployment-scripts" section="declare" newTab className="text-xs font-medium text-primary underline-offset-4 hover:underline">
+          <GuideLink orgId={orgId} guide="deployment-scripts" section="declare" className="text-xs font-medium text-primary underline-offset-4 hover:underline">
             Parameter section format
           </GuideLink>
         </div>
@@ -446,7 +446,7 @@ function DeclarationPanel({ orgId, content }: { orgId: string; content: string }
           <AlertTitle>The upload would be refused</AlertTitle>
           <AlertDescription>
             <p>{declaration.problem}</p>
-            <GuideLink orgId={orgId} guide="deployment-scripts" section="refused" newTab>
+            <GuideLink orgId={orgId} guide="deployment-scripts" section="refused">
               How to fix it
             </GuideLink>
           </AlertDescription>
