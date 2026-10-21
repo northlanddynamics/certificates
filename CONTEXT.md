@@ -164,6 +164,10 @@ _Avoid_: automation, install, target, binding
 A Bash or PowerShell script, uploaded only by Organization Administrators, that an Agent runs to place a newly obtained key and Certificate wherever it is needed, including on other hosts.
 _Avoid_: hook, post-install command, action
 
+**Deployment Parameter**:
+A named value an Organization Administrator gives a Deployment, declared by its Deployment Script version and handed to the script as an environment variable. Plain text, never a Secret.
+_Avoid_: binding, argument, variable, setting
+
 **Deployment Run**:
 The record of one execution of a Deployment: when it ran, which Certificate it delivered, whether its Deployment Script succeeded, and the script's output.
 _Avoid_: job, execution, install log
