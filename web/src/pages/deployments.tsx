@@ -6,7 +6,7 @@ import { useMemo, useState, type FormEvent } from "react";
 import { DataTable } from "@/components/data-table/data-table";
 import { DataTableFacetedFilter } from "@/components/data-table/data-table-faceted-filter";
 import { DataTablePagination } from "@/components/data-table/data-table-pagination";
-import { ParameterFields, missingParameters, shownValues } from "@/components/parameter-fields";
+import { ParameterFields, missingParameters, namesDeclared, shownValues } from "@/components/parameter-fields";
 import { SummaryRows } from "@/components/summary-rows";
 import { Badge } from "@/components/ui/badge";
 import { Button } from "@/components/ui/button";
@@ -283,7 +283,7 @@ function ParametersDialog({ org, deployment }: { org: Me["organizations"][number
   );
 }
 
-/** The dialog's fields, pre-filled with the stored values; a run the Agent already has keeps what it was given. */
+/** The dialog's fields, pre-filled with the stored values; a Work Item the Agent already has keeps what it was given. */
 function EditParameters({ orgId, deployment, declared, onDone }: { orgId: string; deployment: Deployment; declared: ScriptParameter[]; onDone: () => void }) {
   const queryClient = useQueryClient();
   const [typed, setTyped] = useState<Record<string, string>>(deployment.parameters);
@@ -297,7 +297,6 @@ function EditParameters({ orgId, deployment, declared, onDone }: { orgId: string
   });
   // The server is the authority on the values: one it refuses is shown against its field, anything else below them.
   const problems = save.error instanceof ApiError ? save.error.fields?.parameters : undefined;
-  const shownAgainstField = Object.keys(problems ?? {}).some((name) => declared.some((p) => p.name === name));
   return (
     <form
       className="flex flex-col gap-4"
@@ -316,8 +315,8 @@ function EditParameters({ orgId, deployment, declared, onDone }: { orgId: string
           save.reset();
         }}
       />
-      <p className="text-sm text-muted-foreground">The new values are given to the script from the next run the Agent is given.</p>
-      {save.error && !shownAgainstField && <FieldError>{save.error.message}</FieldError>}
+      <p className="text-sm text-muted-foreground">The script is given the new values from the Deployment's next run.</p>
+      {save.error && !namesDeclared(declared, problems) && <FieldError>{save.error.message}</FieldError>}
       <div className="flex justify-end gap-2">
         <Button type="button" variant="outline" onClick={onDone}>
           Cancel
