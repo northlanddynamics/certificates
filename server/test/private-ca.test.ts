@@ -874,7 +874,7 @@ describe("a Name Change's validity", () => {
     expect((await h.api(`${mcs()}/${mc.id}/name-change/approve`, { cookie: approver, body: {} })).status).toBe(200);
 
     const after = await ended(mc.id);
-    expect(after).toMatchObject({ validityDays: 30, issuance: { status: "succeeded" }, currentCertificate: { notBefore: days(0), notAfter: days(30) } });
+    expect(after).toMatchObject({ validityDays: 30, commonName: "app.internal.acme", issuance: { status: "succeeded" }, currentCertificate: { notBefore: days(0), notAfter: days(30) } });
     expect((await auditOf()).find((e) => e.action === "name_change.approved")!.detail).toMatchObject({ validityDays: { from: null, to: 30 } });
   });
 
