@@ -759,6 +759,9 @@ export const api = {
   /** One page of a Deployment's runs, newest first; `page` is from 1. */
   deploymentRuns: (orgId: string, id: string, paging: { page: number; pageSize: number }) =>
     call<Page<DeploymentRun>>(`/api/organizations/${orgId}/deployments/${id}/runs?${new URLSearchParams({ page: String(paging.page), pageSize: String(paging.pageSize) })}`),
+  /** Replaces all of the Deployment's parameter values; the server checks them against its pinned script version. */
+  setDeploymentParameters: (orgId: string, id: string, parameters: Record<string, string>) =>
+    call<Deployment>(`/api/organizations/${orgId}/deployments/${id}/parameters`, { method: "PUT", body: parameters }),
   runDeploymentAgain: (orgId: string, id: string) => call<Deployment>(`/api/organizations/${orgId}/deployments/${id}/runs`, { method: "POST", body: {} }),
   privateCas: (orgId: string) => call<{ items: PrivateCa[] }>(`/api/organizations/${orgId}/private-cas`),
   createPrivateCa: (orgId: string, body: NewPrivateCa) => call<PrivateCa>(`/api/organizations/${orgId}/private-cas`, { body }),

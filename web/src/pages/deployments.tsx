@@ -1,15 +1,18 @@
-import { keepPreviousData, useQuery } from "@tanstack/react-query";
+import { keepPreviousData, useMutation, useQuery, useQueryClient } from "@tanstack/react-query";
 import { Link, useParams } from "@tanstack/react-router";
 import { createColumnHelper, rowPaginationFeature, tableFeatures, useTable, type PaginationState } from "@tanstack/react-table";
 import { XIcon } from "lucide-react";
-import { useMemo, useState } from "react";
+import { useMemo, useState, type FormEvent } from "react";
 import { DataTable } from "@/components/data-table/data-table";
 import { DataTableFacetedFilter } from "@/components/data-table/data-table-faceted-filter";
 import { DataTablePagination } from "@/components/data-table/data-table-pagination";
+import { ParameterFields, missingParameters, namesDeclared, shownValues } from "@/components/parameter-fields";
+import { SummaryRows } from "@/components/summary-rows";
 import { Badge } from "@/components/ui/badge";
 import { Button } from "@/components/ui/button";
 import { Dialog, DialogContent, DialogDescription, DialogHeader, DialogTitle, DialogTrigger } from "@/components/ui/dialog";
-import { api, can, type Deployment, type DeploymentRun, type DeploymentState } from "@/lib/api";
+import { FieldError } from "@/components/ui/field";
+import { ApiError, api, can, type Deployment, type DeploymentRun, type DeploymentState, type Me, type ScriptParameter } from "@/lib/api";
 import { useOrg } from "@/lib/use-org";
 import { useAction } from "@/lib/use-action";
 import { NewDeploymentDialog } from "./new-deployment-dialog";
@@ -206,6 +209,7 @@ function DeploymentActions({ deployment }: { deployment: Deployment }) {
   return (
     <div className="flex flex-col items-end gap-1">
       <div className="flex items-center justify-end gap-2">
+        {org && <ParametersDialog org={org} deployment={deployment} />}
         <RunsDialog orgId={orgId} deployment={deployment} />
         {org && can(org, "deployment", "run") && (
           <Button
@@ -221,6 +225,107 @@ function DeploymentActions({ deployment }: { deployment: Deployment }) {
       </div>
       {runAgain.error && <span className="text-xs text-destructive">{runAgain.error.message}</span>}
     </div>
+  );
+}
+
+/**
+ * The values a Deployment gives its script, with a control to replace them for a caller who may: none for a Deployment whose
+ * pinned script version declares no parameters. The server checks an edit against that version, as it did at creation.
+ */
+function ParametersDialog({ org, deployment }: { org: Me["organizations"][number]; deployment: Deployment }) {
+  const [open, setOpen] = useState(false);
+  const [editing, setEditing] = useState(false);
+  // The same query the New Deployment dialog makes for the script's versions, each with what it declares.
+  const script = useQuery({ queryKey: ["deployment-scripts", org.id, deployment.script.id], queryFn: () => api.deploymentScript(org.id, deployment.script.id) });
+  const declared = script.data?.versions.find((v) => v.hash === deployment.script.hash)?.parameters ?? [];
+  if (declared.length === 0) return null;
+  return (
+    <Dialog
+      open={open}
+      onOpenChange={(next) => {
+        setOpen(next);
+        setEditing(false);
+      }}
+    >
+      <DialogTrigger asChild>
+        <Button variant="outline" size="sm" aria-label={`Parameters of ${deployment.names[0]}`}>
+          Parameters
+        </Button>
+      </DialogTrigger>
+      <DialogContent className="sm:max-w-xl">
+        <DialogHeader>
+          <DialogTitle>Parameters of {deployment.names[0]}</DialogTitle>
+          <DialogDescription>
+            What {deployment.script.name} v{deployment.script.version} is given at every run. The values are kept in plain text on the Deployment: put nothing secret here.
+          </DialogDescription>
+        </DialogHeader>
+        {editing ? (
+          <EditParameters orgId={org.id} deployment={deployment} declared={declared} onDone={() => setEditing(false)} />
+        ) : (
+          <div className="flex flex-col gap-4">
+            <SummaryRows
+              rows={declared.map((p) => ({
+                label: p.label,
+                value: deployment.parameters[p.name] !== undefined ? <span className="font-mono text-xs">{deployment.parameters[p.name]}</span> : <span className="text-muted-foreground">Not set</span>,
+              }))}
+            />
+            {can(org, "deployment", "update") && (
+              <div className="flex justify-end">
+                <Button type="button" onClick={() => setEditing(true)}>
+                  Edit values
+                </Button>
+              </div>
+            )}
+          </div>
+        )}
+      </DialogContent>
+    </Dialog>
+  );
+}
+
+/** The dialog's fields, pre-filled with the stored values; a Work Item the Agent already has keeps what it was given. */
+function EditParameters({ orgId, deployment, declared, onDone }: { orgId: string; deployment: Deployment; declared: ScriptParameter[]; onDone: () => void }) {
+  const queryClient = useQueryClient();
+  const [typed, setTyped] = useState<Record<string, string>>(deployment.parameters);
+  const values = shownValues(declared, typed);
+  const save = useMutation({
+    mutationFn: () => api.setDeploymentParameters(orgId, deployment.id, values),
+    onSuccess: async () => {
+      await queryClient.invalidateQueries({ queryKey: ["deployments"] });
+      onDone();
+    },
+  });
+  // The server is the authority on the values: one it refuses is shown against its field, anything else below them.
+  const problems = save.error instanceof ApiError ? save.error.fields?.parameters : undefined;
+  return (
+    <form
+      className="flex flex-col gap-4"
+      onSubmit={(e: FormEvent) => {
+        e.preventDefault();
+        save.mutate();
+      }}
+    >
+      <ParameterFields
+        declared={declared}
+        typed={typed}
+        problems={problems}
+        idPrefix={`deployment-${deployment.id}`}
+        onChange={(name, value) => {
+          setTyped((t) => ({ ...t, [name]: value }));
+          save.reset();
+        }}
+      />
+      <p className="text-sm text-muted-foreground">The script is given the new values from the Deployment's next run.</p>
+      {save.error && !namesDeclared(declared, problems) && <FieldError>{save.error.message}</FieldError>}
+      <div className="flex justify-end gap-2">
+        <Button type="button" variant="outline" onClick={onDone}>
+          Cancel
+        </Button>
+        <Button type="submit" disabled={missingParameters(declared, values).length > 0 || save.isPending}>
+          Save values
+        </Button>
+      </div>
+    </form>
   );
 }
 

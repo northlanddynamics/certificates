@@ -11,3 +11,7 @@
 - [ ] The control is hidden from a caller without `deployment:update`
 - [ ] After a save, the next run uses the new values
 - [ ] Checked by hand in the app (no web test runner)
+
+## Comments
+
+- Implemented in `web/src/pages/deployments.tsx`: there is no page per Deployment, so each row of the Deployments page gets a "Parameters" dialog beside "Runs". It lists the values the pinned version declares (or "Not set"), and is absent when that version declares none. "Edit values" (shown only with `deployment:update` from `/api/me`) swaps in the dialog's `ParameterFields`, pre-filled with the stored values, and saves through `PUT .../deployments/{id}/parameters` (`api.setDeploymentParameters`); a `400` shows each refused value against its field. Typecheck, CI and the hand check in the app are left to the PR: this environment cannot run them.

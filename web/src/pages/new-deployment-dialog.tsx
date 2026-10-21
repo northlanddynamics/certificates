@@ -2,7 +2,7 @@ import { useMutation, useQuery, useQueryClient } from "@tanstack/react-query";
 import { BotIcon, CheckIcon, ClipboardCheckIcon, FileTerminalIcon, GlobeIcon, PlusIcon, RefreshCwIcon, TriangleAlertIcon, type LucideIcon } from "lucide-react";
 import { useEffect, useState, type FormEvent } from "react";
 import { IssuerChoiceFields, useIssuerChoice } from "@/components/issuer-choice";
-import { ParameterFields, missingParameters, shownValues } from "@/components/parameter-fields";
+import { ParameterFields, missingParameters, namesDeclared, shownValues } from "@/components/parameter-fields";
 import { SummaryRows } from "@/components/summary-rows";
 import { Alert, AlertDescription, AlertTitle } from "@/components/ui/alert";
 import { Button } from "@/components/ui/button";
@@ -122,7 +122,7 @@ function NewDeploymentForm({ org, onDone }: { org: Me["organizations"][number]; 
     },
     // The server is the authority on the values: one it refuses is shown against its field, on the step that has it.
     onError: (error) => {
-      if (error instanceof ApiError && Object.keys(error.fields?.parameters ?? {}).some((name) => declared.some((p) => p.name === name))) setStep("script");
+      if (error instanceof ApiError && namesDeclared(declared, error.fields?.parameters)) setStep("script");
     },
   });
   const parameterProblems = create.error instanceof ApiError ? create.error.fields?.parameters : undefined;
