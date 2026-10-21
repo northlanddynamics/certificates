@@ -175,7 +175,7 @@ describe("the key algorithms each CA takes", () => {
   });
 
   test("an ML-DSA Managed Certificate is refused on an ACME CA, and an ECDSA one on an ML-DSA Private CA", async () => {
-    const onAcme = await h.api(mcs(), { cookie: org.cookie, body: { ...(await mlDsaRequest("ml-dsa-65", ["app.internal.acme"])), issuer: { kind: "acme", environment: "staging" } } });
+    const onAcme = await h.api(mcs(), { cookie: org.cookie, body: { ...(await mlDsaRequest("ml-dsa-65", ["app.internal.acme"])), issuer: { kind: "acme", acmeCaId: "letsencrypt-staging" } } });
     expect(onAcme.status).toBe(422);
     expect(onAcme.body.error).toContain("an ACME CA takes keys of");
 

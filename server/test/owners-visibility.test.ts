@@ -405,17 +405,17 @@ describe("filters", () => {
     expect(await filtered("?archived=true", alice)).toEqual([one.id]);
   });
 
-  test("environment and key algorithm each take one or more values, any of which matches", async () => {
+  test("the ACME CA's tag and key algorithm each take one or more values, any of which matches", async () => {
     const staging = await adminCreates();
-    const production = (await admin().create({ ...(await request()), environment: "production" })).body.id as string;
+    const production = (await admin().create({ ...(await request()), acmeCaId: "letsencrypt-production" })).body.id as string;
     await h.settleIssuances();
 
-    expect(await filtered("?environment=staging")).toEqual([staging.id]);
-    expect(await filtered("?environment=production")).toEqual([production]);
-    expect(await filtered("?environment=staging,production")).toEqual([staging.id, production]);
+    expect(await filtered("?tag=staging")).toEqual([staging.id]);
+    expect(await filtered("?tag=production")).toEqual([production]);
+    expect(await filtered("?tag=staging,production")).toEqual([staging.id, production]);
     expect(await filtered("?keyAlgorithm=ecdsa-p256")).toEqual([staging.id, production]);
     expect(await filtered("?keyAlgorithm=rsa-2048,rsa-4096")).toEqual([]);
-    expect(await filtered("?keyAlgorithm=rsa-2048,ecdsa-p256&environment=production")).toEqual([production]);
+    expect(await filtered("?keyAlgorithm=rsa-2048,ecdsa-p256&tag=production")).toEqual([production]);
   });
 
   test("the inventory is listed a page at a time, with how many match in all", async () => {
@@ -432,7 +432,7 @@ describe("filters", () => {
   });
 
   test("a filter value that means nothing is refused", async () => {
-    for (const query of ["?keyCustody=nobody", "?noOwners=maybe", "?expiringSoon=1", "?archived=yes", "?pendingApproval=", "?environment=dev", "?environment=staging,", "?keyAlgorithm=des", "?page=0", "?pageSize=0", "?pageSize=101", "?page=x"]) {
+    for (const query of ["?keyCustody=nobody", "?noOwners=maybe", "?expiringSoon=1", "?archived=yes", "?pendingApproval=", "?tag=dev", "?tag=staging,", "?keyAlgorithm=des", "?page=0", "?pageSize=0", "?pageSize=101", "?page=x"]) {
       expect((await certs(org.cookie).list(query)).status).toBe(400);
     }
   });

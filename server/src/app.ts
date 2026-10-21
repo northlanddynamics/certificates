@@ -11,6 +11,7 @@ import { registerApiKeys } from "./tenancy/api-keys";
 import { PLATFORM_OPERATOR_ROLE, createAuth } from "./tenancy/auth";
 import { registerCertificateExport } from "./certificates/certificate-export";
 import type { AcmeCertificateAuthority } from "./issuance/acme/certificate-authority";
+import { createAcmeCas, type BuiltInAcmeCaId } from "./issuance/acme/acme-cas";
 import { registerDeploymentScripts } from "./deployment/deployment-scripts";
 import { registerDeployments } from "./deployment/deployments";
 import { registerDcvConfiguration } from "./issuance/dcv/dcv-configuration";
@@ -90,8 +91,10 @@ export interface AppDeps {
   secret: string;
   /** Wraps each Organization's data key; see secrets.ts. */
   kms: Kms;
-  /** The ACME CA: the CA of a Managed Certificate whose issuer is of the ACME kind (issuer.ts). */
+  /** How the platform talks to an ACME CA: the CA of a Managed Certificate whose issuer is of the ACME kind (issuer.ts). */
   certificateAuthority: AcmeCertificateAuthority;
+  /** Where the built-in ACME CAs' directories are served, by id; Let's Encrypt's own unless given (tests point them at Pebble). Read each time it is needed. */
+  builtInAcmeDirectories?: Partial<Record<BuiltInAcmeCaId, string>>;
   /** How DCV checks that a challenge record is visible; the host's DNS resolvers, waiting up to two minutes, unless given. */
   dcv?: Partial<DcvConfig>;
   /** How the Agent protocol is run: see `AgentGatewayConfig` for what each setting is and its default. */
@@ -296,7 +299,8 @@ export function createApp(deps: AppDeps) {
   });
   registerTeamsOverview({ app, db, requireUser, authorize });
   const secrets = createSecrets(deps.kms);
-  registerAcmeAccounts({ app, db, requireUser, authorize, unitOfWork, secrets, certificateAuthority: deps.certificateAuthority });
+  const acmeCas = createAcmeCas({ directoryUrls: deps.builtInAcmeDirectories });
+  registerAcmeAccounts({ app, db, requireUser, authorize, unitOfWork, secrets, certificateAuthority: deps.certificateAuthority, acmeCas });
   const agentGateway = { ...DEFAULT_AGENT_GATEWAY, ...deps.agentGateway };
   const dnsRelayConfig = { ...DEFAULT_DNS_RELAY, ...deps.dnsRelay };
   const workItems = createWorkItems({ db, unitOfWork, pollMs: dnsRelayConfig.pollMs, maxWaitMs: dnsRelayConfig.maxWaitMs, clock });
@@ -320,7 +324,7 @@ export function createApp(deps: AppDeps) {
   const deviceCertificatePruning = createDeviceCertificatePruning({ db, unitOfWork, clock });
   const deviceEnrollment = createDeviceEnrollment({ db, unitOfWork, privateCas, revocations, sharedChallenges, kinds: validatorKinds, validators: enrollmentValidators, transactions: createScepTransactions({ db, clock }), clock });
   const scep = registerScep({ app, db, secrets, enrollment: deviceEnrollment, kinds: validatorKinds, clock, config: deps.scep });
-  const issuers = createIssuers({ acme: deps.certificateAuthority, secrets, privateCas });
+  const issuers = createIssuers({ acme: deps.certificateAuthority, acmeCas, secrets, privateCas });
   const issuances = createIssuances({ db, unitOfWork, issuers, dcv });
   const notifications = createNotifications({
     db,
@@ -350,7 +354,7 @@ export function createApp(deps: AppDeps) {
     );
   });
   const reader = createManagedCertificateReader({ db, authorize, clock, agentOfflineAfterSeconds: agentGateway.offlineAfterSeconds });
-  registerManagedCertificates({ app, db, requireUser, authorize, unitOfWork, issuances, reader, clock, agentOfflineAfterSeconds: agentGateway.offlineAfterSeconds });
+  registerManagedCertificates({ app, db, requireUser, authorize, unitOfWork, issuances, reader, acmeCas, clock, agentOfflineAfterSeconds: agentGateway.offlineAfterSeconds });
   const apiKeys = registerApiKeys({ app, db, auth, authConfig, requireUser, authorize, admit: loginPolicies.admit, unitOfWork });
   registerCertificateExport({ app, db, apiKeys, unitOfWork, reader, issuers });
   registerOwnerRoutes({ app, requireUser, unitOfWork, reader });
@@ -364,7 +368,7 @@ export function createApp(deps: AppDeps) {
   registerRevocationRoutes({ app, db, requireUser, unitOfWork, reader, issuers });
   registerHistory({ app, db, requireUser, reader });
   registerDeploymentScripts({ app, db, requireUser, authorize, unitOfWork });
-  registerDeployments({ app, db, requireUser, authorize, unitOfWork, workItems, issuances, notifications });
+  registerDeployments({ app, db, requireUser, authorize, unitOfWork, workItems, issuances, notifications, acmeCas });
   registerAgents({ app, db, requireUser, authorize, unitOfWork, clock, config: agentGateway, issuances });
   registerAgentGateway({ app, db, unitOfWork, workItems, clock, config: agentGateway });
 

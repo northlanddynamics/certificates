@@ -1,4 +1,4 @@
-// An Organization's ACME account with Let's Encrypt, and the write-only secret behind it. The CA is Pebble and the
+// The ACME CAs an Organization can use, its ACME account with each, and the write-only secret behind it. The CA is Pebble and the
 // ACME client is the real one; the account's key is a secret that no API returns (ADR 0002).
 import { afterAll, beforeAll, beforeEach, describe, expect, test } from "bun:test";
 import acme from "acme-client";
@@ -52,23 +52,23 @@ async function rollOverAtCa(account: { accountUrl: string; accountKey: string })
 }
 
 describe("creating an ACME account", () => {
-  test("an Organization Administrator registers the Organization's account, in staging unless production is chosen", async () => {
+  test("an Organization Administrator registers the Organization's account, with Let's Encrypt Staging unless another ACME CA is chosen", async () => {
     const created = await admin().create();
     expect(created.status).toBe(201);
     expect(created.body).toEqual({
       id: expect.any(String),
-      environment: "staging",
+      acmeCaId: "letsencrypt-staging",
       accountUrl: expect.stringContaining("/my-account/"),
       contactEmail: null,
     });
 
-    const production = await admin().create({ environment: "production", contactEmail: "pki@acme.test", termsOfServiceAgreed: true });
+    const production = await admin().create({ acmeCaId: "letsencrypt-production", contactEmail: "pki@acme.test", termsOfServiceAgreed: true });
     expect(production.status).toBe(201);
-    expect(production.body).toMatchObject({ environment: "production", contactEmail: "pki@acme.test" });
+    expect(production.body).toMatchObject({ acmeCaId: "letsencrypt-production", contactEmail: "pki@acme.test" });
 
     const listed = await admin().list();
     expect(listed.status).toBe(200);
-    expect(listed.body.items.map((a: any) => a.environment)).toEqual(["staging", "production"]);
+    expect(listed.body.items.map((a: any) => a.acmeCaId)).toEqual(["letsencrypt-staging", "letsencrypt-production"]);
   });
 
   test("the account exists at the CA, and the platform can act as it", async () => {
@@ -78,11 +78,17 @@ describe("creating an ACME account", () => {
     expect(tested.body).toEqual({ ok: true });
   });
 
-  test("an Organization has one account per environment", async () => {
+  test("an Organization has one account per ACME CA", async () => {
     expect((await admin().create()).status).toBe(201);
     expect((await admin().create()).status).toBe(409);
-    expect((await admin().create({ environment: "production", termsOfServiceAgreed: true })).status).toBe(201);
+    expect((await admin().create({ acmeCaId: "letsencrypt-production", termsOfServiceAgreed: true })).status).toBe(201);
     expect((await admin().list()).body.items).toHaveLength(2);
+  });
+
+  test("an ACME CA the Organization cannot use is a 404, and nothing is registered", async () => {
+    expect((await admin().create({ acmeCaId: "letsencrypt-elsewhere", termsOfServiceAgreed: true })).status).toBe(404);
+    expect((await admin().list()).body.items).toEqual([]);
+    expect(h.createdAccountKeys).toEqual([]);
   });
 
   test("the terms of service must be agreed to", async () => {
@@ -92,7 +98,7 @@ describe("creating an ACME account", () => {
   });
 
   test("an unreachable CA is a 502 and leaves nothing behind", async () => {
-    h.caDirectories.staging = "https://localhost:1/dir";
+    h.caDirectories["letsencrypt-staging"] = "https://localhost:1/dir";
     const res = await admin().create();
     expect(res.status).toBe(502);
     expect(res.body.error).toContain("could not reach");
@@ -102,8 +108,36 @@ describe("creating an ACME account", () => {
 
   test("each account has its own key", async () => {
     await admin().create();
-    await admin().create({ environment: "production", termsOfServiceAgreed: true });
+    await admin().create({ acmeCaId: "letsencrypt-production", termsOfServiceAgreed: true });
     expect(new Set(h.createdAccountKeys).size).toBe(2);
+  });
+});
+
+describe("the ACME CAs", () => {
+  const acmeCas = (cookie: string, orgId = acmeOrg.orgId) => h.api(`/api/organizations/${orgId}/acme-cas`, { cookie });
+
+  test("Let's Encrypt Staging then Production are built in, with their tags and the directories the platform talks to", async () => {
+    const listed = await acmeCas(acmeOrg.cookie);
+    expect(listed.status).toBe(200);
+    expect(listed.body.items).toEqual([
+      { id: "letsencrypt-staging", name: "Let's Encrypt Staging", directoryUrl: PEBBLE_DIRECTORY, tag: "staging", builtIn: true },
+      { id: "letsencrypt-production", name: "Let's Encrypt Production", directoryUrl: PEBBLE_DIRECTORY, tag: "production", builtIn: true },
+    ]);
+    // The same for every Organization.
+    expect((await acmeCas(globex.cookie, globex.orgId)).body).toEqual(listed.body);
+  });
+
+  test("anyone in the Organization sees which there are, to choose one; only those who may read the ACME accounts see their configuration", async () => {
+    for (const role of ["approver", "member"]) {
+      const listed = await acmeCas(await join(`${role}@acme.test`, role));
+      expect(listed.status).toBe(200);
+      expect(listed.body.items.map((ca: any) => [ca.id, ca.tag, ca.directoryUrl])).toEqual([
+        ["letsencrypt-staging", "staging", null],
+        ["letsencrypt-production", "production", null],
+      ]);
+    }
+    expect((await acmeCas(globex.cookie)).status).toBe(404);
+    expect((await acmeCas("")).status).toBe(401);
   });
 });
 
@@ -145,7 +179,7 @@ describe("who may manage ACME accounts", () => {
     expect((await op.test(body.id)).status).toBe(404);
   });
 
-  test("Organizations have separate accounts even in the same environment", async () => {
+  test("Organizations have separate accounts even with the same ACME CA", async () => {
     const mine = await admin().create();
     const theirs = await accounts(globex.cookie, globex.orgId).create();
     expect(mine.body.accountUrl).not.toBe(theirs.body.accountUrl);
@@ -253,7 +287,7 @@ describe("replacing and testing the account key", () => {
 
 describe("audit", () => {
   test("creating an account and replacing its key are audited, without the key", async () => {
-    const { body } = await admin().create({ environment: "production", contactEmail: "pki@acme.test", termsOfServiceAgreed: true });
+    const { body } = await admin().create({ acmeCaId: "letsencrypt-production", contactEmail: "pki@acme.test", termsOfServiceAgreed: true });
     const newKey = await rollOverAtCa({ accountUrl: body.accountUrl, accountKey: h.createdAccountKeys[0]! });
     expect((await admin().replaceKey(body.id, newKey)).status).toBe(200);
 
@@ -263,12 +297,12 @@ describe("audit", () => {
         action: "acme_account.created",
         target: { type: "acme_account", id: body.id },
         actor: { id: expect.any(String), email: "admin@acme.test" },
-        detail: { environment: "production", accountUrl: body.accountUrl, contactEmail: "pki@acme.test" },
+        detail: { acmeCaId: "letsencrypt-production", accountUrl: body.accountUrl, contactEmail: "pki@acme.test" },
       }),
       expect.objectContaining({
         action: "acme_account.key_replaced",
         target: { type: "acme_account", id: body.id },
-        detail: { environment: "production" },
+        detail: { acmeCaId: "letsencrypt-production" },
       }),
     ]);
     const log = JSON.stringify(await auditOf());

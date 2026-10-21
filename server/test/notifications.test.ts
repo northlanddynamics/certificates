@@ -335,7 +335,7 @@ describe("notices", () => {
     await readyToIssue();
     const mc = await issued();
     await subscribe(mc.id, { type: "channel", id: (await emailChannel()).id });
-    h.caDirectories.staging = "https://localhost:1/dir";
+    h.caDirectories["letsencrypt-staging"] = "https://localhost:1/dir";
     await renewNow(mc.id);
 
     const { mail } = await delivered();

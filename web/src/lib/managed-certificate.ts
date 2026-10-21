@@ -1,5 +1,6 @@
 import { KEY_ALGORITHM_LABELS, type KeyAlgorithm } from "@/lib/csr-generator";
-import type { Issuance, Issuer, ManagedCertificate } from "@/lib/api";
+import type { AcmeCa, Issuance, Issuer, ManagedCertificate } from "@/lib/api";
+import { acmeCaName } from "@/lib/acme-cas";
 import { issuingCaTitle } from "@/lib/private-ca";
 
 /** Whether `userId` is one of the Managed Certificate's Owners directly (a Team's members may be Owners too, which the server decides). */
@@ -26,9 +27,9 @@ const CA_LABELS: Record<string, string> = { "lets-encrypt": "Let's Encrypt" };
 /** A CA by the name people know it by, from its name in the API. */
 export const caLabel = (ca: string) => CA_LABELS[ca] ?? ca;
 
-/** Where a Managed Certificate is issued from, in a few words: an ACME environment, or an Issuing CA with its Private CA. */
-export const issuerLabel = (issuer: Issuer) =>
-  issuer.kind === "acme" ? (issuer.environment === "production" ? "Production" : "Staging") : issuingCaTitle(issuer.privateCa.name, issuer.issuingCa.subject);
+/** Where a Managed Certificate is issued from, in a few words: an ACME CA by name (from `acmeCas`, the Organization's), or an Issuing CA with its Private CA. */
+export const issuerLabel = (issuer: Issuer, acmeCas: AcmeCa[] | undefined) =>
+  issuer.kind === "acme" ? acmeCaName(acmeCas, issuer.acmeCaId) : issuingCaTitle(issuer.privateCa.name, issuer.issuingCa.subject);
 
 /** What an Issuance attempt was for, as a sentence starts. */
 export const ISSUANCE_KIND_WORDS: Record<Issuance["kind"], string> = {

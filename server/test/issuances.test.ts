@@ -31,14 +31,14 @@ afterAll(async () => {
 async function managedCertificateIn(state: Partial<typeof managedCertificate.$inferInsert> = {}) {
   const [row] = await h.db
     .insert(managedCertificate)
-    .values({ organizationId: orgId, names: ["a.example.test"], keyAlgorithm: "ecdsa-p256", keyCustody: "owner", environment: "staging", csr: "not-a-csr", ...state })
+    .values({ organizationId: orgId, names: ["a.example.test"], keyAlgorithm: "ecdsa-p256", keyCustody: "owner", acmeCaId: "letsencrypt-staging", csr: "not-a-csr", ...state })
     .returning();
   return row!;
 }
 
 /**
- * A Certificate the Managed Certificate already has. Its ACME account is for the other environment, so an Issuance that
- * begins still ends at once for want of one in the Managed Certificate's own.
+ * A Certificate the Managed Certificate already has. Its ACME account is with the other built-in ACME CA, so an Issuance
+ * that begins still ends at once for want of one with the Managed Certificate's own.
  */
 async function certificateOf(managedCertificateId: string) {
   let [account] = await h.db.select().from(acmeAccount).where(eq(acmeAccount.organizationId, orgId));
@@ -46,7 +46,7 @@ async function certificateOf(managedCertificateId: string) {
     const [secretRow] = await h.db.insert(secret).values({ organizationId: orgId, ciphertext: Buffer.from("not-a-secret") }).returning();
     [account] = await h.db
       .insert(acmeAccount)
-      .values({ organizationId: orgId, environment: "production", accountUrl: "https://acme.test/acct/1", secretId: secretRow!.id })
+      .values({ organizationId: orgId, acmeCaId: "letsencrypt-production", accountUrl: "https://acme.test/acct/1", secretId: secretRow!.id })
       .returning();
   }
   await h.db.insert(certificate).values({
@@ -59,7 +59,7 @@ async function certificateOf(managedCertificateId: string) {
     names: ["a.example.test"],
     chainPem: "not-a-chain",
     ca: "pebble",
-    environment: "staging",
+    acmeCaId: "letsencrypt-staging",
     acmeAccountId: account!.id,
     issuedAt: new Date("2026-01-01T00:00:00Z"),
   });

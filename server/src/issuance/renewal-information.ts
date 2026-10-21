@@ -49,7 +49,7 @@ export async function informationOf(db: Db, certificateIds: string[]): Promise<M
 export async function refreshRenewalInfo({ db, issuers, now }: { db: Db; issuers: Issuers; now: Date }): Promise<void> {
   const current = currentCertificates(db);
   const due = await db
-    .select({ id: current.id, organizationId: current.organizationId, issuerKind: current.issuerKind, environment: current.environment, acmeAccountId: current.acmeAccountId, issuingCaId: current.issuingCaId, chainPem: current.chainPem })
+    .select({ id: current.id, organizationId: current.organizationId, issuerKind: current.issuerKind, acmeCaId: current.acmeCaId, acmeAccountId: current.acmeAccountId, issuingCaId: current.issuingCaId, chainPem: current.chainPem })
     .from(managedCertificate)
     .innerJoin(current, eq(current.managedCertificateId, managedCertificate.id))
     .leftJoin(renewalInfo, eq(renewalInfo.certificateId, current.id))
@@ -69,7 +69,7 @@ export async function refreshRenewalInfo({ db, issuers, now }: { db: Db; issuers
   const after = (ms: number) => new Date(now.getTime() + ms);
   async function ask(row: (typeof due)[number]) {
     try {
-      const info = await issuers.renewalInfo(certificateIssuerOf(row), row.chainPem);
+      const info = await issuers.renewalInfo(row.organizationId, certificateIssuerOf(row), row.chainPem);
       const retry = info?.retryAfterMs == null ? DEFAULT_RECHECK_MS : Math.min(Math.max(info.retryAfterMs, SHORTEST_RECHECK_MS), LONGEST_RECHECK_MS);
       const values = { windowStart: info?.window.start ?? null, windowEnd: info?.window.end ?? null, checkedAt: now, nextCheckAt: after(retry) };
       await db

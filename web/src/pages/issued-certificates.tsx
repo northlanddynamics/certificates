@@ -9,6 +9,7 @@ import { Sheet, SheetContent, SheetDescription, SheetHeader, SheetTitle } from "
 import { Skeleton } from "@/components/ui/skeleton";
 import { Table, TableBody, TableCell, TableHead, TableHeader, TableRow } from "@/components/ui/table";
 import { can, type Certificate, type ManagedCertificate, type Me } from "@/lib/api";
+import { acmeCaName, useAcmeCas } from "@/lib/acme-cas";
 import { caLabel } from "@/lib/managed-certificate";
 import { useCertificateFacts, useCertificates, useManagedCertificatePage } from "@/lib/use-managed-certificate";
 import { date } from "@/lib/utils";
@@ -131,6 +132,7 @@ function Fact({ label, children }: { label: string; children: ReactNode }) {
 /** One Certificate's full facts: what it is, who issued it and how, its chain, and its revocation if any. */
 function CertificateSheet({ org, m, certificateId, isCurrent, onClose }: { org: Me["organizations"][number]; m: ManagedCertificate; certificateId?: string; isCurrent: boolean; onClose: () => void }) {
   const facts = useCertificateFacts(org.id, m.id, certificateId);
+  const acmeCas = useAcmeCas(org.id).data?.items;
   const c = facts.data;
   return (
     <Sheet open={Boolean(certificateId)} onOpenChange={(open) => !open && onClose()}>
@@ -181,7 +183,7 @@ function CertificateSheet({ org, m, certificateId, isCurrent, onClose }: { org: 
               <Fact label="CA">{caLabel(c.ca)}</Fact>
               {c.acmeAccount && (
                 <Fact label="ACME Account">
-                  <span className="capitalize">{c.acmeAccount.environment}</span> <span className="font-mono text-xs text-muted-foreground">{c.acmeAccount.id}</span>
+                  {acmeCaName(acmeCas, c.acmeAccount.acmeCaId)} <span className="font-mono text-xs text-muted-foreground">{c.acmeAccount.id}</span>
                 </Fact>
               )}
               <Fact label="Chain">

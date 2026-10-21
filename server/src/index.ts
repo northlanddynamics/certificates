@@ -1,7 +1,7 @@
 import "reflect-metadata"; // @peculiar/x509 needs a Reflect polyfill loaded before it
 import { Pool } from "pg";
 import { createApp } from "./app";
-import { createLetsEncrypt } from "./issuance/acme/certificate-authority";
+import { createAcmeCertificateAuthority } from "./issuance/acme/certificate-authority";
 import { createLocalKms } from "./platform/crypto/kms";
 import { ConsoleMailer } from "./platform/mailer";
 import { runMigrations } from "./platform/migrate";
@@ -24,7 +24,7 @@ const { app, auth, db, issuances, renewals, notifications, auditForwarding, crls
   trustedOrigins: process.env.TRUSTED_ORIGINS?.split(",").map((o) => o.trim()).filter(Boolean),
   secret,
   kms: createLocalKms(localKmsKey),
-  certificateAuthority: createLetsEncrypt(),
+  certificateAuthority: createAcmeCertificateAuthority(),
   agentGateway: {
     // An Agent's poll waits for work this long, so that relayed DNS operations reach it at once (see AgentGatewayConfig).
     longPollSeconds: Number(process.env.AGENT_LONG_POLL_SECONDS ?? 20),

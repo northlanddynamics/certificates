@@ -1,6 +1,6 @@
 // Why an Issuance failed, in terms a person can act on. Every failure of DCV or of the CA ends as one of these.
 export const ISSUANCE_FAILURE_CODES = [
-  /** The Organization has no ACME account in the Managed Certificate's environment. */
+  /** The Organization has no ACME account with the Managed Certificate's ACME CA. */
   "no_acme_account",
   /** No DNS Provider of the Organization publishes records for one of the names. */
   "no_dns_provider",

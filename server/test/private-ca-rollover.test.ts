@@ -269,13 +269,13 @@ describe("repointing a Managed Certificate to another Issuing CA", () => {
   test("across kinds of issuer is refused, either way", async () => {
     const ca = await createCa();
     const onPrivateCa = await issued(ca);
-    const onAcme = await api("/managed-certificates", { ...(await request(["www.acme.test"])), environment: "staging" });
+    const onAcme = await api("/managed-certificates", { ...(await request(["www.acme.test"])), acmeCaId: "letsencrypt-staging" });
     expect(onAcme.status).toBe(201);
     await h.settleIssuances();
 
-    expect((await repoint(onPrivateCa.id, { kind: "acme", environment: "staging" })).status).toBe(422);
+    expect((await repoint(onPrivateCa.id, { kind: "acme", acmeCaId: "letsencrypt-staging" })).status).toBe(422);
     expect((await repoint(onAcme.body.id, { kind: "private_ca", issuingCaId: ca.issuing.id })).status).toBe(422);
-    expect((await api(`/managed-certificates/${onAcme.body.id}`)).body.issuer).toEqual({ kind: "acme", environment: "staging" });
+    expect((await api(`/managed-certificates/${onAcme.body.id}`)).body.issuer).toEqual({ kind: "acme", acmeCaId: "letsencrypt-staging" });
   });
 
   test("only an Organization Administrator may, not even an Owner", async () => {

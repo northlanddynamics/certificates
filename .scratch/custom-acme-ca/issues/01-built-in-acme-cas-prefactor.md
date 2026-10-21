@@ -4,11 +4,11 @@
 
 **Blocked by:** None (can start immediately)
 
-**Status:** ready-for-agent
+**Status:** resolved
 
-- [ ] An ACME Account belongs to an ACME CA (at most one per Organization and CA); existing accounts, Managed Certificates and Certificates migrate to the built-in CAs with nothing lost.
-- [ ] The issuer reference is `acmeCaId` through Issuance, Renewal, ARI, Revocation, the API and the agent contract; there is no `environment` alias, and the `environment` columns on Managed Certificate and Certificate are gone.
-- [ ] The ACME accounts page and the registration dialog show the two built-in CAs read-only, with a tag badge; registering needs only a contact email and agreeing to the terms.
-- [ ] The issuer picker for a Managed Certificate lists the built-in CAs, Let's Encrypt Staging first and the default.
-- [ ] `CONTEXT.md` defines **ACME CA**, rewords **ACME Account**, and defines the environment tag; one short ADR records replacing `environment` with `acmeCaId`.
-- [ ] Existing tests pass, changed only where the issuer shape they assert has changed; a migration test covers existing rows.
+- [x] An ACME Account belongs to an ACME CA (at most one per Organization and CA); existing accounts, Managed Certificates and Certificates migrate to the built-in CAs with nothing lost.
+- [x] The issuer reference is `acmeCaId` through Issuance, Renewal, ARI, Revocation, the API and the agent contract; there is no `environment` alias, and the `environment` columns on Managed Certificate and Certificate are gone.
+- [x] The ACME accounts page and the registration dialog show the two built-in CAs read-only, with a tag badge; registering needs only a contact email and agreeing to the terms.
+- [x] The issuer picker for a Managed Certificate lists the built-in CAs, Let's Encrypt Staging first and the default.
+- [x] `CONTEXT.md` defines **ACME CA**, rewords **ACME Account**, and defines the environment tag; one short ADR records replacing `environment` with `acmeCaId`.
+- [x] Existing tests pass, changed only where the issuer shape they assert has changed; a migration test covers existing rows.

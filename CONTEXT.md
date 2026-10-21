@@ -122,8 +122,16 @@ _Avoid_: intermediate, sub-CA
 An Issuing CA's list of the Certificates it signed that are revoked and not yet expired (a platform-made root's, of its Issuing CAs), signed by that CA's key and served to anyone, without credentials and over plain HTTP, from the URL each of its certificates names. It is reissued whenever one is revoked, and at least 3 days before it stops being current, 7 days after it was issued.
 _Avoid_: revocation list, blacklist
 
+**ACME CA**:
+A Certificate Authority the platform obtains Certificates from over ACME: a directory URL and what is needed to register an account there. Let's Encrypt Staging and Let's Encrypt Production are built in, the same for every Organization, defined in code by stable ids (`letsencrypt-staging`, `letsencrypt-production`) and never changed. A Managed Certificate whose issuer is an ACME CA names it by id.
+_Avoid_: ACME provider, ACME server, environment (for the CA itself)
+
+**Environment Tag**:
+A label on an ACME CA, `staging` or `production`, or none, recording what it is for. It changes nothing about how the CA issues: it is shown as a badge and can be filtered on. The built-in ACME CAs carry fixed tags; a past Certificate shows its ACME CA's current tag.
+_Avoid_: environment (as a setting that changes behaviour)
+
 **ACME Account**:
-An Organization's own account with a Certificate Authority, in its staging or production environment. Its key is a Secret.
+An Organization's own account with one ACME CA, at most one per ACME CA. A Managed Certificate on that ACME CA is issued through it. Its key is a Secret.
 _Avoid_: CA account, registration
 
 **Domain Control Validation (DCV)**:

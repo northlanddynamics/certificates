@@ -281,7 +281,7 @@ describe("Revocation", () => {
   test("when the CA cannot be reached, the Certificate is not shown as revoked and nothing is audited", async () => {
     const mc = await setup();
     const { id: certificateId } = await only(mc.id);
-    h.caDirectories.staging = "https://localhost:1/dir";
+    h.caDirectories["letsencrypt-staging"] = "https://localhost:1/dir";
 
     const res = await revoke(mc.id, certificateId);
 
@@ -289,7 +289,7 @@ describe("Revocation", () => {
     expect((await get(mc.id)).currentCertificate.revocation).toBeNull();
     expect((await auditOf()).filter((e) => e.action === "certificate.revoked")).toEqual([]);
     // Once the CA is back it can be revoked.
-    h.caDirectories.staging = h.caDirectories.production;
+    h.caDirectories["letsencrypt-staging"] = h.caDirectories["letsencrypt-production"];
     expect((await revoke(mc.id, certificateId)).status).toBe(200);
   });
 
