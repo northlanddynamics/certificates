@@ -13,6 +13,7 @@ import { ApiKeysPage } from "./pages/api-keys";
 import { CertificatesPage } from "./pages/certificates";
 import { CsrToolsPage } from "./pages/csr-tools";
 import { ViewerPage } from "./pages/viewer";
+import { DeploymentScriptGuidePage } from "./pages/deployment-script-guide";
 import { DeploymentScriptsPage } from "./pages/deployment-scripts";
 import { DeploymentsPage } from "./pages/deployments";
 import { DnsProvidersPage } from "./pages/dns-providers";
@@ -116,6 +117,13 @@ const deploymentScriptsRoute = createRoute({
   getParentRoute: () => appRoute,
   path: "/organizations/$orgId/deployment-scripts",
   component: DeploymentScriptsPage,
+});
+
+// How to write a script; the rest of the app links into its sections by anchor.
+const deploymentScriptGuideRoute = createRoute({
+  getParentRoute: () => appRoute,
+  path: "/organizations/$orgId/deployment-scripts/guide",
+  component: DeploymentScriptGuidePage,
 });
 
 const deploymentsRoute = createRoute({
@@ -232,7 +240,7 @@ const routeTree = rootRoute.addChildren([
       certificateNotificationsRoute,
       certificateUnknownTabRoute,
     ]),
-    membersRoute, teamsRoute, apiKeysRoute, agentsRoute, deploymentsRoute, deploymentScriptsRoute, acmeAccountsRoute, privateCasRoute, enrollmentProfilesRoute, deviceCertificatesRoute, dnsProvidersRoute, notificationChannelsRoute, auditLogRoute, auditForwardingRoute, signInSettingsRoute,
+    membersRoute, teamsRoute, apiKeysRoute, agentsRoute, deploymentsRoute, deploymentScriptsRoute, deploymentScriptGuideRoute, acmeAccountsRoute, privateCasRoute, enrollmentProfilesRoute, deviceCertificatesRoute, dnsProvidersRoute, notificationChannelsRoute, auditLogRoute, auditForwardingRoute, signInSettingsRoute,
     loginPolicyRedirectRoute, ssoConnectionsRedirectRoute, csrToolsRoute, viewerRoute,
     accountSecurityRoute,
     platformOrganizationsRoute,

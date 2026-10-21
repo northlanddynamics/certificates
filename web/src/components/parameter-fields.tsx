@@ -56,7 +56,10 @@ export function ParameterFields({
             <Input id={id} value={values[p.name]} placeholder={p.default} aria-required={p.required} aria-invalid={problem !== undefined} onChange={(e) => onChange(p.name, e.target.value)} />
             <FieldDescription>
               {p.description && <>{p.description} </>}
-              The script finds it in <code>DEPLOY_PARAM_{p.name}</code>.
+              The script finds it in <code>DEPLOY_PARAM_{p.name}</code>
+              {/* What a blank does, as the server applies it: the default, or nothing at all. */}
+              {!p.required && (p.default?.trim() ? "; left blank, it is given the default." : "; left blank, it is not set at all.")}
+              {p.required && "."}
             </FieldDescription>
             {problem && (
               <FieldError>
