@@ -2,7 +2,7 @@
 // ACME client is the real one; the account's key is a secret that no API returns (ADR 0002).
 import { afterAll, beforeAll, beforeEach, describe, expect, spyOn, test } from "bun:test";
 import acme from "acme-client";
-import { PASSWORD, PEBBLE_DIRECTORY, PEBBLE_EAB_DIRECTORY, PEBBLE_EAB_KEY, createHarness, type Harness } from "./support/harness";
+import { PASSWORD, PEBBLE_DIRECTORY, PEBBLE_EAB_DIRECTORY, PEBBLE_MANAGEMENT, PEBBLE_EAB_KEY, createHarness, type Harness } from "./support/harness";
 
 let h: Harness;
 let operator: string;
@@ -262,7 +262,8 @@ describe("adding a custom ACME CA", () => {
       `https://[::1]:${pebblePort}/dir`,
       `https://127.0.0.2:${pebblePort}/dir`,
       `https://0.0.0.0:${pebblePort}/dir`,
-      `https://localhost:${Number(pebblePort) + 1}/dir`,
+      // Its management port: localhost, but not an origin the tests allow (14001 is the Pebble requiring EAB, which they do).
+      `https://localhost:${new URL(PEBBLE_MANAGEMENT).port}/dir`,
       "https://169.254.169.254/latest/meta-data/",
       "https://[fe80::1]/dir",
       "https://[::ffff:127.0.0.1]/dir",
@@ -364,7 +365,7 @@ describe("External Account Binding", () => {
       expect(refused.status).toBe(422);
       expect(refused.body.error).toBeTruthy();
     }
-    expect((await eabCa(undefined)).body.error).toMatch(/external account/i);
+    expect((await eabCa(undefined)).body.error).toMatch(/external ?account/i);
     expect((await acmeCasOf()).filter((ca) => !ca.builtIn)).toEqual([]);
     expect((await admin().list()).body.items).toEqual([]);
     expect(h.createdAccountKeys).toEqual([]);
