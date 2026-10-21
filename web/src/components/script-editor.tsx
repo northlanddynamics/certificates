@@ -1,6 +1,6 @@
 import { defaultKeymap, history, historyKeymap, indentWithTab } from "@codemirror/commands";
 import { bracketMatching, HighlightStyle, syntaxHighlighting } from "@codemirror/language";
-import { Compartment } from "@codemirror/state";
+import { Compartment, EditorState } from "@codemirror/state";
 import { drawSelection, EditorView, highlightActiveLine, highlightActiveLineGutter, keymap, lineNumbers } from "@codemirror/view";
 import { tags } from "@lezer/highlight";
 import { useEffect, useRef } from "react";
@@ -94,4 +94,38 @@ function stateFor(value: string, interpreter: DeploymentScript["interpreter"], l
       if (update.docChanged) onChange(scriptText(update.state));
     }),
   ]);
+}
+
+/** A script shown, not edited: the same colours as the editor, and the text selectable and copyable as it is. */
+export function ScriptView({
+  code,
+  interpreter,
+  label,
+  lineNumbers: numbered = false,
+  className,
+}: {
+  code: string;
+  interpreter: DeploymentScript["interpreter"];
+  /** What it is, for those who cannot see it. */
+  label: string;
+  lineNumbers?: boolean;
+  className?: string;
+}) {
+  const host = useRef<HTMLDivElement>(null);
+  useEffect(() => {
+    const view = new EditorView({
+      parent: host.current!,
+      state: scriptState(code, [
+        ...(numbered ? [lineNumbers()] : []),
+        scriptLanguage(interpreter),
+        syntaxHighlighting(highlight),
+        theme,
+        EditorState.readOnly.of(true),
+        EditorView.editable.of(false),
+        EditorView.contentAttributes.of({ "aria-label": label }),
+      ]),
+    });
+    return () => view.destroy();
+  }, [code, interpreter, label, numbered]);
+  return <div ref={host} className={className} />;
 }

@@ -3,6 +3,7 @@ import { ShieldAlertIcon, TriangleAlertIcon } from "lucide-react";
 import type { ReactNode } from "react";
 import { toast } from "sonner";
 import { CopyButton } from "@/components/copy-button";
+import { ScriptCode } from "@/components/script-code";
 import { GuidePage, GuideSection } from "@/components/guide";
 import { Alert, AlertDescription, AlertTitle } from "@/components/ui/alert";
 import { Badge } from "@/components/ui/badge";
@@ -304,7 +305,7 @@ function FieldRow({ field, needed = false, children }: { field: string; needed?:
 function Code({ text, label }: { text: string; label: string }) {
   return (
     <div className="relative">
-      <pre className="overflow-x-auto rounded-md border bg-muted p-3 pr-10 font-mono text-xs leading-relaxed">{text}</pre>
+      <ScriptCode code={text} interpreter="bash" label="An example parameter section" className="pr-8" />
       <div className="absolute top-1.5 right-1.5">
         <CopyButton text={text} label={label} />
       </div>
@@ -336,7 +337,7 @@ function Example({ interpreter, mayUpload, orgId }: { interpreter: DeploymentScr
                 {step.yours && <Badge>Your code</Badge>}
               </span>
               {step.note && <p className="text-muted-foreground">{step.note}</p>}
-              <pre className="overflow-x-auto rounded-md border bg-muted p-3 font-mono text-xs leading-relaxed">{step.code}</pre>
+              <ScriptCode code={step.code} interpreter={interpreter} label={`Step ${i + 1}: ${step.title}`} />
             </div>
           </li>
         ))}

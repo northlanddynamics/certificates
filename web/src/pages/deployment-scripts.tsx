@@ -6,6 +6,7 @@ import { Suspense, lazy, useState, type FormEvent, type ReactNode } from "react"
 import { DataTable } from "@/components/data-table/data-table";
 import { DataTableFacetedFilter } from "@/components/data-table/data-table-faceted-filter";
 import { DataTablePagination } from "@/components/data-table/data-table-pagination";
+import { ScriptCode } from "@/components/script-code";
 import { ScriptEnvironment } from "@/components/script-environment";
 import { GuideLink } from "@/components/guide";
 import { Alert, AlertDescription, AlertTitle } from "@/components/ui/alert";
@@ -228,9 +229,7 @@ function Versions({ orgId, script }: { orgId: string; script: DeploymentScript }
             <TabsTrigger value="environment">Environment</TabsTrigger>
           </TabsList>
           <TabsContent value="content">
-            <pre aria-label={`Content of version ${content.data.version}`} className="max-h-80 overflow-auto rounded-md border bg-muted p-3 font-mono text-xs">
-              {content.data.content}
-            </pre>
+            <ScriptCode code={content.data.content} interpreter={script.interpreter} label={`Content of version ${content.data.version}`} lineNumbers className="max-h-80" />
           </TabsContent>
           <TabsContent value="parameters" className="flex flex-col gap-3">
             <p className="text-sm text-muted-foreground">
