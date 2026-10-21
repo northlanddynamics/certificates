@@ -187,6 +187,8 @@ export interface Renewal {
 export interface ManagedCertificate {
   id: string;
   names: string[];
+  /** The common name of the current Certificate's subject; none before one is issued, or when it has none. `names` are its subject alternative names. */
+  commonName: string | null;
   keyAlgorithm: string;
   /** Who holds the private key: the Owner, who submitted a CSR, or one Agent, through its one Deployment. */
   keyCustody: "owner" | "agent";

@@ -7,6 +7,7 @@ import { APPROVAL_STATUSES } from "./approval";
 import { AGENT_STATUSES, agentStatus } from "../agents/agents";
 import type { Authorizer } from "../tenancy/authorization";
 import { ACME_ENVIRONMENTS } from "../issuance/acme/certificate-authority";
+import { commonNameOf } from "../pki/certificate-facts";
 import { KEY_ALGORITHMS, KEY_CUSTODIES } from "../pki/csr";
 import type { Db } from "../platform/db/client";
 import { agent, certificate, deployment, issuance, issuingCa, managedCertificate, privateCa } from "../platform/db/schema";
@@ -127,6 +128,7 @@ export const Owner = z.discriminatedUnion("type", [
 export const ManagedCertificate = z.object({
   id: z.string(),
   names: z.array(z.string()),
+  commonName: z.string().nullable().openapi({ description: "The common name in the subject of `currentCertificate`; none before one is issued, or when its subject has none. The names are its subject alternative names." }),
   keyAlgorithm: z.enum(KEY_ALGORITHMS),
   keyCustody: z.enum(KEY_CUSTODIES).openapi({ description: "`owner`: the Owner holds the private key and submitted a CSR. `agent`: one Agent made the key and holds it, through its one Deployment." }),
   environment: z.enum(ACME_ENVIRONMENTS).nullable().openapi({ description: "The ACME environment, as in `issuer`; none for one issued from a Private CA." }),
@@ -291,6 +293,7 @@ export function createManagedCertificateReader({ db, authorize, clock, agentOffl
       return {
         id: row.id,
         names: row.names,
+        commonName: current ? commonNameOf(current.chainPem) : null,
         keyAlgorithm: row.keyAlgorithm,
         keyCustody: row.keyCustody,
         environment: row.environment,
