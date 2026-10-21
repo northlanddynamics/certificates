@@ -22,10 +22,15 @@ type Org = Me["organizations"][number];
 const features = tableFeatures({ rowPaginationFeature });
 const columnHelper = createColumnHelper<typeof features, ManagedCertificate>();
 const makeColumns = (orgId: string) => columnHelper.columns([
+  columnHelper.accessor((m) => m.commonName ?? "—", {
+    id: "commonName",
+    header: "Common name",
+    cell: ({ cell, row }) => <ManagedCertificateLink orgId={orgId} id={row.original.id}>{cell.getValue()}</ManagedCertificateLink>,
+  }),
   columnHelper.accessor((m) => m.names.join(", "), {
     id: "names",
-    header: "Names",
-    cell: ({ cell, row }) => <ManagedCertificateLink orgId={orgId} id={row.original.id}>{cell.getValue()}</ManagedCertificateLink>,
+    header: "SANs",
+    cell: ({ cell }) => <span className="block max-w-80 truncate text-muted-foreground">{cell.getValue()}</span>,
   }),
   columnHelper.accessor("environment", { header: "Environment", cell: ({ cell }) => <Badge variant="outline" className="capitalize">{cell.getValue()}</Badge> }),
   columnHelper.accessor((m) => keyAlgorithmLabel(m.keyAlgorithm), { id: "keyAlgorithm", header: "Key algorithm" }),

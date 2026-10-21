@@ -43,3 +43,9 @@ export function certificateFacts(chainPem: string) {
     })),
   };
 }
+
+/** The leaf's common name, or null when its subject has none (a CA's short-lived Certificates have none). */
+export function commonNameOf(chainPem: string) {
+  const [leaf] = chainPem.match(/-----BEGIN CERTIFICATE-----[^-]+-----END CERTIFICATE-----/) ?? [];
+  return leaf ? (new x509.X509Certificate(leaf).subjectName.getField("CN")[0] ?? null) : null;
+}
