@@ -26,6 +26,7 @@ import { createIntuneKind } from "../../src/enrollment/intune";
 import { IntuneDouble } from "./intune-double";
 import { sharedChallenge } from "../../src/enrollment/shared-challenge";
 import { SCEP_DEFAULTS, type ScepConfig } from "../../src/enrollment/scep";
+import { startDirectoryProxy } from "./directory-proxy";
 
 export const TEST_DATABASE_URL =
   process.env.TEST_DATABASE_URL ?? "postgres://postgres:postgres@localhost:5433/certs_test";
@@ -120,6 +121,11 @@ export interface Harness {
   caRoots: { current: () => Promise<string[]> };
   /** The private keys of the ACME accounts the platform created at the CA, as PEM; for tests to check they never leak. */
   createdAccountKeys: string[];
+  /**
+   * A directory URL for a custom ACME CA that is Pebble's directory without the entries `omit` (such as `revokeCert` or
+   * `renewalInfo`): a CA that offers less than Pebble. Every URL it lists is Pebble's, so its accounts and Certificates are too.
+   */
+  pebbleDirectoryWithout(...omit: string[]): string;
   /** When set, the CA refuses to register an account, giving this as its reason; null (after reset) lets Pebble decide. */
   registrationRefusal: { reason: string | null };
   /** The hooks the app runs when a member is removed; empty unless a test adds one (and takes it out again). */
@@ -208,13 +214,14 @@ export async function createHarness(overrides: Partial<AppDeps> = {}, { database
   // Devices are told apart by the X-Forwarded-For a TLS terminator would add, as tests have no sockets.
   const scep: ScepConfig = { ...SCEP_DEFAULTS, trustForwardedFor: true };
   const localKms = createLocalKms(TEST_KMS_KEY);
+  const directoryProxy = await startDirectoryProxy({ pebbleDirectory: PEBBLE_DIRECTORY, pebbleCa: PEBBLE_CA });
   // The real ACME client against Pebble; it only notes the keys it generated.
   const letsEncrypt = createAcmeCertificateAuthority({
-    trustedCa: PEBBLE_CA,
+    trustedCa: [PEBBLE_CA, directoryProxy.ca],
     roots: { "letsencrypt-staging": () => caRoots.current(), "letsencrypt-production": () => caRoots.current() },
     pollMs: { min: 200, max: 1000 },
-    // Pebble is on localhost, which a custom ACME CA's directory may otherwise not be.
-    allowedDirectoryOrigins: [new URL(PEBBLE_DIRECTORY).origin],
+    // Pebble, and the directories that stand for a CA offering less, are on localhost, which a custom ACME CA's directory may otherwise not be.
+    allowedDirectoryOrigins: [new URL(PEBBLE_DIRECTORY).origin, directoryProxy.origin],
   });
   const bindTxt = createTxtResolver([`${BIND.server}:${BIND.port}`]);
   const dcvResolver = { current: bindTxt };
@@ -339,6 +346,7 @@ export async function createHarness(overrides: Partial<AppDeps> = {}, { database
     failInterruptedIssuances: () => issuances.failInterrupted(),
     caRoots,
     createdAccountKeys,
+    pebbleDirectoryWithout: directoryProxy.without,
     registrationRefusal,
     memberRemovalHooks,
     enrollmentValidations,
@@ -395,7 +403,10 @@ export async function createHarness(overrides: Partial<AppDeps> = {}, { database
       return { orgId: created.body.id, cookie: await harness.signIn(adminEmail, PASSWORD), invitationId: created.body.invitationId };
     },
     reset,
-    close: () => pool.end(),
+    async close() {
+      await directoryProxy.stop();
+      await pool.end();
+    },
   };
   return harness;
 }

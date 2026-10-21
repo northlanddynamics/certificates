@@ -97,7 +97,7 @@ function NewManagedCertificateForm({
   onCreated: (created: ManagedCertificate) => void;
 }) {
   const [step, setStep] = useState<StepId>("authority");
-  const choice = useIssuerChoice(org.id, { canReadAccounts: can(org, "acmeAccount", "read"), canReadPrivateCas: can(org, "privateCa", "read") });
+  const choice = useIssuerChoice(org.id, { canReadPrivateCas: can(org, "privateCa", "read") });
   const { chosenCa, validityOk, keyAlgorithms } = choice;
   const [names, setNames] = useState("");
   const [keyAlgorithm, setKeyAlgorithm] = useState<KeyAlgorithm>("ecdsa-p256");

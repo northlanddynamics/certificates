@@ -142,7 +142,8 @@ export function createIssuers({ acme, acmeCas, secrets, privateCas }: { acme: Ac
       const account = await openAccount(db, organizationId, eq(acmeAccount.acmeCaId, issuer.acmeCaId));
       if (!account) throw new IssuanceFailure("no_acme_account", `the Organization has no ACME account with ${ca.name}; register one first`);
       const chainPem = await acme.issue(ca, account, { csr, responder: dcv(), replaces });
-      return { chainPem, ca: acme.name, issuedBy: { kind: "acme", acmeCaId: issuer.acmeCaId, acmeAccountId: account.id } };
+      // A custom ACME CA is recorded by its name; the built-in ones by what the CA calls itself.
+      return { chainPem, ca: ca.builtIn ? acme.name : ca.name, issuedBy: { kind: "acme", acmeCaId: issuer.acmeCaId, acmeAccountId: account.id } };
     },
     async revoke(tx, _change, organizationId, issuedBy, request) {
       const account = await openAccount(tx, organizationId, eq(acmeAccount.id, issuedBy.acmeAccountId));

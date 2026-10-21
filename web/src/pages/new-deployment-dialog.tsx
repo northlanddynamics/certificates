@@ -61,7 +61,7 @@ function NewDeploymentForm({ org, onDone }: { org: Me["organizations"][number]; 
   const [agentId, setAgentId] = useState("");
   const [names, setNames] = useState("");
   const [keyAlgorithm, setKeyAlgorithm] = useState<KeyAlgorithm>("ecdsa-p256");
-  const choice = useIssuerChoice(orgId, { canReadAccounts: can(org, "acmeAccount", "read"), canReadPrivateCas: can(org, "privateCa", "read") });
+  const choice = useIssuerChoice(orgId, { canReadPrivateCas: can(org, "privateCa", "read") });
   // Only what the chosen CA takes is offered, as the server says: choosing a CA that does not take the key algorithm chosen moves to its first.
   const offered = choice.keyAlgorithms.length > 0 ? choice.keyAlgorithms : [keyAlgorithm];
   useEffect(() => {
