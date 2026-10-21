@@ -3,6 +3,7 @@
 // or edit (ADR 0004). Running a script on an Agent is a later ticket.
 import * as acme from "acme-client";
 import { randomBytes } from "node:crypto";
+import { readFileSync } from "node:fs";
 import { afterAll, beforeAll, beforeEach, describe, expect, test } from "bun:test";
 import { BIND, PASSWORD, createHarness, type Harness } from "./support/harness";
 
@@ -418,5 +419,33 @@ describe("declared parameters", () => {
     expect(changed.status).toBe(201);
     expect(changed.body.latestVersion.hash).not.toBe((await h.api(`${scriptsOf()}/${id}`, { cookie: acmeOrg.cookie })).body.versions[1].hash);
     expect(changed.body.latestVersion.parameters[1].default).toBe("8443");
+  });
+
+  test("the guide's worked examples upload and declare the parameters the guide describes", async () => {
+    const guide = readFileSync(new URL("../../docs/deployment-scripts.md", import.meta.url), "utf8");
+    const examples = [...guide.matchAll(/^```(bash|powershell)\n([\s\S]*?)^```$/gm)]
+      .filter(([, , content]) => content!.includes("# deploy-params:begin"))
+      .map(([, interpreter, content]) => ({ interpreter: interpreter!, content: content! }));
+    expect(examples.map((e) => e.interpreter)).toEqual(["bash", "powershell"]);
+
+    const declared = [];
+    for (const [i, { interpreter, content }] of examples.entries()) {
+      const created = await upload({ name: `example-${i + 1}`, interpreter, content });
+      expect(created.status).toBe(201);
+      declared.push(created.body.latestVersion.parameters.map(({ name, label, required, default: fallback }: any) => ({ name, label, required, default: fallback })));
+    }
+
+    expect(declared).toEqual([
+      [
+        { name: "SITE", label: "Site", required: true, default: undefined },
+        { name: "SERVICE", label: "Service", required: false, default: "nginx" },
+        // No label, so the name is shown.
+        { name: "KEY_OWNER", label: "KEY_OWNER", required: false, default: undefined },
+      ],
+      [
+        { name: "TARGET_DIR", label: "Directory", required: true, default: undefined },
+        { name: "SERVICE", label: "Service", required: false, default: undefined },
+      ],
+    ]);
   });
 });

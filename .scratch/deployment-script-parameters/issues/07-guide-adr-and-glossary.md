@@ -10,3 +10,7 @@
 - [ ] The worked example's section format parses with the upload code
 - [ ] ADR 0010 states the plain-text decision, why, and the Agent-environment alternative for secrets
 - [ ] `CONTEXT.md` defines Deployment Parameter in the glossary's style
+
+## Comments
+
+- The repo had no Deployment Scripts guide (and so no "Parameter bindings" section); the README's Deployment paragraphs were the only documentation. The guide is new, `docs/deployment-scripts.md`, linked from the README, which also names the `DEPLOY_PARAM_` variables beside the `CERT_*` ones. It has a Bash and a PowerShell worked example; `deployment-scripts.test.ts` uploads both from the guide and checks what they declare, so the examples cannot drift from the parser. ADR 0010 and the `CONTEXT.md` term are added. The test runs in the PR's CI: this environment cannot run it.
