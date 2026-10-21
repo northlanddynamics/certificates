@@ -248,6 +248,14 @@ describe("adding a custom ACME CA", () => {
     expect(h.createdAccountKeys).toEqual([]);
   });
 
+  test("the rule is checked again each time the platform connects to the CA", async () => {
+    const { body } = await customCa();
+    expect((await admin().test(body.account.id)).body).toEqual({ ok: true });
+    // As if its directory had been moved to where it may not be, past the check when it was saved.
+    await h.pool.query(`update acme_ca set directory_url = $1 where id = $2`, [`https://127.0.0.1:${new URL(PEBBLE_DIRECTORY).port}/dir`, body.acmeCa.id]);
+    expect((await admin().test(body.account.id)).body).toEqual({ ok: false, error: "the directory URL must not point at a loopback or link-local address" });
+  });
+
   test("the terms of service must be agreed to, and a name given", async () => {
     expect((await customCa({ termsOfServiceAgreed: false })).status).toBe(400);
     expect((await customCa({ termsOfServiceAgreed: undefined })).status).toBe(400);

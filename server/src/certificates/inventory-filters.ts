@@ -3,7 +3,7 @@
 // caller may see.
 import { z } from "@hono/zod-openapi";
 import { and, eq, inArray, isNotNull, isNull, or, sql, type SQL } from "drizzle-orm";
-import { ACME_CA_TAGS, BUILT_IN_ACME_CAS } from "../issuance/acme/acme-cas";
+import { ACME_CA_TAGS, BUILT_IN_ACME_CAS, type AcmeCaTag } from "../issuance/acme/acme-cas";
 import { KEY_ALGORITHMS, KEY_CUSTODIES, type KeyAlgorithm } from "../pki/csr";
 import { acmeCa, agent, certificate, deployment, issuance, managedCertificate } from "../platform/db/schema";
 import { agentOffline } from "../agents/agents";
@@ -55,7 +55,7 @@ export const INVENTORY_FILTERS = {
   noOwners: filter(on.meta({ description: "Managed Certificates with no Owners." }), () => hasNoOwners()),
   keyCustody: filter(z.enum(KEY_CUSTODIES).meta({ description: "Whose private key is held this way." }), (value) => eq(managedCertificate.keyCustody, value)),
   tag: filter(anyOf(ACME_CA_TAGS).meta({ description: "Issued from an ACME CA tagged with one of these, comma-separated." }), (value) => {
-    const tags = value.split(",") as (typeof ACME_CA_TAGS)[number][];
+    const tags = value.split(",") as AcmeCaTag[];
     // A built-in ACME CA's tag is in code; a custom one's is on its row, which is the Managed Certificate's Organization's.
     const builtIn = BUILT_IN_ACME_CAS.filter((ca) => tags.includes(ca.tag)).map((ca) => ca.id);
     const custom = sql`exists (select 1 from ${acmeCa} where ${acmeCa.id}::text = ${managedCertificate.acmeCaId} and ${acmeCa.organizationId} = ${managedCertificate.organizationId} and ${inArray(acmeCa.tag, tags)})`;

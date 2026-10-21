@@ -4,7 +4,7 @@
 
 **Blocked by:** 01
 
-**Status:** resolved
+**Status:** done
 
 - [x] Creating a custom CA registers the account with it in one operation; if the CA refuses, nothing is saved and the CA's reason is shown.
 - [x] Names are unique within the Organization; an Organization may have several custom CAs.

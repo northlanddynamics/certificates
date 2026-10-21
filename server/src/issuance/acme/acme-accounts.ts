@@ -7,13 +7,13 @@ import { and, asc, eq } from "drizzle-orm";
 import { createPrivateKey } from "node:crypto";
 import type { Authorizer } from "../../tenancy/authorization";
 import { roleCan } from "../../tenancy/permissions";
-import { CertificateAuthorityError, type AcmeCertificateAuthority } from "./certificate-authority";
+import { CertificateAuthorityError, type AcmeCertificateAuthority, type CaAccount } from "./certificate-authority";
 import { ACME_CA_TAGS, AcmeCaId, BUILT_IN_ACME_CAS, DEFAULT_ACME_CA_ID, customAcmeCa, type AcmeCa, type AcmeCas } from "./acme-cas";
-import type { Db } from "../../platform/db/client";
+import type { Db, Tx } from "../../platform/db/client";
 import { acmeAccount, acmeCa as acmeCaTable } from "../../platform/db/schema";
 import { HttpError, OrgParam, errors, isUniqueViolation, json } from "../../platform/http";
 import type { Secrets } from "../../platform/crypto/secrets";
-import type { Actor, UnitOfWork } from "../../platform/unit-of-work";
+import type { Actor, Change, UnitOfWork } from "../../platform/unit-of-work";
 
 const AccountParams = OrgParam.extend({ accountId: z.string().openapi({ param: { name: "accountId", in: "path" } }) });
 // Deliberately without any key material: this is every shape the account is ever returned in.
@@ -82,6 +82,22 @@ export function registerAcmeAccounts(ctx: {
 }) {
   const { app, db, requireUser, authorize, unitOfWork, secrets, certificateAuthority: ca, acmeCas } = ctx;
 
+  /** Saves the account the CA registered, its key as a secret, and audits it, in the change at hand. */
+  async function saveAccount(tx: Tx, change: Change, orgId: string, acmeCaId: string, created: CaAccount, contactEmail: string | undefined) {
+    const secretId = await secrets.create(tx, orgId, created.accountKey);
+    const [row] = await tx
+      .insert(acmeAccount)
+      .values({ organizationId: orgId, acmeCaId, accountUrl: created.accountUrl, contactEmail: contactEmail ?? null, secretId })
+      .returning();
+    await change.audit({
+      organizationId: orgId,
+      action: "acme_account.created",
+      target: { type: "acme_account", id: row!.id },
+      detail: { acmeCaId, accountUrl: created.accountUrl, contactEmail: contactEmail ?? null },
+    });
+    return row!;
+  }
+
 
   app.openapi(
     createRoute({
@@ -122,34 +138,21 @@ export function registerAcmeAccounts(ctx: {
       const actor = await requireUser(c);
       await authorize(actor, orgId, { acmeAccount: ["create"] });
       // Checked before the CA is asked, so that a name taken already leaves no account behind at the CA.
-      const taken = async () =>
-        BUILT_IN_ACME_CAS.some((ca) => ca.name === name) ||
-        (await db.select({ id: acmeCaTable.id }).from(acmeCaTable).where(and(eq(acmeCaTable.organizationId, orgId), eq(acmeCaTable.name, name)))).length > 0;
-      if (await taken()) throw nameTaken(name);
+      const [sameName] = await db.select({ id: acmeCaTable.id }).from(acmeCaTable).where(and(eq(acmeCaTable.organizationId, orgId), eq(acmeCaTable.name, name)));
+      if (sameName || BUILT_IN_ACME_CAS.some((ca) => ca.name === name)) throw nameTaken(name);
 
       // Not saved yet, so it has no id; registering needs only where it is, and it is checked there as a custom one.
       const created = await ca.createAccount({ id: "", name, directoryUrl, tag, builtIn: false }, { contactEmail }).catch((err) => caFailure(err));
       try {
         const { caRow, accountRow } = await unitOfWork.run(actor, async (tx, change) => {
           const [caRow] = await tx.insert(acmeCaTable).values({ organizationId: orgId, name, directoryUrl, tag }).returning();
-          const secretId = await secrets.create(tx, orgId, created.accountKey);
-          const [accountRow] = await tx
-            .insert(acmeAccount)
-            .values({ organizationId: orgId, acmeCaId: caRow!.id, accountUrl: created.accountUrl, contactEmail: contactEmail ?? null, secretId })
-            .returning();
           await change.audit({
             organizationId: orgId,
             action: "acme_ca.created",
             target: { type: "acme_ca", id: caRow!.id },
             detail: { name, directoryUrl, tag },
           });
-          await change.audit({
-            organizationId: orgId,
-            action: "acme_account.created",
-            target: { type: "acme_account", id: accountRow!.id },
-            detail: { acmeCaId: caRow!.id, accountUrl: created.accountUrl, contactEmail: contactEmail ?? null },
-          });
-          return { caRow: caRow!, accountRow: accountRow! };
+          return { caRow: caRow!, accountRow: await saveAccount(tx, change, orgId, caRow!.id, created, contactEmail) };
         });
         return c.json({ acmeCa: toAcmeCa(customAcmeCa(caRow), true), account: toAccount(accountRow) }, 201);
       } catch (err) {
@@ -228,20 +231,7 @@ export function registerAcmeAccounts(ctx: {
 
       const created = await ca.createAccount(acmeCa, { contactEmail }).catch((err) => caFailure(err));
       try {
-        const row = await unitOfWork.run(actor, async (tx, change) => {
-          const secretId = await secrets.create(tx, orgId, created.accountKey);
-          const [row] = await tx
-            .insert(acmeAccount)
-            .values({ organizationId: orgId, acmeCaId, accountUrl: created.accountUrl, contactEmail: contactEmail ?? null, secretId })
-            .returning();
-          await change.audit({
-            organizationId: orgId,
-            action: "acme_account.created",
-            target: { type: "acme_account", id: row!.id },
-            detail: { acmeCaId, accountUrl: created.accountUrl, contactEmail: contactEmail ?? null },
-          });
-          return row!;
-        });
+        const row = await unitOfWork.run(actor, (tx, change) => saveAccount(tx, change, orgId, acmeCaId, created, contactEmail));
         return c.json(toAccount(row), 201);
       } catch (err) {
         if (isUniqueViolation(err)) throw alreadyRegistered(acmeCa);

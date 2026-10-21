@@ -129,15 +129,23 @@ export function createAcmeCertificateAuthority({ trustedCa, roots = {}, pollMs, 
   // the rules for where it may be (directory-url.ts) each time, by what its name resolves to now; a built-in one is the
   // platform's own.
   async function reach(ca: AcmeCa): Promise<{ renewalInfo?: string }> {
-    const refusal = ca.builtIn ? null : await directoryUrlRefusal(ca.directoryUrl, { allowedOrigins: allowedDirectoryOrigins });
-    if (refusal) throw new CertificateAuthorityError("rejected", refusal);
+    const refuse = async (url: string) => {
+      const refusal = await directoryUrlRefusal(url, { allowedOrigins: allowedDirectoryOrigins });
+      if (refusal) throw new CertificateAuthorityError("rejected", refusal);
+    };
+    if (!ca.builtIn) await refuse(ca.directoryUrl);
+    let directory: Record<string, unknown>;
     try {
-      const res = await fetch(ca.directoryUrl, { signal: AbortSignal.timeout(10_000), tls: trustedCa ? { ca: trustedCa } : undefined });
+      // A custom one's directory is not followed elsewhere by a redirect, which would get round the rules.
+      const res = await fetch(ca.directoryUrl, { signal: AbortSignal.timeout(10_000), tls: trustedCa ? { ca: trustedCa } : undefined, redirect: ca.builtIn ? "follow" : "error" });
       if (!res.ok) throw new Error(`HTTP ${res.status}`);
-      return await res.json();
+      directory = await res.json();
     } catch (err: any) {
       throw unreachable(ca, err);
     }
+    // Nor are the URLs it lists for the rest of the protocol (newNonce, newAccount, renewalInfo, ...) let through if they are where the directory may not be.
+    if (!ca.builtIn) for (const url of Object.values(directory)) if (typeof url === "string") await refuse(url);
+    return directory;
   }
 
   // Whatever the CA says no to comes back from acme-client as an Error carrying the CA's own explanation.
