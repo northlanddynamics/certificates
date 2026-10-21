@@ -2,10 +2,10 @@
 // here: how its value is read, and the condition it adds. Filters combine (all must hold), and apply within what the
 // caller may see.
 import { z } from "@hono/zod-openapi";
-import { and, eq, inArray, isNotNull, isNull, sql, type SQL } from "drizzle-orm";
+import { and, eq, inArray, isNotNull, isNull, or, sql, type SQL } from "drizzle-orm";
 import { ACME_CA_TAGS, BUILT_IN_ACME_CAS } from "../issuance/acme/acme-cas";
 import { KEY_ALGORITHMS, KEY_CUSTODIES, type KeyAlgorithm } from "../pki/csr";
-import { agent, certificate, deployment, issuance, managedCertificate } from "../platform/db/schema";
+import { acmeCa, agent, certificate, deployment, issuance, managedCertificate } from "../platform/db/schema";
 import { agentOffline } from "../agents/agents";
 import { anyOf } from "../platform/http";
 import { hasNoOwners } from "./owners";
@@ -55,8 +55,11 @@ export const INVENTORY_FILTERS = {
   noOwners: filter(on.meta({ description: "Managed Certificates with no Owners." }), () => hasNoOwners()),
   keyCustody: filter(z.enum(KEY_CUSTODIES).meta({ description: "Whose private key is held this way." }), (value) => eq(managedCertificate.keyCustody, value)),
   tag: filter(anyOf(ACME_CA_TAGS).meta({ description: "Issued from an ACME CA tagged with one of these, comma-separated." }), (value) => {
-    const tags: string[] = value.split(",");
-    return inArray(managedCertificate.acmeCaId, BUILT_IN_ACME_CAS.filter((ca) => tags.includes(ca.tag)).map((ca) => ca.id));
+    const tags = value.split(",") as (typeof ACME_CA_TAGS)[number][];
+    // A built-in ACME CA's tag is in code; a custom one's is on its row, which is the Managed Certificate's Organization's.
+    const builtIn = BUILT_IN_ACME_CAS.filter((ca) => tags.includes(ca.tag)).map((ca) => ca.id);
+    const custom = sql`exists (select 1 from ${acmeCa} where ${acmeCa.id}::text = ${managedCertificate.acmeCaId} and ${acmeCa.organizationId} = ${managedCertificate.organizationId} and ${inArray(acmeCa.tag, tags)})`;
+    return or(inArray(managedCertificate.acmeCaId, builtIn), custom)!;
   }),
   keyAlgorithm: filter(anyOf(KEY_ALGORITHMS).meta({ description: "Whose key is of one of these algorithms, comma-separated." }), (value) => inArray(managedCertificate.keyAlgorithm, value.split(",") as unknown as KeyAlgorithm[])),
   archived: filter(

@@ -120,6 +120,8 @@ export interface Harness {
   caRoots: { current: () => Promise<string[]> };
   /** The private keys of the ACME accounts the platform created at the CA, as PEM; for tests to check they never leak. */
   createdAccountKeys: string[];
+  /** When set, the CA refuses to register an account, giving this as its reason; null (after reset) lets Pebble decide. */
+  registrationRefusal: { reason: string | null };
   /** The hooks the app runs when a member is removed; empty unless a test adds one (and takes it out again). */
   memberRemovalHooks: MemberRemovalHook[];
   /** What the test-only Enrollment Validator kinds `test_allow`, `test_names` and `test_renewal`, which allow every request, were asked, in order. */
@@ -198,6 +200,7 @@ export async function createHarness(overrides: Partial<AppDeps> = {}, { database
   let now = new Date("2026-01-01T00:00:00Z");
   const caDirectories: Record<BuiltInAcmeCaId, string> = { "letsencrypt-staging": PEBBLE_DIRECTORY, "letsencrypt-production": PEBBLE_DIRECTORY };
   const createdAccountKeys: string[] = [];
+  const registrationRefusal: Harness["registrationRefusal"] = { reason: null };
   const caRoots = { current: pebbleRoots };
   const ari: Harness["ari"] = { enabled: false, asked: [], replaces: [], failing: false };
   const revocations: Harness["revocations"] = [];
@@ -210,6 +213,8 @@ export async function createHarness(overrides: Partial<AppDeps> = {}, { database
     trustedCa: PEBBLE_CA,
     roots: { "letsencrypt-staging": () => caRoots.current(), "letsencrypt-production": () => caRoots.current() },
     pollMs: { min: 200, max: 1000 },
+    // Pebble is on localhost, which a custom ACME CA's directory may otherwise not be.
+    allowedDirectoryOrigins: [new URL(PEBBLE_DIRECTORY).origin],
   });
   const bindTxt = createTxtResolver([`${BIND.server}:${BIND.port}`]);
   const dcvResolver = { current: bindTxt };
@@ -230,6 +235,7 @@ export async function createHarness(overrides: Partial<AppDeps> = {}, { database
     certificateAuthority: {
       ...letsEncrypt,
       async createAccount(ca, input) {
+        if (registrationRefusal.reason) throw new CertificateAuthorityError("rejected", registrationRefusal.reason);
         const account = await letsEncrypt.createAccount(ca, input);
         createdAccountKeys.push(account.accountKey);
         return account;
@@ -285,6 +291,7 @@ export async function createHarness(overrides: Partial<AppDeps> = {}, { database
     validatorDouble.reset();
     intune.reset();
     createdAccountKeys.length = 0;
+    registrationRefusal.reason = null;
     caDirectories["letsencrypt-staging"] = caDirectories["letsencrypt-production"] = PEBBLE_DIRECTORY;
     now = new Date("2026-01-01T00:00:00Z");
   };
@@ -332,6 +339,7 @@ export async function createHarness(overrides: Partial<AppDeps> = {}, { database
     failInterruptedIssuances: () => issuances.failInterrupted(),
     caRoots,
     createdAccountKeys,
+    registrationRefusal,
     memberRemovalHooks,
     enrollmentValidations,
     validatorDouble,

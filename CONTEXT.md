@@ -123,7 +123,7 @@ An Issuing CA's list of the Certificates it signed that are revoked and not yet 
 _Avoid_: revocation list, blacklist
 
 **ACME CA**:
-A Certificate Authority the platform obtains Certificates from over ACME: a directory URL and what is needed to register an account there. Let's Encrypt Staging and Let's Encrypt Production are built in, the same for every Organization, defined in code by stable ids (`letsencrypt-staging`, `letsencrypt-production`) and never changed. A Managed Certificate whose issuer is an ACME CA names it by id.
+A Certificate Authority the platform obtains Certificates from over ACME: a directory URL and what is needed to register an account there. Let's Encrypt Staging and Let's Encrypt Production are built in, the same for every Organization, defined in code by stable ids (`letsencrypt-staging`, `letsencrypt-production`) and never changed. An Organization Administrator may add custom ones of the Organization's own, under names unique within it, at an https directory URL that is not a loopback or link-local address; adding one registers the Organization's ACME Account with it in the same step, and nothing is saved if the CA refuses. A Managed Certificate whose issuer is an ACME CA names it by id.
 _Avoid_: ACME provider, ACME server, environment (for the CA itself)
 
 **Environment Tag**:
