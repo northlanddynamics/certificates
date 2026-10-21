@@ -222,7 +222,7 @@ describe("adding a custom ACME CA", () => {
       const res = await customCa({ directoryUrl });
       expect(res.status).toBe(400);
     }
-    expect((await customCa({ directoryUrl: "http://ca.example.test/dir" })).body.error).toContain("https");
+    expect(JSON.stringify((await customCa({ directoryUrl: "http://ca.example.test/dir" })).body)).toContain("the directory URL must be https");
     expect((await acmeCasOf()).filter((ca) => !ca.builtIn)).toEqual([]);
   });
 
