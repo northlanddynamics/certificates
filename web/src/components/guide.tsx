@@ -22,8 +22,8 @@ export const GUIDES = {
     path: "/organizations/$orgId/private-cas/guide",
     sections: {
       how: "How revocation is checked",
-      url: "Your PKI base URL",
-      reach: "Making it reachable",
+      url: "Where Certificates send relying parties",
+      reach: "Checking your relying parties reach it",
       crl: "When CRLs change",
       trust: "Trusting the root",
       rollover: "Rolling over",

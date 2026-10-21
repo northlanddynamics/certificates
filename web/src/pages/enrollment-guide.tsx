@@ -125,8 +125,9 @@ export function EnrollmentGuidePage() {
           ]}
         </Steps>
         <div className="rounded-md border p-3">
-          <strong>The platform must reach Microsoft</strong> over HTTPS: <code>login.microsoftonline.com</code>, <code>graph.microsoft.com</code> and <code>*.manage.microsoft.com</code>.
-          Devices must reach the SCEP URL over HTTPS from wherever they are. When Intune retires, wipes or unenrolls a device, it queues the certificate for revocation; the platform collects that queue at most hourly, Intune's limit, and revokes what it finds.
+          Devices must be able to reach the profile's SCEP URL from wherever they enroll. When Intune retires, wipes or unenrolls a device, it queues the certificate for
+          revocation; the platform collects that queue at most hourly, Intune's limit, and revokes what it finds. If Test says Microsoft cannot be reached, ask whoever runs
+          the platform.
         </div>
       </GuideSection>
 

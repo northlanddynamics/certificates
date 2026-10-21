@@ -21,10 +21,10 @@ export function publicationUrls(pkiBaseUrl: string, { signer, id }: { signer: "r
 export function publicationProblems({ baseUrl, configured }: PkiPublication): { title: string; detail: string }[] {
   return [
     ...(/^https:/i.test(baseUrl)
-      ? [{ title: "The PKI base URL is HTTPS", detail: "Relying parties that check revocation need plain HTTP, and many will refuse Certificates whose CRL is only served over HTTPS." }]
+      ? [{ title: "The PKI base URL is HTTPS", detail: "Relying parties that check revocation need plain HTTP, and many will refuse Certificates whose CRL is only served over HTTPS. Ask whoever runs the platform to change it before you issue." }]
       : []),
     ...(!configured
-      ? [{ title: "The PKI base URL was never set", detail: "It falls back to the address the platform is served at. Ask your platform operator to set PKI_BASE_URL to the public, plain-HTTP address relying parties will use." }]
+      ? [{ title: "The PKI base URL was never set", detail: "It is only the address you reach the platform at, which relying parties may not. Ask whoever runs the platform to set a public, plain-HTTP address before you issue." }]
       : []),
   ];
 }

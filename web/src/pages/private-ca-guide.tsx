@@ -14,21 +14,22 @@ const ROUTE = "/app/organizations/$orgId/private-cas/guide";
 
 const CHECK_STEPS = [
   { title: "Relying party", body: "A server, load balancer, RADIUS server or browser is shown a Certificate." },
-  { title: "Reads the addresses", body: "Its CRL Distribution Point and AIA caIssuers, both under the PKI base URL." },
-  { title: "Fetches over HTTP", body: "With no credentials and no TLS: checking TLS would need a revocation check of its own." },
+  { title: "Reads the addresses", body: "The Certificate names where its CA's revocation list (CRL) and certificate can be fetched." },
+  { title: "Fetches them", body: "Over plain HTTP, without signing in: checking HTTPS would need a revocation check of its own." },
   { title: "Decides", body: "A CRL it cannot fetch, or an expired one, can mean it refuses the Certificate." },
 ];
 
+/** What a relying party must see when it fetches a CRL, each a sign of something only whoever runs the platform can fix. */
 const REACHABLE: [string, string][] = [
-  ["Public", "Reachable by every relying party: no sign-in, no VPN, no IP allowlist. With the SCEP routes, these are the platform's only unauthenticated routes outside sign-in."],
-  ["Plain HTTP", "An http:// PKI base URL. The routes answer over HTTPS too, but relying parties must not need it."],
-  ["No redirect, no HSTS", "A TLS terminator or load balancer in front passes /pki/* through over HTTP, with no redirect to HTTPS and no HSTS on that host."],
-  ["Platform serves TLS", "When the platform terminates TLS itself, the operator sets PKI_HTTP_PORT (such as 80) so it also listens over plain HTTP, answering only /pki/*."],
+  ["The file itself", "An answer of 200 with the CRL, not a sign-in page or an error."],
+  ["No redirect", "Not sent on to an https:// address: a relying party checking revocation will not follow it."],
+  ["From everywhere it is needed", "From every network your relying parties are on, including ones outside your VPN."],
 ];
 
 /**
- * How to publish a Private CA: what relying parties fetch to check revocation, the PKI base URL every Certificate names
- * (this platform's, as it is set), making it reachable, when CRLs change, trusting the root and rolling over.
+ * Publishing a Private CA, for the Organization Administrator: what relying parties fetch to check revocation, the
+ * address every Certificate names (as it is set), checking relying parties reach it, when CRLs change, trusting the root
+ * and rolling over. How the platform itself is served is not theirs to change, so it is not here.
  */
 export function PrivateCaGuidePage() {
   const { orgId } = useParams({ from: ROUTE });
@@ -42,12 +43,12 @@ export function PrivateCaGuidePage() {
       guide="private-cas"
       title="Publishing a Private CA"
       back={{ to: "/organizations/$orgId/private-cas", label: "Private CAs", orgId }}
-      lede="Every Certificate a Private CA signs tells relying parties where to fetch its CRL and its Issuing CA's certificate. The platform serves both. Your part is to make that address reachable, and to settle it before anything is issued."
+      lede="Every Certificate a Private CA signs tells relying parties where to fetch its CA's revocation list and certificate. The platform publishes both. Your part is to check that your relying parties can reach them, and to make them trust the root."
     >
       <Alert variant="destructive">
         <ShieldAlertIcon />
-        <AlertTitle>Settle this first</AlertTitle>
-        <AlertDescription>The PKI base URL is written into every Certificate when it is signed. Changing it later leaves every Certificate already issued pointing at the old address.</AlertDescription>
+        <AlertTitle>Check this before you issue</AlertTitle>
+        <AlertDescription>The address is written into every Certificate when it is signed, and stays there. If it changes later, Certificates already issued still point at the old one.</AlertDescription>
       </Alert>
 
       <GuideSection guide="private-cas" id="how">
@@ -61,36 +62,13 @@ export function PrivateCaGuidePage() {
             </li>
           ))}
         </ol>
-        <div className="rounded-md border">
-          <Table>
-            <TableHeader>
-              <TableRow>
-                <TableHead>Served at</TableHead>
-                <TableHead>What</TableHead>
-              </TableRow>
-            </TableHeader>
-            <TableBody>
-              {[
-                ["/pki/issuing-cas/{id}/ca.crl", "The Issuing CA's CRL (DER)"],
-                ["/pki/issuing-cas/{id}/ca.crt", "The Issuing CA's certificate (DER)"],
-                ["/pki/roots/{id}/ca.crl", "A platform-made root's CRL, listing its revoked Issuing CAs"],
-                ["/pki/roots/{id}/ca.crt", "A platform-made root's certificate"],
-              ].map(([path, what]) => (
-                <TableRow key={path}>
-                  <TableCell className="font-mono text-xs">{path}</TableCell>
-                  <TableCell className="whitespace-normal">{what}</TableCell>
-                </TableRow>
-              ))}
-            </TableBody>
-          </Table>
-        </div>
       </GuideSection>
 
       <GuideSection guide="private-cas" id="url">
         {publication ? <PublicationSummary publication={publication} /> : <p className="text-muted-foreground">{cas.isPending && allowed ? "Loading…" : "Not available to you."}</p>}
         <p className="text-muted-foreground">
-          The platform's operator sets it with <code>PKI_BASE_URL</code>; without it, the address the platform is served at is used. Organization Administrators see it here but
-          cannot change it.
+          It is the same for every Private CA on the platform, and is set by whoever runs the platform, not here. If the Private CAs page warns about it, ask them before you
+          issue anything. The exact addresses of each CA are in its “Trust this root” action.
         </p>
       </GuideSection>
 
@@ -103,8 +81,9 @@ export function PrivateCaGuidePage() {
             </li>
           ))}
         </ul>
-        <span className="font-medium">Check it from a relying party's network</span>
+        <p>From a machine on a relying party's network, fetch one of the CRL addresses (copy it from “Trust this root”):</p>
         <pre className="overflow-x-auto rounded-md border bg-muted p-3 font-mono text-xs leading-relaxed">{`curl -sI ${example}\n# Expect: HTTP 200, and no Location header`}</pre>
+        <p className="text-muted-foreground">If it fails, tell whoever runs the platform what you saw and from where: the address is theirs to make reachable.</p>
       </GuideSection>
 
       <GuideSection guide="private-cas" id="crl">
