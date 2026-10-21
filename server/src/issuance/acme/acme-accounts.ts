@@ -69,12 +69,6 @@ export function registerAcmeAccounts(ctx: {
 }) {
   const { app, db, requireUser, authorize, unitOfWork, secrets, certificateAuthority: ca, acmeCas } = ctx;
 
-  /** The ACME CA an account is with; one the Organization cannot use is gone, which an account's never is but for a bug. */
-  async function acmeCaOf(orgId: string, account: typeof acmeAccount.$inferSelect) {
-    const found = await acmeCas.find(orgId, account.acmeCaId);
-    if (!found) throw new Error(`the ACME CA ${account.acmeCaId} is gone`);
-    return found;
-  }
 
   app.openapi(
     createRoute({
@@ -212,7 +206,7 @@ export function registerAcmeAccounts(ctx: {
       const accountKey = normalizeAccountKey(privateKey);
       if (!accountKey) throw new HttpError(400, "not a usable private key (PEM, RSA or EC)");
 
-      await ca.checkAccount(await acmeCaOf(orgId, account), { accountUrl: account.accountUrl, accountKey }).catch((err) => caFailure(err));
+      await ca.checkAccount(await acmeCas.get(orgId, account.acmeCaId), { accountUrl: account.accountUrl, accountKey }).catch((err) => caFailure(err));
       await unitOfWork.run(actor, async (tx, change) => {
         await secrets.replace(tx, orgId, account.secretId, accountKey);
         await change.audit({
@@ -244,7 +238,7 @@ export function registerAcmeAccounts(ctx: {
       const account = await findAccount(orgId, accountId);
       const accountKey = await secrets.open(db, orgId, account.secretId);
       try {
-        await ca.checkAccount(await acmeCaOf(orgId, account), { accountUrl: account.accountUrl, accountKey });
+        await ca.checkAccount(await acmeCas.get(orgId, account.acmeCaId), { accountUrl: account.accountUrl, accountKey });
         return c.json({ ok: true }, 200);
       } catch (err) {
         if (!(err instanceof CertificateAuthorityError)) throw err;

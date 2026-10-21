@@ -35,13 +35,21 @@ export interface AcmeCas {
   list(organizationId: string): Promise<AcmeCa[]>;
   /** The ACME CA by its id, when the Organization can use it; none otherwise. */
   find(organizationId: string, id: string): Promise<AcmeCa | null>;
+  /** The ACME CA something of the Organization's refers to; one it cannot use is gone, which a stored reference never is but for a bug. */
+  get(organizationId: string, id: string): Promise<AcmeCa>;
 }
 
 /** The ACME CAs, with the built-in ones' directories at `directoryUrls` where given (read each time, so tests may repoint them at Pebble). */
 export function createAcmeCas({ directoryUrls = {} }: { directoryUrls?: Partial<Record<BuiltInAcmeCaId, string>> } = {}): AcmeCas {
   const builtIn = (): AcmeCa[] => BUILT_IN_ACME_CAS.map((ca) => ({ ...ca, directoryUrl: directoryUrls[ca.id] ?? ca.directoryUrl }));
+  const find = async (_organizationId: string, id: string) => builtIn().find((ca) => ca.id === id) ?? null;
   return {
     list: async () => builtIn(),
-    find: async (_organizationId, id) => builtIn().find((ca) => ca.id === id) ?? null,
+    find,
+    async get(organizationId, id) {
+      const ca = await find(organizationId, id);
+      if (!ca) throw new Error(`the ACME CA ${id} is gone`);
+      return ca;
+    },
   };
 }

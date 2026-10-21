@@ -264,9 +264,8 @@ export const IssuerField = z
 
 /**
  * The issuer asked for: `issuer`, or the ACME kind with the ACME CA `acmeCaId` (Let's Encrypt Staging unless given), which
- * must be one the Organization can use. An Issuing CA must be one of the Organization's,
- * active under an active root, permit the names (normalised), and allow the validity chosen, which only a Private CA
- * lets be chosen.
+ * must be one the Organization can use. An Issuing CA must be one of the Organization's, active under an active root,
+ * permit the names (normalised), and allow the validity chosen, which only a Private CA lets be chosen.
  */
 export async function issuerAsked(
   db: Db,

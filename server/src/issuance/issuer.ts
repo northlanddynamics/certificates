@@ -136,16 +136,9 @@ export function createIssuers({ acme, acmeCas, secrets, privateCas }: { acme: Ac
     return { id: account.id, accountUrl: account.accountUrl, accountKey: await secrets.open(db, organizationId, account.secretId) };
   }
 
-  /** The Organization's ACME CA by its id; one it cannot use is gone, which the issuer's reference never is but for a bug. */
-  async function acmeCa(organizationId: string, id: string) {
-    const ca = await acmeCas.find(organizationId, id);
-    if (!ca) throw new Error(`the ACME CA ${id} is gone`);
-    return ca;
-  }
-
   const acmeKind: KindOfIssuer<Issuer & { kind: "acme" }, CertificateIssuer & { kind: "acme" }> = {
     async issue(db, organizationId, issuer, { csr, replaces, dcv }) {
-      const ca = await acmeCa(organizationId, issuer.acmeCaId);
+      const ca = await acmeCas.get(organizationId, issuer.acmeCaId);
       const account = await openAccount(db, organizationId, eq(acmeAccount.acmeCaId, issuer.acmeCaId));
       if (!account) throw new IssuanceFailure("no_acme_account", `the Organization has no ACME account with ${ca.name}; register one first`);
       const chainPem = await acme.issue(ca, account, { csr, responder: dcv(), replaces });
@@ -154,11 +147,11 @@ export function createIssuers({ acme, acmeCas, secrets, privateCas }: { acme: Ac
     async revoke(tx, _change, organizationId, issuedBy, request) {
       const account = await openAccount(tx, organizationId, eq(acmeAccount.id, issuedBy.acmeAccountId));
       if (!account) throw new Error("the ACME account the Certificate was issued through is gone");
-      await acme.revoke(await acmeCa(organizationId, issuedBy.acmeCaId), account, request);
+      await acme.revoke(await acmeCas.get(organizationId, issuedBy.acmeCaId), account, request);
     },
     offersRenewalInfo: true,
-    renewalInfo: async (organizationId, issuedBy, certificate) => acme.renewalInfo(await acmeCa(organizationId, issuedBy.acmeCaId), certificate),
-    roots: async (_db, organizationId, issuedBy) => acme.roots(await acmeCa(organizationId, issuedBy.acmeCaId)),
+    renewalInfo: async (organizationId, issuedBy, certificate) => acme.renewalInfo(await acmeCas.get(organizationId, issuedBy.acmeCaId), certificate),
+    roots: async (_db, organizationId, issuedBy) => acme.roots(await acmeCas.get(organizationId, issuedBy.acmeCaId)),
   };
 
   // No DCV: the names a Private CA may issue for are the Organization's to decide. No ARI either: its Certificates renew by the Renewal Policy alone.
