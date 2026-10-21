@@ -81,7 +81,7 @@ export interface AcmeCertificateAuthority {
 
 export interface AcmeConfig {
   /** PEM CA certificates to trust besides the system's, for a test CA with a private root such as Pebble. */
-  trustedCa?: string | string[];
+  trustedCa?: string[];
   /**
    * The roots of each ACME CA's chains, by its id, for exports that include the root. Let's Encrypt Production defaults
    * to the system's trusted roots, which hold Let's Encrypt's; staging's roots are in none, so a deployment that exports
@@ -120,8 +120,7 @@ function retryAfterMs(header: string | null): number | null {
   return Number.isNaN(at) ? null : Math.max(0, at - Date.now());
 }
 
-export function createAcmeCertificateAuthority({ trustedCa: trusted, roots = {}, pollMs, allowedDirectoryOrigins }: AcmeConfig = {}): AcmeCertificateAuthority {
-  const trustedCa = trusted === undefined ? undefined : [trusted].flat();
+export function createAcmeCertificateAuthority({ trustedCa, roots = {}, pollMs, allowedDirectoryOrigins }: AcmeConfig = {}): AcmeCertificateAuthority {
   // acme-client makes its requests through one shared axios instance, so this is process-wide.
   if (trustedCa) acme.axios.defaults.httpsAgent = new Agent({ ca: [...rootCertificates, ...trustedCa] });
 

@@ -76,7 +76,7 @@ export function useIssuerChoice(orgId: string, { canReadPrivateCas }: { canReadP
     chosenValidity,
     validityOk,
     registered,
-    accountsKnown: acmeCas.data !== undefined,
+    acmeCasKnown: acmeCas.data !== undefined,
     /** The issuer chosen in words, for a summary. */
     title,
     /** The validity chosen in words, for a summary; none for an ACME CA, which decides its own. */
@@ -92,7 +92,7 @@ export function useIssuerChoice(orgId: string, { canReadPrivateCas }: { canReadP
  * the ids apart between forms.
  */
 export function IssuerChoiceFields({ choice, idPrefix, trying }: { choice: ReturnType<typeof useIssuerChoice>; idPrefix: string; trying: string }) {
-  const { issuer, setIssuer, validityDays, setValidityDays, acmeCas, acmeCaFilter, setAcmeCaFilter, activeCas, chosenCa, validityOk, registered, accountsKnown } = choice;
+  const { issuer, setIssuer, validityDays, setValidityDays, acmeCas, acmeCaFilter, setAcmeCaFilter, activeCas, chosenCa, validityOk, registered, acmeCasKnown } = choice;
   const listed = acmeCaChoices(acmeCas, acmeCaFilter);
   return (
     <>
@@ -173,7 +173,7 @@ export function IssuerChoiceFields({ choice, idPrefix, trying }: { choice: Retur
           {!validityOk && <FieldError>Choose a whole number of days from 1 to {chosenCa.validity.maximumDays}.</FieldError>}
         </Field>
       )}
-      {issuer.kind === "acme" && accountsKnown && !registered && (
+      {issuer.kind === "acme" && acmeCasKnown && !registered && (
         <FieldError>
           The Organization has no ACME account with {acmeCaName(acmeCas, issuer.acmeCaId)} yet, so Issuance would fail. An Organization Administrator can register one under ACME accounts.
         </FieldError>

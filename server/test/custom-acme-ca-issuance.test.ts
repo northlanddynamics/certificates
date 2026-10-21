@@ -181,7 +181,7 @@ describe("renewing from a custom ACME CA", () => {
       expect((await get(id)).currentCertificate.acmeCaId).toBe(acmeCaId);
     });
 
-    test("a CA whose directory advertises no ARI renews by the days before expiry alone, and is told of no replacement", async () => {
+    test("a CA whose directory advertises no ARI renews by the days before expiry alone", async () => {
       const { acmeCaId } = await customCa(h.pebbleDirectoryWithout("renewalInfo"));
       const { id, first } = await started(acmeCaId);
       const mc = await get(id);
