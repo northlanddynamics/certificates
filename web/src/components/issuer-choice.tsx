@@ -3,8 +3,10 @@ import { useState } from "react";
 import { Field, FieldContent, FieldDescription, FieldError, FieldLabel, FieldTitle } from "@/components/ui/field";
 import { Input } from "@/components/ui/input";
 import { RadioGroup, RadioGroupItem } from "@/components/ui/radio-group";
+import { Select, SelectContent, SelectItem, SelectTrigger, SelectValue } from "@/components/ui/select";
 import { AcmeCaTagBadge } from "@/components/acme-ca-tag";
-import { DEFAULT_ACME_CA_ID, acmeCaName, useAcmeCas } from "@/lib/acme-cas";
+import { ACME_CA_FILTERS, acmeCaChoices, type AcmeCaFilter } from "@/lib/acme-ca-choices";
+import { ACME_CA_TAG_LABELS, DEFAULT_ACME_CA_ID, acmeCaName, useAcmeCas } from "@/lib/acme-cas";
 import { api, type AcmeCa, type NewManagedCertificate } from "@/lib/api";
 import { KEY_ALGORITHM_LABELS, NO_KEY_ALGORITHMS } from "@/lib/csr-generator";
 import { commonNameOf, daysLabel, findIssuingCa, isValidityDays, permittedNamesLabel, validityLabel } from "@/lib/private-ca";
@@ -26,19 +28,21 @@ const acmeCaDescription = (ca: AcmeCa, trying: string) =>
       ? "A live service. Certificates are publicly trusted, and the CA's rate limits apply."
       : undefined;
 
+const ACME_CA_FILTER_LABELS: Record<AcmeCaFilter, string> = { all: "Every tag", ...ACME_CA_TAG_LABELS, untagged: "Untagged" };
+
 /** The key algorithms, and which ones each kind of CA takes, as the server says; they do not change while the app runs. */
 export const useKeyAlgorithms = () => useQuery({ queryKey: ["key-algorithms"], queryFn: () => api.keyAlgorithms(), staleTime: Infinity });
 
 /**
  * The state of choosing where Certificates are issued from: an ACME CA (Let's Encrypt Staging to begin with) or an
  * active Issuing CA under an active root, and for an Issuing CA a validity (empty for its default). Anyone may list the
- * ACME CAs; the ACME accounts and the Private CAs are fetched only for whoever may read them.
+ * ACME CAs, and see which the Organization has an account with; the Private CAs are fetched only for whoever may read them.
  */
-export function useIssuerChoice(orgId: string, { canReadAccounts, canReadPrivateCas }: { canReadAccounts: boolean; canReadPrivateCas: boolean }) {
+export function useIssuerChoice(orgId: string, { canReadPrivateCas }: { canReadPrivateCas: boolean }) {
   const [issuer, setIssuer] = useState<IssuerChoice>({ kind: "acme", acmeCaId: DEFAULT_ACME_CA_ID });
   const [validityDays, setValidityDays] = useState("");
+  const [acmeCaFilter, setAcmeCaFilter] = useState<AcmeCaFilter>("all");
   const acmeCas = useAcmeCas(orgId);
-  const accounts = useQuery({ queryKey: ["acme-accounts", orgId], queryFn: () => api.acmeAccounts(orgId), enabled: canReadAccounts });
   const privateCas = useQuery({ queryKey: ["private-cas", orgId], queryFn: () => api.privateCas(orgId), enabled: canReadPrivateCas });
   const keyAlgorithms = useKeyAlgorithms();
   // The Private CAs whose root is active, each with its active Issuing CAs: those that can issue, grouped as they are offered.
@@ -52,8 +56,8 @@ export function useIssuerChoice(orgId: string, { canReadAccounts, canReadPrivate
   // The validity chosen, in days; none for the Issuing CA's default.
   const chosenValidity = validityDays.trim() === "" ? null : Number(validityDays);
   const validityOk = !chosenCa || chosenValidity === null || isValidityDays(validityDays, chosenCa.validity.maximumDays);
-  // Whether the chosen ACME CA has an account to issue through; unknown (undefined) until the accounts are read.
-  const registered = issuer.kind !== "acme" || accounts.data?.items.some((a) => a.acmeCaId === issuer.acmeCaId);
+  // Whether the chosen ACME CA has an account to issue through; unknown (undefined) until the ACME CAs are read.
+  const registered = issuer.kind !== "acme" || acmeCas.data?.items.find((ca) => ca.id === issuer.acmeCaId)?.hasAccount;
   const title = issuer.kind === "acme" ? acmeCaName(acmeCas.data?.items, issuer.acmeCaId) : chosenCa?.name;
   return {
     issuer,
@@ -62,6 +66,9 @@ export function useIssuerChoice(orgId: string, { canReadAccounts, canReadPrivate
     setValidityDays,
     /** The ACME CAs, the built-in ones first; none until they are read. */
     acmeCas: acmeCas.data?.items ?? [],
+    /** Which of their tags the picker lists. */
+    acmeCaFilter,
+    setAcmeCaFilter,
     activeCas,
     chosenCa,
     /** The key algorithms the chosen CA takes; none until known. */
@@ -69,7 +76,7 @@ export function useIssuerChoice(orgId: string, { canReadAccounts, canReadPrivate
     chosenValidity,
     validityOk,
     registered,
-    accountsKnown: accounts.data !== undefined,
+    acmeCasKnown: acmeCas.data !== undefined,
     /** The issuer chosen in words, for a summary. */
     title,
     /** The validity chosen in words, for a summary; none for an ACME CA, which decides its own. */
@@ -79,22 +86,46 @@ export function useIssuerChoice(orgId: string, { canReadAccounts, canReadPrivate
   };
 }
 
-/** The radio buttons for each ACME CA, with its tag, and each Issuing CA grouped by its Private CA, then the validity for an Issuing CA. `idPrefix` keeps the ids apart between forms. */
+/**
+ * The radio buttons for each ACME CA, with its tag, filtered by tag, and each Issuing CA grouped by its Private CA, then
+ * the validity for an Issuing CA. An ACME CA the Organization has no account with is shown, disabled. `idPrefix` keeps
+ * the ids apart between forms.
+ */
 export function IssuerChoiceFields({ choice, idPrefix, trying }: { choice: ReturnType<typeof useIssuerChoice>; idPrefix: string; trying: string }) {
-  const { issuer, setIssuer, validityDays, setValidityDays, acmeCas, activeCas, chosenCa, validityOk, registered, accountsKnown } = choice;
+  const { issuer, setIssuer, validityDays, setValidityDays, acmeCas, acmeCaFilter, setAcmeCaFilter, activeCas, chosenCa, validityOk, registered, acmeCasKnown } = choice;
+  const listed = acmeCaChoices(acmeCas, acmeCaFilter);
   return (
     <>
+      <Field orientation="horizontal">
+        <FieldLabel htmlFor={`${idPrefix}-acme-filter`} className="font-normal">
+          ACME CAs tagged
+        </FieldLabel>
+        <Select value={acmeCaFilter} onValueChange={(value) => setAcmeCaFilter(value as AcmeCaFilter)}>
+          <SelectTrigger id={`${idPrefix}-acme-filter`} className="w-40">
+            <SelectValue />
+          </SelectTrigger>
+          <SelectContent>
+            {ACME_CA_FILTERS.map((filter) => (
+              <SelectItem key={filter} value={filter}>
+                {ACME_CA_FILTER_LABELS[filter]}
+              </SelectItem>
+            ))}
+          </SelectContent>
+        </Select>
+      </Field>
       <RadioGroup value={issuerValue(issuer)} onValueChange={(value) => setIssuer(issuerOfValue(value))}>
-        {acmeCas.map((ca) => (
+        {listed.length === 0 && <p className="text-sm text-muted-foreground">No ACME CA has that tag.</p>}
+        {listed.map(({ ca, disabled }) => (
           <FieldLabel key={ca.id} htmlFor={`${idPrefix}-acme-${ca.id}`}>
-            <Field orientation="horizontal">
+            <Field orientation="horizontal" data-disabled={disabled}>
               <FieldContent>
                 <FieldTitle>
                   {ca.name} <AcmeCaTagBadge tag={ca.tag} />
                 </FieldTitle>
                 {acmeCaDescription(ca, trying) && <FieldDescription>{acmeCaDescription(ca, trying)}</FieldDescription>}
+                {disabled && <FieldDescription>No ACME account yet.</FieldDescription>}
               </FieldContent>
-              <RadioGroupItem value={`acme:${ca.id}`} id={`${idPrefix}-acme-${ca.id}`} />
+              <RadioGroupItem value={`acme:${ca.id}`} id={`${idPrefix}-acme-${ca.id}`} disabled={disabled} />
             </Field>
           </FieldLabel>
         ))}
@@ -142,7 +173,7 @@ export function IssuerChoiceFields({ choice, idPrefix, trying }: { choice: Retur
           {!validityOk && <FieldError>Choose a whole number of days from 1 to {chosenCa.validity.maximumDays}.</FieldError>}
         </Field>
       )}
-      {issuer.kind === "acme" && accountsKnown && !registered && (
+      {issuer.kind === "acme" && acmeCasKnown && !registered && (
         <FieldError>
           The Organization has no ACME account with {acmeCaName(acmeCas, issuer.acmeCaId)} yet, so Issuance would fail. An Organization Administrator can register one under ACME accounts.
         </FieldError>

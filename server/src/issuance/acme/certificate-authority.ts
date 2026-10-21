@@ -46,7 +46,7 @@ export interface RenewalInfo {
 }
 
 export interface AcmeCertificateAuthority {
-  /** What the CA calls itself in a Certificate's record of where it came from. */
+  /** What a built-in ACME CA (Let's Encrypt) is called in a Certificate's record of where it came from; a custom one goes by its own name. */
   readonly name: string;
   /** Registers a new account under a new key, with the Organization's agreement to the CA's terms of service. */
   createAccount(ca: AcmeCa, input: { contactEmail?: string }): Promise<CaAccount>;
@@ -64,7 +64,7 @@ export interface AcmeCertificateAuthority {
   /**
    * Tells the CA to revoke the Certificate (PEM, its chain or the leaf alone) for `request.reason`, acting as the account
    * that obtained it. Resolves once the CA has revoked it; throws a CertificateAuthorityError when the CA says no (it is
-   * revoked already, or not this account's) or does not answer.
+   * revoked already, or not this account's), offers no revocation (its directory lists no revokeCert), or does not answer.
    */
   revoke(ca: AcmeCa, account: CaAccount, request: { certificate: string; reason: RevocationReason }): Promise<void>;
   /**
@@ -80,8 +80,8 @@ export interface AcmeCertificateAuthority {
 }
 
 export interface AcmeConfig {
-  /** A PEM CA certificate to trust besides the system's, for a test CA with a private root such as Pebble. */
-  trustedCa?: string;
+  /** PEM CA certificates to trust besides the system's, for a test CA with a private root such as Pebble. */
+  trustedCa?: string[];
   /**
    * The roots of each ACME CA's chains, by its id, for exports that include the root. Let's Encrypt Production defaults
    * to the system's trusted roots, which hold Let's Encrypt's; staging's roots are in none, so a deployment that exports
@@ -122,13 +122,13 @@ function retryAfterMs(header: string | null): number | null {
 
 export function createAcmeCertificateAuthority({ trustedCa, roots = {}, pollMs, allowedDirectoryOrigins }: AcmeConfig = {}): AcmeCertificateAuthority {
   // acme-client makes its requests through one shared axios instance, so this is process-wide.
-  if (trustedCa) acme.axios.defaults.httpsAgent = new Agent({ ca: [...rootCertificates, trustedCa] });
+  if (trustedCa) acme.axios.defaults.httpsAgent = new Agent({ ca: [...rootCertificates, ...trustedCa] });
 
   // acme-client reports a network failure as an unrelated TypeError (and, under Bun, its axios never gives up on a
   // refused connection), so reachability is checked first, by itself. A custom ACME CA's directory is checked against
   // the rules for where it may be (directory-url.ts) each time, by what its name resolves to now; a built-in one is the
   // platform's own.
-  async function reach(ca: AcmeCa): Promise<{ renewalInfo?: string }> {
+  async function reach(ca: AcmeCa): Promise<{ renewalInfo?: string; revokeCert?: string }> {
     const refuse = async (url: string) => {
       const refusal = await directoryUrlRefusal(url, { allowedOrigins: allowedDirectoryOrigins });
       if (refusal) throw new CertificateAuthorityError("rejected", refusal);
@@ -207,7 +207,8 @@ export function createAcmeCertificateAuthority({ trustedCa, roots = {}, pollMs, 
       return { window: { start, end }, retryAfterMs: retryAfterMs(res.headers.get("retry-after")) };
     },
     async revoke(ca, account, { certificate, reason }) {
-      await reach(ca);
+      // Revocation is optional in ACME (RFC 8555, section 7.6): a CA whose directory lists no revokeCert offers none.
+      if (!(await reach(ca)).revokeCert) throw new CertificateAuthorityError("rejected", `${ca.name} offers no revocation (its ACME directory has no revokeCert endpoint), so the platform cannot revoke the Certificate there`);
       const leaf = certificate.match(/-----BEGIN CERTIFICATE-----[^-]+-----END CERTIFICATE-----/)?.[0];
       if (!leaf) throw new CertificateAuthorityError("rejected", "there is no certificate to revoke");
       try {

@@ -123,11 +123,26 @@ describe("the ACME CAs", () => {
     const listed = await acmeCas(acmeOrg.cookie);
     expect(listed.status).toBe(200);
     expect(listed.body.items).toEqual([
-      { id: "letsencrypt-staging", name: "Let's Encrypt Staging", directoryUrl: PEBBLE_DIRECTORY, tag: "staging", builtIn: true },
-      { id: "letsencrypt-production", name: "Let's Encrypt Production", directoryUrl: PEBBLE_DIRECTORY, tag: "production", builtIn: true },
+      { id: "letsencrypt-staging", name: "Let's Encrypt Staging", directoryUrl: PEBBLE_DIRECTORY, tag: "staging", builtIn: true, hasAccount: false },
+      { id: "letsencrypt-production", name: "Let's Encrypt Production", directoryUrl: PEBBLE_DIRECTORY, tag: "production", builtIn: true, hasAccount: false },
     ]);
     // The same for every Organization.
     expect((await acmeCas(globex.cookie, globex.orgId)).body).toEqual(listed.body);
+  });
+
+  test("each says whether the Organization has an account with it, to everyone in it", async () => {
+    expect((await admin().create({ acmeCaId: "letsencrypt-production", termsOfServiceAgreed: true })).status).toBe(201);
+    const { body } = await customCa();
+    const member = await join("member@acme.test", "member");
+    for (const cookie of [acmeOrg.cookie, member]) {
+      expect((await acmeCas(cookie)).body.items.map((ca: any) => [ca.id, ca.hasAccount])).toEqual([
+        ["letsencrypt-staging", false],
+        ["letsencrypt-production", true],
+        [body.acmeCa.id, true],
+      ]);
+    }
+    // Another Organization's accounts are its own.
+    expect((await acmeCas(globex.cookie, globex.orgId)).body.items.map((ca: any) => ca.hasAccount)).toEqual([false, false]);
   });
 
   test("anyone in the Organization sees which there are, to choose one; only those who may read the ACME accounts see their configuration", async () => {
@@ -149,7 +164,7 @@ describe("adding a custom ACME CA", () => {
     const created = await customCa({ contactEmail: "pki@acme.test" });
     expect(created.status).toBe(201);
     expect(created.body).toEqual({
-      acmeCa: { id: expect.any(String), name: "Internal CA", directoryUrl: PEBBLE_DIRECTORY, tag: "staging", builtIn: false },
+      acmeCa: { id: expect.any(String), name: "Internal CA", directoryUrl: PEBBLE_DIRECTORY, tag: "staging", builtIn: false, hasAccount: true },
       account: { id: expect.any(String), acmeCaId: created.body.acmeCa.id, accountUrl: expect.stringContaining("/my-account/"), contactEmail: "pki@acme.test" },
     });
     expect(h.createdAccountKeys).toHaveLength(1);

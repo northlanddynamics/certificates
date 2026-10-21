@@ -42,8 +42,16 @@ const AcmeCaShown = z.object({
   directoryUrl: z.string().nullable().openapi({ description: "Where its ACME directory is served: its configuration, shown only to those who may read the ACME accounts, and none for anyone else." }),
   tag: z.enum(ACME_CA_TAGS).nullable().openapi({ description: "What it is for, `staging` or `production`, as a label that changes nothing about how it issues; none for an untagged one." }),
   builtIn: z.boolean().openapi({ description: "Built into the platform, the same for every Organization and read-only: Let's Encrypt Staging and Production. A custom one is the Organization's own." }),
+  hasAccount: z.boolean().openapi({ description: "Whether the Organization has an ACME account with it, without which a Managed Certificate on it cannot be issued. A custom one always has." }),
 });
-const toAcmeCa = ({ id, name, directoryUrl, tag, builtIn }: AcmeCa, configurationShown: boolean) => ({ id, name, directoryUrl: configurationShown ? directoryUrl : null, tag, builtIn });
+const toAcmeCa = ({ id, name, directoryUrl, tag, builtIn }: AcmeCa, { configurationShown, hasAccount }: { configurationShown: boolean; hasAccount: boolean }) => ({
+  id,
+  name,
+  directoryUrl: configurationShown ? directoryUrl : null,
+  tag,
+  builtIn,
+  hasAccount,
+});
 
 const alreadyRegistered = (ca: AcmeCa) => new HttpError(409, `the Organization already has an ACME account with ${ca.name}`);
 const nameTaken = (name: string) => new HttpError(409, `there is already an ACME CA named ${name}`);
@@ -107,7 +115,7 @@ export function registerAcmeAccounts(ctx: {
       summary: "The ACME CAs the Organization can use",
       description:
         "The built-in ones, Let's Encrypt Staging then Production, then the Organization's custom ones in the order they were added. A Managed Certificate on one issues through the Organization's ACME account with it. " +
-        "Anyone in the Organization may list them, to choose one for a Managed Certificate; only those who may read the ACME accounts see their configuration.",
+        "Anyone in the Organization may list them, and see which it has an account with, to choose one for a Managed Certificate; only those who may read the ACME accounts see their configuration.",
       request: { params: OrgParam },
       responses: { 200: json(z.object({ items: z.array(AcmeCaShown) })), ...errors(401, 403, 404) },
     }),
@@ -115,7 +123,8 @@ export function registerAcmeAccounts(ctx: {
       const { orgId } = c.req.valid("param");
       const { role } = await authorize(await requireUser(c), orgId);
       const configurationShown = roleCan(role, { acmeAccount: ["read"] });
-      return c.json({ items: (await acmeCas.list(orgId)).map((ca) => toAcmeCa(ca, configurationShown)) }, 200);
+      const registered = new Set((await db.select({ acmeCaId: acmeAccount.acmeCaId }).from(acmeAccount).where(eq(acmeAccount.organizationId, orgId))).map((a) => a.acmeCaId));
+      return c.json({ items: (await acmeCas.list(orgId)).map((ca) => toAcmeCa(ca, { configurationShown, hasAccount: registered.has(ca.id) })) }, 200);
     },
   );
 
@@ -154,7 +163,7 @@ export function registerAcmeAccounts(ctx: {
           });
           return { caRow: caRow!, accountRow: await saveAccount(tx, change, orgId, caRow!.id, created, contactEmail) };
         });
-        return c.json({ acmeCa: toAcmeCa(customAcmeCa(caRow), true), account: toAccount(accountRow) }, 201);
+        return c.json({ acmeCa: toAcmeCa(customAcmeCa(caRow), { configurationShown: true, hasAccount: true }), account: toAccount(accountRow) }, 201);
       } catch (err) {
         if (isUniqueViolation(err)) throw nameTaken(name);
         throw err;

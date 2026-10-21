@@ -403,7 +403,7 @@ export interface NameRules {
   sanPatterns: Partial<Record<"dns" | "email" | "ip" | "url" | "upn", string[]>>;
 }
 export type AcmeCaTag = "staging" | "production";
-/** An ACME CA the Organization can use: built in (Let's Encrypt Staging and Production, read-only) or, later, its own. */
+/** An ACME CA the Organization can use: built in (Let's Encrypt Staging and Production, read-only) or its own. */
 export interface AcmeCa {
   id: string;
   name: string;
@@ -412,6 +412,8 @@ export interface AcmeCa {
   /** What it is for, as a label that changes nothing about how it issues. */
   tag: AcmeCaTag | null;
   builtIn: boolean;
+  /** Whether the Organization has an account with it, without which nothing can be issued from it. */
+  hasAccount: boolean;
 }
 /** An Organization's account with an ACME CA, at most one per ACME CA; its key is never returned. */
 export interface AcmeAccount {
