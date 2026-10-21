@@ -545,10 +545,10 @@ function ParametersBanner({ orgId }: { orgId: string }) {
       <InfoIcon />
       <AlertTitle>One script, many targets</AlertTitle>
       <AlertDescription>
-        <p>A script can declare parameters, such as a site name or a port, and each Deployment gives its own values.</p>
+        <p>A script can declare Deployment Parameters, such as a site name or a port, and each Deployment gives its own values.</p>
         <span className="flex flex-wrap gap-4">
           <GuideLink orgId={orgId} guide="deployment-scripts" section="declare">
-            Declaring parameters
+            Declaring Deployment Parameters
           </GuideLink>
           <GuideLink orgId={orgId} guide="deployment-scripts" section="example">
             See an example script

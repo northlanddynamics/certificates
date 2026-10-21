@@ -12,7 +12,7 @@ export const GUIDES = {
     sections: {
       how: "How a script runs",
       receives: "What every script receives",
-      declare: "Declaring parameters",
+      declare: "Declaring Deployment Parameters",
       values: "How values reach the script",
       example: "Example script",
       safety: "Secrets and safety",

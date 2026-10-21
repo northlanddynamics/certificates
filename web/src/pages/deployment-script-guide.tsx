@@ -64,6 +64,7 @@ const REFUSALS: { says: string; fix: ReactNode }[] = [
   { says: `the parameter name "${ENV_PREFIX}SITE" must not start with ${ENV_PREFIX}`, fix: "Drop the prefix: the Agent adds it." },
   { says: 'the parameter "PORT" is declared more than once', fix: "Keep one entry for each name." },
   { says: `a script declares at most ${MAX_PARAMETERS} parameters`, fix: "Split the script, or work values out inside it." },
+  { says: 'the default of the parameter "PORT" contains a newline', fix: "A default obeys the rules for values: one line, at most 1 KiB, no NUL." },
   { says: 'the parameter section needs exactly one "# deploy-params:end" line after its "# deploy-params:begin" line', fix: "One begin line, then one end line after it." },
 ];
 
@@ -91,7 +92,7 @@ export function DeploymentScriptGuidePage() {
       guide="deployment-scripts"
       title="Writing Deployment Scripts"
       back={{ to: "/organizations/$orgId/deployment-scripts", label: "Deployment Scripts", orgId }}
-      lede="A Deployment Script is the Bash or PowerShell an Agent runs, on its own host and with its own rights, to put a new key and Certificate where they are needed. One script can serve many targets: it declares the parameters it needs, and each Deployment gives its own values."
+      lede="A Deployment Script is the Bash or PowerShell an Agent runs, on its own host and with its own rights, to put a new key and Certificate where they are needed. One script can serve many targets: it declares its Deployment Parameters, and each Deployment gives its own values."
     >
 
         <GuideSection guide="deployment-scripts" id="how">
