@@ -289,6 +289,16 @@ describe("API keys", () => {
     expect((await download({ apiKey: key }, org.orgId, mc.id, "?format=der", mc.certificates[1]!.id)).status).toBe(200);
   });
 
+  test("a key fetches a Certificate's CSR, and it is audited as the Certificate's download is", async () => {
+    await readyToIssue();
+    const mc = await issued();
+    const id = mc.certificates[0]!.id;
+    const key = (await createKey(org.cookie)).body.key as string;
+    const res = await h.app.request(`http://localhost${base()}/${mc.id}/certificates/${id}/csr`, { headers: { "x-api-key": key } });
+    expect(res.status).toBe(200);
+    expect((await auditOf()).some((e) => e.action === "api_key.used" && e.detail.certificateId === id && e.detail.format === "csr")).toBe(true);
+  });
+
   test("a key reaches only its own Organization, and carries only what its user may see", async () => {
     await readyToIssue();
     await readyToIssue(globex);
