@@ -8,7 +8,7 @@ import { Button } from "@/components/ui/button";
 import { Sheet, SheetContent, SheetDescription, SheetHeader, SheetTitle } from "@/components/ui/sheet";
 import { Skeleton } from "@/components/ui/skeleton";
 import { Table, TableBody, TableCell, TableHead, TableHeader, TableRow } from "@/components/ui/table";
-import { can, type Certificate, type ManagedCertificate, type Me } from "@/lib/api";
+import { api, can, type Certificate, type ManagedCertificate, type Me } from "@/lib/api";
 import { acmeCaName, useAcmeCas } from "@/lib/acme-cas";
 import { caLabel } from "@/lib/managed-certificate";
 import { useCertificateFacts, useCertificates, useManagedCertificatePage } from "@/lib/use-managed-certificate";
@@ -97,6 +97,14 @@ export function IssuedCertificatesTab() {
                   <TableCell>
                     {/* Actions open their own dialogs, not the side sheet. */}
                     <div className="flex justify-end gap-2" onClick={(e) => e.stopPropagation()}>
+                      {mayDownload && c.hasCsr && (
+                        <Button asChild variant="outline" size="sm">
+                          <a href={api.certificateCsrUrl(org.id, m.id, c.id)} download>
+                            <DownloadIcon />
+                            CSR
+                          </a>
+                        </Button>
+                      )}
                       {mayDownload && <DownloadDialog orgId={org.id} id={m.id} certificateId={c.id} trigger={downloadButton} />}
                       <RevokeDialog org={org} m={m} certificate={c} userId={userId} onChanged={refresh} />
                     </div>

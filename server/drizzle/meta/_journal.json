@@ -358,6 +358,13 @@
       "when": 1792623004785,
       "tag": "0050_acme_ca_external_account_binding",
       "breakpoints": true
+    },
+    {
+      "idx": 51,
+      "version": "7",
+      "when": 1792676035185,
+      "tag": "0051_certificate_csr",
+      "breakpoints": true
     }
   ]
 }

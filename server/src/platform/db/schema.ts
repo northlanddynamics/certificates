@@ -499,6 +499,8 @@ export const certificate = pgTable(
     names: text("names").array().notNull(),
     /** The leaf followed by the intermediates the CA served, PEM. */
     chainPem: text("chain_pem").notNull(),
+    /** The CSR it was issued from; none for one issued before the platform kept it. */
+    csr: text("csr"),
     /**
      * The CA it came from (what that CA calls itself), and the issuer (issuer.ts) it came from: its kind, and for ACME the
      * ACME CA and the account used there, for a Private CA the Issuing CA that signed it.

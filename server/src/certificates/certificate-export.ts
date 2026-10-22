@@ -104,6 +104,33 @@ export function registerCertificateExport(ctx: {
   app.openapi(
     createRoute({
       method: "get",
+      path: "/api/organizations/{orgId}/managed-certificates/{id}/certificates/{certificateId}/csr",
+      tags: ["Managed Certificates"],
+      summary: "Download the CSR a Certificate was issued from",
+      description: "As a person signed in, or with an API key. A Certificate issued before the platform kept its CSR has none (404). A CSR holds no private key.",
+      request: { params: ManagedCertificateParams.extend({ certificateId: z.string().openapi({ param: { name: "certificateId", in: "path" } }) }) },
+      responses: {
+        200: { description: "The CSR, PEM", content: { "application/pkcs10": { schema: z.string() } } },
+        ...errors(401, 403, 404, 429),
+      },
+    }),
+    async (c) => {
+      const { orgId, id, certificateId } = c.req.valid("param");
+      const caller = await apiKeys.callerOf(c);
+      await apiKeys.authorizeCaller(caller, orgId, { managedCertificate: ["download"] });
+      const mc = caller.user ? await reader.findReadable(caller.user, orgId, id) : await reader.findManagedCertificate(orgId, id);
+      const wanted = (await reader.certificatesOf(orgId, mc.id)).find((row) => row.id === certificateId);
+      if (!wanted?.csr) throw new HttpError(404, "no CSR is kept for this Certificate");
+      return c.body(wanted.csr, 200, {
+        "content-type": "application/pkcs10",
+        "content-disposition": `attachment; filename="${wanted.names[0]!.replace(/^\*\./, "wildcard.")}.${wanted.fingerprint.slice(0, 8)}.csr"`,
+      });
+    },
+  );
+
+  app.openapi(
+    createRoute({
+      method: "get",
       path: "/api/organizations/{orgId}/managed-certificates/{id}/certificates/{certificateId}/download",
       tags: ["Managed Certificates"],
       summary: "Download any Certificate of the Managed Certificate, an earlier one included",
