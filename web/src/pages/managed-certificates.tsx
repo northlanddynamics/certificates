@@ -37,7 +37,7 @@ const makeColumns = (orgId: string, acmeCas: AcmeCa[] | undefined) => columnHelp
   // The tag of its ACME CA, as that CA has it now; none for one from a Private CA.
   columnHelper.accessor((m) => (m.acmeCaId ? (acmeCas?.find((ca) => ca.id === m.acmeCaId)?.tag ?? null) : null), {
     id: "tag",
-    header: "Environment",
+    header: "Environment tag",
     cell: ({ cell }) => <AcmeCaTagBadge tag={cell.getValue()} />,
   }),
   columnHelper.accessor((m) => keyAlgorithmLabel(m.keyAlgorithm), { id: "keyAlgorithm", header: "Key algorithm" }),
@@ -139,7 +139,7 @@ export function ManagedCertificates({ org }: { org: Org }) {
           hint="Shows those that match all you choose."
         />
         <DataTableFacetedFilter
-          title="Environment"
+          title="Environment tag"
           options={Object.entries(ACME_CA_TAG_LABELS).map(([value, label]) => ({ value, label }))}
           value={facets.tag}
           onChange={(tag) => narrow({ tag })}

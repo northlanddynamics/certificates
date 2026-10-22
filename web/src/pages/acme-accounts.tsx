@@ -79,7 +79,7 @@ export function AcmeAccountsPage() {
       </div>
       <p className="text-sm text-muted-foreground">
         A Managed Certificate is issued under the Organization's account with its ACME CA. Each ACME CA needs an account of its own; register with Let's Encrypt Staging first to try an
-        Issuance before production.
+        Issuance before production. For any other ACME CA, add it as a custom ACME CA, with External Account Binding if it requires one: its account is registered as it is added.
       </p>
       {org && !allowed ? (
         <p className="text-sm text-muted-foreground">Only Organization Administrators see the ACME accounts.</p>
