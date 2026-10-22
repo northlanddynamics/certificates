@@ -61,6 +61,8 @@ export interface AcmeCertificateAuthority {
   createAccount(ca: AcmeCa, input: { contactEmail?: string; externalAccountBinding?: ExternalAccountBinding }): Promise<CaAccount>;
   /** Resolves when the CA accepts `account.accountKey` as the key of `account.accountUrl`; throws a CertificateAuthorityError when not. */
   checkAccount(ca: AcmeCa, account: CaAccount): Promise<void>;
+  /** Has the CA record `contactEmail` as the account's contact, or none when null; throws a CertificateAuthorityError when it says no or does not answer. */
+  updateContact(ca: AcmeCa, account: CaAccount, contactEmail: string | null): Promise<void>;
   /**
    * Places an order for the names in `request.csr`, answers the CA's DNS challenges through `request.responder`, and
    * finalizes the order with the CSR. Resolves with the Certificate and the intermediates the CA served (PEM, the
@@ -198,6 +200,14 @@ export function createAcmeCertificateAuthority({ trustedCa, roots = {}, pollMs, 
       try {
         const account = await client.updateAccount({});
         if (account.status !== "valid") throw new Error(`the account is ${account.status}`);
+      } catch (err) {
+        throw rejected(err);
+      }
+    },
+    async updateContact(ca, account, contactEmail) {
+      await reach(ca);
+      try {
+        await clientFor(ca, account).updateAccount({ contact: contactEmail ? [`mailto:${contactEmail}`] : [] });
       } catch (err) {
         throw rejected(err);
       }

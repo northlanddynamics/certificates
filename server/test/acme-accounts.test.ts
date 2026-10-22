@@ -333,11 +333,180 @@ describe("adding a custom ACME CA", () => {
   });
 });
 
+describe("changing and deleting a custom ACME CA", () => {
+  const caPath = (id: string, orgId = acmeOrg.orgId) => `/api/organizations/${orgId}/acme-cas/${encodeURIComponent(id)}`;
+  const change = (id: string, body: Record<string, unknown>, cookie = acmeOrg.cookie, orgId = acmeOrg.orgId) => h.api(caPath(id, orgId), { cookie, method: "PATCH", body });
+  const remove = (id: string, cookie = acmeOrg.cookie, orgId = acmeOrg.orgId) => h.api(caPath(id, orgId), { cookie, method: "DELETE" });
+  /** The account's contact as the CA has it, asked as the account (the `keyIndex`th key registered). */
+  const contactAtCa = async (accountUrl: string, keyIndex = 0) =>
+    (await new acme.Client({ directoryUrl: PEBBLE_DIRECTORY, accountKey: h.createdAccountKeys[keyIndex]!, accountUrl }).updateAccount({})).contact;
+  const secretsOf = async (orgId = acmeOrg.orgId) => Number((await h.pool.query(`select count(*) from secret where organization_id = $1`, [orgId])).rows[0].count);
+  const caEvents = async () => (await auditOf()).filter((e) => e.action === "acme_ca.updated" || e.action === "acme_ca.deleted");
+
+  test("an Organization Administrator renames one and changes its tag and contact email, and the CA is told the new contact", async () => {
+    const created = (await customCa({ contactEmail: "pki@acme.test" })).body;
+    const changed = await change(created.acmeCa.id, { name: "  Renamed CA ", tag: "production", contactEmail: "certs@acme.test" });
+    expect(changed.status).toBe(200);
+    expect(changed.body).toEqual({ acmeCa: { ...created.acmeCa, name: "Renamed CA", tag: "production" }, account: { ...created.account, contactEmail: "certs@acme.test" } });
+    expect((await acmeCasOf()).find((ca) => ca.id === created.acmeCa.id)).toEqual(changed.body.acmeCa);
+    expect((await admin().list()).body.items).toEqual([changed.body.account]);
+    expect(await contactAtCa(created.account.accountUrl)).toEqual(["mailto:certs@acme.test"]);
+
+    // What is not given stays as it was; the tag can be taken off.
+    const untagged = await change(created.acmeCa.id, { tag: null });
+    expect(untagged.status).toBe(200);
+    expect(untagged.body).toEqual({ acmeCa: { ...changed.body.acmeCa, tag: null }, account: changed.body.account });
+    expect((await admin().test(created.account.id)).body).toEqual({ ok: true });
+  });
+
+  test("the directory URL and External Account Binding cannot be changed: it is deleted and added again instead", async () => {
+    const { acmeCa } = (await customCa()).body;
+    for (const body of [{ directoryUrl: PEBBLE_EAB_DIRECTORY }, { name: "Moved", directoryUrl: PEBBLE_EAB_DIRECTORY }, { externalAccountBinding: { keyId: "kid-1", hmacKey: PEBBLE_EAB_KEY.hmacKey } }]) {
+      const res = await change(acmeCa.id, body);
+      expect(res.status).toBe(400);
+      expect(JSON.stringify(res.body)).toContain("the directory URL and External Account Binding cannot be changed: delete the ACME CA and add it again");
+    }
+    expect((await change(acmeCa.id, { tag: "testing" })).status).toBe(400);
+    expect((await change(acmeCa.id, { name: " " })).status).toBe(400);
+    expect((await change(acmeCa.id, { contactEmail: "not an email" })).status).toBe(400);
+    expect((await acmeCasOf()).find((ca) => ca.id === acmeCa.id)).toEqual(acmeCa);
+    expect(await caEvents()).toEqual([]);
+  });
+
+  test("names stay unique within the Organization, and a name taken leaves the CA's contact as it was", async () => {
+    const first = (await customCa({ name: "First" })).body;
+    const second = (await customCa({ name: "Second", contactEmail: "pki@acme.test" })).body;
+    for (const name of ["First", " First ", "Let's Encrypt Production"]) {
+      const taken = await change(second.acmeCa.id, { name, contactEmail: "certs@acme.test" });
+      expect(taken.status).toBe(409);
+      expect(taken.body.error).toContain("already an ACME CA named");
+    }
+    expect(await contactAtCa(second.account.accountUrl, 1)).toEqual(["mailto:pki@acme.test"]);
+    expect((await acmeCasOf()).filter((ca) => !ca.builtIn).map((ca) => ca.name)).toEqual(["First", "Second"]);
+    // Keeping its own name is no clash; nor is another Organization's.
+    expect((await change(first.acmeCa.id, { name: "First" })).status).toBe(200);
+    await customCa({ name: "Elsewhere" }, globex.cookie, globex.orgId);
+    expect((await change(first.acmeCa.id, { name: "Elsewhere" })).status).toBe(200);
+  });
+
+  test("an unused one is deleted together with its account and its account's key, and may be added again", async () => {
+    const before = await secretsOf();
+    const created = (await customCa()).body;
+    expect(await secretsOf()).toBe(before + 1);
+
+    const deleted = await remove(created.acmeCa.id);
+    expect(deleted.status).toBe(200);
+    expect(deleted.body).toEqual({ deleted: true });
+    expect((await acmeCasOf()).filter((ca) => !ca.builtIn)).toEqual([]);
+    expect((await admin().list()).body.items).toEqual([]);
+    expect(await secretsOf()).toBe(before);
+    expect((await admin().test(created.account.id)).status).toBe(404);
+    expect((await remove(created.acmeCa.id)).status).toBe(404);
+    expect((await change(created.acmeCa.id, { name: "Back" })).status).toBe(404);
+
+    // Its name is free again.
+    expect((await customCa()).status).toBe(201);
+  });
+
+  test("the built-in ones cannot be changed or deleted, with or without an account", async () => {
+    await admin().create({ acmeCaId: "letsencrypt-production", termsOfServiceAgreed: true });
+    const builtIns = (await acmeCasOf()).filter((ca) => ca.builtIn);
+    for (const ca of builtIns) {
+      const changed = await change(ca.id, { name: "Mine" });
+      expect(changed.status).toBe(409);
+      expect(changed.body.error).toBe(`${ca.name} is built in, and cannot be changed or deleted`);
+      expect((await change(ca.id, { contactEmail: "pki@acme.test" })).status).toBe(409);
+      expect((await remove(ca.id)).status).toBe(409);
+    }
+    expect((await acmeCasOf()).filter((ca) => ca.builtIn)).toEqual(builtIns);
+    expect((await admin().list()).body.items).toHaveLength(1);
+    expect(await caEvents()).toEqual([]);
+  });
+
+  test("an unknown one, or another Organization's, is a 404 and is left as it was", async () => {
+    for (const id of ["00000000-0000-4000-8000-000000000000", "not-an-id"]) {
+      expect((await change(id, { name: "X" })).status).toBe(404);
+      expect((await remove(id)).status).toBe(404);
+    }
+    const theirs = (await customCa({}, globex.cookie, globex.orgId)).body;
+    expect((await change(theirs.acmeCa.id, { name: "Taken over" })).status).toBe(404);
+    expect((await remove(theirs.acmeCa.id)).status).toBe(404);
+    // Nor through another Organization's path.
+    expect((await change(theirs.acmeCa.id, { name: "Taken over" }, acmeOrg.cookie, globex.orgId)).status).toBe(404);
+    expect((await acmeCasOf(globex.cookie, globex.orgId)).find((ca) => ca.id === theirs.acmeCa.id)).toEqual(theirs.acmeCa);
+  });
+
+  test("only an Organization Administrator, who holds the ACME accounts' update and delete as /api/me reports", async () => {
+    const { acmeCa } = (await customCa()).body;
+    for (const role of ["approver", "member"]) {
+      const cookie = await join(`${role}@acme.test`, role);
+      expect((await change(acmeCa.id, { name: `By ${role}` }, cookie)).status).toBe(403);
+      expect((await remove(acmeCa.id, cookie)).status).toBe(403);
+      const held = (await h.api("/api/me", { cookie })).body.organizations.find((o: any) => o.id === acmeOrg.orgId).permissions;
+      expect(held.acmeAccount).toBeUndefined();
+    }
+    expect((await change(acmeCa.id, { name: "By no one" }, "")).status).toBe(401);
+    expect((await remove(acmeCa.id, "")).status).toBe(401);
+    expect((await change(acmeCa.id, { name: "By an operator" }, operator)).status).toBe(404);
+    expect((await remove(acmeCa.id, operator)).status).toBe(404);
+    expect((await acmeCasOf()).find((ca) => ca.id === acmeCa.id)).toEqual(acmeCa);
+
+    const held = (await h.api("/api/me", { cookie: acmeOrg.cookie })).body.organizations.find((o: any) => o.id === acmeOrg.orgId).permissions;
+    expect(held.acmeAccount).toEqual(["read", "create", "update", "delete", "test"]);
+  });
+
+  test("changing and deleting it each write an Audit Event with what changed; a change that changes nothing writes none", async () => {
+    const { acmeCa, account } = (await customCa({ name: "Internal CA", tag: "staging", contactEmail: "pki@acme.test" })).body;
+    await change(acmeCa.id, { name: "Internal CA", tag: "staging", contactEmail: "pki@acme.test" });
+    await change(acmeCa.id, {});
+    expect(await caEvents()).toEqual([]);
+
+    await change(acmeCa.id, { name: "Renamed CA", contactEmail: "certs@acme.test" });
+    await change(acmeCa.id, { tag: "production" });
+    expect((await remove(acmeCa.id)).status).toBe(200);
+    expect(await caEvents()).toEqual([
+      expect.objectContaining({
+        action: "acme_ca.updated",
+        target: { type: "acme_ca", id: acmeCa.id },
+        actor: { id: expect.any(String), email: "admin@acme.test" },
+        detail: { name: "Renamed CA", changes: { name: { from: "Internal CA", to: "Renamed CA" }, contactEmail: { from: "pki@acme.test", to: "certs@acme.test" } } },
+      }),
+      expect.objectContaining({
+        action: "acme_ca.updated",
+        target: { type: "acme_ca", id: acmeCa.id },
+        detail: { name: "Renamed CA", changes: { tag: { from: "staging", to: "production" } } },
+      }),
+      expect.objectContaining({
+        action: "acme_ca.deleted",
+        target: { type: "acme_ca", id: acmeCa.id },
+        actor: { id: expect.any(String), email: "admin@acme.test" },
+        detail: { name: "Renamed CA", directoryUrl: PEBBLE_DIRECTORY, tag: "production", account: { id: account.id, accountUrl: account.accountUrl } },
+      }),
+    ]);
+    expect(JSON.stringify(await auditOf())).not.toContain(pemBody(h.createdAccountKeys[0]!));
+  });
+});
+
 describe("External Account Binding", () => {
   // A CA that requires it (the second Pebble) registers only an account bound with a key id and HMAC key it issued.
   const eabCa = (externalAccountBinding?: unknown, body: Record<string, unknown> = {}) =>
     customCa({ name: "Commercial CA", directoryUrl: PEBBLE_EAB_DIRECTORY, tag: "production", externalAccountBinding, ...body });
   const wrongHmacKey = "pM_tQXbIwoXQ_LIC6jrMnM-Ty_2y8Fi9kpGX2Ikbi28";
+
+  test("a change keeps the binding, and deleting the CA deletes the HMAC key's secret with the account's key", async () => {
+    const secretsOf = async () => Number((await h.pool.query(`select count(*) from secret where organization_id = $1`, [acmeOrg.orgId])).rows[0].count);
+    const before = await secretsOf();
+    const { acmeCa } = (await eabCa(PEBBLE_EAB_KEY)).body;
+    expect(await secretsOf()).toBe(before + 2);
+
+    const changed = await h.api(`/api/organizations/${acmeOrg.orgId}/acme-cas/${acmeCa.id}`, { cookie: acmeOrg.cookie, method: "PATCH", body: { name: "Renamed CA" } });
+    expect(changed.status).toBe(200);
+    expect(changed.body.acmeCa.externalAccountBinding).toEqual({ keyId: PEBBLE_EAB_KEY.keyId });
+
+    expect((await h.api(`/api/organizations/${acmeOrg.orgId}/acme-cas/${acmeCa.id}`, { cookie: acmeOrg.cookie, method: "DELETE" })).status).toBe(200);
+    expect(await secretsOf()).toBe(before);
+    expect(JSON.stringify(await auditOf())).not.toContain(PEBBLE_EAB_KEY.hmacKey);
+  });
 
   test("a CA that requires it registers the account when given the key id and HMAC key, and administrators see the key id", async () => {
     const created = await eabCa(PEBBLE_EAB_KEY);

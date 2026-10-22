@@ -1,17 +1,19 @@
 // The ACME CAs an Organization can use (acme-cas.ts), and its ACME Account with each, at most one per ACME CA. A custom
-// ACME CA is created together with its account, in one change: one the CA will not register is not saved. The
-// account's key is a secret (secrets.ts): it is generated and kept by the platform, and no route returns it. It can be
-// replaced with a key the CA accepts for the account, or tested, and that is all. So is the HMAC key of the External
-// Account Binding a custom ACME CA may require: given once, when the CA is added, and never returned.
+// ACME CA is created together with its account, in one change: one the CA will not register is not saved. Its name,
+// tag and contact email may be changed after, never where it is or its External Account Binding, and it is deleted
+// together with its account once nothing refers to it. The account's key is a secret (secrets.ts): it is generated and
+// kept by the platform, and no route returns it. It can be replaced with a key the CA accepts for the account, or
+// tested, and that is all. So is the HMAC key of the External Account Binding a custom ACME CA may require: given once,
+// when the CA is added, and never returned.
 import { OpenAPIHono, createRoute, z } from "@hono/zod-openapi";
-import { and, asc, eq } from "drizzle-orm";
+import { and, asc, count, eq } from "drizzle-orm";
 import { createPrivateKey } from "node:crypto";
 import type { Authorizer } from "../../tenancy/authorization";
 import { roleCan } from "../../tenancy/permissions";
 import { CertificateAuthorityError, type AcmeCertificateAuthority, type CaAccount } from "./certificate-authority";
 import { ACME_CA_TAGS, AcmeCaId, BUILT_IN_ACME_CAS, DEFAULT_ACME_CA_ID, customAcmeCa, type AcmeCa, type AcmeCas } from "./acme-cas";
 import type { Db, Tx } from "../../platform/db/client";
-import { acmeAccount, acmeCa as acmeCaTable } from "../../platform/db/schema";
+import { acmeAccount, acmeCa as acmeCaTable, certificate, managedCertificate, secret } from "../../platform/db/schema";
 import { HttpError, OrgParam, errors, isUniqueViolation, json } from "../../platform/http";
 import type { Secrets } from "../../platform/crypto/secrets";
 import type { Actor, Change, UnitOfWork } from "../../platform/unit-of-work";
@@ -108,6 +110,12 @@ export function registerAcmeAccounts(ctx: {
 }) {
   const { app, db, requireUser, authorize, unitOfWork, secrets, certificateAuthority: ca, acmeCas } = ctx;
 
+  /** Refuses a name another of the Organization's ACME CAs has, a built-in one's included; checked before the CA is asked anything, so that a name taken leaves the CA as it was. */
+  async function refuseTakenName(orgId: string, name: string) {
+    const [sameName] = await db.select({ id: acmeCaTable.id }).from(acmeCaTable).where(and(eq(acmeCaTable.organizationId, orgId), eq(acmeCaTable.name, name)));
+    if (sameName || BUILT_IN_ACME_CAS.some((ca) => ca.name === name)) throw nameTaken(name);
+  }
+
   /** Saves the account the CA registered, its key as a secret, and audits it, in the change at hand. */
   async function saveAccount(tx: Tx, change: Change, orgId: string, acmeCaId: string, created: CaAccount, contactEmail: string | undefined) {
     const secretId = await secrets.create(tx, orgId, created.accountKey);
@@ -165,9 +173,7 @@ export function registerAcmeAccounts(ctx: {
       const { name, directoryUrl, tag, externalAccountBinding, contactEmail } = c.req.valid("json");
       const actor = await requireUser(c);
       await authorize(actor, orgId, { acmeAccount: ["create"] });
-      // Checked before the CA is asked, so that a name taken already leaves no account behind at the CA.
-      const [sameName] = await db.select({ id: acmeCaTable.id }).from(acmeCaTable).where(and(eq(acmeCaTable.organizationId, orgId), eq(acmeCaTable.name, name)));
-      if (sameName || BUILT_IN_ACME_CAS.some((ca) => ca.name === name)) throw nameTaken(name);
+      await refuseTakenName(orgId, name);
 
       // Not saved yet, so it has no id; registering needs only where it is, and it is checked there as a custom one.
       const externalAccountKeyId = externalAccountBinding?.keyId ?? null;
@@ -191,6 +197,141 @@ export function registerAcmeAccounts(ctx: {
         if (isUniqueViolation(err)) throw nameTaken(name);
         throw err;
       }
+    },
+  );
+
+  const AcmeCaParams = OrgParam.extend({ acmeCaId: z.string().openapi({ param: { name: "acmeCaId", in: "path" } }) });
+
+  /** The Organization's custom ACME CA and its account, locked for the rest of the change when read in one; 404 for none such, 409 for a built-in one. */
+  async function customAcmeCaOf(q: Db | Tx, orgId: string, acmeCaId: string) {
+    const builtIn = BUILT_IN_ACME_CAS.find((ca) => ca.id === acmeCaId);
+    if (builtIn) throw new HttpError(409, `${builtIn.name} is built in, and cannot be changed or deleted`);
+    // Not a UUID can't be a custom one; asking Postgres would only raise a type error.
+    const [row] = z.uuid().safeParse(acmeCaId).success
+      ? await q.select().from(acmeCaTable).where(and(eq(acmeCaTable.organizationId, orgId), eq(acmeCaTable.id, acmeCaId))).for("update")
+      : [];
+    if (!row) throw new HttpError(404, "ACME CA not found");
+    const [account] = await q.select().from(acmeAccount).where(and(eq(acmeAccount.organizationId, orgId), eq(acmeAccount.acmeCaId, row.id))).for("update");
+    // A custom one is created together with its account, and deleted together with it.
+    if (!account) throw new Error(`the custom ACME CA ${row.id} has no account`);
+    return { row, account };
+  }
+
+  app.openapi(
+    createRoute({
+      method: "patch",
+      path: "/api/organizations/{orgId}/acme-cas/{acmeCaId}",
+      tags: ["ACME accounts"],
+      summary: "Rename a custom ACME CA, or change its tag or its account's contact email",
+      description:
+        "What is given replaces what it had. A new contact email (none, given null) is sent to the CA first, and saved only once the CA accepts it: a CA that refuses is 422 with its reason, one that does not answer is 502. " +
+        "The directory URL and External Account Binding are fixed, so that the account cannot be pointed somewhere else: given, they are refused with 400, and changing them means deleting the ACME CA and adding it again. " +
+        "Names are unique within the Organization, the built-in ones' included (409). A built-in ACME CA cannot be changed (409). Only Organization Administrators may.",
+      request: {
+        params: AcmeCaParams,
+        body: {
+          content: {
+            "application/json": {
+              schema: z.strictObject(
+                {
+                  name: NewAcmeCa.shape.name.optional(),
+                  tag: z.enum(ACME_CA_TAGS).nullable().optional(),
+                  contactEmail: z.email().nullable().optional().openapi({ description: "Its account's contact, which the CA is told; null for none." }),
+                },
+                {
+                  error: (issue) =>
+                    issue.code === "unrecognized_keys" && issue.keys.some((key) => key === "directoryUrl" || key === "externalAccountBinding")
+                      ? "the directory URL and External Account Binding cannot be changed: delete the ACME CA and add it again"
+                      : undefined,
+                },
+              ),
+            },
+          },
+        },
+      },
+      responses: { 200: json(z.object({ acmeCa: AcmeCaShown, account: Account }), "Changed"), ...errors(400, 401, 403, 404, 409, 422, 502) },
+    }),
+    async (c) => {
+      const { orgId, acmeCaId } = c.req.valid("param");
+      const asked = c.req.valid("json");
+      const actor = await requireUser(c);
+      await authorize(actor, orgId, { acmeAccount: ["update"] });
+      const current = await customAcmeCaOf(db, orgId, acmeCaId);
+      if (asked.name !== undefined && asked.name !== current.row.name) await refuseTakenName(orgId, asked.name);
+
+      // The CA is told of a new contact before anything is saved, outside the change, as it is when the account is registered.
+      const contactChanged = asked.contactEmail !== undefined && asked.contactEmail !== current.account.contactEmail;
+      if (contactChanged) {
+        const accountKey = await secrets.open(db, orgId, current.account.secretId);
+        await ca.updateContact(customAcmeCa(current.row), { accountUrl: current.account.accountUrl, accountKey }, asked.contactEmail!).catch((err) => caFailure(err));
+      }
+
+      try {
+        const { row, account } = await unitOfWork.run(actor, async (tx, change) => {
+          // Under the lock again, so what the Audit Event says it changed from is what it replaced.
+          const { row, account } = await customAcmeCaOf(tx, orgId, acmeCaId);
+          const changes = {
+            ...(asked.name !== undefined && asked.name !== row.name && { name: { from: row.name, to: asked.name } }),
+            ...(asked.tag !== undefined && asked.tag !== row.tag && { tag: { from: row.tag, to: asked.tag } }),
+            // Only the contact the CA was just told is saved, so that the two agree.
+            ...(contactChanged && asked.contactEmail !== account.contactEmail && { contactEmail: { from: account.contactEmail, to: asked.contactEmail! } }),
+          };
+          if (Object.keys(changes).length === 0) return { row, account };
+          const [updated] = await tx
+            .update(acmeCaTable)
+            .set({ ...(changes.name && { name: changes.name.to }), ...(changes.tag && { tag: changes.tag.to }) })
+            .where(eq(acmeCaTable.id, row.id))
+            .returning();
+          const [updatedAccount] = changes.contactEmail
+            ? await tx.update(acmeAccount).set({ contactEmail: changes.contactEmail.to }).where(eq(acmeAccount.id, account.id)).returning()
+            : [account];
+          await change.audit({ organizationId: orgId, action: "acme_ca.updated", target: { type: "acme_ca", id: row.id }, detail: { name: updated!.name, changes } });
+          return { row: updated!, account: updatedAccount! };
+        });
+        return c.json({ acmeCa: toAcmeCa(customAcmeCa(row), { configurationShown: true, hasAccount: true }), account: toAccount(account) }, 200);
+      } catch (err) {
+        if (isUniqueViolation(err)) throw nameTaken(asked.name!);
+        throw err;
+      }
+    },
+  );
+
+  app.openapi(
+    createRoute({
+      method: "delete",
+      path: "/api/organizations/{orgId}/acme-cas/{acmeCaId}",
+      tags: ["ACME accounts"],
+      summary: "Delete a custom ACME CA",
+      description:
+        "Removes it, the Organization's account with it, and their secrets (the account's key and any External Account Binding's HMAC key); the account is left as it is at the CA. " +
+        "Refused with 409, with the reason, while any Managed Certificate (archived ones included) or Certificate refers to it, so that their history and revocation keep working. " +
+        "A built-in ACME CA cannot be deleted (409). Only Organization Administrators may.",
+      request: { params: AcmeCaParams },
+      responses: { 200: json(z.object({ deleted: z.literal(true) })), ...errors(401, 403, 404, 409) },
+    }),
+    async (c) => {
+      const { orgId, acmeCaId } = c.req.valid("param");
+      const actor = await requireUser(c);
+      await authorize(actor, orgId, { acmeAccount: ["delete"] });
+      await unitOfWork.run(actor, async (tx, change) => {
+        const { row, account } = await customAcmeCaOf(tx, orgId, acmeCaId);
+        const [managed] = await tx.select({ n: count() }).from(managedCertificate).where(and(eq(managedCertificate.organizationId, orgId), eq(managedCertificate.acmeCaId, row.id)));
+        const [issued] = await tx.select({ n: count() }).from(certificate).where(and(eq(certificate.organizationId, orgId), eq(certificate.acmeCaId, row.id)));
+        const plural = (n: number, noun: string) => `${n} ${noun}${n === 1 ? "" : "s"}`;
+        const referring = [managed!.n > 0 && plural(managed!.n, "Managed Certificate"), issued!.n > 0 && plural(issued!.n, "Certificate")].filter(Boolean);
+        if (referring.length > 0) throw new HttpError(409, `${row.name} is the issuer of ${referring.join(" and ")} (archived ones included), so it cannot be deleted`);
+        await tx.delete(acmeAccount).where(eq(acmeAccount.id, account.id));
+        await tx.delete(secret).where(and(eq(secret.organizationId, orgId), eq(secret.id, account.secretId)));
+        await tx.delete(acmeCaTable).where(eq(acmeCaTable.id, row.id));
+        if (row.externalAccountSecretId) await tx.delete(secret).where(and(eq(secret.organizationId, orgId), eq(secret.id, row.externalAccountSecretId)));
+        await change.audit({
+          organizationId: orgId,
+          action: "acme_ca.deleted",
+          target: { type: "acme_ca", id: row.id },
+          detail: { name: row.name, directoryUrl: row.directoryUrl, tag: row.tag, account: { id: account.id, accountUrl: account.accountUrl } },
+        });
+      });
+      return c.json({ deleted: true as const }, 200);
     },
   );
 
