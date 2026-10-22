@@ -20,7 +20,9 @@ const statements = {
   invitation: ["create", "cancel"],
   team: ["create", "update", "delete"],
   audit: ["read"],
-  acmeAccount: ["read", "create", "update", "test"],
+  // ACME CAs and the Organization's account with each. `update` replaces an account's key and changes a custom ACME CA's
+  // name, tag and contact email; `delete` removes a custom one nothing refers to.
+  acmeAccount: ["read", "create", "update", "delete", "test"],
   dnsProvider: ["read", "create", "update", "test"],
   // Delegated DCV: where `_acme-challenge` names are delegated to, and how each name or zone is validated. `dcvRule.read`
   // also shows the CNAME record a name needs.

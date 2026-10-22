@@ -849,6 +849,9 @@ export const api = {
   /** Adds a custom ACME CA and registers the Organization's account with it, in one step: nothing is saved if the CA refuses. */
   createAcmeCa: (orgId: string, body: { name: string; directoryUrl: string; tag: AcmeCaTag | null; externalAccountBinding?: { keyId: string; hmacKey: string }; contactEmail?: string }) =>
     call<{ acmeCa: AcmeCa; account: AcmeAccount }>(`/api/organizations/${orgId}/acme-cas`, { body: { ...body, termsOfServiceAgreed: true } }),
+  updateAcmeCa: (orgId: string, acmeCaId: string, body: { name?: string; tag?: AcmeCaTag | null; contactEmail?: string | null }) =>
+    call<{ acmeCa: AcmeCa; account: AcmeAccount }>(`/api/organizations/${orgId}/acme-cas/${acmeCaId}`, { method: "PATCH", body }),
+  deleteAcmeCa: (orgId: string, acmeCaId: string) => call(`/api/organizations/${orgId}/acme-cas/${acmeCaId}`, { method: "DELETE" }),
   testAcmeAccount: (orgId: string, accountId: string) =>
     call<{ ok: boolean; error?: string }>(`/api/organizations/${orgId}/acme-accounts/${accountId}/test`, { method: "POST", body: {} }),
   dnsProviders: (orgId: string) => call<{ items: DnsProvider[] }>(`/api/organizations/${orgId}/dns-providers`),

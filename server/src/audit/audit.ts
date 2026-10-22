@@ -18,6 +18,8 @@ export const AUDIT_ACTIONS = [
   "team.member_added",
   "team.member_removed",
   "acme_ca.created",
+  "acme_ca.updated",
+  "acme_ca.deleted",
   "acme_account.created",
   "acme_account.key_replaced",
   "dns_provider.created",

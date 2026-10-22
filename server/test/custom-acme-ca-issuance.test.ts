@@ -228,3 +228,71 @@ describe("revoking from a custom ACME CA", () => {
     expect((await auditOf()).filter((e) => e.action === "certificate.revoked")).toEqual([]);
   });
 });
+
+describe("deleting a custom ACME CA", () => {
+  const remove = (acmeCaId: string) => h.api(`/api/organizations/${org.orgId}/acme-cas/${acmeCaId}`, { cookie: org.cookie, method: "DELETE" });
+  const listed = async () => ((await h.api(`/api/organizations/${org.orgId}/acme-cas`, { cookie: org.cookie })).body.items as { id: string }[]).map((ca) => ca.id);
+
+  test("is refused, with the reason, while a Managed Certificate refers to it, archived or not, and its history and revocation keep working", async () => {
+    const { acmeCaId, accountId } = await customCa();
+    await dnsProvider();
+    const id = await issuedFrom(acmeCaId);
+
+    const refused = await remove(acmeCaId);
+    expect(refused.status).toBe(409);
+    expect(refused.body.error).toBe("Internal CA is the issuer of 1 Managed Certificate and 1 Certificate (archived ones included), so it cannot be deleted");
+
+    // Its account is still there to revoke through.
+    const [issued] = await certificates(id);
+    expect(issued).toMatchObject({ acmeCaId, acmeAccountId: accountId });
+    expect((await revoke(id, issued!.id)).status).toBe(200);
+
+    expect((await h.api(`${base()}/${id}/archive`, { cookie: org.cookie, method: "POST", body: {} })).status).toBe(200);
+    expect((await remove(acmeCaId)).status).toBe(409);
+    expect(await listed()).toContain(acmeCaId);
+    expect((await h.api(`/api/organizations/${org.orgId}/acme-accounts`, { cookie: org.cookie })).body.items.map((a: any) => a.id)).toEqual([accountId]);
+    expect((await auditOf()).map((e) => e.action)).not.toContain("acme_ca.deleted");
+  });
+
+  test("is refused while a Certificate refers to it, though no Managed Certificate does", async () => {
+    const { acmeCaId } = await customCa();
+    await dnsProvider();
+    const id = await issuedFrom(acmeCaId);
+    // No route moves a Managed Certificate off an ACME CA; as if one had, its Certificate still came from this one.
+    await h.pool.query(`update managed_certificate set acme_ca_id = 'letsencrypt-staging' where id = $1`, [id]);
+    const refused = await remove(acmeCaId);
+    expect(refused.status).toBe(409);
+    expect(refused.body.error).toBe("Internal CA is the issuer of 1 Certificate (archived ones included), so it cannot be deleted");
+    expect(await listed()).toContain(acmeCaId);
+  });
+
+  test("a Managed Certificate whose first Issuance has not succeeded refers to it all the same", async () => {
+    const { acmeCaId } = await customCa();
+    // No DNS Provider, so its Issuance fails: it still refers to the CA.
+    expect((await create(acmeCaId)).status).toBe(201);
+    await h.settleIssuances();
+    const refused = await remove(acmeCaId);
+    expect(refused.status).toBe(409);
+    expect(refused.body.error).toBe("Internal CA is the issuer of 1 Managed Certificate (archived ones included), so it cannot be deleted");
+  });
+
+  test("another custom ACME CA's Managed Certificates do not stop it", async () => {
+    const used = await customCa(PEBBLE_DIRECTORY, org, "Used CA");
+    const unused = await customCa(PEBBLE_DIRECTORY, org, "Unused CA");
+    await dnsProvider();
+    await issuedFrom(used.acmeCaId);
+    expect((await remove(unused.acmeCaId)).status).toBe(200);
+    expect(await listed()).toEqual(["letsencrypt-staging", "letsencrypt-production", used.acmeCaId]);
+  });
+});
+
+describe("changing a custom ACME CA", () => {
+  test("a renamed and retagged one goes on issuing through the same account", async () => {
+    const { acmeCaId, accountId } = await customCa();
+    await dnsProvider();
+    const changed = await h.api(`/api/organizations/${org.orgId}/acme-cas/${acmeCaId}`, { cookie: org.cookie, method: "PATCH", body: { name: "Renamed CA", tag: "staging" } });
+    expect(changed.status).toBe(200);
+    const id = await issuedFrom(acmeCaId);
+    expect((await get(id)).currentCertificate).toMatchObject({ acmeCaId, acmeAccountId: accountId, ca: "Renamed CA" });
+  });
+});

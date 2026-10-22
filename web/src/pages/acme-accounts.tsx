@@ -4,6 +4,7 @@ import { createColumnHelper, tableFeatures, useTable } from "@tanstack/react-tab
 import { PlusIcon } from "lucide-react";
 import { useState, type FormEvent } from "react";
 import { AcmeCaTagBadge } from "@/components/acme-ca-tag";
+import { ConfirmDialog } from "@/components/confirm-dialog";
 import { DataTable } from "@/components/data-table/data-table";
 import { Button } from "@/components/ui/button";
 import { Dialog, DialogClose, DialogContent, DialogDescription, DialogFooter, DialogHeader, DialogTitle, DialogTrigger } from "@/components/ui/dialog";
@@ -50,14 +51,14 @@ const columns = columnHelper.columns([
     cell: ({ cell }) => (cell.getValue() ? <span className="break-all font-mono text-xs">{cell.getValue()}</span> : <span className="text-muted-foreground">None yet</span>),
   }),
   columnHelper.accessor((r) => r.account?.contactEmail, { id: "contact", header: "Contact", cell: ({ cell }) => cell.getValue() ?? <span className="text-muted-foreground">None</span> }),
-  columnHelper.display({ id: "actions", header: () => <span className="sr-only">Actions</span>, cell: ({ row }) => row.original.account && <TestAccount ca={row.original.ca} account={row.original.account} /> }),
+  columnHelper.display({ id: "actions", header: () => <span className="sr-only">Actions</span>, cell: ({ row }) => <AcmeCaActions ca={row.original.ca} account={row.original.account} /> }),
 ]);
 
 /**
  * The ACME CAs the Organization can use, and its account with each: a Managed Certificate is issued under the account
  * with its ACME CA, and fails until there is one. Let's Encrypt Staging and Production are built in, and shown as they
- * are; an Organization Administrator may add custom ones, each registered with as it is added. The account's key is
- * made and kept by the platform and is never shown.
+ * are; an Organization Administrator may add custom ones, each registered with as it is added, change their names,
+ * tags and contact emails, and delete one that is the issuer of nothing. The account's key is made and kept by the platform and is never shown.
  */
 export function AcmeAccountsPage() {
   const { orgId } = useParams({ from: ROUTE });
@@ -97,19 +98,136 @@ export function AcmeAccountsPage() {
   );
 }
 
-function TestAccount({ ca, account }: { ca: AcmeCa; account: AcmeAccount }) {
+/** Testing the account, and, for a custom ACME CA, changing or deleting it: a built-in one cannot be changed. */
+function AcmeCaActions({ ca, account }: { ca: AcmeCa; account?: AcmeAccount }) {
   const { orgId } = useParams({ from: ROUTE });
   const org = useOrg(orgId);
-  const test = useMutation({ mutationFn: () => api.testAcmeAccount(orgId, account.id) });
-  if (!org || !can(org, "acmeAccount", "test")) return null;
+  if (!org) return null;
   return (
-    <div className="flex items-center justify-end gap-3">
+    <div className="flex items-center justify-end gap-2">
+      {account && can(org, "acmeAccount", "test") && <TestAccount orgId={orgId} ca={ca} account={account} />}
+      {!ca.builtIn && account && can(org, "acmeAccount", "update") && <EditAcmeCaDialog orgId={orgId} ca={ca} account={account} />}
+      {!ca.builtIn && can(org, "acmeAccount", "delete") && <DeleteAcmeCa orgId={orgId} ca={ca} />}
+    </div>
+  );
+}
+
+function TestAccount({ orgId, ca, account }: { orgId: string; ca: AcmeCa; account: AcmeAccount }) {
+  const test = useMutation({ mutationFn: () => api.testAcmeAccount(orgId, account.id) });
+  return (
+    <>
       {test.data && (test.data.ok ? <span role="status" className="text-sm">The CA accepts the key.</span> : <span role="alert" className="text-sm text-destructive">{test.data.error}</span>)}
       {test.error && <span role="alert" className="text-sm text-destructive">{test.error.message}</span>}
       <Button variant="outline" size="sm" disabled={test.isPending} aria-label={`Test the account with ${ca.name}`} onClick={() => test.mutate()}>
         Test
       </Button>
-    </div>
+    </>
+  );
+}
+
+function EditAcmeCaDialog({ orgId, ca, account }: { orgId: string; ca: AcmeCa; account: AcmeAccount }) {
+  const [open, setOpen] = useState(false);
+  return (
+    <Dialog open={open} onOpenChange={setOpen}>
+      <DialogTrigger asChild>
+        <Button variant="outline" size="sm" aria-label={`Edit ${ca.name}`}>
+          Edit
+        </Button>
+      </DialogTrigger>
+      <DialogContent className="sm:max-w-lg">
+        <DialogHeader>
+          <DialogTitle>Edit {ca.name}</DialogTitle>
+          <DialogDescription>Its name, tag and the account's contact email. A new contact email is sent to the CA.</DialogDescription>
+        </DialogHeader>
+        {/* Only mounted while open, so each opening starts from what it has now. */}
+        {open && <EditAcmeCaForm orgId={orgId} ca={ca} account={account} onDone={() => setOpen(false)} />}
+      </DialogContent>
+    </Dialog>
+  );
+}
+
+function EditAcmeCaForm({ orgId, ca, account, onDone }: { orgId: string; ca: AcmeCa; account: AcmeAccount; onDone: () => void }) {
+  const [name, setName] = useState(ca.name);
+  const [tag, setTag] = useState<AcmeCaTag | "">(ca.tag ?? "");
+  const [contactEmail, setContactEmail] = useState(account.contactEmail ?? "");
+  const save = useAction(
+    () => api.updateAcmeCa(orgId, ca.id, { name: name.trim(), tag: tag || null, contactEmail: contactEmail.trim() || null }),
+    ["acme-accounts", "acme-cas"],
+    onDone,
+  );
+  return (
+    <form
+      className="flex flex-col gap-4"
+      onSubmit={(e: FormEvent) => {
+        e.preventDefault();
+        save.mutate(undefined);
+      }}
+    >
+      <div className="flex flex-col gap-2">
+        <Label htmlFor="edit-acme-ca-name">Name</Label>
+        <Input id="edit-acme-ca-name" required value={name} onChange={(e) => setName(e.target.value)} />
+      </div>
+      <div className="flex flex-col gap-2">
+        <Label htmlFor="edit-acme-ca-tag">Tag (optional)</Label>
+        <select id="edit-acme-ca-tag" className="h-9 rounded-md border bg-transparent px-3 text-sm" value={tag} onChange={(e) => setTag(e.target.value as AcmeCaTag | "")}>
+          <option value="">None</option>
+          {(Object.keys(ACME_CA_TAG_LABELS) as AcmeCaTag[]).map((t) => (
+            <option key={t} value={t}>
+              {ACME_CA_TAG_LABELS[t]}
+            </option>
+          ))}
+        </select>
+      </div>
+      <div className="flex flex-col gap-2">
+        <Label htmlFor="edit-acme-contact">Contact email (optional)</Label>
+        <Input id="edit-acme-contact" type="email" value={contactEmail} onChange={(e) => setContactEmail(e.target.value)} />
+      </div>
+      <dl className="grid gap-1 rounded-md border p-3 text-sm sm:grid-cols-[7rem_1fr] sm:gap-x-4">
+        <dt className="text-muted-foreground">Directory</dt>
+        <dd className="min-w-0 break-all font-mono text-xs">{ca.directoryUrl}</dd>
+        <dt className="text-muted-foreground">External Account Binding</dt>
+        <dd className="min-w-0 break-all text-xs">{ca.externalAccountBinding ? <span className="font-mono">{ca.externalAccountBinding.keyId}</span> : <span className="text-muted-foreground">None</span>}</dd>
+      </dl>
+      <p className="text-xs text-muted-foreground">
+        The directory URL and External Account Binding cannot be changed, so the account cannot be pointed somewhere else. To change them, delete this ACME CA and add it again.
+      </p>
+      {save.error && <p className="text-sm text-destructive">{save.error.message}</p>}
+      <DialogFooter>
+        <DialogClose asChild>
+          <Button type="button" variant="outline">
+            Cancel
+          </Button>
+        </DialogClose>
+        <Button type="submit" disabled={save.isPending}>
+          Save
+        </Button>
+      </DialogFooter>
+    </form>
+  );
+}
+
+function DeleteAcmeCa({ orgId, ca }: { orgId: string; ca: AcmeCa }) {
+  const [open, setOpen] = useState(false);
+  const remove = useAction(() => api.deleteAcmeCa(orgId, ca.id), ["acme-accounts", "acme-cas"], () => setOpen(false));
+  return (
+    <>
+      <Button variant="ghost" size="sm" aria-label={`Delete ${ca.name}`} onClick={() => setOpen(true)}>
+        Delete
+      </Button>
+      <ConfirmDialog
+        open={open}
+        onOpenChange={(next) => {
+          setOpen(next);
+          if (!next) remove.reset();
+        }}
+        title={`Delete ${ca.name}?`}
+        description="Its account and the account's key go with it. It cannot be deleted while it is the issuer of any Managed Certificate or Certificate, archived ones included."
+        confirmLabel="Delete"
+        pending={remove.isPending}
+        error={remove.error}
+        onConfirm={() => remove.mutate(undefined)}
+      />
+    </>
   );
 }
 
