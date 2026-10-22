@@ -2,7 +2,7 @@
 
 An ACME CA is a Certificate Authority the platform obtains Certificates from over ACME: a directory URL, and what is needed to register an account there. A Managed Certificate whose issuer is an ACME CA is issued through the Organization's ACME Account with that CA, and its Issuance fails until there is one. Each ACME CA needs an account of its own, at most one per Organization.
 
-Only Organization Administrators see the ACME CAs' configuration and the ACME Accounts, under Administration → ACME accounts in the web app or `/api/organizations/{orgId}/acme-cas` and `/api/organizations/{orgId}/acme-accounts`; they alone may register, change, delete and test them. Anyone in the Organization may list the ACME CAs, by name and Environment Tag and whether the Organization has an account with each, to choose one for a Managed Certificate.
+Only Organization Administrators see the ACME CAs' configuration and the ACME Accounts, under Administration → Integrations → ACME accounts in the web app or `/api/organizations/{orgId}/acme-cas` and `/api/organizations/{orgId}/acme-accounts`; they alone may register, change, delete and test them. Anyone in the Organization may list the ACME CAs, by name and Environment Tag and whether the Organization has an account with each, to choose one for a Managed Certificate.
 
 ## The built-in ACME CAs
 
@@ -13,7 +13,7 @@ Two are built in, the same for every Organization, and cannot be changed or dele
 | Let's Encrypt Staging | `letsencrypt-staging` | `https://acme-staging-v02.api.letsencrypt.org/directory` | `staging` |
 | Let's Encrypt Production | `letsencrypt-production` | `https://acme-v02.api.letsencrypt.org/directory` | `production` |
 
-Their configuration is shown, read-only, on the ACME accounts page and in the registration dialog. Let's Encrypt Staging is the default issuer of a new Managed Certificate, so that an Issuance is tried there before production, where Let's Encrypt rate-limits; its Certificates are not trusted by browsers.
+Their configuration is shown, read-only, on the ACME accounts page and in its **Register an account** dialog. Let's Encrypt Staging is the default issuer of a new Managed Certificate, so that an Issuance is tried there before production, where Let's Encrypt rate-limits; its Certificates are not trusted by browsers.
 
 ## Registering an ACME Account
 
@@ -44,7 +44,7 @@ Some CAs, commercial ones especially, register only accounts bound to an account
 
 ## The Environment Tag
 
-An ACME CA's Environment Tag is `staging`, `production` or none: a label of what it is for, which you set to tell your colleagues. It changes nothing about how the CA issues. It is shown as a badge beside the CA's name, in the ACME accounts list, in the issuer picker of a new Managed Certificate (which can be filtered by tag) and in the Managed Certificates list (filtered by **Environment tag**, the API's `tag` filter). The built-in ones carry fixed tags. A past Certificate shows its ACME CA's tag as it is now, so retagging a CA retags its history.
+An ACME CA's Environment Tag is `staging`, `production` or none: a label of what it is for, which you set to tell your colleagues. It changes nothing about how the CA issues. It is shown as a badge beside the CA's name, in the ACME accounts list (as **Tag**), in the issuer picker of a new Managed Certificate (which can be filtered by tag) and in the Managed Certificates list (filtered by **Environment tag**, the API's `tag` filter). The built-in ones carry fixed tags. A past Certificate shows its ACME CA's tag as it is now, so retagging a CA retags its history.
 
 ## Changing a custom ACME CA
 
@@ -58,4 +58,4 @@ Its directory URL and External Account Binding are fixed once it is added, so th
 
 ## Audit
 
-Adding a custom ACME CA records `acme_ca.created` and its account's `acme_account.created` in the same change; registering with a built-in one records `acme_account.created`; editing records `acme_ca.updated` and deleting `acme_ca.deleted`. Their detail is in [audit-events.md](audit-events.md).
+Adding a custom ACME CA records `acme_ca.created` and its account's `acme_account.created` in the same change; registering with a built-in one records `acme_account.created`; replacing an account's key records `acme_account.key_replaced`; editing a custom one records `acme_ca.updated` and deleting it `acme_ca.deleted`. Their detail is in [audit-events.md](audit-events.md).

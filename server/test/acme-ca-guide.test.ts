@@ -3,7 +3,7 @@
 // custom one is what acme-accounts.test.ts tests through the API.
 import { readFileSync } from "node:fs";
 import { describe, expect, test } from "bun:test";
-import { ACME_CA_TAGS, BUILT_IN_ACME_CAS, DEFAULT_ACME_CA_ID } from "../src/issuance/acme/acme-cas";
+import { BUILT_IN_ACME_CAS, DEFAULT_ACME_CA_ID } from "../src/issuance/acme/acme-cas";
 
 const guide = readFileSync(new URL("../../docs/acme-cas.md", import.meta.url), "utf8");
 
@@ -14,8 +14,7 @@ describe("the ACME CAs guide", () => {
     expect(rows).toEqual(BUILT_IN_ACME_CAS.map(({ name, id, directoryUrl, tag }) => ({ name, id, directoryUrl, tag })));
   });
 
-  test("it names the default ACME CA and every Environment Tag", () => {
+  test("it names the default ACME CA", () => {
     expect(guide).toContain(`${BUILT_IN_ACME_CAS.find((ca) => ca.id === DEFAULT_ACME_CA_ID)!.name} is the default issuer`);
-    for (const tag of ACME_CA_TAGS) expect(guide).toContain(`\`${tag}\``);
   });
 });

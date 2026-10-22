@@ -20,12 +20,20 @@ const issuerOfValue = (value: string): IssuerChoice => {
   return kind === "acme" ? { kind: "acme", acmeCaId: ref } : { kind: "private_ca", issuingCaId: ref };
 };
 
-/** What an ACME CA is for, by its tag, `trying` naming what a staging one is for, such as "an Issuance"; nothing for an untagged one. */
+/**
+ * What an ACME CA is for, by its tag, `trying` naming what a staging one is for, such as "an Issuance"; nothing for an
+ * untagged one. Only the built-in ones are known to be Let's Encrypt, so only theirs says who trusts their Certificates:
+ * a custom one's tag is its administrator's label, which says nothing of that.
+ */
 const acmeCaDescription = (ca: AcmeCa, trying: string) =>
   ca.tag === "staging"
-    ? `A test service. Certificates are not trusted by browsers; use it to try ${trying} first.`
+    ? ca.builtIn
+      ? `A test service. Certificates are not trusted by browsers; use it to try ${trying} first.`
+      : `Tagged for testing; use it to try ${trying} first.`
     : ca.tag === "production"
-      ? "A live service. Certificates are publicly trusted, and the CA's rate limits apply."
+      ? ca.builtIn
+        ? "A live service. Certificates are publicly trusted, and the CA's rate limits apply."
+        : "Tagged for production use."
       : undefined;
 
 const ACME_CA_FILTER_LABELS: Record<AcmeCaFilter, string> = { all: "Every tag", ...ACME_CA_TAG_LABELS, untagged: "Untagged" };
