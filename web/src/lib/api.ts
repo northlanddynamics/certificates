@@ -241,6 +241,8 @@ export interface Certificate {
   /** The Issuing CA, of a Private CA, that signed it; none for a Certificate from an ACME CA. */
   issuingCaId: string | null;
   issuedAt: string;
+  /** Whether the CSR it was issued from is kept and can be downloaded. */
+  hasCsr: boolean;
   revocation: Revocation | null;
 }
 /** One certificate of a Certificate's chain, as it says of itself. */
@@ -731,6 +733,7 @@ export const api = {
   /** Where a Certificate downloads from: the current one, or the one with `certificateId`. */
   certificateDownloadUrl: (orgId: string, id: string, form: { format: string; chain: string }, certificateId?: string) =>
     `/api/organizations/${orgId}/managed-certificates/${id}/${certificateId ? `certificates/${certificateId}/download` : "certificate"}?${new URLSearchParams(form)}`,
+  certificateCsrUrl: (orgId: string, id: string, certificateId: string) => `/api/organizations/${orgId}/managed-certificates/${id}/certificates/${certificateId}/csr`,
   /** One page of the API keys the caller may see, oldest first; `page` is from 1. */
   apiKeys: (orgId: string, paging: { page: number; pageSize: number }) =>
     call<Page<ApiKey>>(`/api/organizations/${orgId}/api-keys?${new URLSearchParams({ page: String(paging.page), pageSize: String(paging.pageSize) })}`),

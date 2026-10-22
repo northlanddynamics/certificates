@@ -335,8 +335,9 @@ export function KeySource({
   }
 
   return (
-    <div className="flex flex-col gap-5">
-      <RadioGroup value={state.mode} onValueChange={(mode) => onChange({ ...state, mode: mode as KeySourceMode })} className="grid gap-2 sm:grid-cols-3">
+    <div className="@container flex min-w-0 flex-col gap-5">
+      {/* Three across only where the container has room; a narrow dialog stacks them. */}
+      <RadioGroup value={state.mode} onValueChange={(mode) => onChange({ ...state, mode: mode as KeySourceMode })} className="grid gap-2 @lg:grid-cols-3">
         {MODES.map(({ mode, title, icon: Icon }) => (
           <FieldLabel key={mode} htmlFor={`${idPrefix}-mode-${mode}`}>
             <Field orientation="horizontal">
