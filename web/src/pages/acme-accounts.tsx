@@ -35,22 +35,33 @@ const columns = columnHelper.columns([
     cell: ({ row }) => (
       <span className="flex flex-col gap-1">
         <span className="flex items-center gap-2">
-          {row.original.ca.name} <AcmeCaTagBadge tag={row.original.ca.tag} />
+          {row.original.ca.name}
         </span>
-        {row.original.ca.directoryUrl && <span className="break-all font-mono text-xs text-muted-foreground">{row.original.ca.directoryUrl}</span>}
         {row.original.ca.externalAccountBinding && (
           <span className="break-all text-xs text-muted-foreground">
             External Account Binding key id <span className="font-mono">{row.original.ca.externalAccountBinding.keyId}</span>
           </span>
         )}
-        {row.original.ca.builtIn && <span className="text-xs text-muted-foreground">Built in; it cannot be changed.</span>}
       </span>
     ),
+  }),
+  columnHelper.accessor((r) => r.ca.tag, { id: "tag", header: "Tag", cell: ({ row }) => <AcmeCaTagBadge tag={row.original.ca.tag} /> }),
+  columnHelper.accessor((r) => r.ca.directoryUrl, {
+    id: "directory",
+    header: "Directory",
+    cell: ({ cell }) => <span className="block max-w-56 truncate font-mono text-xs" title={cell.getValue() ?? undefined}>{cell.getValue()}</span>,
   }),
   columnHelper.accessor((r) => r.account?.accountUrl, {
     id: "account",
     header: "Account",
-    cell: ({ cell }) => (cell.getValue() ? <span className="break-all font-mono text-xs">{cell.getValue()}</span> : <span className="text-muted-foreground">None yet</span>),
+    cell: ({ cell }) =>
+      cell.getValue() ? (
+        <span className="block max-w-56 truncate font-mono text-xs" title={cell.getValue()}>
+          {cell.getValue()}
+        </span>
+      ) : (
+        <span className="text-muted-foreground">None yet</span>
+      ),
   }),
   columnHelper.accessor((r) => r.account?.contactEmail, { id: "contact", header: "Contact", cell: ({ cell }) => cell.getValue() ?? <span className="text-muted-foreground">None</span> }),
   columnHelper.display({ id: "actions", header: () => <span className="sr-only">Actions</span>, cell: ({ row }) => <AcmeCaActions ca={row.original.ca} account={row.original.account} /> }),
