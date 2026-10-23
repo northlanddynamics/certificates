@@ -101,6 +101,8 @@ export function registerManagedCertificates(ctx: {
         "The key algorithm must be one the profile allows, and the profile must be enabled and its issuer still usable (an ACME CA the Organization has an ACME Account with, or an active Issuing CA), or it is refused with 422; the issuer's own checks then apply as above. " +
         "A non-administrator's names must keep to the profile's name rules as they are now (422, naming the names that do not); an Organization Administrator is held only to the issuer's limits. " +
         "The requester and the profile's default Team become Owners, with any Owners named. " +
+        "What is copied stays as it is when the profile is edited later, but its name rules, as they are then, bind a non-administrator's Name Change of it, and while the profile is disabled nothing is issued under it: " +
+        "it is not approved, its names are not changed and it does not renew, automatically or asked for, until the profile is enabled again or an Organization Administrator detaches it (ADR 0012). " +
         "While the Organization requires a Certificate Profile, a request without `profileId` from whoever may not create one outright is refused with 403. " +
         "As a person signed in, or with a user's API key in the `x-api-key` header, which may do what both its person may now and it carries; an Organization's key may not.",
       request: {
@@ -121,7 +123,7 @@ export function registerManagedCertificates(ctx: {
                   .openapi({ description: "For a Private CA issuer only: how many days its Certificates are valid for, at most the Issuing CA's maximum; its default when not given." }),
                 owners: z.array(OwnerRef).max(MAX_OWNERS).default([]).openapi({ description: "Users and Teams of the Organization accountable for it; none is allowed." }),
                 renewalPolicy: RenewalPolicy.optional().openapi({ description: "The Renewal Policy it starts with: automatic, 30 days before expiry, unless given." }),
-                profileId: z.string().optional().openapi({ description: "The Certificate Profile it is requested through, which fixes its issuer, validity and Renewal Policy." }),
+                profileId: z.string().optional().openapi({ description: "The Certificate Profile it is requested through, whose issuer, validity and Renewal Policy are copied onto it; its name rules and whether it is enabled are checked live." }),
               }),
             },
           },
