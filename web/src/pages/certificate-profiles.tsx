@@ -3,6 +3,7 @@ import { useParams } from "@tanstack/react-router";
 import { createColumnHelper, tableFeatures, useTable } from "@tanstack/react-table";
 import { PlusIcon } from "lucide-react";
 import { useState, type FormEvent } from "react";
+import { ConfirmDialog } from "@/components/confirm-dialog";
 import { DataTable } from "@/components/data-table/data-table";
 import { IssuerChoiceFields, useIssuerChoice } from "@/components/issuer-choice";
 import { Badge } from "@/components/ui/badge";
@@ -19,6 +20,7 @@ import { KEY_ALGORITHM_LABELS, type KeyAlgorithm } from "@/lib/csr-generator";
 import { MAX_NAMES, splitNames } from "@/lib/csr-names";
 import { chosenValidityLabel, findIssuingCa } from "@/lib/private-ca";
 import { nameRulesLabel } from "@/lib/profile-choice";
+import { disableConsequence } from "@/lib/profile-disable";
 import { useAction } from "@/lib/use-action";
 import { useOrg } from "@/lib/use-org";
 
@@ -38,7 +40,7 @@ function IssuerName({ orgId, issuer }: { orgId: string; issuer: CertificateProfi
 // The server lists every profile, so there is nothing to page.
 const features = tableFeatures({});
 const columnHelper = createColumnHelper<typeof features, CertificateProfile>();
-const columns = (orgId: string, mayEdit: boolean) =>
+const columns = (orgId: string, mayEdit: boolean, mayDisable: boolean) =>
   columnHelper.columns([
     columnHelper.accessor("name", {
       header: "Name",
@@ -60,15 +62,21 @@ const columns = (orgId: string, mayEdit: boolean) =>
     columnHelper.display({
       id: "actions",
       header: () => <span className="sr-only">Actions</span>,
-      cell: ({ row }) => <div className="flex justify-end">{mayEdit && <ProfileDialog orgId={orgId} profile={row.original} />}</div>,
+      cell: ({ row }) => (
+        <div className="flex justify-end gap-2">
+          {mayEdit && <ProfileDialog orgId={orgId} profile={row.original} />}
+          {mayDisable && (row.original.enabled ? <DisableDialog orgId={orgId} profile={row.original} /> : <EnableButton orgId={orgId} profile={row.original} />)}
+        </div>
+      ),
     }),
   ]);
 const noRows: CertificateProfile[] = [];
 
 /**
  * The Organization's Certificate Profiles: how it issues each kind of Managed Certificate, which members request against
- * instead of choosing a CA, a key algorithm, a validity and a Renewal Policy. Only Organization Administrators create and
- * edit them; editing one changes no Managed Certificate already made from it.
+ * instead of choosing a CA, a key algorithm, a validity and a Renewal Policy. Only Organization Administrators create,
+ * edit, disable and enable them; editing one changes no Managed Certificate already made from it, and disabling one
+ * stops anything more being issued under it until it is enabled again.
  */
 export function CertificateProfilesPage() {
   const { orgId } = useParams({ from: ROUTE });
@@ -76,8 +84,9 @@ export function CertificateProfilesPage() {
   const allowed = org ? can(org, "certificateProfile", "read") : false;
   const mayCreate = org ? can(org, "certificateProfile", "create") : false;
   const mayEdit = org ? can(org, "certificateProfile", "update") : false;
+  const mayDisable = org ? can(org, "certificateProfile", "disable") : false;
   const profiles = useQuery({ queryKey: ["certificate-profiles", orgId], queryFn: () => api.certificateProfiles(orgId), enabled: allowed });
-  const table = useTable({ features, columns: columns(orgId, mayEdit), data: profiles.data?.items ?? noRows, getRowId: (p) => p.id });
+  const table = useTable({ features, columns: columns(orgId, mayEdit, mayDisable), data: profiles.data?.items ?? noRows, getRowId: (p) => p.id });
 
   return (
     <div className="flex flex-col gap-6">
@@ -91,6 +100,47 @@ export function CertificateProfilesPage() {
       </p>
       <DataTable table={table} empty={profiles.isPending ? "Loading…" : "No Certificate Profile yet."} />
       {profiles.error && <p className="text-sm text-destructive">{profiles.error.message}</p>}
+    </div>
+  );
+}
+
+/** Asks before disabling the profile, saying what it stops and how many pending decisions it holds. */
+function DisableDialog({ orgId, profile }: { orgId: string; profile: CertificateProfile }) {
+  const [open, setOpen] = useState(false);
+  // Counted as the dialog opens, so the numbers are those of now.
+  const read = useQuery({ queryKey: ["certificate-profile", orgId, profile.id], queryFn: () => api.certificateProfile(orgId, profile.id), enabled: open, staleTime: 0 });
+  const disable = useAction(() => api.disableCertificateProfile(orgId, profile.id), ["certificate-profiles"], () => setOpen(false));
+  return (
+    <>
+      <Button variant="ghost" size="sm" aria-label={`Disable ${profile.name}`} onClick={() => setOpen(true)}>
+        Disable
+      </Button>
+      <ConfirmDialog
+        open={open}
+        onOpenChange={(next) => {
+          if (next) disable.reset();
+          setOpen(next);
+        }}
+        title={`Disable ${profile.name}?`}
+        description={read.data ? disableConsequence(read.data.pending) : read.error ? read.error.message : "Counting what awaits Approval under it…"}
+        confirmLabel="Disable"
+        pending={disable.isPending || !read.data}
+        error={disable.error}
+        onConfirm={() => disable.mutate(undefined)}
+      />
+    </>
+  );
+}
+
+/** Enables a disabled profile again: members see it, and what awaits Approval under it may be approved. */
+function EnableButton({ orgId, profile }: { orgId: string; profile: CertificateProfile }) {
+  const enable = useAction(() => api.enableCertificateProfile(orgId, profile.id), ["certificate-profiles"]);
+  return (
+    <div className="flex flex-col items-end gap-1">
+      <Button variant="ghost" size="sm" aria-label={`Enable ${profile.name}`} disabled={enable.isPending} onClick={() => enable.mutate(undefined)}>
+        {enable.isPending ? "Enabling…" : "Enable"}
+      </Button>
+      {enable.error && <span className="text-sm text-destructive">{enable.error.message}</span>}
     </div>
   );
 }

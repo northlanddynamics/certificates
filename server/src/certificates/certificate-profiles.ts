@@ -4,15 +4,16 @@
 // algorithms a requester's key may have, the validity for a Private CA, the starting Renewal Policy, and may name a
 // Team to be co-Owner of what is made from it. These are copied onto each Managed Certificate made from it (ADR 0012),
 // so editing a profile changes none already made. Its name rules (profile-name-rules.ts) are not copied: a
-// non-administrator's request and Name Change keep to them as they are now. Only Organization Administrators create
-// and edit them; every member lists the enabled ones.
+// non-administrator's request and Name Change keep to them as they are now, as is whether it is enabled: while it is
+// disabled nothing is issued under it (issuance.ts refuses to begin). Only Organization Administrators create, edit,
+// disable and enable them; every member lists the enabled ones.
 import { OpenAPIHono, createRoute, z } from "@hono/zod-openapi";
-import { and, asc, eq } from "drizzle-orm";
+import { and, asc, count, eq, isNull } from "drizzle-orm";
 import { isDeepStrictEqual } from "node:util";
 import type { Authorizer } from "../tenancy/authorization";
 import { roleCan } from "../tenancy/permissions";
 import type { Db, Tx } from "../platform/db/client";
-import { acmeAccount, certificateProfile, team } from "../platform/db/schema";
+import { acmeAccount, certificateProfile, managedCertificate, nameChange, team } from "../platform/db/schema";
 import { HttpError, OrgParam, errors, isUniqueViolation, json } from "../platform/http";
 import type { AcmeCas } from "../issuance/acme/acme-cas";
 import { issuerColumns, issuerOf, type Issuer } from "../issuance/issuer";
@@ -62,6 +63,12 @@ export const CertificateProfile = z.object({
   createdAt: z.string(),
 });
 
+const CertificateProfileRead = CertificateProfile.extend({
+  pending: z
+    .object({ proposals: z.number().int(), nameChanges: z.number().int() })
+    .openapi({ description: "How many Proposals through it, and Name Changes of Managed Certificates made from it, await Approval: what disabling it holds, as they cannot be approved while it is disabled." }),
+});
+
 const policyOf = (row: ProfileRow): Policy => ({ mode: row.renewalMode, daysBeforeExpiry: row.renewalDaysBeforeExpiry });
 export const nameRulesOf = (row: ProfileRow): ProfileNameRules => ({ exact: row.allowedExactNames, zones: row.allowedZones, maxNames: row.maxNames, wildcards: row.wildcardsAllowed });
 const nameRulesColumns = (rules: ProfileNameRules) => ({ allowedExactNames: rules.exact, allowedZones: rules.zones, maxNames: rules.maxNames, wildcardsAllowed: rules.wildcards });
@@ -102,6 +109,10 @@ async function hasAcmeAccount(tx: Db | Tx, orgId: string, acmeCaId: string) {
 
 const noAcmeAccount = (caName: string) => `the Organization has no ACME Account with ${caName}; register one first`;
 
+/** Why nothing may be issued under the profile now, naming it; none when it is enabled. */
+export const disabledRefusal = (profile: { name: string; enabled: boolean }) =>
+  profile.enabled ? undefined : `the Certificate Profile ${profile.name} is disabled, so nothing is issued under it`;
+
 /** What a Managed Certificate requested through a profile is made with, copied from it (ADR 0012). */
 export type RequestedThrough = {
   profile: { id: string; name: string };
@@ -127,7 +138,8 @@ export async function requestedThrough(db: Db | Tx, acmeCas: AcmeCas, orgId: str
     : [];
   // A disabled profile is as good as none to those who may not see it, and refused to everyone.
   if (!row) throw new HttpError(422, "the Organization has no such Certificate Profile");
-  if (!row.enabled) throw new HttpError(422, `the Certificate Profile ${row.name} is disabled, so nothing is issued under it`);
+  const disabled = disabledRefusal(row);
+  if (disabled) throw new HttpError(422, disabled);
   if (!row.allowedKeyAlgorithms.includes(keyAlgorithm)) {
     throw new HttpError(422, `the Certificate Profile ${row.name} allows keys of ${row.allowedKeyAlgorithms.join(", ")}, not ${keyAlgorithm}`);
   }
@@ -146,12 +158,28 @@ export async function requestedThrough(db: Db | Tx, acmeCas: AcmeCas, orgId: str
 }
 
 /**
- * Why a non-administrator may not give a Managed Certificate made from the profile `profileId` these names (normalised):
- * those the profile's name rules, as they are now, do not allow. None when they may.
+ * Why a Managed Certificate made from the profile `profileId` may not have its names changed to these (normalised): the
+ * profile is disabled, for everyone; or, for a non-administrator (`heldToNameRules`), the names its name rules, as they
+ * are now, do not allow. None when it may.
  */
-export async function profileNamesRefusalFor(db: Db | Tx, profileId: string, names: string[]) {
+export async function profileNameChangeRefusal(db: Db | Tx, profileId: string, names: string[], heldToNameRules: boolean) {
   const [row] = await db.select().from(certificateProfile).where(eq(certificateProfile.id, profileId));
-  return profileNamesRefusal(row!.name, nameRulesOf(row!), names);
+  return disabledRefusal(row!) ?? (heldToNameRules ? profileNamesRefusal(row!.name, nameRulesOf(row!), names) : undefined);
+}
+
+/** How many Proposals through the profile, and Name Changes of what was made from it, await Approval; not those of an archived Managed Certificate, which cannot be approved. */
+async function pendingOf(db: Db, profileId: string) {
+  const live = and(eq(managedCertificate.certificateProfileId, profileId), isNull(managedCertificate.archivedAt));
+  const [proposals] = await db
+    .select({ n: count() })
+    .from(managedCertificate)
+    .where(and(live, eq(managedCertificate.approvalStatus, "pending")));
+  const [nameChanges] = await db
+    .select({ n: count() })
+    .from(nameChange)
+    .innerJoin(managedCertificate, and(eq(managedCertificate.id, nameChange.managedCertificateId), eq(managedCertificate.organizationId, nameChange.organizationId)))
+    .where(and(live, eq(nameChange.status, "pending")));
+  return { proposals: proposals!.n, nameChanges: nameChanges!.n };
 }
 
 /** What a profile issues with, as it is checked against its issuer. */
@@ -350,17 +378,57 @@ export function registerCertificateProfiles(ctx: {
       method: "get",
       path: "/api/organizations/{orgId}/certificate-profiles/{id}",
       tags: ["Certificate Profiles"],
-      description: "Everyone in the Organization may ask about an enabled one; only Organization Administrators about a disabled one (404 otherwise).",
+      description:
+        "Everyone in the Organization may ask about an enabled one; only Organization Administrators about a disabled one (404 otherwise). " +
+        "`pending` counts what awaits Approval under it, which disabling it would hold.",
       request: { params: ProfileParams },
-      responses: { 200: json(CertificateProfile), ...errors(401, 403, 404) },
+      responses: { 200: json(CertificateProfileRead), ...errors(401, 403, 404) },
     }),
     async (c) => {
       const { orgId, id } = c.req.valid("param");
       const { role } = await authorize(await requireUser(c), orgId, { certificateProfile: ["read"] });
       const row = await findProfile(orgId, id, role);
-      return c.json(toProfile(row, (await defaultTeamsOf(orgId, [row]))(row)), 200);
+      return c.json({ ...toProfile(row, (await defaultTeamsOf(orgId, [row]))(row)), pending: await pendingOf(db, row.id) }, 200);
     },
   );
+
+  for (const enabled of [false, true]) {
+    const verb = enabled ? "enable" : "disable";
+    app.openapi(
+      createRoute({
+        method: "post",
+        path: `/api/organizations/{orgId}/certificate-profiles/{id}/${verb}`,
+        tags: ["Certificate Profiles"],
+        summary: enabled ? "Enable a disabled Certificate Profile again" : "Disable a Certificate Profile: nothing more is issued under it until it is enabled again",
+        description: enabled
+          ? "Members see it again and may request through it, and the Proposals and Name Changes from it that are pending may be approved again. 409 when it is already enabled. Only Organization Administrators may."
+          : "Every request through it is refused (422), Organization Administrators' too, and members no longer see it. Proposals through it, and Name Changes of Managed Certificates made from it, " +
+            "stay pending: they may be rejected, and approving one is refused (422) until it is enabled again. Reading it counts them. 409 when it is already disabled. Only Organization Administrators may.",
+        request: { params: ProfileParams },
+        responses: { 200: json(CertificateProfile, enabled ? "Enabled" : "Disabled"), ...errors(401, 403, 404, 409) },
+      }),
+      async (c) => {
+        const { orgId, id } = c.req.valid("param");
+        const actor = await requireUser(c);
+        const { role } = await authorize(actor, orgId, { certificateProfile: ["disable"] });
+        await findProfile(orgId, id, role);
+        const row = await unitOfWork.run(actor, async (tx, change) => {
+          // Locked, so that an Issuance beginning under it (which reads it under a share lock) sees it as it is after this.
+          const [current] = await tx.select().from(certificateProfile).where(eq(certificateProfile.id, id)).for("update");
+          if (current!.enabled === enabled) throw new HttpError(409, `the Certificate Profile is already ${enabled ? "enabled" : "disabled"}`);
+          const [row] = await tx.update(certificateProfile).set({ enabled }).where(eq(certificateProfile.id, id)).returning();
+          await change.audit({
+            organizationId: orgId,
+            action: enabled ? "certificate_profile.enabled" : "certificate_profile.disabled",
+            target: { type: "certificate_profile", id },
+            detail: { name: current!.name },
+          });
+          return row!;
+        });
+        return c.json(toProfile(row, (await defaultTeamsOf(orgId, [row]))(row)), 200);
+      },
+    );
+  }
 
   app.openapi(
     createRoute({
