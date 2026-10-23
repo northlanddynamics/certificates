@@ -162,7 +162,7 @@ export function registerApiKeys(ctx: {
       description:
         "A user's key (`type: user`, the default) may be made by any member of the Organization. It acts as them, carries the permissions they hold now, and works only in this Organization and only for what they may still see and do there. " +
         "An Organization's key (`type: organization`) is made by an Organization Administrator, belongs to the Organization and outlives them; it sees every Managed Certificate of the Organization and carries only downloads. " +
-        "A key is sent in the `x-api-key` header, so far to download Certificates. Its value is in this response and nowhere else: it cannot be read again, only revoked. " +
+        "A key is sent in the `x-api-key` header, so far to download Certificates and, a user's key, to request Managed Certificates. Its value is in this response and nowhere else: it cannot be read again, only revoked. " +
         "A person makes and revokes keys signed in; an API key cannot.",
       request: {
         params: OrgParam,

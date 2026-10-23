@@ -393,6 +393,13 @@
       "when": 1792786206682,
       "tag": "0055_managed_certificate_renewal_blocked",
       "breakpoints": true
+    },
+    {
+      "idx": 56,
+      "version": "7",
+      "when": 1792790804715,
+      "tag": "0056_certificate_profile_settings",
+      "breakpoints": true
     }
   ]
 }

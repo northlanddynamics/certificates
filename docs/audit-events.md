@@ -57,6 +57,7 @@ Each resource's verbs, as of this writing. New ones may be added within version 
 | `managed_certificate` | `created`, `proposed`, `approved`, `rejected`, `owner_added`, `owner_removed`, `subscriber_added`, `subscriber_removed`, `renewal_policy_changed`, `csr_uploaded`, `names_changed`, `archived`, `issuer_changed`, `profile_detached` |
 | `certificate` | `revoked` |
 | `certificate_profile` | `created`, `updated`, `disabled`, `enabled` |
+| `certificate_profile_settings` | `changed` |
 | `private_ca` | `created`, `issuing_ca_added`, `csr_signed`, `updated`, `retired`, `revoked`, `crl_published` |
 | `enrollment_profile` | `created`, `updated`, `disabled`, `ra_rotated`, `shared_challenge_rotated`, `shared_challenge_retired` |
 | `enrollment_validator` | `tested` |
@@ -110,6 +111,10 @@ Adding a custom ACME CA records `acme_ca.created`, with its `name`, `directoryUr
 `certificate_profile.updated` targets the Certificate Profile an Organization Administrator edited. Its `detail` has the profile's `name` (its new one, when renamed) and the `changes`, each `{ "from": ..., "to": ... }`, of whichever of `name`, `description`, `issuer`, `allowedKeyAlgorithms`, `validityDays`, `renewalPolicy`, `defaultTeam` and `nameRules` changed, in the shapes `certificate_profile.created` gives them. Managed Certificates already made from it are not changed, and new `nameRules` do not re-check pending Proposals. A change that changes nothing is not audited.
 
 `certificate_profile.disabled` targets the Certificate Profile an Organization Administrator disabled, and `certificate_profile.enabled` the one they enabled again. Each `detail` has the profile's `name`. While it is disabled nothing is issued under it: requests through it are refused, and its pending Proposals and Name Changes stay pending, rejectable but not approvable.
+
+`certificate_profile_settings.changed` targets the Organization (`organization`, its id) whose settings for Certificate Profiles an Organization Administrator changed. Its `detail` has `requireProfile`, `{ "from": ..., "to": ... }`: while it is true, whoever may not create a Managed Certificate outright, and their API keys, may propose one only through a Certificate Profile. Setting it to what it is already is not an event.
+
+A Managed Certificate created or proposed with a user's API key is also an `api_key.used`, targeting the Managed Certificate, whose `detail` names the key (`apiKeyId`, `apiKeyName`, `apiKeyType`) and has `managedCertificate`, `created` or `proposed`.
 
 `managed_certificate.profile_detached` targets the Managed Certificate an Organization Administrator detached from the Certificate Profile it was made from. Its `detail` has its `names` and the `certificateProfile`, `{ "id": ..., "name": ... }`. Nothing else about it changes: it keeps the settings copied from the profile and its Owners, and is no longer held to the profile's name rules or stopped by it being disabled.
 

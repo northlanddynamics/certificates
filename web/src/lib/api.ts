@@ -41,7 +41,15 @@ export interface Me {
     /** Whether they have an authenticator app, and whether an Organization of theirs holds them up until they set one up. */
     mfa: { enabled: boolean; setupRequired: boolean };
   };
-  organizations: { id: string; name: string; slug: string; role: string; permissions: Record<string, string[]> }[];
+  organizations: {
+    id: string;
+    name: string;
+    slug: string;
+    role: string;
+    permissions: Record<string, string[]>;
+    /** Whether they may request a Managed Certificate without a Certificate Profile: not while the Organization requires one of those who may not create one outright. */
+    requestsWithoutProfile: boolean;
+  }[];
   /** The roles the server accepts when assigning one. */
   roles: string[];
 }
@@ -586,6 +594,11 @@ export interface CertificateProfile {
   enabled: boolean;
   createdAt: string;
 }
+/** The Organization's settings for Certificate Profiles. */
+export interface CertificateProfileSettings {
+  /** Whether those who may not create a Managed Certificate outright may propose one only through a profile. */
+  requireProfile: boolean;
+}
 /** A Certificate Profile as it is created, or edited: an edit gives only what changes, null removing the validity or default Team. */
 export interface CertificateProfileChanges {
   name: string;
@@ -826,6 +839,9 @@ export const api = {
   runDeploymentAgain: (orgId: string, id: string) => call<Deployment>(`/api/organizations/${orgId}/deployments/${id}/runs`, { method: "POST", body: {} }),
   privateCas: (orgId: string) => call<{ items: PrivateCa[] }>(`/api/organizations/${orgId}/private-cas`),
   certificateProfiles: (orgId: string) => call<{ items: CertificateProfile[] }>(`/api/organizations/${orgId}/certificate-profiles`),
+  certificateProfileSettings: (orgId: string) => call<CertificateProfileSettings>(`/api/organizations/${orgId}/certificate-profile-settings`),
+  setCertificateProfileSettings: (orgId: string, settings: Partial<CertificateProfileSettings>) =>
+    call<CertificateProfileSettings>(`/api/organizations/${orgId}/certificate-profile-settings`, { method: "PUT", body: settings }),
   createCertificateProfile: (orgId: string, { validityDays, defaultTeamId, ...body }: CertificateProfileChanges) =>
     call<CertificateProfile>(`/api/organizations/${orgId}/certificate-profiles`, {
       body: { ...body, ...(validityDays !== null && { validityDays }), ...(defaultTeamId !== null && { defaultTeamId }) },

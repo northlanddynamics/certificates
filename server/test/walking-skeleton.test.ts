@@ -54,6 +54,7 @@ describe("walking skeleton", () => {
         slug: "acme",
         role: "organization-administrator",
         permissions: expect.objectContaining({ invitation: ["create", "cancel"] }),
+        requestsWithoutProfile: true,
       },
     ]);
     const inventory = await h.api(`/api/organizations/${orgId}/managed-certificates`, { cookie });

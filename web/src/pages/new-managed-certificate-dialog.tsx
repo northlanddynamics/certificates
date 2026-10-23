@@ -22,9 +22,9 @@ import { CUSTOM, keyStepFor, nameRulesLabel, profileOptions, stepsFor } from "@/
 type Org = Me["organizations"][number];
 
 const ALL_STEPS = [
-  // Only when the Organization has a Certificate Profile to offer.
+  // Only when the Organization has a Certificate Profile to offer, or the caller may request only through one.
   { id: "profile", title: "Choose a profile", icon: FileBadgeIcon },
-  // Not on a profile, which fixes the issuer.
+  // Not on a profile, which fixes the issuer, nor for a caller who may request only through one.
   { id: "authority", title: "Certificate Authority", icon: LandmarkIcon },
   { id: "names", title: "Domain names", icon: GlobeIcon },
   { id: "key", title: "Key and CSR", icon: KeyRoundIcon },
@@ -106,7 +106,9 @@ function NewManagedCertificateForm({
   const choice = useIssuerChoice(org.id, { canReadPrivateCas: can(org, "privateCa", "read") });
   const { chosenCa, validityOk } = choice;
   const profiles = useQuery({ queryKey: ["certificate-profiles", org.id], queryFn: () => api.certificateProfiles(org.id), enabled: can(org, "certificateProfile", "read") });
-  const profileChoices = profileOptions(profiles.data?.items ?? [], true);
+  // Custom only for those who may request without a profile: the Organization may require one of those who may not create outright.
+  const customOpen = org.requestsWithoutProfile;
+  const profileChoices = profileOptions(profiles.data?.items ?? [], customOpen);
   // The profile step's choice: a profile's id, Custom, or none yet.
   const [profileValue, setProfileValue] = useState<string | null>(null);
   const profile = profiles.data?.items.find((p) => p.enabled && p.id === profileValue);
@@ -149,7 +151,7 @@ function NewManagedCertificateForm({
   const keyReady = useKeySourceReady(keySource, parsedNames, keyAlgorithm);
   const steps = stepsFor(
     ALL_STEPS.filter((s) => s.id !== "save" || generating),
-    { profilesOffered: profileChoices.some((c) => c.value !== CUSTOM), profile },
+    { profilesOffered: profileChoices.some((c) => c.value !== CUSTOM), customOpen, profile },
   );
   // The step that is open: the first, when the one chosen is not among them (no profiles to offer after all).
   const shown = steps.some((s) => s.id === step) ? step : steps[0]!.id;
@@ -157,7 +159,7 @@ function NewManagedCertificateForm({
   // generated for these names, or a CSR that matches them is pasted; the Save step once that key is saved and the user says so. The Ownership and Review steps
   // always do: Owners are optional, and Review only shows what was entered.
   const complete: Record<StepId, boolean> = {
-    profile: profileValue === CUSTOM || profile !== undefined,
+    profile: (customOpen && profileValue === CUSTOM) || profile !== undefined,
     authority: validityOk,
     names: problems.length === 0,
     key: generating ? csrOf(keySource, parsedNames, keyAlgorithm) !== "" : keyReady,
@@ -185,6 +187,15 @@ function NewManagedCertificateForm({
             A Certificate Profile sets where it is issued from and the key it takes, so you enter only the names and the CSR.{" "}
             {direct ? "Issuance starts as soon as it is created." : "An Approver must approve it before any Certificate is issued."}
           </FieldDescription>
+          {!customOpen && (
+            <FieldDescription>
+              {profiles.isLoading
+                ? "Loading…"
+                : profileChoices.length === 0
+                  ? "The Organization requires a Certificate Profile, and none is available to you. Ask an Organization Administrator for one."
+                  : "The Organization requires a Certificate Profile: choose one."}
+            </FieldDescription>
+          )}
           <RadioGroup value={profileValue ?? ""} onValueChange={setProfileValue}>
             {profileChoices.map(({ value, title, description }) => {
               const rules = profileRulesText(profiles.data?.items.find((p) => p.id === value), direct);
