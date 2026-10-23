@@ -114,6 +114,8 @@ Adding a custom ACME CA records `acme_ca.created`, with its `name`, `directoryUr
 
 `certificate_profile_settings.changed` targets the Organization (`organization`, its id) whose settings for Certificate Profiles an Organization Administrator changed. Its `detail` has `requireProfile`, `{ "from": ..., "to": ... }`: while it is true, whoever may not create a Managed Certificate outright, and their API keys, may propose one only through a Certificate Profile. Setting it to what it is already is not an event.
 
+A Managed Certificate created or proposed with a user's API key is also an `api_key.used`, targeting the Managed Certificate, whose `detail` names the key (`apiKeyId`, `apiKeyName`, `apiKeyType`) and has `managedCertificate`, `created` or `proposed`.
+
 `managed_certificate.profile_detached` targets the Managed Certificate an Organization Administrator detached from the Certificate Profile it was made from. Its `detail` has its `names` and the `certificateProfile`, `{ "id": ..., "name": ... }`. Nothing else about it changes: it keeps the settings copied from the profile and its Owners, and is no longer held to the profile's name rules or stopped by it being disabled.
 
 A Managed Certificate requested through a Certificate Profile has `certificateProfile`, `{ "id": ..., "name": ... }` (the profile's name then), in the `detail` of its `managed_certificate.created` or `managed_certificate.proposed`, with the issuer, the `validityDays` (when the profile fixes one) and the `renewalPolicy` copied from the profile. One made without a profile has `renewalPolicy` only when its request gave one. The requester and the profile's default Team, as well as any Owners named, are each audited as `managed_certificate.owner_added`.

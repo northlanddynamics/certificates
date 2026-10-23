@@ -123,8 +123,8 @@ function RequireProfileSetting({ orgId }: { orgId: string }) {
           <div className="flex flex-col gap-1">
             <Label htmlFor="require-profile">Require a Certificate Profile</Label>
             <p className="text-sm text-muted-foreground">
-              Members and Approvers may propose a Managed Certificate only through a profile, with their API keys too, and are no longer offered Custom. Organization
-              Administrators are not held to it, and Name Changes of existing Managed Certificates are not affected.
+              Whoever may not create a Managed Certificate outright may propose one only through a profile, with their API keys too, and is no longer offered Custom.
+              Those who may create one outright, such as Organization Administrators, are not held to it, and Name Changes of existing Managed Certificates are not affected.
             </p>
           </div>
         </div>

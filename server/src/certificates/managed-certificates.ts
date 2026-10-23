@@ -22,7 +22,7 @@ import { InventoryQuery, inventoryCondition } from "./inventory-filters";
 import { refusalError, type Issuances } from "../issuance/issuance";
 import { Certificate, CertificateFacts, Issuance, ManagedCertificate, ManagedCertificateParams, RenewalPolicy, toCertificate, toIssuance, type ManagedCertificateReader } from "./managed-certificate-reader";
 import { requestedThrough } from "./certificate-profiles";
-import { certificateProfileSettingsOf, profileRequiredRefusal } from "./certificate-profile-settings";
+import { certificateProfileSettingsOf, profileRequiredRefusal, requestsWithoutProfile } from "./certificate-profile-settings";
 import { profileNamesRefusal } from "./profile-name-rules";
 import { checkNamesAndCsr, csrField, namesField } from "./names-and-csr";
 import { OwnerRef, addOwner } from "./owners";
@@ -134,7 +134,8 @@ export function registerManagedCertificates(ctx: {
       const body = c.req.valid("json");
       const caller = await apiKeys.callerOf(c);
       const create: Permissions = { managedCertificate: ["create"] };
-      // An Organization's key acts as no one, so nobody would propose or own what it made; it carries no `create` either.
+      // An Organization's key acts as no one, so nobody would propose or own what it made: it is refused, as one carrying no
+      // `create` (or, made for another Organization, as one that does not know this one).
       if (!caller.user) {
         await apiKeys.authorizeCaller(caller, orgId, create);
         throw new HttpError(403, "not permitted");
@@ -144,7 +145,7 @@ export function registerManagedCertificates(ctx: {
       // Who may create outright needs no Approval; everyone else must be allowed to propose. A key may only what its person may and it carries.
       const needsApproval = !roleCan(role, create) || (caller.apiKey !== null && !carries(caller.apiKey.permissions, create));
       await apiKeys.authorizeCaller(caller, orgId, needsApproval ? { managedCertificate: ["propose"] } : create);
-      if (needsApproval && body.profileId === undefined && (await certificateProfileSettingsOf(db, orgId)).requireProfile) throw profileRequiredRefusal();
+      if (body.profileId === undefined && !requestsWithoutProfile(await certificateProfileSettingsOf(db, orgId), !needsApproval)) throw profileRequiredRefusal();
 
       // A profile fixes what it is issued with, so a request through one may not choose any of it too.
       const chosen = (["issuer", "acmeCaId", "validityDays", "renewalPolicy"] as const).filter((field) => body[field] !== undefined);
@@ -196,6 +197,15 @@ export function registerManagedCertificates(ctx: {
             ...(through && { certificateProfile: through.profile }),
           },
         });
+        // A key leaves a trace of what it was used for.
+        if (caller.apiKey) {
+          await change.audit({
+            organizationId: orgId,
+            action: "api_key.used",
+            target: { type: "managed_certificate", id: row!.id },
+            detail: { apiKeyId: caller.apiKey.id, apiKeyName: caller.apiKey.name, apiKeyType: caller.apiKey.type, managedCertificate: needsApproval ? "proposed" : "created" },
+          });
+        }
         // Whoever requests through a profile owns what they asked for, with the profile's default Team.
         const owners: OwnerRef[] = [
           ...(through ? [{ type: "user" as const, id: actor.id }] : []),

@@ -30,9 +30,26 @@ export async function certificateProfileSettingsOf(db: Db | Tx, organizationId: 
   return row ?? DEFAULTS;
 }
 
+/**
+ * Whether one may request a Managed Certificate without a profile under these settings: whoever may create one outright
+ * (`mayCreate`) always may, anyone else only while no profile is required.
+ */
+export const requestsWithoutProfile = (settings: Settings, mayCreate: boolean) => mayCreate || !settings.requireProfile;
+
 /** Why a request without a profile is refused (403) to one who may not create outright, while a profile is required. */
 export const profileRequiredRefusal = () =>
   new HttpError(403, "the Organization requires a Certificate Profile: propose through one (`profileId`), or ask an Organization Administrator");
+
+/** The Organization's settings, locked for the rest of the transaction. */
+async function lockSettings(tx: Tx, organizationId: string, occurredAt: Date): Promise<Settings> {
+  await tx.insert(certificateProfileSettings).values({ organizationId, updatedAt: occurredAt }).onConflictDoNothing();
+  const [row] = await tx
+    .select({ requireProfile: certificateProfileSettings.requireProfile })
+    .from(certificateProfileSettings)
+    .where(eq(certificateProfileSettings.organizationId, organizationId))
+    .for("update");
+  return row!;
+}
 
 export function registerCertificateProfileSettings(ctx: { app: OpenAPIHono; db: Db; requireUser(c: any): Promise<Actor>; authorize: Authorizer["authorize"]; unitOfWork: UnitOfWork }) {
   const { app, db, requireUser, authorize, unitOfWork } = ctx;
@@ -72,21 +89,16 @@ export function registerCertificateProfileSettings(ctx: { app: OpenAPIHono; db: 
       const actor = await requireUser(c);
       await authorize(actor, orgId, { certificateProfile: ["update"] });
       const changed = await unitOfWork.run(actor, async (tx, change) => {
-        // Locked, so that concurrent changes take turns and each records the value the one before left.
-        await tx.insert(certificateProfileSettings).values({ organizationId: orgId, updatedAt: change.occurredAt }).onConflictDoNothing();
-        const [before] = await tx
-          .select({ requireProfile: certificateProfileSettings.requireProfile })
-          .from(certificateProfileSettings)
-          .where(eq(certificateProfileSettings.organizationId, orgId))
-          .for("update");
-        const after = { ...before!, ...asked };
-        if (after.requireProfile === before!.requireProfile) return before!;
+        // Serialises concurrent changes, so each records the value the one before left.
+        const before = await lockSettings(tx, orgId, change.occurredAt);
+        const after = { ...before, ...asked };
+        if (after.requireProfile === before.requireProfile) return before;
         await tx.update(certificateProfileSettings).set({ ...after, updatedAt: change.occurredAt }).where(eq(certificateProfileSettings.organizationId, orgId));
         await change.audit({
           organizationId: orgId,
           action: "certificate_profile_settings.changed",
           target: { type: "organization", id: orgId },
-          detail: { requireProfile: { from: before!.requireProfile, to: after.requireProfile } },
+          detail: { requireProfile: { from: before.requireProfile, to: after.requireProfile } },
         });
         return after;
       });

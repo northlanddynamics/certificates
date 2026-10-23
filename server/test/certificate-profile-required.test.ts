@@ -27,7 +27,7 @@ const settingsPath = () => `${base()}/certificate-profile-settings`;
 const createMc = (body: unknown, cookie = org.cookie) => h.api(`${base()}/managed-certificates`, { cookie, body });
 const createWithKey = (body: unknown, apiKey: string) =>
   h.app.request(`http://localhost${base()}/managed-certificates`, { method: "POST", headers: { "x-api-key": apiKey, "content-type": "application/json" }, body: JSON.stringify(body) });
-const requireProfile = (requireProfile: boolean, cookie = org.cookie) => h.api(settingsPath(), { cookie, method: "PUT", body: { requireProfile } });
+const setRequireProfile = (requireProfile: boolean, cookie = org.cookie) => h.api(settingsPath(), { cookie, method: "PUT", body: { requireProfile } });
 const auditOf = async (action: string) =>
   ((await h.api(`${base()}/audit-events`, { cookie: org.cookie })).body.items as { action: string; actor: any; target: any; detail: any }[]).filter((e) => e.action === action);
 /** Whether `/api/me` tells the caller they may request a Managed Certificate without a profile in the Organization. */
@@ -70,12 +70,12 @@ describe("the setting", () => {
     const member = await join("member@acme.test", "member");
     expect((await h.api(settingsPath(), { cookie: member })).body).toEqual({ requireProfile: false });
 
-    const changed = await requireProfile(true);
+    const changed = await setRequireProfile(true);
     expect(changed.status).toBe(200);
     expect(changed.body).toEqual({ requireProfile: true });
     expect((await h.api(settingsPath(), { cookie: member })).body).toEqual({ requireProfile: true });
     // Setting it to what it is already changes nothing, and is not audited.
-    expect((await requireProfile(true)).status).toBe(200);
+    expect((await setRequireProfile(true)).status).toBe(200);
     expect(await auditOf("certificate_profile_settings.changed")).toEqual([
       expect.objectContaining({ target: { type: "organization", id: org.orgId }, detail: { requireProfile: { from: false, to: true } } }),
     ]);
@@ -84,7 +84,7 @@ describe("the setting", () => {
   test("is changed only by those with certificateProfile.update", async () => {
     for (const role of ["member", "approver"]) {
       const cookie = await join(`${role}@acme.test`, role);
-      expect((await requireProfile(true, cookie)).status).toBe(403);
+      expect((await setRequireProfile(true, cookie)).status).toBe(403);
     }
     expect((await h.api(settingsPath(), { cookie: org.cookie })).body).toEqual({ requireProfile: false });
   });
@@ -95,7 +95,7 @@ describe("while a Certificate Profile is required", () => {
     const profile = await createProfile();
     const member = await join("member@acme.test", "member");
     expect(await openWithoutProfile(member)).toBe(true);
-    expect((await requireProfile(true)).status).toBe(200);
+    expect((await setRequireProfile(true)).status).toBe(200);
     expect(await openWithoutProfile(member)).toBe(false);
 
     const refused = await createMc({ ...(await request(["www.internal.acme"])), issuer: profile.issuer }, member);
@@ -111,14 +111,14 @@ describe("while a Certificate Profile is required", () => {
   test("an Approver's request without a profile is refused too", async () => {
     const profile = await createProfile();
     const approver = await join("approver@acme.test", "approver");
-    await requireProfile(true);
+    await setRequireProfile(true);
     expect(await openWithoutProfile(approver)).toBe(false);
     expect((await createMc({ ...(await request(["www.internal.acme"])), issuer: profile.issuer }, approver)).status).toBe(403);
   });
 
   test("an Organization Administrator still creates one without a profile", async () => {
     const profile = await createProfile();
-    await requireProfile(true);
+    await setRequireProfile(true);
     expect(await openWithoutProfile(org.cookie)).toBe(true);
     const res = await createMc({ ...(await request(["www.internal.acme"])), issuer: profile.issuer });
     expect(res.status).toBe(201);
@@ -129,19 +129,24 @@ describe("while a Certificate Profile is required", () => {
     const profile = await createProfile();
     const member = await join("member@acme.test", "member");
     const key = await makeKey(member);
-    await requireProfile(true);
+    await setRequireProfile(true);
 
     const refused = await createWithKey({ ...(await request(["www.internal.acme"])), issuer: profile.issuer }, key);
     expect(refused.status).toBe(403);
     const through = await createWithKey({ ...(await request(["www.internal.acme"])), profileId: profile.id }, key);
     expect(through.status).toBe(201);
-    expect(await through.json()).toMatchObject({ approval: { status: "pending", proposedBy: { email: "member@acme.test" } }, profile: { id: profile.id } });
+    const proposed = await through.json();
+    expect(proposed).toMatchObject({ approval: { status: "pending", proposedBy: { email: "member@acme.test" } }, profile: { id: profile.id } });
+    // The key leaves a trace of what it was used for.
+    expect(await auditOf("api_key.used")).toEqual([
+      expect.objectContaining({ actor: expect.objectContaining({ email: "member@acme.test" }), target: { type: "managed_certificate", id: proposed.id }, detail: expect.objectContaining({ apiKeyName: "ci", managedCertificate: "proposed" }) }),
+    ]);
   });
 
   test("an Organization Administrator's own API key still creates one without a profile", async () => {
     const profile = await createProfile();
     const key = await makeKey(org.cookie);
-    await requireProfile(true);
+    await setRequireProfile(true);
     const res = await createWithKey({ ...(await request(["www.internal.acme"])), issuer: profile.issuer }, key);
     expect(res.status).toBe(201);
     expect((await res.json()).approval.status).toBe("not_required");
@@ -150,7 +155,7 @@ describe("while a Certificate Profile is required", () => {
   test("an Organization's API key, which carries no create, is refused", async () => {
     const profile = await createProfile();
     const key = await makeKey(org.cookie, "organization");
-    await requireProfile(true);
+    await setRequireProfile(true);
     expect((await createWithKey({ ...(await request(["www.internal.acme"])), issuer: profile.issuer }, key)).status).toBe(403);
     expect((await createWithKey({ ...(await request(["www.internal.acme"])), profileId: profile.id }, key)).status).toBe(403);
   });
@@ -166,7 +171,21 @@ describe("while a Certificate Profile is required", () => {
     // A Member who proposed one is not its Owner unless named; so make them one.
     const memberId = (await h.api("/api/me", { cookie: member })).body.user.id as string;
     expect((await h.api(`${base()}/managed-certificates/${proposed.body.id}/owners`, { cookie: org.cookie, body: { type: "user", id: memberId } })).status).toBe(200);
-    await requireProfile(true);
+    await setRequireProfile(true);
+
+    const changed = await h.api(`${base()}/managed-certificates/${proposed.body.id}/name-change`, { cookie: member, body: await request(["www.internal.acme", "app.internal.acme"]) });
+    expect(changed.status).toBe(201);
+  });
+
+  test("an Owner still proposes a Name Change on a Managed Certificate made through a profile", async () => {
+    const profile = await createProfile();
+    const member = await join("member@acme.test", "member");
+    const proposed = await createMc({ ...(await request(["www.internal.acme"])), profileId: profile.id }, member);
+    expect(proposed.status).toBe(201);
+    const approver = await join("approver@acme.test", "approver");
+    expect((await h.api(`${base()}/managed-certificates/${proposed.body.id}/approve`, { cookie: approver, body: {} })).status).toBe(200);
+    await h.settleIssuances();
+    await setRequireProfile(true);
 
     const changed = await h.api(`${base()}/managed-certificates/${proposed.body.id}/name-change`, { cookie: member, body: await request(["www.internal.acme", "app.internal.acme"]) });
     expect(changed.status).toBe(201);
@@ -176,8 +195,8 @@ describe("while a Certificate Profile is required", () => {
 test("when it is off, a Member's request without a profile is a Proposal as before", async () => {
   const profile = await createProfile();
   const member = await join("member@acme.test", "member");
-  await requireProfile(true);
-  await requireProfile(false);
+  await setRequireProfile(true);
+  await setRequireProfile(false);
   const res = await createMc({ ...(await request(["www.internal.acme"])), issuer: profile.issuer }, member);
   expect(res.status).toBe(201);
   expect(res.body.approval.status).toBe("pending");

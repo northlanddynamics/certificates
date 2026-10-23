@@ -46,7 +46,7 @@ import { registerIssuerRoutes } from "./issuance/issuer-routes";
 import { createManagedCertificateReader } from "./certificates/managed-certificate-reader";
 import { registerManagedCertificates } from "./certificates/managed-certificates";
 import { registerCertificateProfiles } from "./certificates/certificate-profiles";
-import { registerCertificateProfileSettings } from "./certificates/certificate-profile-settings";
+import { registerCertificateProfileSettings, requestsWithoutProfile } from "./certificates/certificate-profile-settings";
 import { registerProfileDetachRoutes } from "./certificates/profile-detach-routes";
 import { discardNameChangesOfRemoved } from "./certificates/name-change";
 import { registerNameChangeRoutes } from "./certificates/name-change-routes";
@@ -283,7 +283,7 @@ export function createApp(deps: AppDeps) {
           organizations: organizations.map(({ requireProfile, ...o }) => ({
             ...o,
             permissions: permissionsOf(o.role),
-            requestsWithoutProfile: !requireProfile || roleCan(o.role, { managedCertificate: ["create"] }),
+            requestsWithoutProfile: requestsWithoutProfile({ requireProfile: requireProfile ?? false }, roleCan(o.role, { managedCertificate: ["create"] })),
           })),
           roles: ROLE_NAMES,
         },
