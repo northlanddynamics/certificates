@@ -53,6 +53,8 @@ export const AUDIT_ACTIONS = [
   "private_ca.crl_published",
   "private_ca.retired",
   "private_ca.revoked",
+  "certificate_profile.created",
+  "certificate_profile.updated",
   "enrollment_profile.created",
   "enrollment_profile.updated",
   "enrollment_profile.disabled",

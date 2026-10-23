@@ -197,7 +197,7 @@ export async function findIssuingCa(db: Db | Tx, organizationId: string, issuing
 }
 
 /** The Issuing CA in words, by its common name and its Private CA's name. */
-const issuingCaLabel = ({ issuing, ca }: IssuingCaOf) => `the Issuing CA ${new x509.Name(issuing.subject).getField("CN")[0] ?? issuing.subject} of the Private CA ${ca.name}`;
+export const issuingCaLabel = ({ issuing, ca }: IssuingCaOf) => `the Issuing CA ${new x509.Name(issuing.subject).getField("CN")[0] ?? issuing.subject} of the Private CA ${ca.name}`;
 
 /** Why the Issuing CA issues nothing now: its root is revoked, or it is not active. None when it issues. */
 export function issuingRefusal(of: IssuingCaOf) {

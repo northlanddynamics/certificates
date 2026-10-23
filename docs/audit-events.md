@@ -56,6 +56,7 @@ Each resource's verbs, as of this writing. New ones may be added within version 
 | `dcv_rule` | `created`, `changed`, `deleted` |
 | `managed_certificate` | `created`, `proposed`, `approved`, `rejected`, `owner_added`, `owner_removed`, `subscriber_added`, `subscriber_removed`, `renewal_policy_changed`, `csr_uploaded`, `names_changed`, `archived`, `issuer_changed` |
 | `certificate` | `revoked` |
+| `certificate_profile` | `created`, `updated` |
 | `private_ca` | `created`, `issuing_ca_added`, `csr_signed`, `updated`, `retired`, `revoked`, `crl_published` |
 | `enrollment_profile` | `created`, `updated`, `disabled`, `ra_rotated`, `shared_challenge_rotated`, `shared_challenge_retired` |
 | `enrollment_validator` | `tested` |
@@ -101,6 +102,12 @@ Adding a custom ACME CA records `acme_ca.created`, with its `name`, `directoryUr
 `acme_ca.deleted` targets a custom ACME CA an Organization Administrator deleted, with its account and the secrets of both. Its `detail` has its `name`, `directoryUrl` and `tag`, and its `account`'s `id` and `accountUrl`. The account is left as it is at the CA.
 
 `managed_certificate.issuer_changed` targets the Managed Certificate when an Organization Administrator repoints it from one Issuing CA to another, as in rolling an Issuing CA over. Its `detail` has its `names`, and `from` and `to`, each `{ "kind": "private_ca", "issuingCaId": "..." }`. Repointing it to the Issuing CA it is on already is not an event.
+
+### Certificate Profiles
+
+`certificate_profile.created` targets the Certificate Profile (`certificate_profile`, its id) an Organization Administrator created. Its `detail` has the `name`, the `description`, the `issuer` (`{ "kind": "acme", "acmeCaId": ... }` or `{ "kind": "private_ca", "issuingCaId": ... }`), the `allowedKeyAlgorithms` (such as `ecdsa-p256`), the `validityDays` it fixes for a Private CA (null for the Issuing CA's default, and always for an ACME CA), the starting `renewalPolicy` (`{ "mode": ..., "daysBeforeExpiry": ... }`) and the `defaultTeam` made co-Owner (`{ "id": ..., "name": ... }`, or null).
+
+`certificate_profile.updated` targets the Certificate Profile an Organization Administrator edited. Its `detail` has the profile's `name` (its new one, when renamed) and the `changes`, each `{ "from": ..., "to": ... }`, of whichever of `name`, `description`, `issuer`, `allowedKeyAlgorithms`, `validityDays`, `renewalPolicy` and `defaultTeam` changed, in the shapes `certificate_profile.created` gives them. Managed Certificates already made from it are not changed. A change that changes nothing is not audited.
 
 ### Device enrollment
 

@@ -640,6 +640,52 @@ export const enrollmentProfile = pgTable(
 );
 
 /**
+ * A Certificate Profile (certificate-profiles.ts): how the Organization issues one kind of Managed Certificate, which
+ * members request against. Its issuer, key algorithms, validity and Renewal Policy are copied onto each Managed
+ * Certificate made from it; editing it changes none of those already made.
+ */
+export const certificateProfile = pgTable(
+  "certificate_profile",
+  {
+    id: uuid("id").primaryKey().defaultRandom(),
+    organizationId: text("organization_id")
+      .notNull()
+      .references(() => organization.id),
+    name: text("name").notNull(),
+    description: text("description").notNull().default(""),
+    /** Its issuer (issuer.ts), stored the way a Managed Certificate stores one. */
+    issuerKind: text("issuer_kind").$type<IssuerKind>().notNull(),
+    acmeCaId: text("acme_ca_id"),
+    issuingCaId: uuid("issuing_ca_id"),
+    /** The key algorithms a requester's key may have: some of those its issuer takes. */
+    allowedKeyAlgorithms: text("allowed_key_algorithms").array().$type<KeyAlgorithm[]>().notNull(),
+    /** For a Private CA only: how many days its Managed Certificates' Certificates are valid for; null for the Issuing CA's default. */
+    validityDays: integer("validity_days"),
+    /** The Renewal Policy each Managed Certificate made from it starts with. */
+    renewalMode: text("renewal_mode").$type<RenewalMode>().notNull().default("automatic"),
+    renewalDaysBeforeExpiry: integer("renewal_days_before_expiry").notNull().default(30),
+    /** The Team made co-Owner of each Managed Certificate made from it; none when the Team is deleted. */
+    defaultTeamId: text("default_team_id").references(() => team.id, { onDelete: "set null" }),
+    /** Whether members may request through it; a disabled profile issues nothing. */
+    enabled: boolean("enabled").notNull().default(true),
+    createdAt: timestamp("created_at", { withTimezone: true }).notNull().defaultNow(),
+  },
+  (t) => [
+    unique("certificate_profile_organization_name_unique").on(t.organizationId, t.name),
+    unique("certificate_profile_id_organization_unique").on(t.id, t.organizationId),
+    check(
+      "certificate_profile_issuer_kind",
+      sql`(${t.issuerKind} = 'acme' and ${t.acmeCaId} is not null and ${t.issuingCaId} is null) or (${t.issuerKind} = 'private_ca' and ${t.issuingCaId} is not null and ${t.acmeCaId} is null)`,
+    ),
+    check("certificate_profile_validity", sql`${t.validityDays} is null or (${t.issuerKind} = 'private_ca' and ${t.validityDays} >= 1)`),
+    check("certificate_profile_key_algorithms", sql`cardinality(${t.allowedKeyAlgorithms}) >= 1`),
+    check("certificate_profile_renewal_mode", sql`${t.renewalMode} in ('automatic', 'manual')`),
+    check("certificate_profile_renewal_days", sql`${t.renewalDaysBeforeExpiry} between 1 and 365`),
+    foreignKey({ columns: [t.issuingCaId, t.organizationId], foreignColumns: [issuingCa.id, issuingCa.organizationId] }),
+  ],
+);
+
+/**
  * A Device Certificate: one a device obtained under an Enrollment Profile. It belongs to the profile, not to a Managed
  * Certificate, and has no Owners.
  */
