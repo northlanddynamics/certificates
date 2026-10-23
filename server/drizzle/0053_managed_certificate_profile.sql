@@ -1,0 +1,2 @@
+ALTER TABLE "managed_certificate" ADD COLUMN "certificate_profile_id" uuid;--> statement-breakpoint
+ALTER TABLE "managed_certificate" ADD CONSTRAINT "managed_certificate_certificate_profile_id_organization_id_certificate_profile_id_organization_id_fk" FOREIGN KEY ("certificate_profile_id","organization_id") REFERENCES "public"."certificate_profile"("id","organization_id") ON DELETE no action ON UPDATE no action;

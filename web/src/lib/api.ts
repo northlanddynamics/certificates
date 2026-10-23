@@ -201,6 +201,8 @@ export interface ManagedCertificate {
   /** When it was archived: it then neither issues, renews nor deploys. */
   archivedAt: string | null;
   owners: Owner[];
+  /** The Certificate Profile it was requested through, as the profile is now; none for one made without a profile. */
+  profile: { id: string; name: string; enabled: boolean } | null;
   approval: Approval;
   /** Until it is approved, Renewal uses `names`. */
   pendingNameChange: PendingNameChange | null;
@@ -516,7 +518,7 @@ export interface NewDeployment {
   names: string[];
   keyAlgorithm: string;
   /** An ACME CA, or an Issuing CA of one of the Organization's Private CAs. */
-  issuer: NewManagedCertificate["issuer"];
+  issuer: IssuerRef;
   /** For an Issuing CA only: how many days its Certificates are valid for; its default when not given. */
   validityDays?: number;
   renewalPolicy: RenewalPolicy;
@@ -547,21 +549,26 @@ export interface ApiKey {
   expiresAt: string | null;
   createdAt: string;
 }
+/** An issuer as a request names it: an ACME CA by id, or an Issuing CA of one of the Organization's Private CAs by id. */
+export type IssuerRef = { kind: "acme"; acmeCaId: string } | { kind: "private_ca"; issuingCaId: string };
 export interface NewManagedCertificate {
   names: string[];
   keyAlgorithm: string;
   csr: string;
-  issuer: { kind: "acme"; acmeCaId: string } | { kind: "private_ca"; issuingCaId: string };
+  /** Not with `profileId`, whose profile fixes it. */
+  issuer?: IssuerRef;
   /** For a Private CA issuer only; its Issuing CA's default when not given. */
   validityDays?: number;
   owners?: OwnerRef[];
+  /** The Certificate Profile it is requested through, which fixes its issuer, validity and Renewal Policy. */
+  profileId?: string;
 }
 /** How the Organization issues one kind of Managed Certificate, which members request against. */
 export interface CertificateProfile {
   id: string;
   name: string;
   description: string;
-  issuer: NewManagedCertificate["issuer"];
+  issuer: IssuerRef;
   allowedKeyAlgorithms: KeyAlgorithm[];
   /** For a Private CA issuer: the validity it fixes; none for the Issuing CA's default, and always none for an ACME CA. */
   validityDays: number | null;

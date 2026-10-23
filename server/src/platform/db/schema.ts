@@ -170,10 +170,13 @@ export const managedCertificate = pgTable(
     renewalDaysBeforeExpiry: integer("renewal_days_before_expiry").notNull().default(30),
     /** When it was archived: it is hidden from the inventory unless archived ones are asked for. Null while it is live. */
     archivedAt: timestamp("archived_at", { withTimezone: true }),
+    /** The Certificate Profile it was requested through, whose settings it was made with; null for one made without, or detached from it. */
+    certificateProfileId: uuid("certificate_profile_id"),
     createdAt: timestamp("created_at", { withTimezone: true }).notNull().defaultNow(),
   },
   (t) => [
     index("managed_certificate_org_idx").on(t.organizationId),
+    foreignKey({ columns: [t.certificateProfileId, t.organizationId], foreignColumns: [certificateProfile.id, certificateProfile.organizationId] }),
     check(
       "managed_certificate_issuer_kind",
       sql`(${t.issuerKind} = 'acme' and ${t.acmeCaId} is not null and ${t.issuingCaId} is null) or (${t.issuerKind} = 'private_ca' and ${t.issuingCaId} is not null and ${t.acmeCaId} is null)`,

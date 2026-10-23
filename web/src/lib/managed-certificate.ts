@@ -28,6 +28,9 @@ const CA_LABELS: Record<string, string> = { "lets-encrypt": "Let's Encrypt" };
 export const caLabel = (ca: string) => CA_LABELS[ca] ?? ca;
 
 /** Where a Managed Certificate is issued from, in a few words: an ACME CA by name (from `acmeCas`, the Organization's), or an Issuing CA with its Private CA. */
+/** The Certificate Profile it was requested through, by name, and whether it is disabled. */
+export const profileLabel = (profile: NonNullable<ManagedCertificate["profile"]>) => (profile.enabled ? profile.name : `${profile.name} (disabled)`);
+
 export const issuerLabel = (issuer: Issuer, acmeCas: AcmeCa[] | undefined) =>
   issuer.kind === "acme" ? acmeCaName(acmeCas, issuer.acmeCaId) : issuingCaTitle(issuer.privateCa.name, issuer.issuingCa.subject);
 

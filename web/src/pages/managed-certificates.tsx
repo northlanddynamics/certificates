@@ -15,7 +15,7 @@ import { api, can, ownerLabel, type AcmeCa, type AcmeCaTag, type InventoryFilter
 import { KEY_ALGORITHMS, KEY_ALGORITHM_LABELS } from "@/lib/csr-generator";
 import { AcmeCaTagBadge } from "@/components/acme-ca-tag";
 import { ACME_CA_TAG_LABELS, useAcmeCas } from "@/lib/acme-cas";
-import { issuerLabel, keyAlgorithmLabel, status } from "@/lib/managed-certificate";
+import { issuerLabel, keyAlgorithmLabel, profileLabel, status } from "@/lib/managed-certificate";
 import { chosenValidityLabel } from "@/lib/private-ca";
 
 type Org = Me["organizations"][number];
@@ -225,7 +225,7 @@ function ApprovalQueue({ org, onDecided: decided }: { org: Org; onDecided: () =>
       id: m.id,
       names: m.names.join(", "),
       request: "New",
-      detail: `${keyAlgorithmLabel(m.keyAlgorithm)}, ${issuerLabel(m.issuer, acmeCas)}${m.issuer.kind === "private_ca" ? `, valid for ${chosenValidityLabel(m.validityDays)}` : ""}`,
+      detail: `${m.profile ? `Through the profile ${profileLabel(m.profile)}: ` : ""}${keyAlgorithmLabel(m.keyAlgorithm)}, ${issuerLabel(m.issuer, acmeCas)}${m.issuer.kind === "private_ca" ? `, valid for ${chosenValidityLabel(m.validityDays)}` : ""}`,
       proposedBy: m.approval.proposedBy?.email,
       label: m.names.join(", "),
       approve: () => approve.mutate(m.id),
