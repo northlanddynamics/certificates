@@ -135,6 +135,7 @@ describe("issuing the first Certificate", () => {
       acmeAccountId: account.id,
       issuingCaId: null,
       issuedAt: expect.any(String),
+      hasCsr: true,
       revocation: null,
     });
     expect(leaf.subjectAltName).toBe(`DNS:${name}`);

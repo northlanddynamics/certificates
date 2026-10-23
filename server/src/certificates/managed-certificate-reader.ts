@@ -53,6 +53,7 @@ export const Certificate = z.object({
   acmeAccountId: z.string().nullable().openapi({ description: "The ACME account it was issued through; none for a Certificate from a Private CA." }),
   issuingCaId: z.string().nullable().openapi({ description: "The Issuing CA, of a Private CA, that signed it; none for a Certificate from an ACME CA." }),
   issuedAt: z.string(),
+  hasCsr: z.boolean().openapi({ description: "Whether the CSR it was issued from is kept, and so can be downloaded; not for one issued before the platform kept it." }),
   revocation: Revocation.nullable().openapi({ description: "Set once the CA has been told to revoke it, by whom and why." }),
 });
 
@@ -180,6 +181,7 @@ export const toCertificate = (row: typeof certificate.$inferSelect, revocation: 
   acmeAccountId: row.acmeAccountId,
   issuingCaId: row.issuingCaId,
   issuedAt: row.issuedAt.toISOString(),
+  hasCsr: row.csr !== null,
   revocation: revocation ? toRevocation(revocation) : null,
 });
 

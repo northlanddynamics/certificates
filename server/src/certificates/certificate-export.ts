@@ -36,6 +36,27 @@ export function registerCertificateExport(ctx: {
 }) {
   const { app, db, apiKeys, unitOfWork, reader, issuers } = ctx;
 
+  /** An Organization's or user's API key leaves a trace of what it fetched. */
+  const auditKeyUse = (caller: Awaited<ReturnType<ApiKeys["callerOf"]>>, orgId: string, managedCertificateId: string, detail: Record<string, unknown>) => {
+    const key = caller.apiKey;
+    if (!key) return;
+    return unitOfWork.run(caller.user, (_tx, change) =>
+      change.audit({
+        organizationId: orgId,
+        action: "api_key.used",
+        target: { type: "managed_certificate", id: managedCertificateId },
+        detail: {
+          apiKeyId: key.id,
+          apiKeyName: key.name,
+          apiKeyType: key.type,
+          // An Organization's key acts as no one, so who made it is what leads back to a person.
+          ...(key.createdBy && { createdBy: key.createdBy }),
+          ...detail,
+        },
+      }),
+    );
+  };
+
   /** `certificateId` is the Certificate asked for, or the current one when left out. */
   async function serve(c: any, orgId: string, id: string, certificateId: string | undefined, { format, chain }: z.infer<typeof ExportQuery>) {
     const caller = await apiKeys.callerOf(c);
@@ -53,26 +74,7 @@ export function registerCertificateExport(ctx: {
         if (err instanceof RootNotKnownError) throw new HttpError(422, err.message);
         throw err;
       });
-    if (caller.apiKey) {
-      const key = caller.apiKey;
-      await unitOfWork.run(caller.user, (_tx, change) =>
-        change.audit({
-          organizationId: orgId,
-          action: "api_key.used",
-          target: { type: "managed_certificate", id: mc.id },
-          detail: {
-            apiKeyId: key.id,
-            apiKeyName: key.name,
-            apiKeyType: key.type,
-            // An Organization's key acts as no one, so who made it is what leads back to a person.
-            ...(key.createdBy && { createdBy: key.createdBy }),
-            certificateId: wanted.id,
-            format,
-            chain,
-          },
-        }),
-      );
-    }
+    await auditKeyUse(caller, orgId, mc.id, { certificateId: wanted.id, format, chain });
 
     const name = wanted.names[0]!.replace(/^\*\./, "wildcard.");
     const part = { leaf: ".leaf", "with-intermediates": "", "with-root": ".root" }[chain];
@@ -98,6 +100,34 @@ export function registerCertificateExport(ctx: {
     (c) => {
       const { orgId, id } = c.req.valid("param");
       return serve(c, orgId, id, undefined, c.req.valid("query"));
+    },
+  );
+
+  app.openapi(
+    createRoute({
+      method: "get",
+      path: "/api/organizations/{orgId}/managed-certificates/{id}/certificates/{certificateId}/csr",
+      tags: ["Managed Certificates"],
+      summary: "Download the CSR a Certificate was issued from",
+      description: "As a person signed in, or with an API key. A Certificate issued before the platform kept its CSR has none (404). A CSR holds no private key.",
+      request: { params: ManagedCertificateParams.extend({ certificateId: z.string().openapi({ param: { name: "certificateId", in: "path" } }) }) },
+      responses: {
+        200: { description: "The CSR, PEM", content: { "application/pkcs10": { schema: z.string() } } },
+        ...errors(401, 403, 404, 429),
+      },
+    }),
+    async (c) => {
+      const { orgId, id, certificateId } = c.req.valid("param");
+      const caller = await apiKeys.callerOf(c);
+      await apiKeys.authorizeCaller(caller, orgId, { managedCertificate: ["download"] });
+      const mc = caller.user ? await reader.findReadable(caller.user, orgId, id) : await reader.findManagedCertificate(orgId, id);
+      const wanted = (await reader.certificatesOf(orgId, mc.id)).find((row) => row.id === certificateId);
+      if (!wanted?.csr) throw new HttpError(404, "no CSR is kept for this Certificate");
+      await auditKeyUse(caller, orgId, mc.id, { certificateId: wanted.id, format: "csr" });
+      return c.body(wanted.csr, 200, {
+        "content-type": "application/pkcs10",
+        "content-disposition": `attachment; filename="${wanted.names[0]!.replace(/^\*\./, "wildcard.")}.${wanted.fingerprint.slice(0, 8)}.csr"`,
+      });
     },
   );
 

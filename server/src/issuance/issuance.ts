@@ -282,6 +282,7 @@ export function createIssuances({ db, unitOfWork, issuers, dcv }: IssuancesDeps)
           managedCertificateId: mc.id,
           ...stored,
           chainPem: issued.chainPem,
+          csr: mc.csr,
           ca: issued.ca,
           ...certificateIssuerColumns(issued.issuedBy),
           issuedAt: change.occurredAt,

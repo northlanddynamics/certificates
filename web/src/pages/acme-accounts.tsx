@@ -1,13 +1,15 @@
 import { useMutation, useQuery } from "@tanstack/react-query";
 import { useParams } from "@tanstack/react-router";
 import { createColumnHelper, tableFeatures, useTable } from "@tanstack/react-table";
-import { PlusIcon } from "lucide-react";
+import { ClipboardCheckIcon, KeyRoundIcon, LandmarkIcon, PlusIcon, ServerIcon } from "lucide-react";
 import { useState, type FormEvent } from "react";
 import { AcmeCaTagBadge } from "@/components/acme-ca-tag";
+import { SteppedForm, STEPPED_DIALOG, type Step } from "@/components/stepped-form";
 import { ConfirmDialog } from "@/components/confirm-dialog";
 import { DataTable } from "@/components/data-table/data-table";
 import { Button } from "@/components/ui/button";
 import { Dialog, DialogClose, DialogContent, DialogDescription, DialogFooter, DialogHeader, DialogTitle, DialogTrigger } from "@/components/ui/dialog";
+import { Field, FieldDescription, FieldError, FieldGroup, FieldLabel, FieldLegend, FieldSet } from "@/components/ui/field";
 import { Input } from "@/components/ui/input";
 import { Label } from "@/components/ui/label";
 import { api, can, type AcmeAccount, type AcmeCa, type AcmeCaTag } from "@/lib/api";
@@ -33,22 +35,33 @@ const columns = columnHelper.columns([
     cell: ({ row }) => (
       <span className="flex flex-col gap-1">
         <span className="flex items-center gap-2">
-          {row.original.ca.name} <AcmeCaTagBadge tag={row.original.ca.tag} />
+          {row.original.ca.name}
         </span>
-        {row.original.ca.directoryUrl && <span className="break-all font-mono text-xs text-muted-foreground">{row.original.ca.directoryUrl}</span>}
         {row.original.ca.externalAccountBinding && (
           <span className="break-all text-xs text-muted-foreground">
             External Account Binding key id <span className="font-mono">{row.original.ca.externalAccountBinding.keyId}</span>
           </span>
         )}
-        {row.original.ca.builtIn && <span className="text-xs text-muted-foreground">Built in; it cannot be changed.</span>}
       </span>
     ),
+  }),
+  columnHelper.accessor((r) => r.ca.tag, { id: "tag", header: "Tag", cell: ({ row }) => <AcmeCaTagBadge tag={row.original.ca.tag} /> }),
+  columnHelper.accessor((r) => r.ca.directoryUrl, {
+    id: "directory",
+    header: "Directory",
+    cell: ({ cell }) => <span className="block max-w-56 truncate font-mono text-xs" title={cell.getValue() ?? undefined}>{cell.getValue()}</span>,
   }),
   columnHelper.accessor((r) => r.account?.accountUrl, {
     id: "account",
     header: "Account",
-    cell: ({ cell }) => (cell.getValue() ? <span className="break-all font-mono text-xs">{cell.getValue()}</span> : <span className="text-muted-foreground">None yet</span>),
+    cell: ({ cell }) =>
+      cell.getValue() ? (
+        <span className="block max-w-56 truncate font-mono text-xs" title={cell.getValue()}>
+          {cell.getValue()}
+        </span>
+      ) : (
+        <span className="text-muted-foreground">None yet</span>
+      ),
   }),
   columnHelper.accessor((r) => r.account?.contactEmail, { id: "contact", header: "Contact", cell: ({ cell }) => cell.getValue() ?? <span className="text-muted-foreground">None</span> }),
   columnHelper.display({ id: "actions", header: () => <span className="sr-only">Actions</span>, cell: ({ row }) => <AcmeCaActions ca={row.original.ca} account={row.original.account} /> }),
@@ -234,21 +247,18 @@ function DeleteAcmeCa({ orgId, ca }: { orgId: string; ca: AcmeCa }) {
 function RegisterAccountDialog({ orgId, acmeCas }: { orgId: string; acmeCas: AcmeCa[] }) {
   const [open, setOpen] = useState(false);
   return (
-    <Dialog
-      open={open}
-      onOpenChange={setOpen}
-    >
+    <Dialog open={open} onOpenChange={setOpen}>
       <DialogTrigger asChild>
         <Button>
           <PlusIcon />
           Register an account
         </Button>
       </DialogTrigger>
-      <DialogContent className="sm:max-w-lg">
-        <DialogHeader>
-          <DialogTitle>Register an ACME account</DialogTitle>
-          <DialogDescription>With a built-in ACME CA, or a custom one added in the same step. The platform makes the account's key and keeps it; it is never shown.</DialogDescription>
-        </DialogHeader>
+      <DialogContent className={STEPPED_DIALOG}>
+        <DialogTitle className="sr-only">Register an ACME account</DialogTitle>
+        <DialogDescription className="sr-only">
+          With a built-in ACME CA, or a custom one added in the same step. The platform makes the account's key and keeps it; it is never shown.
+        </DialogDescription>
         {/* Only mounted while open, so each opening starts from a clean form. */}
         {open && <RegisterAccountForm orgId={orgId} acmeCas={acmeCas} onDone={() => setOpen(false)} />}
       </DialogContent>
@@ -259,7 +269,17 @@ function RegisterAccountDialog({ orgId, acmeCas }: { orgId: string; acmeCas: Acm
 /** The choice, in the ACME CA list, of adding a custom ACME CA rather than registering with an existing one. */
 const CUSTOM = "custom";
 
+const CA_STEP: Step<RegisterStepId> = { id: "ca", title: "ACME CA", icon: LandmarkIcon };
+const DETAILS_STEP: Step<RegisterStepId> = { id: "details", title: "Custom ACME CA", icon: ServerIcon };
+const BINDING_STEP: Step<RegisterStepId> = { id: "binding", title: "External Account Binding", icon: KeyRoundIcon };
+const ACCOUNT_STEP: Step<RegisterStepId> = { id: "account", title: "Account", icon: ClipboardCheckIcon };
+type RegisterStepId = "ca" | "details" | "binding" | "account";
+// Only a custom ACME CA has details and a binding to ask for.
+const BUILT_IN_STEPS = [CA_STEP, ACCOUNT_STEP] as const satisfies readonly Step<RegisterStepId>[];
+const CUSTOM_STEPS = [CA_STEP, DETAILS_STEP, BINDING_STEP, ACCOUNT_STEP] as const satisfies readonly Step<RegisterStepId>[];
+
 function RegisterAccountForm({ orgId, acmeCas, onDone }: { orgId: string; acmeCas: AcmeCa[]; onDone: () => void }) {
+  const [step, setStep] = useState<RegisterStepId>("ca");
   const [acmeCaId, setAcmeCaId] = useState(acmeCas[0]?.id ?? CUSTOM);
   const [name, setName] = useState("");
   const [directoryUrl, setDirectoryUrl] = useState("");
@@ -286,95 +306,116 @@ function RegisterAccountForm({ orgId, acmeCas, onDone }: { orgId: string; acmeCa
     onDone,
   );
   const caName = chosen?.name ?? (name.trim() || "the CA");
+  const complete: Record<RegisterStepId, boolean> = {
+    ca: true,
+    details: name.trim() !== "" && directoryUrl.trim() !== "",
+    binding: (externalAccountKeyId.trim() === "") === (externalAccountHmacKey.trim() === ""),
+    account: agreed,
+  };
   return (
-    <form
-      className="flex flex-col gap-4"
-      onSubmit={(e: FormEvent) => {
-        e.preventDefault();
-        register.mutate(undefined);
-      }}
+    <SteppedForm
+      title="Register an ACME account"
+      steps={chosen ? BUILT_IN_STEPS : CUSTOM_STEPS}
+      step={step}
+      onStep={setStep}
+      complete={complete}
+      submitLabel={chosen ? "Register" : "Add and register"}
+      pending={register.isPending}
+      onSubmit={() => register.mutate(undefined)}
     >
-      <div className="flex flex-col gap-2">
-        <Label htmlFor="acme-ca">ACME CA</Label>
-        <select id="acme-ca" className="h-9 rounded-md border bg-transparent px-3 text-sm" value={acmeCaId} onChange={(e) => setAcmeCaId(e.target.value)}>
-          {acmeCas.map((ca) => (
-            <option key={ca.id} value={ca.id}>
-              {ca.name}
-            </option>
-          ))}
-          <option value={CUSTOM}>A custom ACME CA…</option>
-        </select>
-      </div>
-      {chosen ? (
-        /* An existing ACME CA's configuration is shown, not asked for: a built-in one cannot be changed. */
-        <dl className="grid gap-1 rounded-md border p-3 text-sm sm:grid-cols-[7rem_1fr] sm:gap-x-4">
-          <dt className="text-muted-foreground">Directory</dt>
-          <dd className="min-w-0 break-all font-mono text-xs">{chosen.directoryUrl}</dd>
-          <dt className="text-muted-foreground">Tag</dt>
-          <dd>{chosen.tag ? <AcmeCaTagBadge tag={chosen.tag} /> : <span className="text-muted-foreground">None</span>}</dd>
-        </dl>
-      ) : (
-        <>
-          <div className="flex flex-col gap-2">
-            <Label htmlFor="acme-ca-name">Name</Label>
-            <Input id="acme-ca-name" required value={name} onChange={(e) => setName(e.target.value)} />
-          </div>
-          <div className="flex flex-col gap-2">
-            <Label htmlFor="acme-ca-directory">Directory URL</Label>
-            <Input id="acme-ca-directory" type="url" required placeholder="https://ca.example.com/acme/directory" value={directoryUrl} onChange={(e) => setDirectoryUrl(e.target.value)} />
-            <p className="text-xs text-muted-foreground">
-              https, and not a loopback or link-local address; a private address is fine. It cannot be changed once the CA is added.
-            </p>
-          </div>
-          <div className="flex flex-col gap-2">
-            <Label htmlFor="acme-ca-tag">Tag (optional)</Label>
-            <select id="acme-ca-tag" className="h-9 rounded-md border bg-transparent px-3 text-sm" value={tag} onChange={(e) => setTag(e.target.value as AcmeCaTag | "")}>
-              <option value="">None</option>
-              {(Object.keys(ACME_CA_TAG_LABELS) as AcmeCaTag[]).map((t) => (
-                <option key={t} value={t}>
-                  {ACME_CA_TAG_LABELS[t]}
-                </option>
-              ))}
-            </select>
-            <p className="text-xs text-muted-foreground">A label of what it is for, shown beside its name; it changes nothing about how it issues.</p>
-          </div>
-          <fieldset className="flex flex-col gap-3 rounded-md border p-3">
-            <legend className="px-1 text-sm">External Account Binding (optional)</legend>
-            <p className="text-xs text-muted-foreground">
-              For a CA that requires one: the key id and HMAC key it gave you. The HMAC key is kept as a secret and never shown again. Neither can be changed once the CA is added.
-            </p>
-            <div className="flex flex-col gap-2">
-              <Label htmlFor="acme-ca-eab-key-id">Key id</Label>
-              <Input id="acme-ca-eab-key-id" autoComplete="off" required={externalAccountHmacKey.trim() !== ""} value={externalAccountKeyId} onChange={(e) => setExternalAccountKeyId(e.target.value)} />
-            </div>
-            <div className="flex flex-col gap-2">
-              <Label htmlFor="acme-ca-eab-hmac-key">HMAC key</Label>
-              <Input id="acme-ca-eab-hmac-key" type="password" autoComplete="off" required={externalAccountKeyId.trim() !== ""} value={externalAccountHmacKey} onChange={(e) => setExternalAccountHmacKey(e.target.value)} />
-            </div>
-          </fieldset>
-        </>
+      {step === "ca" && (
+        <FieldSet>
+          <FieldLegend>ACME CA</FieldLegend>
+          <FieldDescription>With a built-in ACME CA, or a custom one added in the same step. The platform makes the account's key and keeps it; it is never shown.</FieldDescription>
+          <FieldGroup>
+            <Field>
+              <FieldLabel htmlFor="acme-ca">ACME CA</FieldLabel>
+              <select id="acme-ca" className="h-9 rounded-md border bg-transparent px-3 text-sm" value={acmeCaId} onChange={(e) => setAcmeCaId(e.target.value)}>
+                {acmeCas.map((ca) => (
+                  <option key={ca.id} value={ca.id}>
+                    {ca.name}
+                  </option>
+                ))}
+                <option value={CUSTOM}>A custom ACME CA…</option>
+              </select>
+            </Field>
+            {chosen && (
+              /* An existing ACME CA's configuration is shown, not asked for: a built-in one cannot be changed. */
+              <dl className="grid gap-1 rounded-md border p-3 text-sm sm:grid-cols-[7rem_1fr] sm:gap-x-4">
+                <dt className="text-muted-foreground">Directory</dt>
+                <dd className="min-w-0 break-all font-mono text-xs">{chosen.directoryUrl}</dd>
+                <dt className="text-muted-foreground">Tag</dt>
+                <dd>{chosen.tag ? <AcmeCaTagBadge tag={chosen.tag} /> : <span className="text-muted-foreground">None</span>}</dd>
+              </dl>
+            )}
+          </FieldGroup>
+        </FieldSet>
       )}
-      <div className="flex flex-col gap-2">
-        <Label htmlFor="acme-contact">Contact email (optional)</Label>
-        <Input id="acme-contact" type="email" value={contactEmail} onChange={(e) => setContactEmail(e.target.value)} />
-      </div>
-      <label className="flex items-start gap-2 text-sm">
-        <input type="checkbox" className="mt-1" checked={agreed} onChange={(e) => setAgreed(e.target.checked)} />
-        <span>I agree to {caName}'s terms of service on the Organization's behalf.</span>
-      </label>
-      {(chosen?.tag ?? tag) === "production" && <p className="text-sm text-muted-foreground">This is an account with a production CA, which may rate-limit.</p>}
-      {!chosen && <p className="text-sm text-muted-foreground">The account is registered with the CA as it is added; if the CA refuses, nothing is saved.</p>}
-      {register.error && <p className="text-sm text-destructive">{register.error.message}</p>}
-      <DialogFooter>
-        <DialogClose asChild>
-          <Button type="button" variant="outline">
-            Cancel
-          </Button>
-        </DialogClose>
-        <Button type="submit" disabled={!agreed || register.isPending}>
-          {chosen ? "Register" : "Add and register"}
-        </Button>
-      </DialogFooter>
-    </form>
+      {step === "details" && (
+        <FieldSet>
+          <FieldLegend>Custom ACME CA</FieldLegend>
+          <FieldGroup>
+            <Field>
+              <FieldLabel htmlFor="acme-ca-name">Name</FieldLabel>
+              <Input id="acme-ca-name" autoFocus value={name} onChange={(e) => setName(e.target.value)} />
+            </Field>
+            <Field>
+              <FieldLabel htmlFor="acme-ca-directory">Directory URL</FieldLabel>
+              <Input id="acme-ca-directory" type="url" placeholder="https://ca.example.com/acme/directory" value={directoryUrl} onChange={(e) => setDirectoryUrl(e.target.value)} />
+              <FieldDescription>https, and not a loopback or link-local address; a private address is fine. It cannot be changed once the CA is added.</FieldDescription>
+            </Field>
+            <Field>
+              <FieldLabel htmlFor="acme-ca-tag">Tag (optional)</FieldLabel>
+              <select id="acme-ca-tag" className="h-9 rounded-md border bg-transparent px-3 text-sm" value={tag} onChange={(e) => setTag(e.target.value as AcmeCaTag | "")}>
+                <option value="">None</option>
+                {(Object.keys(ACME_CA_TAG_LABELS) as AcmeCaTag[]).map((t) => (
+                  <option key={t} value={t}>
+                    {ACME_CA_TAG_LABELS[t]}
+                  </option>
+                ))}
+              </select>
+              <FieldDescription>A label of what it is for, shown beside its name; it changes nothing about how it issues.</FieldDescription>
+            </Field>
+          </FieldGroup>
+        </FieldSet>
+      )}
+      {step === "binding" && (
+        <FieldSet>
+          <FieldLegend>External Account Binding (optional)</FieldLegend>
+          <FieldDescription>
+            For a CA that requires one: the key id and HMAC key it gave you. The HMAC key is kept as a secret and never shown again. Neither can be changed once the CA is added.
+          </FieldDescription>
+          <FieldGroup>
+            <Field>
+              <FieldLabel htmlFor="acme-ca-eab-key-id">Key id</FieldLabel>
+              <Input id="acme-ca-eab-key-id" autoComplete="off" autoFocus value={externalAccountKeyId} onChange={(e) => setExternalAccountKeyId(e.target.value)} />
+            </Field>
+            <Field>
+              <FieldLabel htmlFor="acme-ca-eab-hmac-key">HMAC key</FieldLabel>
+              <Input id="acme-ca-eab-hmac-key" type="password" autoComplete="off" value={externalAccountHmacKey} onChange={(e) => setExternalAccountHmacKey(e.target.value)} />
+              {!complete.binding && <FieldError>Give both the key id and the HMAC key, or neither.</FieldError>}
+            </Field>
+          </FieldGroup>
+        </FieldSet>
+      )}
+      {step === "account" && (
+        <FieldSet>
+          <FieldLegend>Account with {caName}</FieldLegend>
+          <FieldGroup>
+            <Field>
+              <FieldLabel htmlFor="acme-contact">Contact email (optional)</FieldLabel>
+              <Input id="acme-contact" type="email" autoFocus value={contactEmail} onChange={(e) => setContactEmail(e.target.value)} />
+            </Field>
+            <label className="flex items-start gap-2 text-sm">
+              <input type="checkbox" className="mt-1" checked={agreed} onChange={(e) => setAgreed(e.target.checked)} />
+              <span>I agree to {caName}'s terms of service on the Organization's behalf.</span>
+            </label>
+            {(chosen?.tag ?? tag) === "production" && <p className="text-sm text-muted-foreground">This is an account with a production CA, which may rate-limit.</p>}
+            {!chosen && <p className="text-sm text-muted-foreground">The account is registered with the CA as it is added; if the CA refuses, nothing is saved.</p>}
+            {register.error && <p className="text-sm text-destructive">{register.error.message}</p>}
+          </FieldGroup>
+        </FieldSet>
+      )}
+    </SteppedForm>
   );
 }
