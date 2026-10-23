@@ -41,3 +41,25 @@ export const ISSUANCE_KIND_WORDS: Record<Issuance["kind"], string> = {
   renewal: "Renewal",
   name_change: "Issuance of the new names",
 };
+
+/** The name a Managed Certificate goes by: its current Certificate's common name, or else its first name. */
+export const primaryName = (m: ManagedCertificate) => m.commonName ?? m.names[0];
+
+const DAY = 24 * 60 * 60 * 1000;
+
+/** A Certificate's life in whole days: how long it is valid for, and how much of that is left (rounded down, as the PEM Parser counts it; none once it has ended). */
+export function lifeOf({ notBefore, notAfter }: { notBefore: string; notAfter: string }, now = Date.now()) {
+  const total = Math.round((Date.parse(notAfter) - Date.parse(notBefore)) / DAY);
+  const remaining = Date.parse(notAfter) - now;
+  return { total, left: remaining <= 0 ? null : Math.floor(remaining / DAY) };
+}
+
+/** When the current Certificate ends, in a few words for beside the status: "expires in 38 days", "expired" or "revoked". */
+export function expiryPhrase(certificate: ManagedCertificate["currentCertificate"], now = Date.now()) {
+  if (!certificate) return null;
+  if (certificate.revocation) return "revoked";
+  const { left } = lifeOf(certificate, now);
+  if (left === null) return "expired";
+  if (left === 0) return "expires today";
+  return `expires in ${left} day${left === 1 ? "" : "s"}`;
+}

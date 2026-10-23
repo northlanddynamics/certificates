@@ -22,7 +22,6 @@ import { ManagedCertificateDetailsPage } from "./pages/managed-certificate-detai
 import { ManagedCertificateOverview } from "./pages/managed-certificate-overview";
 import { IssuedCertificatesTab } from "./pages/issued-certificates";
 import { ActivityTab } from "./pages/managed-certificate-activity";
-import { ServicesTab } from "./pages/managed-certificate-tabs";
 import { NotificationsTab } from "./pages/subscriber-controls";
 import { NotificationChannelsPage } from "./pages/notification-channels";
 import { AuditLogPage } from "./pages/audit-log";
@@ -78,7 +77,6 @@ const certificateRoute = createRoute({
 const certificateOverviewRoute = createRoute({ getParentRoute: () => certificateRoute, path: "/", component: ManagedCertificateOverview });
 const certificateIssuedRoute = createRoute({ getParentRoute: () => certificateRoute, path: "issued", component: IssuedCertificatesTab });
 const certificateActivityRoute = createRoute({ getParentRoute: () => certificateRoute, path: "activity", component: ActivityTab });
-const certificateServicesRoute = createRoute({ getParentRoute: () => certificateRoute, path: "services", component: ServicesTab });
 const certificateNotificationsRoute = createRoute({ getParentRoute: () => certificateRoute, path: "notifications", component: NotificationsTab });
 // Any other tab goes to Overview.
 const certificateUnknownTabRoute = createRoute({
@@ -235,7 +233,6 @@ const routeTree = rootRoute.addChildren([
       certificateOverviewRoute,
       certificateIssuedRoute,
       certificateActivityRoute,
-      certificateServicesRoute,
       certificateNotificationsRoute,
       certificateUnknownTabRoute,
     ]),
