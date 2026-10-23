@@ -16,7 +16,7 @@ import { acmeCaName } from "@/lib/acme-cas";
 import { api, can, ownerFromKey, ownerKey, type CertificateProfile, type ManagedCertificate, type Me } from "@/lib/api";
 import { KEY_ALGORITHM_LABELS, type KeyAlgorithm } from "@/lib/csr-generator";
 import { nameProblems, splitNames } from "@/lib/csr-names";
-import { daysLabel, findIssuingCa, permitsOnlyLabel } from "@/lib/private-ca";
+import { chosenValidityLabel, findIssuingCa, permitsOnlyLabel } from "@/lib/private-ca";
 import { CUSTOM, keyStepFor, profileOptions, stepsFor } from "@/lib/profile-choice";
 
 type Org = Me["organizations"][number];
@@ -114,7 +114,7 @@ function NewManagedCertificateForm({
   const { keyAlgorithms } = keyStep;
   const [names, setNames] = useState("");
   const [keyAlgorithm, setKeyAlgorithm] = useState<KeyAlgorithm>("ecdsa-p256");
-  // Only what the chosen CA takes is offered: choosing a CA that does not take the key algorithm chosen moves to its first.
+  // Only what the chosen profile allows, or else what the chosen CA takes, is offered: choosing a CA that does not take the key algorithm chosen moves to its first.
   useEffect(() => {
     if (keyAlgorithms.length > 0 && !keyAlgorithms.includes(keyAlgorithm)) setKeyAlgorithm(keyAlgorithms[0]!);
   }, [keyAlgorithms, keyAlgorithm]);
@@ -325,8 +325,7 @@ function profileIssuerTitle(profile: CertificateProfile, choice: ReturnType<type
 }
 
 /** The validity a profile fixes, in words; none for an ACME CA, which decides its own. */
-const profileValidityText = (profile: CertificateProfile) =>
-  profile.issuer.kind === "acme" ? null : profile.validityDays !== null ? daysLabel(profile.validityDays) : "The Issuing CA's default";
+const profileValidityText = (profile: CertificateProfile) => (profile.issuer.kind === "acme" ? null : chosenValidityLabel(profile.validityDays));
 
 function Summary({
   profile,
