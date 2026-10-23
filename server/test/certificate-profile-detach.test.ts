@@ -146,12 +146,12 @@ describe("once detached, a Managed Certificate made from a disabled profile", ()
     const res = await detach(id);
     expect(res.status).toBe(200);
     expect(res.body.renewal.blocked).toBeNull();
-    h.setNow(days(61));
+    // Due again at once: the very next pass, the same day, renews it.
     expect(await h.runRenewalScheduler()).toBe(1);
     await h.settleIssuances();
     const renewed = await read(id);
     expect(renewed.issuance).toMatchObject({ kind: "renewal", status: "succeeded" });
-    expect(renewed.currentCertificate.notAfter).toBe(days(151).toISOString());
+    expect(renewed.currentCertificate.notAfter).toBe(days(150).toISOString());
     // The settings copied from the profile still hold: the Issuing CA and the 90-day validity.
     expect(renewed.validityDays).toBe(90);
   });
@@ -176,5 +176,19 @@ describe("once detached, a Managed Certificate made from a disabled profile", ()
     // The Issuing CA's own limits still hold.
     const outside = await api(`/managed-certificates/${id}/name-change`, { cookie: member, body: await request(["www.example.com"]) });
     expect(outside.status).toBe(422);
+  });
+
+  test("has a Name Change that was pending before it was detached approved", async () => {
+    const profile = await createProfile();
+    const { id, member } = await issuedFrom(profile);
+    expect((await api(`/certificate-profiles/${profile}`, { method: "PATCH", body: { nameRules: { ...RULES, exact: ["app.internal.acme"] } } })).status).toBe(200);
+    expect((await api(`/managed-certificates/${id}/name-change`, { cookie: member, body: await request(["app.internal.acme"]) })).status).toBe(201);
+    await disable(profile);
+    expect((await api(`/managed-certificates/${id}/name-change/approve`, { body: {} })).status).toBe(422);
+
+    expect((await detach(id)).status).toBe(200);
+    expect((await api(`/managed-certificates/${id}/name-change/approve`, { body: {} })).status).toBe(200);
+    await h.settleIssuances();
+    expect((await read(id)).issuance).toMatchObject({ status: "succeeded" });
   });
 });
