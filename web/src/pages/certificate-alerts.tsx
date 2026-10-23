@@ -95,8 +95,9 @@ function Pending({ title, children, mayDecide, proposedByMe, onApprove, onReject
 }
 
 /**
- * What needs attention before anything else on a Managed Certificate: the automation's latest failure, with the means to try
- * again, and a Proposal or Name Change waiting for Approval, with the means to decide it. Nothing shows when there is none.
+ * What needs attention before anything else on a Managed Certificate: a Renewal blocked by a disabled Certificate Profile,
+ * the automation's latest failure, with the means to try again, and a Proposal or Name Change waiting for Approval, with
+ * the means to decide it. Nothing shows when there is none.
  */
 export function AlertStrip({ org, m, userId, onChanged }: { org: Me["organizations"][number]; m: ManagedCertificate; userId?: string; onChanged: () => void }) {
   const owns = isOwner(m, userId);
@@ -120,11 +121,22 @@ export function AlertStrip({ org, m, userId, onChanged }: { org: Me["organizatio
   const proposal = m.approval.status === "pending" ? m.approval : null;
   const nameChange = m.pendingNameChange;
   const heldUp = m.issuance?.awaitingKey && m.agent?.status === "offline" ? m.agent : null;
+  const blocked = m.renewal.blocked;
 
   if (m.archivedAt) return null;
-  if (!failure && !proposal && !nameChange && !heldUp) return null;
+  if (!failure && !proposal && !nameChange && !heldUp && !blocked) return null;
   return (
     <div className="flex flex-col gap-2">
+      {blocked && (
+        <Alert variant="destructive">
+          <CircleAlertIcon />
+          <AlertTitle>Renewal blocked</AlertTitle>
+          <AlertDescription>
+            It was due for Renewal {when(blocked.since)}, but the Certificate Profile {blocked.profile.name} it was made from is disabled, so nothing is issued under it. It renews
+            once an Organization Administrator enables the profile again.
+          </AlertDescription>
+        </Alert>
+      )}
       {heldUp && (
         <Alert variant="destructive">
           <CircleAlertIcon />

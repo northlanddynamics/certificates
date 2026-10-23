@@ -4,14 +4,14 @@
 
 **Blocked by:** 04
 
-**Status:** ready-for-agent
+**Status:** done
 
-- [ ] When a Managed Certificate linked to a disabled profile is due, the scheduler begins no Issuance and records it as renewal-blocked.
-- [ ] A new *Renewal blocked* notice is sent to its Subscribers once, not again on each scheduler pass while it stays blocked.
-- [ ] "Renew now" is refused with 422, naming the disabled profile, for Owners and Organization Administrators alike.
-- [ ] The Managed Certificate's state reports the block; the inventory and details pages show "Renewal blocked".
-- [ ] Revocation, downloads, changes to Owners, Subscribers and the Renewal Policy, and Archive keep working.
-- [ ] Enabling the profile unblocks its Managed Certificates, and a due one renews on the next scheduler pass.
-- [ ] Reading a profile also reports how many live Managed Certificates are linked to it; the disable confirmation shows that they will stop renewing.
-- [ ] Expiry notices continue as usual.
-- [ ] Scheduler tests driven like the existing renewal tests, server tests for "Renew now", and notification tests for the notice.
+- [x] When a Managed Certificate linked to a disabled profile is due, the scheduler begins no Issuance and records it as renewal-blocked.
+- [x] A new *Renewal blocked* notice is sent to its Subscribers once, not again on each scheduler pass while it stays blocked.
+- [x] "Renew now" is refused with 422, naming the disabled profile, for Owners and Organization Administrators alike.
+- [x] The Managed Certificate's state reports the block; the inventory and details pages show "Renewal blocked".
+- [x] Revocation, downloads, changes to Owners, Subscribers and the Renewal Policy, and Archive keep working.
+- [x] Enabling the profile unblocks its Managed Certificates, and a due one renews on the next scheduler pass.
+- [x] Reading a profile also reports how many live Managed Certificates are linked to it; the disable confirmation shows that they will stop renewing.
+- [x] Expiry notices continue as usual.
+- [x] Scheduler tests driven like the existing renewal tests, server tests for "Renew now", and notification tests for the notice.

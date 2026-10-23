@@ -359,6 +359,7 @@ export function createIssuances({ db, unitOfWork, issuers, dcv }: IssuancesDeps)
       if (mc.csr === null) return { refused: "awaiting_key" };
       if (mc.approvalStatus === "pending") return { refused: "awaiting_approval" };
       if (mc.approvalStatus === "rejected") return { refused: "rejected" };
+      if (intent === "scheduled" && mc.renewalMode !== "automatic") return { refused: "not_automatic" };
       if (mc.certificateProfileId !== null) {
         // A share lock, so that disabling the profile waits for this change, or this one sees it disabled.
         const [profile] = await tx
@@ -368,7 +369,6 @@ export function createIssuances({ db, unitOfWork, issuers, dcv }: IssuancesDeps)
           .for("share");
         if (!profile!.enabled) return { refused: "profile_disabled", profile: profile!.name };
       }
-      if (intent === "scheduled" && mc.renewalMode !== "automatic") return { refused: "not_automatic" };
       if (intent !== "issue" && !hasCertificate) return { refused: "no_certificate" };
       // The lock on the Managed Certificate makes this the only Issuance that can begin now; the index that allows one running is a backstop.
       const [runningOne] = await tx
@@ -407,6 +407,8 @@ export function createIssuances({ db, unitOfWork, issuers, dcv }: IssuancesDeps)
         target: { type: "managed_certificate", id },
         detail: { issuanceId: row!.id, ...(renewal && { renewal }), ...issuerDetail(issuerOf(mc)) },
       });
+      // Whatever blocked its Renewal no longer does; one blocked again later is told of again.
+      if (mc.renewalBlockedAt) await tx.update(managedCertificate).set({ renewalBlockedAt: null }).where(eq(managedCertificate.id, id));
       if (!awaitingKey) change.afterCommit(() => start(row!.id));
       return { issuanceId: row!.id };
     },

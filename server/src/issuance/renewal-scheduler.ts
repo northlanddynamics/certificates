@@ -2,14 +2,18 @@
 // and starts an Issuance for each, which reuses the CSR the Managed Certificate holds. It keeps no state of its own: what
 // is due, and what to wait for after a failure, are read from the Managed Certificates and their Issuances, so a pass
 // that is repeated, or run by two platform instances at once, starts a Renewal once (a Managed Certificate has at most
-// one Issuance running). Its time is the clock it is given, so tests control it.
-import { and, eq, or, sql } from "drizzle-orm";
+// one Issuance running). One whose Certificate Profile is disabled is not renewed (issuance.ts refuses to begin): the
+// first pass that finds it due marks it renewal-blocked and tells its Subscribers, and later passes leave it alone while
+// the profile stays disabled. The next Issuance that begins clears the mark, so one blocked again is told of again. Its
+// time is the clock it is given, so tests control it.
+import { and, eq, isNull, or, sql } from "drizzle-orm";
 import type { Db } from "../platform/db/client";
-import { issuance, managedCertificate, renewalInfo } from "../platform/db/schema";
+import { certificateProfile, issuance, managedCertificate, renewalInfo } from "../platform/db/schema";
 import { renewsAutomatically, type Issuances } from "./issuance";
 import type { Issuers } from "./issuer";
 import { currentCertificates, failuresOf, nextAttemptAt } from "./renewal";
 import { refreshRenewalInfo, informationOf } from "./renewal-information";
+import type { Notifications } from "../notifications/notifications";
 import type { UnitOfWork } from "../platform/unit-of-work";
 
 export interface RenewalScheduler {
@@ -22,12 +26,14 @@ export function createRenewalScheduler({
   unitOfWork,
   issuances,
   issuers,
+  notifications,
   clock,
 }: {
   db: Db;
   unitOfWork: UnitOfWork;
   issuances: Issuances;
   issuers: Issuers;
+  notifications: Pick<Notifications, "notify">;
   clock: () => Date;
 }): RenewalScheduler {
   const current = currentCertificates(db);
@@ -53,6 +59,8 @@ export function createRenewalScheduler({
               sql`${renewalInfo.windowStart} <= ${now}`,
             ),
             sql`not exists (select 1 from ${issuance} where ${issuance.managedCertificateId} = ${managedCertificate.id} and ${issuance.status} = 'running')`,
+            // Marked blocked, and its profile still disabled: nothing to do until it is enabled.
+            sql`not (${managedCertificate.renewalBlockedAt} is not null and exists (select 1 from ${certificateProfile} where ${certificateProfile.id} = ${managedCertificate.certificateProfileId} and not ${certificateProfile.enabled}))`,
           ),
         );
       const failures = await failuresOf(db, candidates.map((c) => c.managedCertificate.id));
@@ -65,7 +73,24 @@ export function createRenewalScheduler({
         if (!at || at > now) continue;
         try {
           // Decided again under a lock: a change made since the pass began (a switch to manual, an archive, another Issuance) wins.
-          const begun = await unitOfWork.run(null, (tx, change) => issuances.begin(tx, change, null, mc, "scheduled"));
+          const begun = await unitOfWork.run(null, async (tx, change) => {
+            const outcome = await issuances.begin(tx, change, null, mc, "scheduled");
+            if ("refused" in outcome && outcome.refused === "profile_disabled") {
+              // Marked once: a pass that finds it marked already has told its Subscribers.
+              const marked = await tx
+                .update(managedCertificate)
+                .set({ renewalBlockedAt: change.occurredAt })
+                .where(and(eq(managedCertificate.id, mc.id), isNull(managedCertificate.renewalBlockedAt)))
+                .returning({ id: managedCertificate.id });
+              if (marked.length > 0) {
+                await notifications.notify(tx, change, mc, {
+                  event: "renewal.blocked",
+                  detail: { certificateProfile: { id: mc.certificateProfileId!, name: outcome.profile! }, dueAt: at.toISOString() },
+                });
+              }
+            }
+            return outcome;
+          });
           if ("issuanceId" in begun) started++;
         } catch (err) {
           console.error("could not start the Renewal of", mc.id, err);

@@ -362,7 +362,7 @@ export function createApp(deps: AppDeps) {
   registerOwnerRoutes({ app, requireUser, unitOfWork, reader });
   registerSubscriberRoutes({ app, db, requireUser, unitOfWork, reader });
   registerRenewalRoutes({ app, db, requireUser, unitOfWork, issuances, reader });
-  const renewals = createRenewalScheduler({ db, unitOfWork, issuances, issuers, clock });
+  const renewals = createRenewalScheduler({ db, unitOfWork, issuances, issuers, notifications, clock });
   registerNameChangeRoutes({ app, requireUser, authorize, unitOfWork, issuances, reader, notifications });
   registerApprovals({ app, db, requireUser, authorize, unitOfWork, issuances, reader, notifications });
   registerArchiveRoutes({ app, requireUser, authorize, unitOfWork, issuances, reader });

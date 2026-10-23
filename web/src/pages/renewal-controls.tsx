@@ -14,6 +14,7 @@ const when = (iso: string) => new Date(iso).toLocaleString();
 function summary(m: ManagedCertificate) {
   const { policy, dueAt, dueBecause, failing } = m.renewal;
   if (policy.mode === "manual") return "Renewed by hand only";
+  if (m.renewal.blocked) return `Renewal blocked: the Certificate Profile ${m.renewal.blocked.profile.name} is disabled`;
   const days = `${policy.daysBeforeExpiry} day${policy.daysBeforeExpiry === 1 ? "" : "s"} before expiry`;
   if (!dueAt) return `Renews automatically ${days}`;
   // The CA's own window, when it is the one that is due first, is the reason to name.

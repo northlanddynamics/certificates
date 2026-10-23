@@ -8,6 +8,7 @@ export const NOTICE_EVENTS = [
   "certificate.expiring",
   "renewal.succeeded",
   "renewal.failed",
+  "renewal.blocked",
   "deployment_run.failed",
   "agent.offline",
   "approval.decided",
