@@ -162,6 +162,12 @@ describe("while a Certificate Profile is disabled", () => {
     expect(refused.status).toBe(422);
     expect(refused.body.error).toMatch(/Certificate Profile Internal web is disabled/);
     expect(await auditOf("name_change.approved")).toEqual([]);
+    // Nor is it issued another way while the profile is disabled.
+    for (const path of ["renewals", "issuances"]) {
+      const res = await h.api(`${base()}/managed-certificates/${mc}/${path}`, { cookie: org.cookie, body: {} });
+      expect(res.status).toBe(422);
+      expect(res.body.error).toMatch(/Certificate Profile Internal web is disabled/);
+    }
 
     await enable(id);
     expect((await h.api(`${base()}/managed-certificates/${mc}/name-change/approve`, { cookie: approver, body: {} })).status).toBe(200);

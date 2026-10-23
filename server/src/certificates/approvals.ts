@@ -117,7 +117,7 @@ export function registerApprovals(ctx: {
       path: "/api/organizations/{orgId}/managed-certificates/{id}/approve",
       tags: ["Approval"],
       summary: "Approve a proposed Managed Certificate, which starts its Issuance",
-      description: "The proposer need do nothing more. Nobody decides their own proposal, and a decision is final " +
+      description: "The proposer need do nothing more. Nobody decides their own proposal, and a decision is final. " +
         "Refused (422) while the Certificate Profile it is from is disabled, naming the profile; it stays pending, and may be rejected or approved once the profile is enabled again.",
       request: {
         params: ManagedCertificateParams,

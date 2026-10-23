@@ -62,7 +62,7 @@ export function registerRenewalRoutes(ctx: {
       summary: "Upload a new CSR, which the next Renewal uses",
       description:
         "For a key the Owner holds: a new CSR for the same key algorithm and exactly the same names. Nothing is issued now; every Renewal from the next on uses it. " +
-        "Refused (422) while the Certificate Profile it was made from is disabled. Organization Administrators and the Managed Certificate's own Owners may.",
+        "Organization Administrators and the Managed Certificate's own Owners may.",
       request: { params: ManagedCertificateParams, body: { content: { "application/json": { schema: z.object({ csr: csrField }) } } } },
       responses: { 200: json(ManagedCertificate, "Stored"), ...errors(400, 401, 403, 404, 409, 422) },
     }),

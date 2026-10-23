@@ -180,7 +180,7 @@ export function registerNameChangeRoutes(ctx: {
       path: "/api/organizations/{orgId}/managed-certificates/{id}/name-change/approve",
       tags: ["Name changes"],
       summary: "Approve the pending name change: the Managed Certificate takes the new names and CSR, and an Issuance of them begins",
-      description: "Nobody decides their own proposal, and a decision is final " +
+      description: "Nobody decides their own proposal, and a decision is final. " +
         "Refused (422) while the Certificate Profile it is from is disabled, naming the profile; it stays pending, and may be rejected or approved once the profile is enabled again.",
       request: {
         params: ManagedCertificateParams,
