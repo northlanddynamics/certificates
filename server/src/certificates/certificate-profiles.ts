@@ -423,7 +423,7 @@ export function registerCertificateProfiles(ctx: {
           ? "Members see it again and may request through it, and the Proposals and Name Changes from it that are pending may be approved again; the Managed Certificates made from it renew again, a due one on the scheduler's next pass. 409 when it is already enabled. Only Organization Administrators may."
           : "Every request through it is refused (422), Organization Administrators' too, and members no longer see it. Proposals through it, and Name Changes of Managed Certificates made from it, " +
             "stay pending: they may be rejected, and approving one is refused (422) until it is enabled again. The live Managed Certificates made from it stop renewing: the scheduler marks a due one " +
-            "as blocked and tells its Subscribers once, and \"Renew now\" is refused (422). Reading it counts both. 409 when it is already disabled. Only Organization Administrators may.",
+            "as blocked and tells its Subscribers once, and \"Renew now\" is refused (422), until it is enabled again or the Managed Certificate is detached from it. Reading it counts both. 409 when it is already disabled. Only Organization Administrators may.",
         request: { params: ProfileParams },
         responses: { 200: json(CertificateProfile, enabled ? "Enabled" : "Disabled"), ...errors(401, 403, 404, 409) },
       }),

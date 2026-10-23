@@ -19,7 +19,7 @@ export const CERTIFICATE_PROFILE_GUIDE: GuideSection[] = [
   {
     title: "Proposing through one",
     paragraphs: [
-      "New Managed Certificate starts by choosing a profile: the Certificate Authority step is skipped and the Key and CSR step is set to the profile's key algorithm. Custom is offered too, unless the Organization requires a Certificate Profile.",
+      "New Managed Certificate starts by choosing a profile: the Certificate Authority step is skipped and the Key and CSR step is set to the profile's key algorithm, or limited to its list. Custom is offered too, unless the Organization requires a Certificate Profile.",
       "A request by anyone but an Organization Administrator must keep to the profile's name rules and is a Proposal, which an Approver decides; the requester becomes an Owner, with the profile's co-Owner Team. An Organization Administrator's request is created outright and held only to the issuer's limits.",
     ],
   },
@@ -34,7 +34,7 @@ export const CERTIFICATE_PROFILE_GUIDE: GuideSection[] = [
   {
     title: "Detaching",
     paragraphs: [
-      "To let one Managed Certificate renew while its profile stays disabled, detach it from the profile on its details page. It keeps its settings, names and Owners, becomes an ordinary Managed Certificate, and is no longer held to the profile's name rules. It cannot be attached again.",
+      "To let one Managed Certificate renew while its profile stays disabled, an Organization Administrator detaches it from the profile on its details page. It keeps its settings, names and Owners, becomes an ordinary Managed Certificate, and is no longer held to the profile's name rules. It cannot be attached again.",
     ],
   },
 ];
