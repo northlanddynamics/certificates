@@ -59,7 +59,7 @@ export const CertificateProfile = z.object({
       "What a non-administrator's names must keep to when they request through it, and in a Name Change of what was made from it, as the rules are now: " +
       "within `exact` or `zones` (any name when both are empty), at most `maxNames` of them, and no wildcard unless `wildcards`. The issuer's limits still apply.",
   }),
-  enabled: z.boolean().openapi({ description: "Whether members may request through it." }),
+  enabled: z.boolean().openapi({ description: "Whether anything is issued under it: while it is disabled, nobody may request through it and nothing made from it is approved, has its names changed or renews." }),
   createdAt: z.string(),
 });
 
@@ -301,6 +301,8 @@ export function registerCertificateProfiles(ctx: {
         "`validityDays` is for a Private CA only (400 with an ACME CA), at most its Issuing CA's maximum (422 otherwise). " +
         "`renewalPolicy` is what each Managed Certificate made from it starts with (automatic, 30 days before expiry, unless given), and `defaultTeamId` a Team of the Organization (422 otherwise) made co-Owner of each. " +
         "`nameRules` limit the names a non-administrator may request through it (none unless given); ones that are not names, or a wildcard among `exact` when `wildcards` is off, are refused with 400. " +
+        "Its issuer, the requester's key algorithm, its validity and its Renewal Policy are copied onto each Managed Certificate made from it, so editing it later changes none of them; " +
+        "its name rules and whether it is enabled are checked live, on each request through it and each Name Change of what was made from it. While it is disabled nothing is issued under it, Renewal included (ADR 0012). " +
         "Names are unique within the Organization (409). Only Organization Administrators may.",
       request: {
         params: OrgParam,
@@ -394,6 +396,7 @@ export function registerCertificateProfiles(ctx: {
       method: "get",
       path: "/api/organizations/{orgId}/certificate-profiles/{id}",
       tags: ["Certificate Profiles"],
+      summary: "A Certificate Profile, with what disabling it would stop",
       description:
         "Everyone in the Organization may ask about an enabled one; only Organization Administrators about a disabled one (404 otherwise). " +
         "`linked` counts the live Managed Certificates made from it, which stop renewing while it is disabled, and `pending` what awaits Approval under it, which disabling it would hold.",
@@ -456,7 +459,7 @@ export function registerCertificateProfiles(ctx: {
       description:
         "What is not given is left as it is; `validityDays` and `defaultTeamId` null remove them. A change to `issuer`, `allowedKeyAlgorithms` or `validityDays` is checked, with what is left as it is, as when a profile is created (400 or 422), so pointing it at another issuer may need its key algorithms or validity changed with it. " +
         "`nameRules` replaces its name rules, checked as when a profile is created; it changes no pending Proposal, and the next request or Name Change keeps to the new ones. " +
-        "Managed Certificates already made from it keep what they were made with. Names are unique within the Organization (409). A change that changes nothing is not audited. Only Organization Administrators may.",
+        "Managed Certificates already made from it keep the issuer, key algorithm, validity and Renewal Policy they were made with; its name rules, as they are now, still bind a non-administrator's Name Change of one. Names are unique within the Organization (409). A change that changes nothing is not audited. Only Organization Administrators may.",
       request: {
         params: ProfileParams,
         body: {

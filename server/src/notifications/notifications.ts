@@ -110,7 +110,7 @@ function render(names: string[], what: NoticeOf, link: string): { subject: strin
         subject: `${name}: Renewal blocked`,
         text: lines(
           `It was due for Renewal at ${dueAt}, but it was made from the Certificate Profile ${certificateProfile.name}, which is disabled, so nothing is issued under it. ` +
-            "It will not be renewed until an Organization Administrator enables the profile again.",
+            "It will not be renewed until an Organization Administrator enables the profile again, or detaches it from the profile.",
         ),
       };
     }

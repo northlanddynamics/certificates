@@ -1,7 +1,7 @@
 import { useQuery } from "@tanstack/react-query";
 import { useParams } from "@tanstack/react-router";
 import { createColumnHelper, tableFeatures, useTable } from "@tanstack/react-table";
-import { PlusIcon } from "lucide-react";
+import { ChevronDownIcon, PlusIcon } from "lucide-react";
 import { useState, type FormEvent } from "react";
 import { ConfirmDialog } from "@/components/confirm-dialog";
 import { DataTable } from "@/components/data-table/data-table";
@@ -9,6 +9,7 @@ import { IssuerChoiceFields, useIssuerChoice } from "@/components/issuer-choice"
 import { Badge } from "@/components/ui/badge";
 import { Button } from "@/components/ui/button";
 import { Checkbox } from "@/components/ui/checkbox";
+import { Collapsible, CollapsibleContent, CollapsibleTrigger } from "@/components/ui/collapsible";
 import { Dialog, DialogClose, DialogContent, DialogDescription, DialogFooter, DialogHeader, DialogTitle, DialogTrigger } from "@/components/ui/dialog";
 import { Field, FieldDescription, FieldLabel, FieldLegend, FieldSet } from "@/components/ui/field";
 import { Input } from "@/components/ui/input";
@@ -16,6 +17,7 @@ import { Label } from "@/components/ui/label";
 import { Select, SelectContent, SelectItem, SelectTrigger, SelectValue } from "@/components/ui/select";
 import { Textarea } from "@/components/ui/textarea";
 import { acmeCaName, useAcmeCas } from "@/lib/acme-cas";
+import { CERTIFICATE_PROFILE_GUIDE } from "@/lib/certificate-profile-guide";
 import { api, can, type CertificateProfile, type CertificateProfileChanges, type RenewalPolicy } from "@/lib/api";
 import { KEY_ALGORITHM_LABELS, type KeyAlgorithm } from "@/lib/csr-generator";
 import { MAX_NAMES, splitNames } from "@/lib/csr-names";
@@ -99,10 +101,37 @@ export function CertificateProfilesPage() {
         A profile says once how a kind of certificate is issued: from which CA, with which keys, for how long, and how it renews. Members request against a profile instead of
         choosing these themselves. Each Managed Certificate keeps the settings it was made with, so editing a profile changes only what is requested after.
       </p>
+      <ProfileGuide />
       <DataTable table={table} empty={profiles.isPending ? "Loading…" : "No Certificate Profile yet."} />
       {profiles.error && <p className="text-sm text-destructive">{profiles.error.message}</p>}
       {mayEdit && <RequireProfileSetting orgId={orgId} />}
     </div>
+  );
+}
+
+/** How profiles work, folded away until asked for: setting one up, proposing through one, disabling and detaching. */
+function ProfileGuide() {
+  return (
+    <Collapsible className="group/guide">
+      <CollapsibleTrigger asChild>
+        <Button type="button" variant="ghost" size="sm" className="-ml-2">
+          <ChevronDownIcon className="transition-transform group-data-[state=closed]/guide:-rotate-90" />
+          How Certificate Profiles work
+        </Button>
+      </CollapsibleTrigger>
+      <CollapsibleContent className="flex max-w-3xl flex-col gap-4 pt-2">
+        {CERTIFICATE_PROFILE_GUIDE.map((section) => (
+          <section key={section.title} className="flex flex-col gap-2">
+            <h2 className="text-sm font-medium">{section.title}</h2>
+            {section.paragraphs.map((paragraph) => (
+              <p key={paragraph} className="text-sm text-muted-foreground">
+                {paragraph}
+              </p>
+            ))}
+          </section>
+        ))}
+      </CollapsibleContent>
+    </Collapsible>
   );
 }
 
