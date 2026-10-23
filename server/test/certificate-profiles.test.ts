@@ -123,6 +123,8 @@ describe("a Certificate Profile's issuer", () => {
     const res = await create({ name: "Public web", issuer: { kind: "acme", acmeCaId: "no-such-ca" }, allowedKeyAlgorithms: ["ecdsa-p256"] });
     expect(res.status).toBe(422);
     expect(res.body.error).toMatch(/no such ACME CA/);
+    // Nor is one chosen for it.
+    expect((await create({ name: "Public web", issuer: { kind: "acme" }, allowedKeyAlgorithms: ["ecdsa-p256"] })).status).toBe(400);
   });
 
   test("an Issuing CA that is not the Organization's, or does not issue, is refused with the reason", async () => {

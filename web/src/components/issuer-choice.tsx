@@ -44,8 +44,8 @@ export const useKeyAlgorithms = () => useQuery({ queryKey: ["key-algorithms"], q
 /**
  * The state of choosing where Certificates are issued from: an ACME CA (Let's Encrypt Staging to begin with) or an
  * active Issuing CA under an active root, and for an Issuing CA a validity (empty for its default), starting from `initial`
- * when given. Anyone may list the
- * ACME CAs, and see which the Organization has an account with; the Private CAs are fetched only for whoever may read them.
+ * when given. Anyone may list the ACME CAs, and see which the Organization has an account with; the Private CAs are
+ * fetched only for whoever may read them.
  */
 export function useIssuerChoice(orgId: string, { canReadPrivateCas, initial }: { canReadPrivateCas: boolean; initial?: { issuer: IssuerChoice; validityDays: number | null } }) {
   const [issuer, setIssuer] = useState<IssuerChoice>(initial?.issuer ?? { kind: "acme", acmeCaId: DEFAULT_ACME_CA_ID });

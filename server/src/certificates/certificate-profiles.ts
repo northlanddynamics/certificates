@@ -16,7 +16,7 @@ import { HttpError, OrgParam, errors, isUniqueViolation, json } from "../platfor
 import type { AcmeCas } from "../issuance/acme/acme-cas";
 import { issuerColumns, issuerOf, type Issuer } from "../issuance/issuer";
 import { KEY_ALGORITHMS, type KeyAlgorithm } from "../pki/csr";
-import { IssuerField, findIssuingCa, issuingCaLabel, issuingRefusal, keyAlgorithmRefusal, validityDaysField, validityRefusal } from "../private-ca/private-ca";
+import { findIssuingCa, issuingCaLabel, issuingRefusal, keyAlgorithmRefusal, validityDaysField, validityRefusal } from "../private-ca/private-ca";
 import { RenewalPolicy } from "./managed-certificate-reader";
 import type { Actor, UnitOfWork } from "../platform/unit-of-work";
 
@@ -39,7 +39,7 @@ const ValidityDays = validityDaysField.openapi({ description: "For a Private CA 
 const DefaultTeamId = z.string().openapi({ description: "A Team of the Organization made co-Owner of each Managed Certificate made from the profile." });
 
 const ProfileIssuer = z
-  .discriminatedUnion("kind", [z.object({ kind: z.literal("acme"), acmeCaId: z.string() }), z.object({ kind: z.literal("private_ca"), issuingCaId: z.string() })])
+  .discriminatedUnion("kind", [z.object({ kind: z.literal("acme"), acmeCaId: z.string().min(1) }), z.object({ kind: z.literal("private_ca"), issuingCaId: z.string() })])
   .openapi({ description: "`acme`: the ACME CA `acmeCaId`, through the Organization's ACME Account with it. `private_ca`: the Issuing CA `issuingCaId` of one of its Private CAs." });
 
 export const CertificateProfile = z.object({
@@ -137,6 +137,15 @@ export function registerCertificateProfiles(ctx: {
 
   const taken = (name: string) => new HttpError(409, `the Organization already has a Certificate Profile named ${name}`);
 
+  /** A 409 when the Organization already has a profile with this name. */
+  async function refuseTakenName(tx: Tx, orgId: string, name: string) {
+    const [named] = await tx
+      .select({ id: certificateProfile.id })
+      .from(certificateProfile)
+      .where(and(eq(certificateProfile.organizationId, orgId), eq(certificateProfile.name, name)));
+    if (named) throw taken(name);
+  }
+
   app.openapi(
     createRoute({
       method: "get",
@@ -180,7 +189,7 @@ export function registerCertificateProfiles(ctx: {
               schema: z.object({
                 name: Name,
                 description: Description.default(""),
-                issuer: IssuerField,
+                issuer: ProfileIssuer,
                 allowedKeyAlgorithms: AllowedKeyAlgorithms,
                 validityDays: ValidityDays.optional(),
                 renewalPolicy: RenewalPolicy.default(DEFAULT_RENEWAL_POLICY),
@@ -198,17 +207,13 @@ export function registerCertificateProfiles(ctx: {
       const actor = await requireUser(c);
       await authorize(actor, orgId, { certificateProfile: ["create"] });
       const issuing: Issuing = { issuer: body.issuer, allowedKeyAlgorithms: body.allowedKeyAlgorithms, validityDays: body.validityDays ?? null };
-      const refusal = await issuingRefused(db, orgId, issuing);
-      if (refusal) throw refusal;
-      const defaultTeam = body.defaultTeamId === undefined ? null : await teamOf(db, orgId, body.defaultTeamId);
-      const [named] = await db
-        .select({ id: certificateProfile.id })
-        .from(certificateProfile)
-        .where(and(eq(certificateProfile.organizationId, orgId), eq(certificateProfile.name, body.name)));
-      if (named) throw taken(body.name);
 
       try {
-        const row = await unitOfWork.run(actor, async (tx, change) => {
+        const { row, defaultTeam } = await unitOfWork.run(actor, async (tx, change) => {
+          const refusal = await issuingRefused(tx, orgId, issuing);
+          if (refusal) throw refusal;
+          const defaultTeam = body.defaultTeamId === undefined ? null : await teamOf(tx, orgId, body.defaultTeamId);
+          await refuseTakenName(tx, orgId, body.name);
           const [row] = await tx
             .insert(certificateProfile)
             .values({
@@ -237,7 +242,7 @@ export function registerCertificateProfiles(ctx: {
               defaultTeam,
             },
           });
-          return row!;
+          return { row: row!, defaultTeam };
         });
         return c.json(toProfile(row, defaultTeam), 201);
       } catch (err) {
@@ -293,7 +298,7 @@ export function registerCertificateProfiles(ctx: {
               schema: z.object({
                 name: Name.optional(),
                 description: Description.optional(),
-                issuer: IssuerField.optional(),
+                issuer: ProfileIssuer.optional(),
                 allowedKeyAlgorithms: AllowedKeyAlgorithms.optional(),
                 validityDays: ValidityDays.nullable().optional(),
                 renewalPolicy: RenewalPolicy.optional(),
@@ -337,13 +342,7 @@ export function registerCertificateProfiles(ctx: {
             const refusal = await issuingRefused(tx, orgId, issuing);
             if (refusal) throw refusal;
           }
-          if (changed.includes("name")) {
-            const [named] = await tx
-              .select({ id: certificateProfile.id })
-              .from(certificateProfile)
-              .where(and(eq(certificateProfile.organizationId, orgId), eq(certificateProfile.name, after.name)));
-            if (named) throw taken(after.name);
-          }
+          if (changed.includes("name")) await refuseTakenName(tx, orgId, after.name);
           const [row] = await tx
             .update(certificateProfile)
             .set({
