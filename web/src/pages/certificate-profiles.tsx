@@ -16,7 +16,7 @@ import { Textarea } from "@/components/ui/textarea";
 import { acmeCaName, useAcmeCas } from "@/lib/acme-cas";
 import { api, can, type CertificateProfile, type CertificateProfileChanges, type RenewalPolicy } from "@/lib/api";
 import { KEY_ALGORITHM_LABELS, type KeyAlgorithm } from "@/lib/csr-generator";
-import { splitNames } from "@/lib/csr-names";
+import { MAX_NAMES, splitNames } from "@/lib/csr-names";
 import { chosenValidityLabel, findIssuingCa } from "@/lib/private-ca";
 import { nameRulesLabel } from "@/lib/profile-choice";
 import { useAction } from "@/lib/use-action";
@@ -144,7 +144,7 @@ function ProfileForm({ orgId, profile, onDone }: { orgId: string; profile?: Cert
   // Only the algorithms the chosen issuer takes count, so choosing another issuer drops those it does not.
   const allowedKeys = choice.keyAlgorithms.filter((algorithm) => keys.includes(algorithm));
   const daysOk = /^\d+$/.test(days) && Number(days) >= 1 && Number(days) <= 365;
-  const maxNamesOk = maxNames.trim() === "" || (/^\d+$/.test(maxNames.trim()) && Number(maxNames) >= 1 && Number(maxNames) <= 100);
+  const maxNamesOk = maxNames.trim() === "" || (/^\d+$/.test(maxNames.trim()) && Number(maxNames) >= 1 && Number(maxNames) <= MAX_NAMES);
   const changes: CertificateProfileChanges = {
     name: name.trim(),
     description: description.trim(),
@@ -241,7 +241,7 @@ function ProfileForm({ orgId, profile, onDone }: { orgId: string; profile?: Cert
               id="profile-max-names"
               type="number"
               min={1}
-              max={100}
+              max={MAX_NAMES}
               step={1}
               className="w-20"
               aria-invalid={!maxNamesOk}

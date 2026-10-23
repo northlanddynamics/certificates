@@ -19,7 +19,10 @@ export interface ProfileNameRules {
 /** No rules: any names the issuer takes. */
 export const NO_NAME_RULES: ProfileNameRules = { exact: [], zones: [], maxNames: null, wildcards: true };
 
-/** The rules as they are given and shown. */
+/** The rules as they are shown. */
+export const ProfileNameRulesShown = z.object({ exact: z.array(z.string()), zones: z.array(z.string()), maxNames: z.number().int().nullable(), wildcards: z.boolean() });
+
+/** The rules as they are given. */
 export const ProfileNameRulesField = z
   .object({
     exact: z.array(z.string().max(255)).max(MAX_RULES).default([]).openapi({ description: "Names allowed exactly: a DNS name, or a wildcard (`*.` then a DNS name), which allows that wildcard alone." }),
@@ -51,13 +54,15 @@ export function normalizeProfileNameRules(rules: ProfileNameRules): { rules: Pro
   return { rules: { exact: [...exact], zones: [...zones], maxNames: rules.maxNames, wildcards: rules.wildcards } };
 }
 
-/** Why the names (normalised) break the rules of the profile named `profileName`, naming the offending names; none when they keep them. */
+/** Why the names (normalised) break the rules of the profile named `profileName`, naming every offending name; none when they keep them. */
 export function profileNamesRefusal(profileName: string, rules: ProfileNameRules, names: string[]): string | undefined {
   const of = `the Certificate Profile ${profileName}`;
-  if (rules.maxNames !== null && names.length > rules.maxNames) return `${of} allows at most ${rules.maxNames} ${rules.maxNames === 1 ? "name" : "names"}, not ${names.length}`;
   const wildcards = rules.wildcards ? [] : names.filter((name) => name.startsWith("*."));
-  if (wildcards.length > 0) return `${wildcards.join(", ")}: ${of} allows no wildcards`;
   const outside = rules.exact.length + rules.zones.length === 0 ? [] : namesOutside(rules, names);
-  if (outside.length > 0) return `${outside.join(", ")} ${outside.length === 1 ? "is" : "are"} outside the name rules of ${of}`;
-  return undefined;
+  const broken = [
+    ...(rules.maxNames !== null && names.length > rules.maxNames ? [`${of} allows at most ${rules.maxNames} ${rules.maxNames === 1 ? "name" : "names"}, not ${names.length}`] : []),
+    ...(wildcards.length > 0 ? [`${wildcards.join(", ")}: ${of} allows no wildcards`] : []),
+    ...(outside.length > 0 ? [`${outside.join(", ")} ${outside.length === 1 ? "is" : "are"} outside the name rules of ${of}`] : []),
+  ];
+  return broken.length === 0 ? undefined : broken.join("; ");
 }

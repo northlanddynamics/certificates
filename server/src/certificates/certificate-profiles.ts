@@ -19,7 +19,7 @@ import { issuerColumns, issuerOf, type Issuer } from "../issuance/issuer";
 import { KEY_ALGORITHMS, type KeyAlgorithm } from "../pki/csr";
 import { findIssuingCa, issuingCaLabel, issuingRefusal, keyAlgorithmRefusal, validityDaysField, validityRefusal } from "../private-ca/private-ca";
 import { RenewalPolicy } from "./managed-certificate-reader";
-import { NO_NAME_RULES, ProfileNameRulesField, normalizeProfileNameRules, profileNamesRefusal, type ProfileNameRules } from "./profile-name-rules";
+import { NO_NAME_RULES, ProfileNameRulesField, ProfileNameRulesShown, normalizeProfileNameRules, profileNamesRefusal, type ProfileNameRules } from "./profile-name-rules";
 import type { Actor, UnitOfWork } from "../platform/unit-of-work";
 
 type ProfileRow = typeof certificateProfile.$inferSelect;
@@ -38,7 +38,6 @@ const AllowedKeyAlgorithms = z
   .refine((values) => new Set(values).size === values.length, "no value may be given twice")
   .openapi({ description: "The key algorithms a requester's key may have: some of those the issuer takes (an ML-DSA Private CA takes only ML-DSA ones, and every other issuer none)." });
 const ValidityDays = validityDaysField.openapi({ description: "For a Private CA issuer only: how many days its Certificates are valid for, at most the Issuing CA's maximum; the Issuing CA's default when none." });
-const NameRules = ProfileNameRulesField;
 const DefaultTeamId = z.string().openapi({ description: "A Team of the Organization made co-Owner of each Managed Certificate made from the profile." });
 
 const ProfileIssuer = z
@@ -54,7 +53,7 @@ export const CertificateProfile = z.object({
   validityDays: z.number().int().nullable().openapi({ description: "For a Private CA issuer: how many days its Certificates are valid for; none for the Issuing CA's default, and always none for an ACME CA, which decides." }),
   renewalPolicy: RenewalPolicy.openapi({ description: "The Renewal Policy each Managed Certificate made from it starts with." }),
   defaultTeam: z.object({ id: z.string(), name: z.string() }).nullable().openapi({ description: "The Team made co-Owner of each Managed Certificate made from it; none when it names none." }),
-  nameRules: z.object({ exact: z.array(z.string()), zones: z.array(z.string()), maxNames: z.number().int().nullable(), wildcards: z.boolean() }).openapi({
+  nameRules: ProfileNameRulesShown.openapi({
     description:
       "What a non-administrator's names must keep to when they request through it, and in a Name Change of what was made from it, as the rules are now: " +
       "within `exact` or `zones` (any name when both are empty), at most `maxNames` of them, and no wildcard unless `wildcards`. The issuer's limits still apply.",
@@ -272,7 +271,7 @@ export function registerCertificateProfiles(ctx: {
                 validityDays: ValidityDays.optional(),
                 renewalPolicy: RenewalPolicy.default(DEFAULT_RENEWAL_POLICY),
                 defaultTeamId: DefaultTeamId.optional(),
-                nameRules: NameRules.optional(),
+                nameRules: ProfileNameRulesField.optional(),
               }),
             },
           },
@@ -386,7 +385,7 @@ export function registerCertificateProfiles(ctx: {
                 validityDays: ValidityDays.nullable().optional(),
                 renewalPolicy: RenewalPolicy.optional(),
                 defaultTeamId: DefaultTeamId.nullable().optional(),
-                nameRules: NameRules.optional(),
+                nameRules: ProfileNameRulesField.optional(),
               }),
             },
           },

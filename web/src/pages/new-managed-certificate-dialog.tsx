@@ -111,6 +111,7 @@ function NewManagedCertificateForm({
   const [profileValue, setProfileValue] = useState<string | null>(null);
   const profile = profiles.data?.items.find((p) => p.enabled && p.id === profileValue);
   const keyStep = keyStepFor(profile, choice.keyAlgorithms);
+  const profileRules = profileRulesText(profile, direct);
   const { keyAlgorithms } = keyStep;
   const [names, setNames] = useState("");
   const [keyAlgorithm, setKeyAlgorithm] = useState<KeyAlgorithm>("ecdsa-p256");
@@ -230,9 +231,9 @@ function NewManagedCertificateForm({
             />
             <FieldDescription>One per line; wildcards as *.example.com. The certificate is issued for exactly these names.</FieldDescription>
             {!profile && chosenCa && <FieldDescription>{permitsOnlyLabel(chosenCa)}</FieldDescription>}
-            {profile && profileRulesText(profile, direct) && (
+            {profile && profileRules && (
               <FieldDescription>
-                Names through {profile.name}: {profileRulesText(profile, direct)}
+                Names through {profile.name}: {profileRules}
               </FieldDescription>
             )}
             {names.trim() !== "" && problems.map((problem) => <FieldError key={problem}>{problem}</FieldError>)}

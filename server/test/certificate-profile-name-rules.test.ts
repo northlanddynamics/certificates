@@ -119,6 +119,11 @@ describe("a non-administrator's Proposal through a profile with name rules", () 
     expect(tooMany.status).toBe(422);
     expect(tooMany.body.error).toMatch(/Internal web allows at most 2 names, not 3/);
 
+    // Every broken rule is named at once.
+    const both = await propose(["*.db.internal.acme"]);
+    expect(both.status).toBe(422);
+    expect(both.body.error).toMatch(/\*\.db\.internal\.acme: .* allows no wildcards; \*\.db\.internal\.acme is outside the name rules/);
+
     const within = await propose(["www.internal.acme", "a.apps.internal.acme"]);
     expect(within.status).toBe(201);
     expect(within.body.approval.status).toBe("pending");
