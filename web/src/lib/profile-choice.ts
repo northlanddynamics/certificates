@@ -1,5 +1,5 @@
 // The New Managed Certificate dialog's profile step: which Certificate Profiles it offers, which steps follow, and what
-// the Key step offers on a profile. Pure and free of the app's imports, so the server's tests can run it.
+// the Key step offers on a profile, and its name rules in words. Pure and free of the app's imports, so the server's tests can run it.
 import type { KeyAlgorithm } from "./csr-generator";
 
 /** What the step needs to know of a profile. */
@@ -9,6 +9,30 @@ export interface ProfileChoosable {
   description: string;
   allowedKeyAlgorithms: readonly KeyAlgorithm[];
   enabled: boolean;
+}
+
+/** A profile's name rules, as the server reports them. */
+export interface ProfileNameRules {
+  exact: readonly string[];
+  zones: readonly string[];
+  maxNames: number | null;
+  wildcards: boolean;
+}
+
+/**
+ * The name rules in words, such as "Only www.example.com, or anything in apps.example.com; at most 2 names; no
+ * wildcards."; none when there are none, and any names the issuer takes are allowed.
+ */
+export function nameRulesLabel({ exact, zones, maxNames, wildcards }: ProfileNameRules): string | null {
+  const which = [...(exact.length > 0 ? [exact.join(", ")] : []), ...(zones.length > 0 ? [`anything in ${zones.join(", ")}`] : [])];
+  const parts = [
+    ...(which.length > 0 ? [`only ${which.join(", or ")}`] : []),
+    ...(maxNames !== null ? [`at most ${maxNames} ${maxNames === 1 ? "name" : "names"}`] : []),
+    ...(wildcards ? [] : ["no wildcards"]),
+  ];
+  if (parts.length === 0) return null;
+  const text = parts.join("; ");
+  return `${text[0]!.toUpperCase()}${text.slice(1)}.`;
 }
 
 /** The value of the step's choice for requesting without a profile. */

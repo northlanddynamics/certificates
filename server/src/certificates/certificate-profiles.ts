@@ -3,8 +3,9 @@
 // ACME CA the Organization has an ACME Account with, or an active Issuing CA of one of its Private CAs), the key
 // algorithms a requester's key may have, the validity for a Private CA, the starting Renewal Policy, and may name a
 // Team to be co-Owner of what is made from it. These are copied onto each Managed Certificate made from it (ADR 0012),
-// so editing a profile changes none already made. Only Organization Administrators create and edit them; every member
-// lists the enabled ones.
+// so editing a profile changes none already made. Its name rules (profile-name-rules.ts) are not copied: a
+// non-administrator's request and Name Change keep to them as they are now. Only Organization Administrators create
+// and edit them; every member lists the enabled ones.
 import { OpenAPIHono, createRoute, z } from "@hono/zod-openapi";
 import { and, asc, eq } from "drizzle-orm";
 import { isDeepStrictEqual } from "node:util";
@@ -18,6 +19,7 @@ import { issuerColumns, issuerOf, type Issuer } from "../issuance/issuer";
 import { KEY_ALGORITHMS, type KeyAlgorithm } from "../pki/csr";
 import { findIssuingCa, issuingCaLabel, issuingRefusal, keyAlgorithmRefusal, validityDaysField, validityRefusal } from "../private-ca/private-ca";
 import { RenewalPolicy } from "./managed-certificate-reader";
+import { NO_NAME_RULES, ProfileNameRulesField, ProfileNameRulesShown, normalizeProfileNameRules, profileNamesRefusal, type ProfileNameRules } from "./profile-name-rules";
 import type { Actor, UnitOfWork } from "../platform/unit-of-work";
 
 type ProfileRow = typeof certificateProfile.$inferSelect;
@@ -51,11 +53,25 @@ export const CertificateProfile = z.object({
   validityDays: z.number().int().nullable().openapi({ description: "For a Private CA issuer: how many days its Certificates are valid for; none for the Issuing CA's default, and always none for an ACME CA, which decides." }),
   renewalPolicy: RenewalPolicy.openapi({ description: "The Renewal Policy each Managed Certificate made from it starts with." }),
   defaultTeam: z.object({ id: z.string(), name: z.string() }).nullable().openapi({ description: "The Team made co-Owner of each Managed Certificate made from it; none when it names none." }),
+  nameRules: ProfileNameRulesShown.openapi({
+    description:
+      "What a non-administrator's names must keep to when they request through it, and in a Name Change of what was made from it, as the rules are now: " +
+      "within `exact` or `zones` (any name when both are empty), at most `maxNames` of them, and no wildcard unless `wildcards`. The issuer's limits still apply.",
+  }),
   enabled: z.boolean().openapi({ description: "Whether members may request through it." }),
   createdAt: z.string(),
 });
 
 const policyOf = (row: ProfileRow): Policy => ({ mode: row.renewalMode, daysBeforeExpiry: row.renewalDaysBeforeExpiry });
+export const nameRulesOf = (row: ProfileRow): ProfileNameRules => ({ exact: row.allowedExactNames, zones: row.allowedZones, maxNames: row.maxNames, wildcards: row.wildcardsAllowed });
+const nameRulesColumns = (rules: ProfileNameRules) => ({ allowedExactNames: rules.exact, allowedZones: rules.zones, maxNames: rules.maxNames, wildcardsAllowed: rules.wildcards });
+
+/** The rules given, normalised; a 400 when they cannot be rules. */
+function nameRulesAsked(rules: ProfileNameRules): ProfileNameRules {
+  const normal = normalizeProfileNameRules(rules);
+  if ("invalid" in normal) throw new HttpError(400, normal.invalid);
+  return normal.rules;
+}
 
 function toProfile(row: ProfileRow, defaultTeam: TeamRef | null): z.infer<typeof CertificateProfile> {
   return {
@@ -67,6 +83,7 @@ function toProfile(row: ProfileRow, defaultTeam: TeamRef | null): z.infer<typeof
     validityDays: row.validityDays,
     renewalPolicy: policyOf(row),
     defaultTeam,
+    nameRules: nameRulesOf(row),
     enabled: row.enabled,
     createdAt: row.createdAt.toISOString(),
   };
@@ -92,13 +109,14 @@ export type RequestedThrough = {
   validityDays: number | null;
   renewalPolicy: Policy;
   defaultTeamId: string | null;
+  nameRules: ProfileNameRules;
 };
 
 /**
  * The Organization's profile a Managed Certificate with a key of `keyAlgorithm` is requested through, and what it is
  * made with. A 422 when the Organization has no such profile, it is disabled, it does not allow the key algorithm, or its
  * issuer is no longer usable: an ACME CA the Organization has no ACME Account with, or an Issuing CA that does not issue.
- * The names, the CSR and the issuer's own limits are the request's to check, as for one made without a profile.
+ * The names, the CSR, the profile's name rules (for a non-administrator) and the issuer's own limits are the request's to check.
  */
 export async function requestedThrough(db: Db | Tx, acmeCas: AcmeCas, orgId: string, profileId: string, keyAlgorithm: KeyAlgorithm): Promise<RequestedThrough> {
   const [row] = isId(profileId)
@@ -124,7 +142,16 @@ export async function requestedThrough(db: Db | Tx, acmeCas: AcmeCas, orgId: str
     const refusal = of ? issuingRefusal(of) : "the Organization has no such Issuing CA";
     if (refusal) throw unusable(refusal);
   }
-  return { profile: { id: row.id, name: row.name }, issuer, validityDays: row.validityDays, renewalPolicy: policyOf(row), defaultTeamId: row.defaultTeamId };
+  return { profile: { id: row.id, name: row.name }, issuer, validityDays: row.validityDays, renewalPolicy: policyOf(row), defaultTeamId: row.defaultTeamId, nameRules: nameRulesOf(row) };
+}
+
+/**
+ * Why a non-administrator may not give a Managed Certificate made from the profile `profileId` these names (normalised):
+ * those the profile's name rules, as they are now, do not allow. None when they may.
+ */
+export async function profileNamesRefusalFor(db: Db | Tx, profileId: string, names: string[]) {
+  const [row] = await db.select().from(certificateProfile).where(eq(certificateProfile.id, profileId));
+  return profileNamesRefusal(row!.name, nameRulesOf(row!), names);
 }
 
 /** What a profile issues with, as it is checked against its issuer. */
@@ -229,6 +256,7 @@ export function registerCertificateProfiles(ctx: {
         "`allowedKeyAlgorithms` are some of those the issuer takes (422 otherwise): an ML-DSA Private CA takes only ML-DSA ones, every other issuer none. " +
         "`validityDays` is for a Private CA only (400 with an ACME CA), at most its Issuing CA's maximum (422 otherwise). " +
         "`renewalPolicy` is what each Managed Certificate made from it starts with (automatic, 30 days before expiry, unless given), and `defaultTeamId` a Team of the Organization (422 otherwise) made co-Owner of each. " +
+        "`nameRules` limit the names a non-administrator may request through it (none unless given); ones that are not names, or a wildcard among `exact` when `wildcards` is off, are refused with 400. " +
         "Names are unique within the Organization (409). Only Organization Administrators may.",
       request: {
         params: OrgParam,
@@ -243,6 +271,7 @@ export function registerCertificateProfiles(ctx: {
                 validityDays: ValidityDays.optional(),
                 renewalPolicy: RenewalPolicy.default(DEFAULT_RENEWAL_POLICY),
                 defaultTeamId: DefaultTeamId.optional(),
+                nameRules: ProfileNameRulesField.optional(),
               }),
             },
           },
@@ -256,6 +285,7 @@ export function registerCertificateProfiles(ctx: {
       const actor = await requireUser(c);
       await authorize(actor, orgId, { certificateProfile: ["create"] });
       const issuing: Issuing = { issuer: body.issuer, allowedKeyAlgorithms: body.allowedKeyAlgorithms, validityDays: body.validityDays ?? null };
+      const nameRules = body.nameRules ? nameRulesAsked(body.nameRules) : NO_NAME_RULES;
 
       try {
         const { row, defaultTeam } = await unitOfWork.run(actor, async (tx, change) => {
@@ -275,6 +305,7 @@ export function registerCertificateProfiles(ctx: {
               renewalMode: body.renewalPolicy.mode,
               renewalDaysBeforeExpiry: body.renewalPolicy.daysBeforeExpiry,
               defaultTeamId: defaultTeam?.id ?? null,
+              ...nameRulesColumns(nameRules),
             })
             .returning();
           await change.audit({
@@ -289,6 +320,7 @@ export function registerCertificateProfiles(ctx: {
               validityDays: issuing.validityDays,
               renewalPolicy: body.renewalPolicy,
               defaultTeam,
+              nameRules,
             },
           });
           return { row: row!, defaultTeam };
@@ -338,6 +370,7 @@ export function registerCertificateProfiles(ctx: {
       summary: "Edit a Certificate Profile, including pointing it at another issuer",
       description:
         "What is not given is left as it is; `validityDays` and `defaultTeamId` null remove them. A change to `issuer`, `allowedKeyAlgorithms` or `validityDays` is checked, with what is left as it is, as when a profile is created (400 or 422), so pointing it at another issuer may need its key algorithms or validity changed with it. " +
+        "`nameRules` replaces its name rules, checked as when a profile is created; it changes no pending Proposal, and the next request or Name Change keeps to the new ones. " +
         "Managed Certificates already made from it keep what they were made with. Names are unique within the Organization (409). A change that changes nothing is not audited. Only Organization Administrators may.",
       request: {
         params: ProfileParams,
@@ -352,6 +385,7 @@ export function registerCertificateProfiles(ctx: {
                 validityDays: ValidityDays.nullable().optional(),
                 renewalPolicy: RenewalPolicy.optional(),
                 defaultTeamId: DefaultTeamId.nullable().optional(),
+                nameRules: ProfileNameRulesField.optional(),
               }),
             },
           },
@@ -365,6 +399,7 @@ export function registerCertificateProfiles(ctx: {
       const actor = await requireUser(c);
       const { role } = await authorize(actor, orgId, { certificateProfile: ["update"] });
       await findProfile(orgId, id, role);
+      const nameRules = body.nameRules && nameRulesAsked(body.nameRules);
 
       try {
         const { row, defaultTeam } = await unitOfWork.run(actor, async (tx, change) => {
@@ -383,8 +418,9 @@ export function registerCertificateProfiles(ctx: {
             ...issuing,
             ...(body.renewalPolicy && { renewalPolicy: body.renewalPolicy }),
             ...(body.defaultTeamId !== undefined && { defaultTeam: body.defaultTeamId === null ? null : await teamOf(tx, orgId, body.defaultTeamId) }),
+            ...(nameRules && { nameRules }),
           };
-          const fields = ["name", "description", "issuer", "allowedKeyAlgorithms", "validityDays", "renewalPolicy", "defaultTeam"] as const;
+          const fields = ["name", "description", "issuer", "allowedKeyAlgorithms", "validityDays", "renewalPolicy", "defaultTeam", "nameRules"] as const;
           const changed = fields.filter((field) => !isDeepStrictEqual(before[field], after[field]));
           if (changed.length === 0) return { row: current!, defaultTeam: before.defaultTeam };
           if (changed.some((field) => field === "issuer" || field === "allowedKeyAlgorithms" || field === "validityDays")) {
@@ -403,6 +439,7 @@ export function registerCertificateProfiles(ctx: {
               renewalMode: after.renewalPolicy.mode,
               renewalDaysBeforeExpiry: after.renewalPolicy.daysBeforeExpiry,
               defaultTeamId: after.defaultTeam?.id ?? null,
+              ...nameRulesColumns(after.nameRules),
             })
             .where(eq(certificateProfile.id, id))
             .returning();

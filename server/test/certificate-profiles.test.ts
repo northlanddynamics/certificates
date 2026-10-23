@@ -94,6 +94,7 @@ describe("creating a Certificate Profile", () => {
           validityDays: 90,
           renewalPolicy: { mode: "automatic", daysBeforeExpiry: 20 },
           defaultTeam: { id: team, name: "Web" },
+          nameRules: { exact: [], zones: [], maxNames: null, wildcards: true },
         },
       }),
     ]);

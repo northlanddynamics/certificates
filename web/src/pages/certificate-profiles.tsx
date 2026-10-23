@@ -16,7 +16,9 @@ import { Textarea } from "@/components/ui/textarea";
 import { acmeCaName, useAcmeCas } from "@/lib/acme-cas";
 import { api, can, type CertificateProfile, type CertificateProfileChanges, type RenewalPolicy } from "@/lib/api";
 import { KEY_ALGORITHM_LABELS, type KeyAlgorithm } from "@/lib/csr-generator";
+import { MAX_NAMES, splitNames } from "@/lib/csr-names";
 import { chosenValidityLabel, findIssuingCa } from "@/lib/private-ca";
+import { nameRulesLabel } from "@/lib/profile-choice";
 import { useAction } from "@/lib/use-action";
 import { useOrg } from "@/lib/use-org";
 
@@ -53,6 +55,7 @@ const columns = (orgId: string, mayEdit: boolean) =>
     columnHelper.accessor("allowedKeyAlgorithms", { header: "Keys", cell: ({ cell }) => cell.getValue().map((algorithm) => KEY_ALGORITHM_LABELS[algorithm]).join(", ") }),
     columnHelper.display({ id: "validity", header: "Validity", cell: ({ row }) => (row.original.issuer.kind === "acme" ? "The CA's" : chosenValidityLabel(row.original.validityDays)) }),
     columnHelper.accessor("renewalPolicy", { header: "Renewal", cell: ({ cell }) => renewalLabel(cell.getValue()) }),
+    columnHelper.accessor("nameRules", { header: "Names", cell: ({ cell }) => nameRulesLabel(cell.getValue()) ?? <span className="text-muted-foreground">Any the issuer takes</span> }),
     columnHelper.accessor("defaultTeam", { header: "Co-Owner", cell: ({ cell }) => cell.getValue()?.name ?? <span className="text-muted-foreground">None</span> }),
     columnHelper.display({
       id: "actions",
@@ -133,10 +136,15 @@ function ProfileForm({ orgId, profile, onDone }: { orgId: string; profile?: Cert
   const [days, setDays] = useState(String(profile?.renewalPolicy.daysBeforeExpiry ?? 30));
   const [teamId, setTeamId] = useState(profile?.defaultTeam?.id ?? NO_TEAM);
   const teams = useQuery({ queryKey: ["teams", orgId], queryFn: () => api.teams(orgId) });
+  const [exactNames, setExactNames] = useState(profile?.nameRules.exact.join("\n") ?? "");
+  const [zones, setZones] = useState(profile?.nameRules.zones.join("\n") ?? "");
+  const [maxNames, setMaxNames] = useState(profile?.nameRules.maxNames === null || !profile ? "" : String(profile.nameRules.maxNames));
+  const [wildcards, setWildcards] = useState(profile?.nameRules.wildcards ?? true);
 
   // Only the algorithms the chosen issuer takes count, so choosing another issuer drops those it does not.
   const allowedKeys = choice.keyAlgorithms.filter((algorithm) => keys.includes(algorithm));
   const daysOk = /^\d+$/.test(days) && Number(days) >= 1 && Number(days) <= 365;
+  const maxNamesOk = maxNames.trim() === "" || (/^\d+$/.test(maxNames.trim()) && Number(maxNames) >= 1 && Number(maxNames) <= MAX_NAMES);
   const changes: CertificateProfileChanges = {
     name: name.trim(),
     description: description.trim(),
@@ -145,13 +153,14 @@ function ProfileForm({ orgId, profile, onDone }: { orgId: string; profile?: Cert
     validityDays: choice.issuer.kind === "private_ca" ? choice.chosenValidity : null,
     renewalPolicy: { mode, daysBeforeExpiry: Number(days) },
     defaultTeamId: teamId === NO_TEAM ? null : teamId,
+    nameRules: { exact: splitNames(exactNames), zones: splitNames(zones), maxNames: maxNames.trim() === "" ? null : Number(maxNames), wildcards },
   };
   const save = useAction(
     () => (profile ? api.updateCertificateProfile(orgId, profile.id, changes) : api.createCertificateProfile(orgId, changes)),
     ["certificate-profiles", "audit-events"],
     onDone,
   );
-  const ready = changes.name !== "" && allowedKeys.length > 0 && choice.validityOk && choice.registered !== false && daysOk;
+  const ready = changes.name !== "" && allowedKeys.length > 0 && choice.validityOk && choice.registered !== false && daysOk && maxNamesOk;
 
   return (
     <form
@@ -206,6 +215,50 @@ function ProfileForm({ orgId, profile, onDone }: { orgId: string; profile?: Cert
           </Select>
           <Input type="number" min={1} max={365} step={1} className="w-20" aria-label="Days before expiry" aria-invalid={!daysOk} value={days} onChange={(e) => setDays(e.target.value)} />
           <span className="text-sm text-muted-foreground">days before expiry</span>
+        </div>
+      </FieldSet>
+      <FieldSet>
+        <FieldLegend>Name rules</FieldLegend>
+        <FieldDescription>
+          Which names members may request through it, within what the issuer allows. With no names and no zones, any name the issuer takes. Organization Administrators are held
+          only to the issuer's limits, and editing the rules does not re-check pending Proposals.
+        </FieldDescription>
+        <div className="grid gap-4 sm:grid-cols-2">
+          <Field>
+            <FieldLabel htmlFor="profile-exact-names">Names</FieldLabel>
+            <Textarea id="profile-exact-names" rows={3} value={exactNames} onChange={(e) => setExactNames(e.target.value)} placeholder="www.example.com" />
+            <FieldDescription>One per line, each allowed exactly; a wildcard as *.example.com.</FieldDescription>
+          </Field>
+          <Field>
+            <FieldLabel htmlFor="profile-zones">Zones</FieldLabel>
+            <Textarea id="profile-zones" rows={3} value={zones} onChange={(e) => setZones(e.target.value)} placeholder="internal.example.com" />
+            <FieldDescription>One per line, each allowing the name and everything beneath it.</FieldDescription>
+          </Field>
+        </div>
+        <div className="flex flex-wrap items-center gap-6">
+          <div className="flex items-center gap-2">
+            <Input
+              id="profile-max-names"
+              type="number"
+              min={1}
+              max={MAX_NAMES}
+              step={1}
+              className="w-20"
+              aria-invalid={!maxNamesOk}
+              value={maxNames}
+              onChange={(e) => setMaxNames(e.target.value)}
+              placeholder="Any"
+            />
+            <FieldLabel htmlFor="profile-max-names" className="font-normal">
+              names at most
+            </FieldLabel>
+          </div>
+          <div className="flex items-center gap-2">
+            <Checkbox id="profile-wildcards" checked={wildcards} onCheckedChange={(checked) => setWildcards(checked === true)} />
+            <FieldLabel htmlFor="profile-wildcards" className="font-normal">
+              Wildcards allowed
+            </FieldLabel>
+          </div>
         </div>
       </FieldSet>
       <Field>

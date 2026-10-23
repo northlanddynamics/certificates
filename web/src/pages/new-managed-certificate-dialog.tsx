@@ -17,7 +17,7 @@ import { api, can, ownerFromKey, ownerKey, type CertificateProfile, type Managed
 import { KEY_ALGORITHM_LABELS, type KeyAlgorithm } from "@/lib/csr-generator";
 import { nameProblems, splitNames } from "@/lib/csr-names";
 import { chosenValidityLabel, findIssuingCa, permitsOnlyLabel } from "@/lib/private-ca";
-import { CUSTOM, keyStepFor, profileOptions, stepsFor } from "@/lib/profile-choice";
+import { CUSTOM, keyStepFor, nameRulesLabel, profileOptions, stepsFor } from "@/lib/profile-choice";
 
 type Org = Me["organizations"][number];
 
@@ -111,6 +111,7 @@ function NewManagedCertificateForm({
   const [profileValue, setProfileValue] = useState<string | null>(null);
   const profile = profiles.data?.items.find((p) => p.enabled && p.id === profileValue);
   const keyStep = keyStepFor(profile, choice.keyAlgorithms);
+  const profileRules = profileRulesText(profile, direct);
   const { keyAlgorithms } = keyStep;
   const [names, setNames] = useState("");
   const [keyAlgorithm, setKeyAlgorithm] = useState<KeyAlgorithm>("ecdsa-p256");
@@ -185,17 +186,21 @@ function NewManagedCertificateForm({
             {direct ? "Issuance starts as soon as it is created." : "An Approver must approve it before any Certificate is issued."}
           </FieldDescription>
           <RadioGroup value={profileValue ?? ""} onValueChange={setProfileValue}>
-            {profileChoices.map(({ value, title, description }) => (
-              <FieldLabel key={value} htmlFor={`new-mc-profile-${value}`}>
-                <Field orientation="horizontal">
-                  <FieldContent>
-                    <FieldTitle>{title}</FieldTitle>
-                    {description && <FieldDescription>{description}</FieldDescription>}
-                  </FieldContent>
-                  <RadioGroupItem value={value} id={`new-mc-profile-${value}`} />
-                </Field>
-              </FieldLabel>
-            ))}
+            {profileChoices.map(({ value, title, description }) => {
+              const rules = profileRulesText(profiles.data?.items.find((p) => p.id === value), direct);
+              return (
+                <FieldLabel key={value} htmlFor={`new-mc-profile-${value}`}>
+                  <Field orientation="horizontal">
+                    <FieldContent>
+                      <FieldTitle>{title}</FieldTitle>
+                      {description && <FieldDescription>{description}</FieldDescription>}
+                      {rules && <FieldDescription>Names: {rules}</FieldDescription>}
+                    </FieldContent>
+                    <RadioGroupItem value={value} id={`new-mc-profile-${value}`} />
+                  </Field>
+                </FieldLabel>
+              );
+            })}
           </RadioGroup>
         </FieldSet>
       )}
@@ -226,6 +231,11 @@ function NewManagedCertificateForm({
             />
             <FieldDescription>One per line; wildcards as *.example.com. The certificate is issued for exactly these names.</FieldDescription>
             {!profile && chosenCa && <FieldDescription>{permitsOnlyLabel(chosenCa)}</FieldDescription>}
+            {profile && profileRules && (
+              <FieldDescription>
+                Names through {profile.name}: {profileRules}
+              </FieldDescription>
+            )}
             {names.trim() !== "" && problems.map((problem) => <FieldError key={problem}>{problem}</FieldError>)}
           </Field>
           {parsedNames.length > 0 && problems.length === 0 && (
@@ -322,6 +332,13 @@ function NewManagedCertificateForm({
 function profileIssuerTitle(profile: CertificateProfile, choice: ReturnType<typeof useIssuerChoice>) {
   const { issuer } = profile;
   return issuer.kind === "acme" ? acmeCaName(choice.acmeCas, issuer.acmeCaId) : (findIssuingCa(choice.activeCas, issuer.issuingCaId)?.name ?? "A Private CA of the Organization");
+}
+
+/** A profile's name rules in words, saying when the caller is not held to them; none for no profile, or one without rules. */
+function profileRulesText(profile: CertificateProfile | undefined, direct: boolean) {
+  const rules = profile && nameRulesLabel(profile.nameRules);
+  if (!rules) return null;
+  return direct ? `${rules} As an Organization Administrator, you are held only to the CA's limits.` : rules;
 }
 
 /** The validity a profile fixes, in words; none for an ACME CA, which decides its own. */

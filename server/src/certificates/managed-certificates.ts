@@ -19,6 +19,7 @@ import { InventoryQuery, inventoryCondition } from "./inventory-filters";
 import { refusalMessage, type Issuances } from "../issuance/issuance";
 import { Certificate, CertificateFacts, Issuance, ManagedCertificate, ManagedCertificateParams, RenewalPolicy, toCertificate, toIssuance, type ManagedCertificateReader } from "./managed-certificate-reader";
 import { requestedThrough } from "./certificate-profiles";
+import { profileNamesRefusal } from "./profile-name-rules";
 import { checkNamesAndCsr, csrField, namesField } from "./names-and-csr";
 import { OwnerRef, addOwner } from "./owners";
 import { roleCan } from "../tenancy/permissions";
@@ -92,6 +93,7 @@ export function registerManagedCertificates(ctx: {
           "Names outside the Issuing CA's permitted name rules are refused with 422, which names them, as is a `validityDays` above its maximum; `validityDays` with an ACME CA is refused with 400. " +
         "Given `profileId`, a Certificate Profile of the Organization fixes its issuer, validity and Renewal Policy, which are copied onto it, so giving `issuer`, `acmeCaId`, `validityDays` or `renewalPolicy` too is refused with 400. " +
         "The key algorithm must be one the profile allows, and the profile must be enabled and its issuer still usable (an ACME CA the Organization has an ACME Account with, or an active Issuing CA), or it is refused with 422; the issuer's own checks then apply as above. " +
+        "A non-administrator's names must keep to the profile's name rules as they are now (422, naming the names that do not); an Organization Administrator is held only to the issuer's limits. " +
         "The requester and the profile's default Team become Owners, with any Owners named.",
       request: {
         params: OrgParam,
@@ -136,6 +138,9 @@ export function registerManagedCertificates(ctx: {
       const { names, csr } = await checkNamesAndCsr(body);
       let issuer;
       if (through) {
+        // A non-administrator keeps to the profile's name rules as they are now; everyone to the issuer's limits after them.
+        const outside = needsApproval ? profileNamesRefusal(through.profile.name, through.nameRules, names) : undefined;
+        if (outside) throw new HttpError(422, outside);
         const refusal = await issuerRefusal(db, orgId, through.issuer, { names, validityDays: through.validityDays, keyAlgorithm: body.keyAlgorithm });
         if (refusal) throw new HttpError(refusal.status, refusal.message);
         issuer = through.issuer;
