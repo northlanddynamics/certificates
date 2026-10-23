@@ -1,6 +1,7 @@
 // The server's own list of the reasons each kind of issuer takes, from a module that imports only types.
 import { ISSUING_CA_REVOCATION_REASONS, REVOCATION_REASONS_OF, type RevocationReason } from "../../../server/src/pki/revocation-reasons";
 import type { KeyAlgorithm } from "./csr-generator";
+import type { ProfileNameRules } from "./profile-choice";
 import type { DeviceExtendedKeyUsage, DeviceKeyType, DeviceKeyUsage } from "../../../server/src/enrollment/enrollment-profile-kinds";
 
 // The web UI talks only to the platform's HTTP API (described by /api/openapi.json).
@@ -576,6 +577,8 @@ export interface CertificateProfile {
   renewalPolicy: RenewalPolicy;
   /** The Team made co-Owner of each Managed Certificate made from it. */
   defaultTeam: { id: string; name: string } | null;
+  /** What a non-administrator's names must keep to, as they are now: within `exact` or `zones` (any name when both are empty), at most `maxNames`, and no wildcard unless `wildcards`. */
+  nameRules: ProfileNameRules;
   enabled: boolean;
   createdAt: string;
 }
@@ -588,6 +591,7 @@ export interface CertificateProfileChanges {
   validityDays: number | null;
   renewalPolicy: RenewalPolicy;
   defaultTeamId: string | null;
+  nameRules: ProfileNameRules;
 }
 export interface NotificationChannel {
   id: string;

@@ -669,6 +669,14 @@ export const certificateProfile = pgTable(
     renewalDaysBeforeExpiry: integer("renewal_days_before_expiry").notNull().default(30),
     /** The Team made co-Owner of each Managed Certificate made from it; none when the Team is deleted. */
     defaultTeamId: text("default_team_id").references(() => team.id, { onDelete: "set null" }),
+    /**
+     * Its name rules (profile-name-rules.ts), which a non-administrator's names must keep to, checked as they are now:
+     * exact names and zones (none of either for any name), the most names a request may carry, and whether wildcards are allowed.
+     */
+    allowedExactNames: text("allowed_exact_names").array().notNull().default(sql`'{}'`),
+    allowedZones: text("allowed_zones").array().notNull().default(sql`'{}'`),
+    maxNames: integer("max_names"),
+    wildcardsAllowed: boolean("wildcards_allowed").notNull().default(true),
     /** Whether members may request through it; a disabled profile issues nothing. */
     enabled: boolean("enabled").notNull().default(true),
     createdAt: timestamp("created_at", { withTimezone: true }).notNull().defaultNow(),
@@ -684,6 +692,7 @@ export const certificateProfile = pgTable(
     check("certificate_profile_key_algorithms", sql`cardinality(${t.allowedKeyAlgorithms}) >= 1`),
     check("certificate_profile_renewal_mode", sql`${t.renewalMode} in ('automatic', 'manual')`),
     check("certificate_profile_renewal_days", sql`${t.renewalDaysBeforeExpiry} between 1 and 365`),
+    check("certificate_profile_max_names", sql`${t.maxNames} is null or ${t.maxNames} >= 1`),
     foreignKey({ columns: [t.issuingCaId, t.organizationId], foreignColumns: [issuingCa.id, issuingCa.organizationId] }),
   ],
 );

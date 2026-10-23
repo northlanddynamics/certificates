@@ -379,6 +379,13 @@
       "when": 1792766910925,
       "tag": "0053_managed_certificate_profile",
       "breakpoints": true
+    },
+    {
+      "idx": 54,
+      "version": "7",
+      "when": 1792774310449,
+      "tag": "0054_certificate_profile_name_rules",
+      "breakpoints": true
     }
   ]
 }

@@ -14,6 +14,7 @@ import { checkNamesAndCsr, csrField, namesField } from "./names-and-csr";
 import { applyNames, endPendingNameChange, lockManagedCertificate, pendingNameChanges, refusalToChangeNames, validityChangeDetail } from "./name-change";
 import { issuerOf } from "../issuance/issuer";
 import { roleCan } from "../tenancy/permissions";
+import { profileNamesRefusalFor } from "./certificate-profiles";
 import { issuerRefusal, validityDaysField } from "../private-ca/private-ca";
 import type { Actor, UnitOfWork } from "../platform/unit-of-work";
 
@@ -38,6 +39,7 @@ export function registerNameChangeRoutes(ctx: {
       description:
         "For a Managed Certificate issued from a Private CA, the new names must be within its Issuing CA's permitted name rules, and the change may give it another `validityDays` " +
         "(null for the Issuing CA's default; when not given, it keeps its own), at most the Issuing CA's maximum (422 above it, and 400 for one from an ACME CA). " +
+        "For one made from a Certificate Profile, an Owner's new names must keep to the profile's name rules as they are now (422, naming the names that do not); an Organization Administrator is held only to the issuer's limits. " +
         "An Organization Administrator's change applies at once and an Issuance of the new names begins. An Owner's waits for an Approver to approve it, " +
         "and until then Renewal continues with the last approved names and CSR; at most one is pending at a time. The CSR must be for the key algorithm of the Managed Certificate and ask for exactly the new names.",
       request: {
@@ -76,6 +78,9 @@ export function registerNameChangeRoutes(ctx: {
         if (sameNames(names, mc.names)) {
           throw new HttpError(422, "the Managed Certificate already has the same names; to replace only its CSR, upload a new one");
         }
+        // An Owner who is not an Organization Administrator keeps to the name rules of the profile it was made from, as they are now.
+        const outside = needsApproval && mc.certificateProfileId !== null ? await profileNamesRefusalFor(tx, mc.certificateProfileId, names) : undefined;
+        if (outside) throw new HttpError(422, outside);
         // Only a validity asked for is checked: one it keeps is clipped at Issuance to a maximum lowered since.
         const refused = await issuerRefusal(tx, orgId, issuerOf(mc), { names, validityDays: body.validityDays ?? null, keyAlgorithm: csr.keyAlgorithm });
         if (refused) throw new HttpError(refused.status, refused.message);
