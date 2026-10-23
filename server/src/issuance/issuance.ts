@@ -407,6 +407,8 @@ export function createIssuances({ db, unitOfWork, issuers, dcv }: IssuancesDeps)
         target: { type: "managed_certificate", id },
         detail: { issuanceId: row!.id, ...(renewal && { renewal }), ...issuerDetail(issuerOf(mc)) },
       });
+      // Whatever blocked its Renewal no longer does; one blocked again later is told of again.
+      if (mc.renewalBlockedAt) await tx.update(managedCertificate).set({ renewalBlockedAt: null }).where(eq(managedCertificate.id, id));
       if (!awaitingKey) change.afterCommit(() => start(row!.id));
       return { issuanceId: row!.id };
     },

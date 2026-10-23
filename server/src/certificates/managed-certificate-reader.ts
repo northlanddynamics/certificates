@@ -109,7 +109,7 @@ export const Renewal = z.object({
       profile: z.object({ id: z.string(), name: z.string() }).openapi({ description: "The disabled Certificate Profile it was made from." }),
     })
     .nullable()
-    .openapi({ description: "Set while it is not renewed because the Certificate Profile it was made from is disabled: \"Renewal blocked\". It renews again once the profile is enabled." }),
+    .openapi({ description: "Set while it is due and not renewed because the Certificate Profile it was made from is disabled: \"Renewal blocked\". It renews on the scheduler's next pass once the profile is enabled." }),
 });
 
 const Issuer = z
@@ -354,7 +354,8 @@ export function createManagedCertificateReader({ db, authorize, clock, agentOffl
                 nextAttemptAt: nextAttemptAt(policy, current!, failed, ari?.window ?? null)?.toISOString() ?? null,
               }
             : null,
-          blocked: row.renewalBlockedAt && profile ? { since: row.renewalBlockedAt.toISOString(), profile: { id: profile.id, name: profile.name } } : null,
+          // Only while it is still held up: it would renew automatically, and its profile is still disabled.
+          blocked: row.renewalBlockedAt && policy.mode === "automatic" && !row.archivedAt && profile && !profile.enabled ? { since: row.renewalBlockedAt.toISOString(), profile: { id: profile.id, name: profile.name } } : null,
         },
         issuance: latest ? toIssuance(latest) : null,
         currentCertificate: current ? toCertificate(current, revocations.get(current.id)) : null,

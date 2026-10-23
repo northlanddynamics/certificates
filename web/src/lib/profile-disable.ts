@@ -8,7 +8,7 @@ export interface ProfilePending {
 }
 
 /** What disabling a profile holds, as reading it reports: its live Managed Certificates, which stop renewing, and what awaits Approval under it. */
-export interface ProfileHeld {
+export interface ProfileDisableCounts {
   linked: number;
   pending: ProfilePending;
 }
@@ -16,7 +16,7 @@ export interface ProfileHeld {
 const counted = (n: number, one: string) => `${n} ${one}${n === 1 ? "" : "s"}`;
 
 /** What stops once the profile is disabled: requests, the Renewal of its live Managed Certificates, and the pending decisions it holds. */
-export function disableConsequence({ linked, pending: { proposals, nameChanges } }: ProfileHeld): string {
+export function disableConsequence({ linked, pending: { proposals, nameChanges } }: ProfileDisableCounts): string {
   const stops = "Nobody can request a certificate through it, Organization Administrators included, until it is enabled again.";
   const renewing =
     linked === 0

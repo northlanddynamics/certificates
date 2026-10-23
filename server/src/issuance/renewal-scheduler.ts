@@ -3,11 +3,12 @@
 // is due, and what to wait for after a failure, are read from the Managed Certificates and their Issuances, so a pass
 // that is repeated, or run by two platform instances at once, starts a Renewal once (a Managed Certificate has at most
 // one Issuance running). One whose Certificate Profile is disabled is not renewed (issuance.ts refuses to begin): the
-// first pass that finds it due marks it renewal-blocked and tells its Subscribers, and later passes find it marked and
-// tell nobody again, until enabling the profile clears the mark. Its time is the clock it is given, so tests control it.
+// first pass that finds it due marks it renewal-blocked and tells its Subscribers, and later passes leave it alone while
+// the profile stays disabled. The next Issuance that begins clears the mark, so one blocked again is told of again. Its
+// time is the clock it is given, so tests control it.
 import { and, eq, isNull, or, sql } from "drizzle-orm";
 import type { Db } from "../platform/db/client";
-import { issuance, managedCertificate, renewalInfo } from "../platform/db/schema";
+import { certificateProfile, issuance, managedCertificate, renewalInfo } from "../platform/db/schema";
 import { renewsAutomatically, type Issuances } from "./issuance";
 import type { Issuers } from "./issuer";
 import { currentCertificates, failuresOf, nextAttemptAt } from "./renewal";
@@ -58,6 +59,8 @@ export function createRenewalScheduler({
               sql`${renewalInfo.windowStart} <= ${now}`,
             ),
             sql`not exists (select 1 from ${issuance} where ${issuance.managedCertificateId} = ${managedCertificate.id} and ${issuance.status} = 'running')`,
+            // Marked blocked, and its profile still disabled: nothing to do until it is enabled.
+            sql`not (${managedCertificate.renewalBlockedAt} is not null and exists (select 1 from ${certificateProfile} where ${certificateProfile.id} = ${managedCertificate.certificateProfileId} and not ${certificateProfile.enabled}))`,
           ),
         );
       const failures = await failuresOf(db, candidates.map((c) => c.managedCertificate.id));
@@ -71,8 +74,8 @@ export function createRenewalScheduler({
         try {
           // Decided again under a lock: a change made since the pass began (a switch to manual, an archive, another Issuance) wins.
           const begun = await unitOfWork.run(null, async (tx, change) => {
-            const begun = await issuances.begin(tx, change, null, mc, "scheduled");
-            if ("refused" in begun && begun.refused === "profile_disabled") {
+            const outcome = await issuances.begin(tx, change, null, mc, "scheduled");
+            if ("refused" in outcome && outcome.refused === "profile_disabled") {
               // Marked once: a pass that finds it marked already has told its Subscribers.
               const marked = await tx
                 .update(managedCertificate)
@@ -82,11 +85,11 @@ export function createRenewalScheduler({
               if (marked.length > 0) {
                 await notifications.notify(tx, change, mc, {
                   event: "renewal.blocked",
-                  detail: { certificateProfile: { id: mc.certificateProfileId!, name: begun.profile! }, dueAt: at.toISOString() },
+                  detail: { certificateProfile: { id: mc.certificateProfileId!, name: outcome.profile! }, dueAt: at.toISOString() },
                 });
               }
             }
-            return begun;
+            return outcome;
           });
           if ("issuanceId" in begun) started++;
         } catch (err) {

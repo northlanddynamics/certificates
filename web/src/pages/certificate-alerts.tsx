@@ -95,8 +95,9 @@ function Pending({ title, children, mayDecide, proposedByMe, onApprove, onReject
 }
 
 /**
- * What needs attention before anything else on a Managed Certificate: a Renewal blocked by a disabled Certificate Profile, the automation's latest failure, with the means to try
- * again, and a Proposal or Name Change waiting for Approval, with the means to decide it. Nothing shows when there is none.
+ * What needs attention before anything else on a Managed Certificate: a Renewal blocked by a disabled Certificate Profile,
+ * the automation's latest failure, with the means to try again, and a Proposal or Name Change waiting for Approval, with
+ * the means to decide it. Nothing shows when there is none.
  */
 export function AlertStrip({ org, m, userId, onChanged }: { org: Me["organizations"][number]; m: ManagedCertificate; userId?: string; onChanged: () => void }) {
   const owns = isOwner(m, userId);

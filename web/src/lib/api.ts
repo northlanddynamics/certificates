@@ -2,7 +2,7 @@
 import { ISSUING_CA_REVOCATION_REASONS, REVOCATION_REASONS_OF, type RevocationReason } from "../../../server/src/pki/revocation-reasons";
 import type { KeyAlgorithm } from "./csr-generator";
 import type { ProfileNameRules } from "./profile-choice";
-import type { ProfileHeld } from "./profile-disable";
+import type { ProfileDisableCounts } from "./profile-disable";
 import type { DeviceExtendedKeyUsage, DeviceKeyType, DeviceKeyUsage } from "../../../server/src/enrollment/enrollment-profile-kinds";
 
 // The web UI talks only to the platform's HTTP API (described by /api/openapi.json).
@@ -832,8 +832,8 @@ export const api = {
     }),
   updateCertificateProfile: (orgId: string, id: string, body: Partial<CertificateProfileChanges>) =>
     call<CertificateProfile>(`/api/organizations/${orgId}/certificate-profiles/${id}`, { method: "PATCH", body }),
-  /** The profile, with what awaits Approval under it. */
-  certificateProfile: (orgId: string, id: string) => call<CertificateProfile & ProfileHeld>(`/api/organizations/${orgId}/certificate-profiles/${id}`),
+  /** The profile, with how many live Managed Certificates are linked to it and what awaits Approval under it. */
+  certificateProfile: (orgId: string, id: string) => call<CertificateProfile & ProfileDisableCounts>(`/api/organizations/${orgId}/certificate-profiles/${id}`),
   disableCertificateProfile: (orgId: string, id: string) => call<CertificateProfile>(`/api/organizations/${orgId}/certificate-profiles/${id}/disable`, { method: "POST", body: {} }),
   enableCertificateProfile: (orgId: string, id: string) => call<CertificateProfile>(`/api/organizations/${orgId}/certificate-profiles/${id}/enable`, { method: "POST", body: {} }),
   createPrivateCa: (orgId: string, body: NewPrivateCa) => call<PrivateCa>(`/api/organizations/${orgId}/private-cas`, { body }),

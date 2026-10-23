@@ -171,18 +171,21 @@ export async function profileNameChangeRefusal(db: Db | Tx, profileId: string, n
   return disabledRefusal(row!) ?? (heldToNameRules ? profileNamesRefusal(row!.name, nameRulesOf(row!), names) : undefined);
 }
 
+/** The profile's Managed Certificates that are not archived. */
+const liveOf = (profileId: string) => and(eq(managedCertificate.certificateProfileId, profileId), isNull(managedCertificate.archivedAt));
+
 /** How many live Managed Certificates are linked to the profile: approved, or made without needing Approval, and not archived. */
 async function linkedOf(db: Db, profileId: string) {
   const [linked] = await db
     .select({ n: count() })
     .from(managedCertificate)
-    .where(and(eq(managedCertificate.certificateProfileId, profileId), isNull(managedCertificate.archivedAt), inArray(managedCertificate.approvalStatus, ["approved", "not_required"])));
+    .where(and(liveOf(profileId), inArray(managedCertificate.approvalStatus, ["approved", "not_required"])));
   return linked!.n;
 }
 
 /** How many Proposals through the profile, and Name Changes of what was made from it, await Approval; not those of an archived Managed Certificate, which cannot be approved. */
 async function pendingOf(db: Db, profileId: string) {
-  const live = and(eq(managedCertificate.certificateProfileId, profileId), isNull(managedCertificate.archivedAt));
+  const live = liveOf(profileId);
   const [proposals] = await db
     .select({ n: count() })
     .from(managedCertificate)
@@ -431,8 +434,6 @@ export function registerCertificateProfiles(ctx: {
           const [current] = await tx.select().from(certificateProfile).where(eq(certificateProfile.id, id)).for("update");
           if (current!.enabled === enabled) throw new HttpError(409, `the Certificate Profile is already ${enabled ? "enabled" : "disabled"}`);
           const [row] = await tx.update(certificateProfile).set({ enabled }).where(eq(certificateProfile.id, id)).returning();
-          // What the scheduler found blocked renews again on its next pass, and is told of afresh if blocked again.
-          if (enabled) await tx.update(managedCertificate).set({ renewalBlockedAt: null }).where(eq(managedCertificate.certificateProfileId, id));
           await change.audit({
             organizationId: orgId,
             action: enabled ? "certificate_profile.enabled" : "certificate_profile.disabled",

@@ -27,8 +27,7 @@ export function RenewNowButton({ org, m, userId, onChanged }: { org: Me["organiz
   // The server decides; this only keeps the button from those who surely may not (a Team's members may, too).
   const owns = isOwner(m, userId);
   const renew = useMutation({ mutationFn: () => api.renewNow(org.id, m.id), onSuccess: onChanged });
-  // Nothing is issued under a disabled Certificate Profile, so the server would refuse.
-  if (m.archivedAt || !m.currentCertificate || m.profile?.enabled === false || m.approval.status === "pending" || m.approval.status === "rejected" || !(can(org, "managedCertificate", "renew") || owns)) return null;
+  if (m.archivedAt || !m.currentCertificate || m.approval.status === "pending" || m.approval.status === "rejected" || !(can(org, "managedCertificate", "renew") || owns)) return null;
   return (
     <>
       <Button disabled={renew.isPending || m.issuance?.status === "running"} onClick={() => renew.mutate()}>

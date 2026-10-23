@@ -169,6 +169,40 @@ describe("while its Certificate Profile is disabled, a due Managed Certificate",
     expect((await api(`/managed-certificates/${mc}/archive`, { body: {} })).status).toBe(200);
   });
 
+  test("the notice reaches webhook channels as the renewal.blocked event, naming the profile", async () => {
+    const profile = await createProfile();
+    const mc = await issuedFrom(profile);
+    const channel = await api("/notification-channels", { body: { name: "SIEM", kind: "webhook", url: "https://hooks.example.test/T000/B000/s3cr3t" } });
+    expect(channel.status).toBe(201);
+    expect((await api(`/managed-certificates/${mc}/subscribers`, { body: { type: "channel", id: channel.body.id } })).status).toBe(200);
+    await disable(profile);
+    h.setNow(days(60));
+    await h.runRenewalScheduler();
+    await h.deliverNotices();
+    expect(h.webhooks.sent.map((w) => w.body)).toEqual([
+      expect.objectContaining({
+        event: "renewal.blocked",
+        managedCertificate: expect.objectContaining({ id: mc }),
+        detail: { certificateProfile: { id: profile, name: "Internal web" }, dueAt: days(60).toISOString() },
+        subject: "www.internal.acme: Renewal blocked",
+      }),
+    ]);
+  });
+
+  test("is no longer shown as blocked once it would not renew anyway: switched to manual, or archived", async () => {
+    const profile = await createProfile();
+    const manual = await issuedFrom(profile);
+    const archived = await issuedFrom(profile);
+    await disable(profile);
+    h.setNow(days(60));
+    await h.runRenewalScheduler();
+    expect((await read(manual)).renewal.blocked).not.toBeNull();
+    await api(`/managed-certificates/${manual}/renewal-policy`, { method: "PUT", body: { mode: "manual", daysBeforeExpiry: 30 } });
+    await api(`/managed-certificates/${archived}/archive`, { body: {} });
+    expect((await read(manual)).renewal.blocked).toBeNull();
+    expect((await read(archived)).renewal.blocked).toBeNull();
+  });
+
   test("expiry notices continue as usual", async () => {
     const profile = await createProfile();
     await issuedFrom(profile);
