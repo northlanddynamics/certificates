@@ -133,7 +133,7 @@ export function AlertStrip({ org, m, userId, onChanged }: { org: Me["organizatio
           <AlertTitle>Renewal blocked</AlertTitle>
           <AlertDescription>
             It was due for Renewal {when(blocked.since)}, but the Certificate Profile {blocked.profile.name} it was made from is disabled, so nothing is issued under it. It renews
-            once an Organization Administrator enables the profile again.
+            once an Organization Administrator enables the profile again, or detaches it from the profile.
           </AlertDescription>
         </Alert>
       )}

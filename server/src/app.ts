@@ -46,6 +46,7 @@ import { registerIssuerRoutes } from "./issuance/issuer-routes";
 import { createManagedCertificateReader } from "./certificates/managed-certificate-reader";
 import { registerManagedCertificates } from "./certificates/managed-certificates";
 import { registerCertificateProfiles } from "./certificates/certificate-profiles";
+import { registerProfileDetachRoutes } from "./certificates/profile-detach-routes";
 import { discardNameChangesOfRemoved } from "./certificates/name-change";
 import { registerNameChangeRoutes } from "./certificates/name-change-routes";
 import { registerOwnerRoutes } from "./certificates/owner-routes";
@@ -367,6 +368,7 @@ export function createApp(deps: AppDeps) {
   registerApprovals({ app, db, requireUser, authorize, unitOfWork, issuances, reader, notifications });
   registerArchiveRoutes({ app, requireUser, authorize, unitOfWork, issuances, reader });
   registerIssuerRoutes({ app, requireUser, authorize, unitOfWork, reader });
+  registerProfileDetachRoutes({ app, requireUser, authorize, unitOfWork, reader });
   registerRevocationRoutes({ app, db, requireUser, unitOfWork, reader, issuers });
   registerHistory({ app, db, requireUser, reader });
   registerDeploymentScripts({ app, db, requireUser, authorize, unitOfWork });

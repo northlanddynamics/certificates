@@ -45,6 +45,7 @@ export const AUDIT_ACTIONS = [
   "managed_certificate.names_changed",
   "managed_certificate.archived",
   "managed_certificate.issuer_changed",
+  "managed_certificate.profile_detached",
   "certificate.revoked",
   "private_ca.created",
   "private_ca.issuing_ca_added",

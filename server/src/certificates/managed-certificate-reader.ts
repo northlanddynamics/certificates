@@ -109,7 +109,7 @@ export const Renewal = z.object({
       profile: z.object({ id: z.string(), name: z.string() }).openapi({ description: "The disabled Certificate Profile it was made from." }),
     })
     .nullable()
-    .openapi({ description: "Set while it is due and not renewed because the Certificate Profile it was made from is disabled: \"Renewal blocked\". It renews on the scheduler's next pass once the profile is enabled." }),
+    .openapi({ description: "Set while it is due and not renewed because the Certificate Profile it was made from is disabled: \"Renewal blocked\". It renews on the scheduler's next pass once the profile is enabled, or it is detached from the profile." }),
 });
 
 const Issuer = z

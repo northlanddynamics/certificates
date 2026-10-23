@@ -857,6 +857,8 @@ export const api = {
   /** Repoints a Managed Certificate issued from a Private CA to another Issuing CA; its next Issuance comes from there. */
   changeIssuer: (orgId: string, id: string, issuingCaId: string) =>
     call<ManagedCertificate>(`/api/organizations/${orgId}/managed-certificates/${id}/issuer`, { method: "PUT", body: { issuer: { kind: "private_ca", issuingCaId } } }),
+  /** Detaches a Managed Certificate from its Certificate Profile: it keeps its settings and Owners, and the profile's name rules and disabled state no longer apply. */
+  detachProfile: (orgId: string, id: string) => call<ManagedCertificate>(`/api/organizations/${orgId}/managed-certificates/${id}/profile`, { method: "DELETE" }),
   enrollmentProfiles: (orgId: string) => call<{ items: EnrollmentProfile[] }>(`/api/organizations/${orgId}/enrollment-profiles`),
   enrollmentProfile: (orgId: string, id: string) => call<EnrollmentProfile>(`/api/organizations/${orgId}/enrollment-profiles/${id}`),
   /** A page of the Device Certificates a profile issued, newest first: `q` searches subject, names, serial and device ID. */

@@ -54,7 +54,7 @@ Each resource's verbs, as of this writing. New ones may be added within version 
 | `dns_provider` | `created`, `changed`, `secret_replaced`, `tested`, `relay_changed` |
 | `validation_zone` | `created`, `deleted` |
 | `dcv_rule` | `created`, `changed`, `deleted` |
-| `managed_certificate` | `created`, `proposed`, `approved`, `rejected`, `owner_added`, `owner_removed`, `subscriber_added`, `subscriber_removed`, `renewal_policy_changed`, `csr_uploaded`, `names_changed`, `archived`, `issuer_changed` |
+| `managed_certificate` | `created`, `proposed`, `approved`, `rejected`, `owner_added`, `owner_removed`, `subscriber_added`, `subscriber_removed`, `renewal_policy_changed`, `csr_uploaded`, `names_changed`, `archived`, `issuer_changed`, `profile_detached` |
 | `certificate` | `revoked` |
 | `certificate_profile` | `created`, `updated`, `disabled`, `enabled` |
 | `private_ca` | `created`, `issuing_ca_added`, `csr_signed`, `updated`, `retired`, `revoked`, `crl_published` |
@@ -110,6 +110,8 @@ Adding a custom ACME CA records `acme_ca.created`, with its `name`, `directoryUr
 `certificate_profile.updated` targets the Certificate Profile an Organization Administrator edited. Its `detail` has the profile's `name` (its new one, when renamed) and the `changes`, each `{ "from": ..., "to": ... }`, of whichever of `name`, `description`, `issuer`, `allowedKeyAlgorithms`, `validityDays`, `renewalPolicy`, `defaultTeam` and `nameRules` changed, in the shapes `certificate_profile.created` gives them. Managed Certificates already made from it are not changed, and new `nameRules` do not re-check pending Proposals. A change that changes nothing is not audited.
 
 `certificate_profile.disabled` targets the Certificate Profile an Organization Administrator disabled, and `certificate_profile.enabled` the one they enabled again. Each `detail` has the profile's `name`. While it is disabled nothing is issued under it: requests through it are refused, and its pending Proposals and Name Changes stay pending, rejectable but not approvable.
+
+`managed_certificate.profile_detached` targets the Managed Certificate an Organization Administrator detached from the Certificate Profile it was made from. Its `detail` has its `names` and the `certificateProfile`, `{ "id": ..., "name": ... }`. Nothing else about it changes: it keeps the settings copied from the profile and its Owners, and is no longer held to the profile's name rules or stopped by it being disabled.
 
 A Managed Certificate requested through a Certificate Profile has `certificateProfile`, `{ "id": ..., "name": ... }` (the profile's name then), in the `detail` of its `managed_certificate.created` or `managed_certificate.proposed`, with the issuer, the `validityDays` (when the profile fixes one) and the `renewalPolicy` copied from the profile. One made without a profile has `renewalPolicy` only when its request gave one. The requester and the profile's default Team, as well as any Owners named, are each audited as `managed_certificate.owner_added`.
 
