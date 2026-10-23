@@ -46,9 +46,16 @@ export function profileOptions(profiles: readonly ProfileChoosable[], customOpen
   ];
 }
 
-/** The dialog's steps: the profile step only when there are profiles to offer, and no Authority step once a profile is chosen, which fixes the issuer. */
-export function stepsFor<S extends { id: string }>(steps: readonly S[], { profilesOffered, profile }: { profilesOffered: boolean; profile: ProfileChoosable | undefined }): S[] {
-  return steps.filter((s) => (s.id !== "profile" || profilesOffered) && (s.id !== "authority" || !profile));
+/**
+ * The dialog's steps: the profile step only when there are profiles to offer, and no Authority step once a profile is
+ * chosen, which fixes the issuer. Without Custom (`customOpen` false) there is no request but through a profile: the
+ * profile step is always shown, to say so when there is none to offer, and the Authority step never.
+ */
+export function stepsFor<S extends { id: string }>(
+  steps: readonly S[],
+  { profilesOffered, customOpen, profile }: { profilesOffered: boolean; customOpen: boolean; profile: ProfileChoosable | undefined },
+): S[] {
+  return steps.filter((s) => (s.id !== "profile" || profilesOffered || !customOpen) && (s.id !== "authority" || (customOpen && !profile)));
 }
 
 /**

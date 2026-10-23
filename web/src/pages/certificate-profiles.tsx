@@ -12,6 +12,7 @@ import { Checkbox } from "@/components/ui/checkbox";
 import { Dialog, DialogClose, DialogContent, DialogDescription, DialogFooter, DialogHeader, DialogTitle, DialogTrigger } from "@/components/ui/dialog";
 import { Field, FieldDescription, FieldLabel, FieldLegend, FieldSet } from "@/components/ui/field";
 import { Input } from "@/components/ui/input";
+import { Label } from "@/components/ui/label";
 import { Select, SelectContent, SelectItem, SelectTrigger, SelectValue } from "@/components/ui/select";
 import { Textarea } from "@/components/ui/textarea";
 import { acmeCaName, useAcmeCas } from "@/lib/acme-cas";
@@ -100,6 +101,35 @@ export function CertificateProfilesPage() {
       </p>
       <DataTable table={table} empty={profiles.isPending ? "Loading…" : "No Certificate Profile yet."} />
       {profiles.error && <p className="text-sm text-destructive">{profiles.error.message}</p>}
+      {mayEdit && <RequireProfileSetting orgId={orgId} />}
+    </div>
+  );
+}
+
+/** Whether those who may not create a Managed Certificate outright may propose one only through a profile; off unless turned on, and audited. */
+function RequireProfileSetting({ orgId }: { orgId: string }) {
+  const settings = useQuery({ queryKey: ["certificate-profile-settings", orgId], queryFn: () => api.certificateProfileSettings(orgId) });
+  const change = useAction((requireProfile: boolean) => api.setCertificateProfileSettings(orgId, { requireProfile }), ["certificate-profile-settings", "me", "audit-events"]);
+  return (
+    <div className="flex flex-col gap-2">
+      {settings.data && (
+        <div className="flex items-start gap-3">
+          <Checkbox
+            id="require-profile"
+            checked={settings.data.requireProfile}
+            disabled={change.isPending}
+            onCheckedChange={(checked) => change.mutate(checked === true)}
+          />
+          <div className="flex flex-col gap-1">
+            <Label htmlFor="require-profile">Require a Certificate Profile</Label>
+            <p className="text-sm text-muted-foreground">
+              Members and Approvers may propose a Managed Certificate only through a profile, with their API keys too, and are no longer offered Custom. Organization
+              Administrators are not held to it, and Name Changes of existing Managed Certificates are not affected.
+            </p>
+          </div>
+        </div>
+      )}
+      {(settings.error ?? change.error) && <p className="text-sm text-destructive">{(settings.error ?? change.error)!.message}</p>}
     </div>
   );
 }

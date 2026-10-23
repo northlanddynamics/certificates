@@ -58,6 +58,7 @@ export const AUDIT_ACTIONS = [
   "certificate_profile.updated",
   "certificate_profile.disabled",
   "certificate_profile.enabled",
+  "certificate_profile_settings.changed",
   "enrollment_profile.created",
   "enrollment_profile.updated",
   "enrollment_profile.disabled",

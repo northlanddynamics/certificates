@@ -700,6 +700,18 @@ export const certificateProfile = pgTable(
 );
 
 /**
+ * An Organization's settings for Certificate Profiles. No row is the defaults. Requiring a profile has whoever may not
+ * create a Managed Certificate outright propose one only through a profile (certificate-profile-settings.ts).
+ */
+export const certificateProfileSettings = pgTable("certificate_profile_settings", {
+  organizationId: text("organization_id")
+    .primaryKey()
+    .references(() => organization.id),
+  requireProfile: boolean("require_profile").notNull().default(false),
+  updatedAt: timestamp("updated_at", { withTimezone: true }).notNull(),
+});
+
+/**
  * A Device Certificate: one a device obtained under an Enrollment Profile. It belongs to the profile, not to a Managed
  * Certificate, and has no Owners.
  */

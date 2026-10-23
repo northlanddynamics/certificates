@@ -21,9 +21,17 @@ describe("the profile step", () => {
   });
 
   test("is shown only when there is a profile to choose; on a profile the Authority step is skipped", () => {
-    expect(ids(stepsFor(STEPS, { profilesOffered: true, profile: undefined }))).toEqual(["profile", "authority", "names", "key", "review"]);
-    expect(ids(stepsFor(STEPS, { profilesOffered: true, profile: web }))).toEqual(["profile", "names", "key", "review"]);
-    expect(ids(stepsFor(STEPS, { profilesOffered: false, profile: undefined }))).toEqual(["authority", "names", "key", "review"]);
+    expect(ids(stepsFor(STEPS, { profilesOffered: true, customOpen: true, profile: undefined }))).toEqual(["profile", "authority", "names", "key", "review"]);
+    expect(ids(stepsFor(STEPS, { profilesOffered: true, customOpen: true, profile: web }))).toEqual(["profile", "names", "key", "review"]);
+    expect(ids(stepsFor(STEPS, { profilesOffered: false, customOpen: true, profile: undefined }))).toEqual(["authority", "names", "key", "review"]);
+  });
+
+  test("hides Custom, and never offers the Authority step, when the caller may request only through a profile", () => {
+    expect(profileOptions([web, services], false).map((o) => o.title)).toEqual(["Internal web", "Services"]);
+    expect(ids(stepsFor(STEPS, { profilesOffered: true, customOpen: false, profile: undefined }))).toEqual(["profile", "names", "key", "review"]);
+    // With no profile to offer, the profile step is still shown, to say so, and nothing leads past it to the Authority step.
+    expect(profileOptions([retired], false)).toEqual([]);
+    expect(ids(stepsFor(STEPS, { profilesOffered: false, customOpen: false, profile: undefined }))).toEqual(["profile", "names", "key", "review"]);
   });
 });
 

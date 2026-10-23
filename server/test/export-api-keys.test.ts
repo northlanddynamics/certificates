@@ -315,7 +315,7 @@ describe("API keys", () => {
     expect((await download({ apiKey: key }, globex.orgId, elsewhere.id)).status).toBe(404);
   });
 
-  test("a key opens nothing but downloads, and a key cannot make or revoke keys", async () => {
+  test("a key opens nothing but downloads and requesting a Managed Certificate, and a key cannot make or revoke keys", async () => {
     const key = (await createKey(org.cookie)).body.key as string;
     const asKey = { "x-api-key": key };
     const call = (path: string, init: RequestInit = {}) => h.app.request(`http://localhost${path}`, { ...init, headers: { ...asKey, "content-type": "application/json", origin: "http://localhost" } });

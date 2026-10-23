@@ -33,7 +33,7 @@ import { ENROLLMENT_VALIDATOR_KINDS } from "./enrollment/enrollment-validator-ki
 import { createEnrollmentValidatorRuns } from "./enrollment/enrollment-validators";
 import { DEFAULT_DNS_RELAY, createDnsRelay, type DnsRelayConfig } from "./issuance/dcv/dns-relay";
 import { createDnsProviders, registerDnsProviders } from "./issuance/dcv/dns-providers";
-import { member, organization } from "./platform/db/schema";
+import { certificateProfileSettings, member, organization } from "./platform/db/schema";
 import { createAuthorizer } from "./tenancy/authorization";
 import { HttpError, errors, json } from "./platform/http";
 import { createIssuances } from "./issuance/issuance";
@@ -46,6 +46,7 @@ import { registerIssuerRoutes } from "./issuance/issuer-routes";
 import { createManagedCertificateReader } from "./certificates/managed-certificate-reader";
 import { registerManagedCertificates } from "./certificates/managed-certificates";
 import { registerCertificateProfiles } from "./certificates/certificate-profiles";
+import { registerCertificateProfileSettings } from "./certificates/certificate-profile-settings";
 import { registerProfileDetachRoutes } from "./certificates/profile-detach-routes";
 import { discardNameChangesOfRemoved } from "./certificates/name-change";
 import { registerNameChangeRoutes } from "./certificates/name-change-routes";
@@ -64,7 +65,7 @@ import { registerSubscriberRoutes } from "./certificates/subscriber-routes";
 import { removeTeamFromSubscribers, removeUserFromSubscribers } from "./certificates/subscribers";
 import { createOrganizations } from "./tenancy/organizations";
 import { createPrivateCas, registerPrivateCas } from "./private-ca/private-ca";
-import { ROLE_NAMES, permissionsOf } from "./tenancy/permissions";
+import { ROLE_NAMES, permissionsOf, roleCan } from "./tenancy/permissions";
 import { registerScep, type ScepConfig } from "./enrollment/scep";
 import { createScepTransactions } from "./enrollment/scep-transactions";
 import { createSecrets } from "./platform/crypto/secrets";
@@ -250,6 +251,8 @@ export function createApp(deps: AppDeps) {
                 role: z.string(),
                 // What the caller may do there, so clients ask "may I?" instead of comparing role names.
                 permissions: z.record(z.string(), z.array(z.string())),
+                // Whether they may request a Managed Certificate without a Certificate Profile: not while one is required of those who may not create one outright.
+                requestsWithoutProfile: z.boolean(),
               }),
             ),
             // The roles the platform accepts when assigning one.
@@ -262,9 +265,10 @@ export function createApp(deps: AppDeps) {
     async (c) => {
       const user = await requireSession(c);
       const organizations = await db
-        .select({ id: organization.id, name: organization.name, slug: organization.slug, role: member.role })
+        .select({ id: organization.id, name: organization.name, slug: organization.slug, role: member.role, requireProfile: certificateProfileSettings.requireProfile })
         .from(member)
         .innerJoin(organization, eq(organization.id, member.organizationId))
+        .leftJoin(certificateProfileSettings, eq(certificateProfileSettings.organizationId, member.organizationId))
         .where(eq(member.userId, user.id))
         .orderBy(asc(organization.createdAt), asc(organization.id));
       return c.json(
@@ -276,7 +280,11 @@ export function createApp(deps: AppDeps) {
             isPlatformOperator: user.role === PLATFORM_OPERATOR_ROLE,
             mfa: await loginPolicies.mfaOf(user),
           },
-          organizations: organizations.map((o) => ({ ...o, permissions: permissionsOf(o.role) })),
+          organizations: organizations.map(({ requireProfile, ...o }) => ({
+            ...o,
+            permissions: permissionsOf(o.role),
+            requestsWithoutProfile: !requireProfile || roleCan(o.role, { managedCertificate: ["create"] }),
+          })),
           roles: ROLE_NAMES,
         },
         200,
@@ -356,9 +364,10 @@ export function createApp(deps: AppDeps) {
     );
   });
   const reader = createManagedCertificateReader({ db, authorize, clock, agentOfflineAfterSeconds: agentGateway.offlineAfterSeconds });
-  registerManagedCertificates({ app, db, requireUser, authorize, unitOfWork, issuances, reader, acmeCas, clock, agentOfflineAfterSeconds: agentGateway.offlineAfterSeconds });
-  registerCertificateProfiles({ app, db, requireUser, authorize, unitOfWork, acmeCas });
   const apiKeys = registerApiKeys({ app, db, auth, authConfig, requireUser, authorize, admit: loginPolicies.admit, unitOfWork });
+  registerManagedCertificates({ app, db, requireUser, authorize, apiKeys, unitOfWork, issuances, reader, acmeCas, clock, agentOfflineAfterSeconds: agentGateway.offlineAfterSeconds });
+  registerCertificateProfiles({ app, db, requireUser, authorize, unitOfWork, acmeCas });
+  registerCertificateProfileSettings({ app, db, requireUser, authorize, unitOfWork });
   registerCertificateExport({ app, db, apiKeys, unitOfWork, reader, issuers });
   registerOwnerRoutes({ app, requireUser, unitOfWork, reader });
   registerSubscriberRoutes({ app, db, requireUser, unitOfWork, reader });
