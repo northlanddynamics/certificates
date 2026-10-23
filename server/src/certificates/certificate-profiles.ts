@@ -74,6 +74,59 @@ function toProfile(row: ProfileRow, defaultTeam: TeamRef | null): z.infer<typeof
 
 const isId = (id: string) => z.uuid().safeParse(id).success;
 
+/** Whether the Organization has an ACME Account with the ACME CA. */
+async function hasAcmeAccount(tx: Db | Tx, orgId: string, acmeCaId: string) {
+  const [account] = await tx
+    .select({ id: acmeAccount.id })
+    .from(acmeAccount)
+    .where(and(eq(acmeAccount.organizationId, orgId), eq(acmeAccount.acmeCaId, acmeCaId)));
+  return account !== undefined;
+}
+
+const noAcmeAccount = (caName: string) => `the Organization has no ACME Account with ${caName}; register one first`;
+
+/** What a Managed Certificate requested through a profile is made with, copied from it (ADR 0012). */
+export type RequestedThrough = {
+  profile: { id: string; name: string };
+  issuer: Issuer;
+  validityDays: number | null;
+  renewalPolicy: Policy;
+  defaultTeamId: string | null;
+};
+
+/**
+ * The Organization's profile a Managed Certificate with a key of `keyAlgorithm` is requested through, and what it is
+ * made with. A 422 when the Organization has no such profile, it is disabled, it does not allow the key algorithm, or its
+ * issuer is no longer usable: an ACME CA the Organization has no ACME Account with, or an Issuing CA that does not issue.
+ * The names, the CSR and the issuer's own limits are the request's to check, as for one made without a profile.
+ */
+export async function requestedThrough(db: Db | Tx, acmeCas: AcmeCas, orgId: string, profileId: string, keyAlgorithm: KeyAlgorithm): Promise<RequestedThrough> {
+  const [row] = isId(profileId)
+    ? await db
+        .select()
+        .from(certificateProfile)
+        .where(and(eq(certificateProfile.organizationId, orgId), eq(certificateProfile.id, profileId)))
+    : [];
+  // A disabled profile is as good as none to those who may not see it, and refused to everyone.
+  if (!row) throw new HttpError(422, "the Organization has no such Certificate Profile");
+  if (!row.enabled) throw new HttpError(422, `the Certificate Profile ${row.name} is disabled, so nothing is issued under it`);
+  if (!row.allowedKeyAlgorithms.includes(keyAlgorithm)) {
+    throw new HttpError(422, `the Certificate Profile ${row.name} allows keys of ${row.allowedKeyAlgorithms.join(", ")}, not ${keyAlgorithm}`);
+  }
+  const issuer = issuerOf(row);
+  const unusable = (why: string) => new HttpError(422, `the Certificate Profile ${row.name} cannot issue now: ${why}`);
+  if (issuer.kind === "acme") {
+    const ca = await acmeCas.find(orgId, issuer.acmeCaId);
+    if (!ca) throw unusable("the Organization has no such ACME CA");
+    if (!(await hasAcmeAccount(db, orgId, ca.id))) throw unusable(noAcmeAccount(ca.name));
+  } else {
+    const of = await findIssuingCa(db, orgId, issuer.issuingCaId);
+    const refusal = of ? issuingRefusal(of) : "the Organization has no such Issuing CA";
+    if (refusal) throw unusable(refusal);
+  }
+  return { profile: { id: row.id, name: row.name }, issuer, validityDays: row.validityDays, renewalPolicy: policyOf(row), defaultTeamId: row.defaultTeamId };
+}
+
 /** What a profile issues with, as it is checked against its issuer. */
 type Issuing = { issuer: Issuer; allowedKeyAlgorithms: KeyAlgorithm[]; validityDays: number | null };
 
@@ -99,11 +152,7 @@ export function registerCertificateProfiles(ctx: {
       if (validityDays !== null) return new HttpError(400, "a validity can be fixed only by a profile whose issuer is a Private CA");
       const ca = await acmeCas.find(orgId, issuer.acmeCaId);
       if (!ca) return new HttpError(422, "the Organization has no such ACME CA");
-      const [account] = await tx
-        .select({ id: acmeAccount.id })
-        .from(acmeAccount)
-        .where(and(eq(acmeAccount.organizationId, orgId), eq(acmeAccount.acmeCaId, ca.id)));
-      if (!account) return new HttpError(422, `the Organization has no ACME Account with ${ca.name}; register one first`);
+      if (!(await hasAcmeAccount(tx, orgId, ca.id))) return new HttpError(422, noAcmeAccount(ca.name));
       const refusal = keysRefusal({ label: ca.name });
       return refusal ? new HttpError(422, refusal) : undefined;
     }

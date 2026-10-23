@@ -7,12 +7,12 @@ import { Select, SelectContent, SelectItem, SelectTrigger, SelectValue } from "@
 import { AcmeCaTagBadge } from "@/components/acme-ca-tag";
 import { ACME_CA_FILTERS, acmeCaChoices, type AcmeCaFilter } from "@/lib/acme-ca-choices";
 import { ACME_CA_TAG_LABELS, DEFAULT_ACME_CA_ID, acmeCaName, useAcmeCas } from "@/lib/acme-cas";
-import { api, type AcmeCa, type NewManagedCertificate } from "@/lib/api";
+import { api, type AcmeCa, type IssuerRef } from "@/lib/api";
 import { KEY_ALGORITHM_LABELS, NO_KEY_ALGORITHMS } from "@/lib/csr-generator";
 import { commonNameOf, daysLabel, findIssuingCa, isValidityDays, permittedNamesLabel, validityLabel } from "@/lib/private-ca";
 
 /** The issuer chosen: an ACME CA by id, or an Issuing CA of one of the Organization's Private CAs by id. */
-export type IssuerChoice = NewManagedCertificate["issuer"];
+export type IssuerChoice = IssuerRef;
 /** The issuer as a radio button's value, and back. */
 const issuerValue = (i: IssuerChoice) => (i.kind === "acme" ? `acme:${i.acmeCaId}` : `private_ca:${i.issuingCaId}`);
 const issuerOfValue = (value: string): IssuerChoice => {

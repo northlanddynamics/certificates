@@ -17,11 +17,12 @@ import { HttpError, OrgParam, PageQuery, errors, json, pageOf } from "../platfor
 import { issuerAuditDetail, issuerColumns } from "../issuance/issuer";
 import { InventoryQuery, inventoryCondition } from "./inventory-filters";
 import { refusalMessage, type Issuances } from "../issuance/issuance";
-import { Certificate, CertificateFacts, Issuance, ManagedCertificate, ManagedCertificateParams, toCertificate, toIssuance, type ManagedCertificateReader } from "./managed-certificate-reader";
+import { Certificate, CertificateFacts, Issuance, ManagedCertificate, ManagedCertificateParams, RenewalPolicy, toCertificate, toIssuance, type ManagedCertificateReader } from "./managed-certificate-reader";
+import { requestedThrough } from "./certificate-profiles";
 import { checkNamesAndCsr, csrField, namesField } from "./names-and-csr";
 import { OwnerRef, addOwner } from "./owners";
 import { roleCan } from "../tenancy/permissions";
-import { IssuerField, issuerAsked, validityDaysField } from "../private-ca/private-ca";
+import { IssuerField, issuerAsked, issuerRefusal, validityDaysField } from "../private-ca/private-ca";
 import { revocationsOf } from "../issuance/revocation";
 import type { Actor, UnitOfWork } from "../platform/unit-of-work";
 
@@ -88,7 +89,10 @@ export function registerManagedCertificates(ctx: {
         "An Organization Administrator creates it outright and Issuance starts at once; anyone else proposes it, and it waits for an Approver to approve it, which starts Issuance. " +
         "Issuance runs in the background: the response shows it running, and the Managed Certificate shows the Certificate or the cause of the failure when it ends. " +
         "Its issuer is an ACME CA (Let's Encrypt Staging unless `acmeCaId` says otherwise; 422 for one the Organization cannot use) or, given `issuer`, an active Issuing CA of one of the Organization's Private CAs, which issues with no DCV. " +
-          "Names outside the Issuing CA's permitted name rules are refused with 422, which names them, as is a `validityDays` above its maximum; `validityDays` with an ACME CA is refused with 400.",
+          "Names outside the Issuing CA's permitted name rules are refused with 422, which names them, as is a `validityDays` above its maximum; `validityDays` with an ACME CA is refused with 400. " +
+        "Given `profileId`, a Certificate Profile of the Organization fixes its issuer, validity and Renewal Policy, which are copied onto it, so giving `issuer`, `acmeCaId`, `validityDays` or `renewalPolicy` too is refused with 400. " +
+        "The key algorithm must be one the profile allows, and the profile must be enabled and its issuer still usable (an ACME CA the Organization has an ACME Account with, or an active Issuing CA), or it is refused with 422; the issuer's own checks then apply as above. " +
+        "The requester and the profile's default Team become Owners, with any Owners named.",
       request: {
         params: OrgParam,
         body: {
@@ -106,6 +110,8 @@ export function registerManagedCertificates(ctx: {
                   .optional()
                   .openapi({ description: "For a Private CA issuer only: how many days its Certificates are valid for, at most the Issuing CA's maximum; its default when not given." }),
                 owners: z.array(OwnerRef).max(MAX_OWNERS).default([]).openapi({ description: "Users and Teams of the Organization accountable for it; none is allowed." }),
+                renewalPolicy: RenewalPolicy.optional().openapi({ description: "The Renewal Policy it starts with: automatic, 30 days before expiry, unless given." }),
+                profileId: z.string().optional().openapi({ description: "The Certificate Profile it is requested through, which fixes its issuer, validity and Renewal Policy." }),
               }),
             },
           },
@@ -122,8 +128,22 @@ export function registerManagedCertificates(ctx: {
       const needsApproval = !roleCan(role, { managedCertificate: ["create"] });
       if (needsApproval) await authorize(actor, orgId, { managedCertificate: ["propose"] });
 
+      // A profile fixes what it is issued with, so a request through one may not choose any of it too.
+      const chosen = (["issuer", "acmeCaId", "validityDays", "renewalPolicy"] as const).filter((field) => body[field] !== undefined);
+      if (body.profileId !== undefined && chosen.length > 0) throw new HttpError(400, `a Certificate Profile fixes ${chosen.map((field) => `\`${field}\``).join(", ")}; give none with \`profileId\``);
+      const through = body.profileId === undefined ? undefined : await requestedThrough(db, acmeCas, orgId, body.profileId, body.keyAlgorithm);
+
       const { names, csr } = await checkNamesAndCsr(body);
-      const issuer = await issuerAsked(db, acmeCas, orgId, body, names);
+      let issuer;
+      if (through) {
+        const refusal = await issuerRefusal(db, orgId, through.issuer, { names, validityDays: through.validityDays, keyAlgorithm: body.keyAlgorithm });
+        if (refusal) throw new HttpError(refusal.status, refusal.message);
+        issuer = through.issuer;
+      } else {
+        issuer = await issuerAsked(db, acmeCas, orgId, body, names);
+      }
+      const validityDays = through ? through.validityDays : (body.validityDays ?? null);
+      const renewalPolicy = through?.renewalPolicy ?? body.renewalPolicy;
 
       const created = await unitOfWork.run(actor, async (tx, change) => {
         const [row] = await tx
@@ -134,8 +154,10 @@ export function registerManagedCertificates(ctx: {
             keyAlgorithm: body.keyAlgorithm,
             keyCustody: "owner",
             ...issuerColumns(issuer),
-            validityDays: body.validityDays ?? null,
+            validityDays,
             csr: body.csr,
+            ...(renewalPolicy && { renewalMode: renewalPolicy.mode, renewalDaysBeforeExpiry: renewalPolicy.daysBeforeExpiry }),
+            certificateProfileId: through?.profile.id ?? null,
             ...(needsApproval && { approvalStatus: "pending", proposedById: actor.id, proposedByEmail: actor.email }),
           })
           .returning();
@@ -147,12 +169,20 @@ export function registerManagedCertificates(ctx: {
             names,
             keyAlgorithm: body.keyAlgorithm,
             keyCustody: "owner",
-            ...issuerAuditDetail(issuer, body.validityDays),
+            ...issuerAuditDetail(issuer, validityDays ?? undefined),
             csrFingerprint: csr.fingerprint,
+            ...(renewalPolicy && { renewalPolicy }),
+            ...(through && { certificateProfile: through.profile }),
           },
         });
+        // Whoever requests through a profile owns what they asked for, with the profile's default Team.
+        const owners: OwnerRef[] = [
+          ...(through ? [{ type: "user" as const, id: actor.id }] : []),
+          ...(through?.defaultTeamId ? [{ type: "team" as const, id: through.defaultTeamId }] : []),
+          ...body.owners,
+        ];
         // Whoever creates or proposes may name the Owners at the same time; each is audited as added (naming one twice adds it once).
-        for (const ref of body.owners) await addOwner(tx, change, orgId, row!.id, ref);
+        for (const ref of owners) await addOwner(tx, change, orgId, row!.id, ref);
         // A proposal is issued only once approved.
         if (!needsApproval) {
           const begun = await issuances.begin(tx, change, actor, row!, "issue");

@@ -9,7 +9,7 @@ import type { Authorizer } from "../tenancy/authorization";
 import { commonNameOf } from "../pki/certificate-facts";
 import { KEY_ALGORITHMS, KEY_CUSTODIES } from "../pki/csr";
 import type { Db } from "../platform/db/client";
-import { agent, certificate, deployment, issuance, issuingCa, managedCertificate, privateCa } from "../platform/db/schema";
+import { agent, certificate, certificateProfile, deployment, issuance, issuingCa, managedCertificate, privateCa } from "../platform/db/schema";
 import { HttpError, OrgParam } from "../platform/http";
 import { issuerOf, type Issuer as IssuerOfRow } from "../issuance/issuer";
 import { ISSUANCE_FAILURE_CODES } from "../issuance/issuance-failure";
@@ -140,6 +140,10 @@ export const ManagedCertificate = z.object({
   createdAt: z.string(),
   archivedAt: z.string().nullable().openapi({ description: "When it was archived: it then neither issues, renews nor deploys, and is listed only when archived ones are asked for." }),
   owners: z.array(Owner).openapi({ description: "Users and Teams accountable for it, in the order they were added; none is allowed." }),
+  profile: z
+    .object({ id: z.string(), name: z.string(), enabled: z.boolean() })
+    .nullable()
+    .openapi({ description: "The Certificate Profile it was requested through, as the profile is now; none for one made without a profile." }),
   approval: Approval,
   pendingNameChange: PendingNameChange.nullable().openapi({ description: "A change of its names waiting for Approval; until it is approved, Renewal uses the names above." }),
   renewal: Renewal,
@@ -267,6 +271,17 @@ export function createManagedCertificateReader({ db, authorize, clock, agentOffl
               .where(inArray(issuingCa.id, issuingCaIds))
           ).map((shown) => [shown.issuingCa.id, shown]),
     );
+    const profileIds = [...new Set(rows.flatMap((r) => (r.certificateProfileId ? [r.certificateProfileId] : [])))];
+    const profiles = new Map(
+      profileIds.length === 0
+        ? []
+        : (
+            await db
+              .select({ id: certificateProfile.id, name: certificateProfile.name, enabled: certificateProfile.enabled })
+              .from(certificateProfile)
+              .where(inArray(certificateProfile.id, profileIds))
+          ).map((profile) => [profile.id, profile]),
+    );
     const failures = await failuresOf(db, ids);
     const nameChanges = await pendingNameChanges(db, ids);
     const information = await informationOf(db, currentCertificates.map((c) => c.id));
@@ -303,6 +318,7 @@ export function createManagedCertificateReader({ db, authorize, clock, agentOffl
         createdAt: row.createdAt.toISOString(),
         archivedAt: row.archivedAt?.toISOString() ?? null,
         owners: owners.get(row.id) ?? [],
+        profile: (row.certificateProfileId && profiles.get(row.certificateProfileId)) || null,
         approval: {
           status: row.approvalStatus,
           proposedBy: row.proposedById && row.proposedByEmail ? { id: row.proposedById, email: row.proposedByEmail } : null,
