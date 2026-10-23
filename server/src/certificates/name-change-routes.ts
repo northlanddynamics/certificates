@@ -14,7 +14,7 @@ import { checkNamesAndCsr, csrField, namesField } from "./names-and-csr";
 import { applyNames, endPendingNameChange, lockManagedCertificate, pendingNameChanges, refusalToChangeNames, validityChangeDetail } from "./name-change";
 import { issuerOf } from "../issuance/issuer";
 import { roleCan } from "../tenancy/permissions";
-import { profileNamesRefusalFor } from "./certificate-profiles";
+import { profileNameChangeRefusal } from "./certificate-profiles";
 import { issuerRefusal, validityDaysField } from "../private-ca/private-ca";
 import type { Actor, UnitOfWork } from "../platform/unit-of-work";
 
@@ -39,7 +39,7 @@ export function registerNameChangeRoutes(ctx: {
       description:
         "For a Managed Certificate issued from a Private CA, the new names must be within its Issuing CA's permitted name rules, and the change may give it another `validityDays` " +
         "(null for the Issuing CA's default; when not given, it keeps its own), at most the Issuing CA's maximum (422 above it, and 400 for one from an ACME CA). " +
-        "For one made from a Certificate Profile, an Owner's new names must keep to the profile's name rules as they are now (422, naming the names that do not); an Organization Administrator is held only to the issuer's limits. " +
+        "For one made from a Certificate Profile, nobody may change them while the profile is disabled (422), and an Owner's new names must keep to the profile's name rules as they are now (422, naming the names that do not); an Organization Administrator is held only to the issuer's limits. " +
         "An Organization Administrator's change applies at once and an Issuance of the new names begins. An Owner's waits for an Approver to approve it, " +
         "and until then Renewal continues with the last approved names and CSR; at most one is pending at a time. The CSR must be for the key algorithm of the Managed Certificate and ask for exactly the new names.",
       request: {
@@ -74,13 +74,13 @@ export function registerNameChangeRoutes(ctx: {
         const mc = await lockManagedCertificate(tx, orgId, id);
         const refusal = refusalToChangeNames(mc);
         if (refusal) throw new HttpError(409, refusal);
+        // Nobody changes the names under a disabled profile, and an Owner who is not an Organization Administrator keeps to its name rules as they are now.
+        const outside = mc.certificateProfileId !== null ? await profileNameChangeRefusal(tx, mc.certificateProfileId, names, needsApproval) : undefined;
+        if (outside) throw new HttpError(422, outside);
         if ((await pendingNameChanges(tx, [mc.id])).size > 0) throw new HttpError(409, "a name change of this Managed Certificate is already pending Approval; wait for it to be decided");
         if (sameNames(names, mc.names)) {
           throw new HttpError(422, "the Managed Certificate already has the same names; to replace only its CSR, upload a new one");
         }
-        // An Owner who is not an Organization Administrator keeps to the name rules of the profile it was made from, as they are now.
-        const outside = needsApproval && mc.certificateProfileId !== null ? await profileNamesRefusalFor(tx, mc.certificateProfileId, names) : undefined;
-        if (outside) throw new HttpError(422, outside);
         // Only a validity asked for is checked: one it keeps is clipped at Issuance to a maximum lowered since.
         const refused = await issuerRefusal(tx, orgId, issuerOf(mc), { names, validityDays: body.validityDays ?? null, keyAlgorithm: csr.keyAlgorithm });
         if (refused) throw new HttpError(refused.status, refused.message);
@@ -180,12 +180,13 @@ export function registerNameChangeRoutes(ctx: {
       path: "/api/organizations/{orgId}/managed-certificates/{id}/name-change/approve",
       tags: ["Name changes"],
       summary: "Approve the pending name change: the Managed Certificate takes the new names and CSR, and an Issuance of them begins",
-      description: "Nobody decides their own proposal, and a decision is final.",
+      description: "Nobody decides their own proposal, and a decision is final. " +
+        "Refused (422) while the Certificate Profile it is from is disabled, naming the profile; it stays pending, and may be rejected or approved once the profile is enabled again.",
       request: {
         params: ManagedCertificateParams,
         body: { content: { "application/json": { schema: z.object({ reason: z.string().trim().max(1000).optional() }) } } },
       },
-      responses: { 200: json(ManagedCertificate, "Approved, with the Issuance of the new names running"), ...errors(400, 401, 403, 404, 409) },
+      responses: { 200: json(ManagedCertificate, "Approved, with the Issuance of the new names running"), ...errors(400, 401, 403, 404, 409, 422) },
     }),
     async (c) => {
       const { orgId, id } = c.req.valid("param");

@@ -272,7 +272,7 @@ export function registerDeployments(ctx: {
           return;
         }
         await tx.update(deployment).set({ keyFailure: null }).where(eq(deployment.id, row.id));
-        // The first Issuance, as of whoever set the Deployment up. It is refused only if the Managed Certificate was archived meanwhile.
+        // The first Issuance, as of whoever set the Deployment up. It is refused only if the Managed Certificate was archived meanwhile (an Agent never holds the key of one made from a Certificate Profile).
         await issuances.begin(tx, change, { id: row.createdById, email: row.createdByEmail }, mc, "issue");
       },
     },

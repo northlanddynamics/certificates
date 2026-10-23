@@ -16,7 +16,7 @@ import { issuance, managedCertificate } from "../platform/db/schema";
 import { HttpError, OrgParam, PageQuery, errors, json, pageOf } from "../platform/http";
 import { issuerAuditDetail, issuerColumns } from "../issuance/issuer";
 import { InventoryQuery, inventoryCondition } from "./inventory-filters";
-import { refusalMessage, type Issuances } from "../issuance/issuance";
+import { refusalError, type Issuances } from "../issuance/issuance";
 import { Certificate, CertificateFacts, Issuance, ManagedCertificate, ManagedCertificateParams, RenewalPolicy, toCertificate, toIssuance, type ManagedCertificateReader } from "./managed-certificate-reader";
 import { requestedThrough } from "./certificate-profiles";
 import { profileNamesRefusal } from "./profile-name-rules";
@@ -191,7 +191,8 @@ export function registerManagedCertificates(ctx: {
         // A proposal is issued only once approved.
         if (!needsApproval) {
           const begun = await issuances.begin(tx, change, actor, row!, "issue");
-          if ("refused" in begun) throw new Error(`the Issuance of a Managed Certificate just created was refused: ${begun.refused}`);
+          // Its Certificate Profile may have been disabled since it was checked.
+          if ("refused" in begun) throw begun.refused === "profile_disabled" ? refusalError(begun, "issue") : new Error(`the Issuance of a Managed Certificate just created was refused: ${begun.refused}`);
         }
         return row!;
       });
@@ -241,9 +242,9 @@ export function registerManagedCertificates(ctx: {
       path: "/api/organizations/{orgId}/managed-certificates/{id}/issuances",
       tags: ["Managed Certificates"],
       summary: "Try issuing a Certificate again",
-      description: "For when the last Issuance failed. It reuses the Managed Certificate's CSR. Only one runs at a time.",
+      description: "For when the last Issuance failed. It reuses the Managed Certificate's CSR. Only one runs at a time. Refused (422) while the Certificate Profile it was made from is disabled.",
       request: { params: ManagedCertificateParams },
-      responses: { 202: json(Issuance, "Started"), ...errors(401, 403, 404, 409) },
+      responses: { 202: json(Issuance, "Started"), ...errors(401, 403, 404, 409, 422) },
     }),
     async (c) => {
       const { orgId, id } = c.req.valid("param");
@@ -251,7 +252,7 @@ export function registerManagedCertificates(ctx: {
       await authorize(actor, orgId, { managedCertificate: ["issue"] });
       const mc = await findManagedCertificate(orgId, id);
       const begun = await unitOfWork.run(actor, (tx, change) => issuances.begin(tx, change, actor, mc, "issue"));
-      if ("refused" in begun) throw new HttpError(409, refusalMessage(begun.refused, "issue"));
+      if ("refused" in begun) throw refusalError(begun, "issue");
       const [row] = await db.select().from(issuance).where(eq(issuance.id, begun.issuanceId));
       return c.json(toIssuance(row!), 202);
     },

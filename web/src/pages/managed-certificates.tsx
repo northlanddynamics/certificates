@@ -236,7 +236,7 @@ function ApprovalQueue({ org, onDecided: decided }: { org: Org; onDecided: () =>
       id: n.managedCertificateId,
       names: n.currentNames.join(", "),
       request: "Name change",
-      detail: `to ${n.names.join(", ")}${n.validityDays !== n.currentValidityDays ? `; validity from ${chosenValidityLabel(n.currentValidityDays)} to ${chosenValidityLabel(n.validityDays)}` : ""}`,
+      detail: `${n.profile ? `Through the profile ${profileLabel(n.profile)}: ` : ""}to ${n.names.join(", ")}${n.validityDays !== n.currentValidityDays ? `; validity from ${chosenValidityLabel(n.currentValidityDays)} to ${chosenValidityLabel(n.validityDays)}` : ""}`,
       proposedBy: n.proposedBy.email,
       label: `name change of ${n.currentNames.join(", ")}`,
       approve: () => approveNames.mutate(n.managedCertificateId),

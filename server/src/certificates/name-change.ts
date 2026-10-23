@@ -8,9 +8,9 @@ import { and, asc, eq, inArray, isNull } from "drizzle-orm";
 import type { ApprovalStatus } from "./approval";
 import type { KeyCustody } from "../pki/csr";
 import type { Tx, Db } from "../platform/db/client";
-import { managedCertificate, nameChange } from "../platform/db/schema";
+import { certificateProfile, managedCertificate, nameChange } from "../platform/db/schema";
 import { HttpError } from "../platform/http";
-import type { Issuances } from "../issuance/issuance";
+import { refusalError, type Issuances } from "../issuance/issuance";
 import type { MemberRemovalHook } from "../tenancy/member-removal";
 import type { Actor, Change } from "../platform/unit-of-work";
 
@@ -44,12 +44,21 @@ export async function pendingNameChanges(db: Db | Tx, managedCertificateIds: str
   return new Map(rows.map((row) => [row.managedCertificateId, row]));
 }
 
-/** Every name change in the Organization waiting for Approval, the oldest first; an archived Managed Certificate's cannot be approved, so is left out. */
+/**
+ * Every name change in the Organization waiting for Approval, the oldest first, with the Certificate Profile its Managed
+ * Certificate was made from, as the profile is now; an archived Managed Certificate's cannot be approved, so is left out.
+ */
 export const pendingNameChangesOf = (db: Db, organizationId: string) =>
   db
-    .select({ change: nameChange, currentNames: managedCertificate.names, currentValidityDays: managedCertificate.validityDays })
+    .select({
+      change: nameChange,
+      currentNames: managedCertificate.names,
+      currentValidityDays: managedCertificate.validityDays,
+      profile: { id: certificateProfile.id, name: certificateProfile.name, enabled: certificateProfile.enabled },
+    })
     .from(nameChange)
     .innerJoin(managedCertificate, and(eq(managedCertificate.id, nameChange.managedCertificateId), eq(managedCertificate.organizationId, nameChange.organizationId)))
+    .leftJoin(certificateProfile, eq(certificateProfile.id, managedCertificate.certificateProfileId))
     .where(and(eq(nameChange.organizationId, organizationId), eq(nameChange.status, "pending"), isNull(managedCertificate.archivedAt)))
     .orderBy(asc(nameChange.createdAt), asc(nameChange.id));
 
@@ -87,6 +96,7 @@ export async function applyNames(tx: Tx, change: Change, actor: Actor, issuances
   const begun = await issuances.begin(tx, change, actor, mc, "issue");
   if ("refused" in begun) {
     if (begun.refused === "already_running") throw new HttpError(409, "an Issuance of this Managed Certificate is running; its names can be changed once it has ended");
+    if (begun.refused === "profile_disabled") throw refusalError(begun, "issue");
     throw new Error(`the Issuance of a Managed Certificate whose names were just changed was refused: ${begun.refused}`);
   }
 }

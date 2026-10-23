@@ -465,6 +465,7 @@ describe("the Approval queue and the history", () => {
         managedCertificateId: mc.id,
         currentNames: mc.names,
         currentValidityDays: null,
+        profile: null,
         names: proposed.names,
         validityDays: null,
         proposedBy: { id: expect.any(String), email: "owner@acme.test" },

@@ -7,7 +7,7 @@ import type { Authorizer } from "../tenancy/authorization";
 import type { Db } from "../platform/db/client";
 import { managedCertificate } from "../platform/db/schema";
 import { OrgParam, HttpError, errors, json } from "../platform/http";
-import { refusalMessage, type Issuances } from "../issuance/issuance";
+import { refusalError, type Issuances } from "../issuance/issuance";
 import type { Notifications } from "../notifications/notifications";
 import { ManagedCertificate, ManagedCertificateParams, type ManagedCertificateReader } from "./managed-certificate-reader";
 import { PendingNameChange, pendingNameChangesOf, toPendingNameChange } from "./name-change";
@@ -17,6 +17,7 @@ const QueuedNameChange = PendingNameChange.extend({
   managedCertificateId: z.string(),
   currentNames: z.array(z.string()),
   currentValidityDays: z.number().nullable().openapi({ description: "The validity the Managed Certificate has now, as its `validityDays`." }),
+  profile: ManagedCertificate.shape.profile,
 });
 
 export function registerApprovals(ctx: {
@@ -70,7 +71,7 @@ export function registerApprovals(ctx: {
       const changes = await pendingNameChangesOf(db, orgId);
       const nameChanges = changes
         .filter(({ change }) => change.proposedById !== actor.id)
-        .map(({ change, currentNames, currentValidityDays }) => ({ managedCertificateId: change.managedCertificateId, currentNames, currentValidityDays, ...toPendingNameChange(change) }));
+        .map(({ change, currentNames, currentValidityDays, profile }) => ({ managedCertificateId: change.managedCertificateId, currentNames, currentValidityDays, profile, ...toPendingNameChange(change) }));
       return c.json({ items: await withState(rows), nameChanges }, 200);
     },
   );
@@ -103,8 +104,8 @@ export function registerApprovals(ctx: {
       await notifications.notify(tx, change, mc, { event: "approval.decided", detail: { of: "proposal", decision, reason, decidedBy: actor.email, names: mc.names } });
       if (decision === "approved") {
         const begun = await issuances.begin(tx, change, actor, mc, "issue");
-        // Only an archive can refuse it now (archived since the proposal was made); the approval is rolled back with it.
-        if ("refused" in begun) throw new HttpError(409, refusalMessage(begun.refused, "issue"));
+        // Only an archive (since the proposal was made) or its disabled Certificate Profile can refuse it now; the approval is rolled back with it.
+        if ("refused" in begun) throw refusalError(begun, "issue");
       }
     });
     return (await withState([await findManagedCertificate(orgId, id)]))[0]!;
@@ -116,12 +117,13 @@ export function registerApprovals(ctx: {
       path: "/api/organizations/{orgId}/managed-certificates/{id}/approve",
       tags: ["Approval"],
       summary: "Approve a proposed Managed Certificate, which starts its Issuance",
-      description: "The proposer need do nothing more. Nobody decides their own proposal, and a decision is final.",
+      description: "The proposer need do nothing more. Nobody decides their own proposal, and a decision is final. " +
+        "Refused (422) while the Certificate Profile it is from is disabled, naming the profile; it stays pending, and may be rejected or approved once the profile is enabled again.",
       request: {
         params: ManagedCertificateParams,
         body: { content: { "application/json": { schema: z.object({ reason: z.string().trim().max(1000).optional() }) } } },
       },
-      responses: { 200: json(ManagedCertificate, "Approved, with its first Issuance running"), ...errors(400, 401, 403, 404, 409) },
+      responses: { 200: json(ManagedCertificate, "Approved, with its first Issuance running"), ...errors(400, 401, 403, 404, 409, 422) },
     }),
     async (c) => {
       const { orgId, id } = c.req.valid("param");

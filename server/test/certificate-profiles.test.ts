@@ -268,7 +268,7 @@ describe("editing a Certificate Profile", () => {
       renewalPolicy: { mode: "manual", daysBeforeExpiry: 10 },
       defaultTeam: null,
     });
-    expect((await h.api(`${profiles()}/${profile.id}`, { cookie: org.cookie })).body).toEqual(res.body);
+    expect((await h.api(`${profiles()}/${profile.id}`, { cookie: org.cookie })).body).toEqual({ ...res.body, pending: { proposals: 0, nameChanges: 0 } });
     expect((await auditOf("certificate_profile.updated")).map((e) => e.detail)).toEqual([
       {
         name: "Internal services",

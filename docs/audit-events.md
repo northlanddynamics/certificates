@@ -56,7 +56,7 @@ Each resource's verbs, as of this writing. New ones may be added within version 
 | `dcv_rule` | `created`, `changed`, `deleted` |
 | `managed_certificate` | `created`, `proposed`, `approved`, `rejected`, `owner_added`, `owner_removed`, `subscriber_added`, `subscriber_removed`, `renewal_policy_changed`, `csr_uploaded`, `names_changed`, `archived`, `issuer_changed` |
 | `certificate` | `revoked` |
-| `certificate_profile` | `created`, `updated` |
+| `certificate_profile` | `created`, `updated`, `disabled`, `enabled` |
 | `private_ca` | `created`, `issuing_ca_added`, `csr_signed`, `updated`, `retired`, `revoked`, `crl_published` |
 | `enrollment_profile` | `created`, `updated`, `disabled`, `ra_rotated`, `shared_challenge_rotated`, `shared_challenge_retired` |
 | `enrollment_validator` | `tested` |
@@ -108,6 +108,8 @@ Adding a custom ACME CA records `acme_ca.created`, with its `name`, `directoryUr
 `certificate_profile.created` targets the Certificate Profile (`certificate_profile`, its id) an Organization Administrator created. Its `detail` has the `name`, the `description`, the `issuer` (`{ "kind": "acme", "acmeCaId": ... }` or `{ "kind": "private_ca", "issuingCaId": ... }`), the `allowedKeyAlgorithms` (such as `ecdsa-p256`), the `validityDays` it fixes for a Private CA (null for the Issuing CA's default, and always for an ACME CA), the starting `renewalPolicy` (`{ "mode": ..., "daysBeforeExpiry": ... }`), the `defaultTeam` made co-Owner (`{ "id": ..., "name": ... }`, or null), and its `nameRules` (`{ "exact": [...], "zones": [...], "maxNames": ..., "wildcards": ... }`, with no names, no zones, a null `maxNames` and `wildcards` true for none).
 
 `certificate_profile.updated` targets the Certificate Profile an Organization Administrator edited. Its `detail` has the profile's `name` (its new one, when renamed) and the `changes`, each `{ "from": ..., "to": ... }`, of whichever of `name`, `description`, `issuer`, `allowedKeyAlgorithms`, `validityDays`, `renewalPolicy`, `defaultTeam` and `nameRules` changed, in the shapes `certificate_profile.created` gives them. Managed Certificates already made from it are not changed, and new `nameRules` do not re-check pending Proposals. A change that changes nothing is not audited.
+
+`certificate_profile.disabled` targets the Certificate Profile an Organization Administrator disabled, and `certificate_profile.enabled` the one they enabled again. Each `detail` has the profile's `name`. While it is disabled nothing is issued under it: requests through it are refused, and its pending Proposals and Name Changes stay pending, rejectable but not approvable.
 
 A Managed Certificate requested through a Certificate Profile has `certificateProfile`, `{ "id": ..., "name": ... }` (the profile's name then), in the `detail` of its `managed_certificate.created` or `managed_certificate.proposed`, with the issuer, the `validityDays` (when the profile fixes one) and the `renewalPolicy` copied from the profile. One made without a profile has `renewalPolicy` only when its request gave one. The requester and the profile's default Team, as well as any Owners named, are each audited as `managed_certificate.owner_added`.
 

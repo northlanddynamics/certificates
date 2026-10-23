@@ -7,7 +7,7 @@ import { parseCsr } from "../pki/csr";
 import type { Db } from "../platform/db/client";
 import { issuance, managedCertificate } from "../platform/db/schema";
 import { HttpError, errors, json } from "../platform/http";
-import { refusalMessage, type Issuances } from "./issuance";
+import { refusalError, type Issuances } from "./issuance";
 import { Issuance, ManagedCertificate, ManagedCertificateParams, RenewalPolicy, toIssuance, type ManagedCertificateReader } from "../certificates/managed-certificate-reader";
 import { checkNamesAndCsr, csrField } from "../certificates/names-and-csr";
 import type { Actor, UnitOfWork } from "../platform/unit-of-work";
@@ -97,16 +97,16 @@ export function registerRenewalRoutes(ctx: {
       summary: "Renew now: start a Renewal at once, whatever the Renewal Policy",
       description:
         "Issues a new Certificate with the Managed Certificate's CSR, in the background. Only for one that has a Certificate, is approved and is not archived, and only one Issuance runs at a time. " +
-        "Organization Administrators and the Managed Certificate's own Owners may.",
+        "Refused (422) while the Certificate Profile it was made from is disabled. Organization Administrators and the Managed Certificate's own Owners may.",
       request: { params: ManagedCertificateParams },
-      responses: { 202: json(Issuance, "Started"), ...errors(401, 403, 404, 409) },
+      responses: { 202: json(Issuance, "Started"), ...errors(401, 403, 404, 409, 422) },
     }),
     async (c) => {
       const { orgId, id } = c.req.valid("param");
       const actor = await requireUser(c);
       const mc = await findAsOwnerOr(actor, orgId, id, { managedCertificate: ["renew"] }, "only an Owner or an Organization Administrator may renew a Managed Certificate");
       const begun = await unitOfWork.run(actor, (tx, change) => issuances.begin(tx, change, actor, mc, "renewNow"));
-      if ("refused" in begun) throw new HttpError(409, refusalMessage(begun.refused, "renewNow"));
+      if ("refused" in begun) throw refusalError(begun, "renewNow");
       const [row] = await db.select().from(issuance).where(eq(issuance.id, begun.issuanceId));
       return c.json(toIssuance(row!), 202);
     },
