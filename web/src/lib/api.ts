@@ -2,7 +2,7 @@
 import { ISSUING_CA_REVOCATION_REASONS, REVOCATION_REASONS_OF, type RevocationReason } from "../../../server/src/pki/revocation-reasons";
 import type { KeyAlgorithm } from "./csr-generator";
 import type { ProfileNameRules } from "./profile-choice";
-import type { ProfilePending } from "./profile-disable";
+import type { ProfileHeld } from "./profile-disable";
 import type { DeviceExtendedKeyUsage, DeviceKeyType, DeviceKeyUsage } from "../../../server/src/enrollment/enrollment-profile-kinds";
 
 // The web UI talks only to the platform's HTTP API (described by /api/openapi.json).
@@ -185,6 +185,8 @@ export interface Renewal {
   ari: { window: { start: string; end: string } | null; checkedAt: string | null; nextCheckAt: string } | null;
   /** Set while the latest Renewal has failed. */
   failing: { failures: number; lastFailure: { code: string; message: string; at: string }; nextAttemptAt: string | null } | null;
+  /** Set while it is not renewed because the Certificate Profile it was made from is disabled: since when the scheduler found it due. */
+  blocked: { since: string; profile: { id: string; name: string } } | null;
 }
 export interface ManagedCertificate {
   id: string;
@@ -831,7 +833,7 @@ export const api = {
   updateCertificateProfile: (orgId: string, id: string, body: Partial<CertificateProfileChanges>) =>
     call<CertificateProfile>(`/api/organizations/${orgId}/certificate-profiles/${id}`, { method: "PATCH", body }),
   /** The profile, with what awaits Approval under it. */
-  certificateProfile: (orgId: string, id: string) => call<CertificateProfile & { pending: ProfilePending }>(`/api/organizations/${orgId}/certificate-profiles/${id}`),
+  certificateProfile: (orgId: string, id: string) => call<CertificateProfile & ProfileHeld>(`/api/organizations/${orgId}/certificate-profiles/${id}`),
   disableCertificateProfile: (orgId: string, id: string) => call<CertificateProfile>(`/api/organizations/${orgId}/certificate-profiles/${id}/disable`, { method: "POST", body: {} }),
   enableCertificateProfile: (orgId: string, id: string) => call<CertificateProfile>(`/api/organizations/${orgId}/certificate-profiles/${id}/enable`, { method: "POST", body: {} }),
   createPrivateCa: (orgId: string, body: NewPrivateCa) => call<PrivateCa>(`/api/organizations/${orgId}/private-cas`, { body }),

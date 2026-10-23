@@ -103,6 +103,13 @@ export const Renewal = z.object({
     })
     .nullable()
     .openapi({ description: "Set while the latest Renewal of a Managed Certificate that has a Certificate has failed." }),
+  blocked: z
+    .object({
+      since: z.string().openapi({ description: "When the scheduler found it due and did not renew it." }),
+      profile: z.object({ id: z.string(), name: z.string() }).openapi({ description: "The disabled Certificate Profile it was made from." }),
+    })
+    .nullable()
+    .openapi({ description: "Set while it is not renewed because the Certificate Profile it was made from is disabled: \"Renewal blocked\". It renews again once the profile is enabled." }),
 });
 
 const Issuer = z
@@ -306,6 +313,7 @@ export function createManagedCertificateReader({ db, authorize, clock, agentOffl
       const ari = current ? information.get(current.id) : undefined;
       const pending = nameChanges.get(row.id);
       const due = policy.mode === "automatic" && current ? renewalDue(current, policy.daysBeforeExpiry, ari?.window ?? null) : null;
+      const profile = (row.certificateProfileId && profiles.get(row.certificateProfileId)) || null;
       return {
         id: row.id,
         names: row.names,
@@ -318,7 +326,7 @@ export function createManagedCertificateReader({ db, authorize, clock, agentOffl
         createdAt: row.createdAt.toISOString(),
         archivedAt: row.archivedAt?.toISOString() ?? null,
         owners: owners.get(row.id) ?? [],
-        profile: (row.certificateProfileId && profiles.get(row.certificateProfileId)) || null,
+        profile,
         approval: {
           status: row.approvalStatus,
           proposedBy: row.proposedById && row.proposedByEmail ? { id: row.proposedById, email: row.proposedByEmail } : null,
@@ -346,6 +354,7 @@ export function createManagedCertificateReader({ db, authorize, clock, agentOffl
                 nextAttemptAt: nextAttemptAt(policy, current!, failed, ari?.window ?? null)?.toISOString() ?? null,
               }
             : null,
+          blocked: row.renewalBlockedAt && profile ? { since: row.renewalBlockedAt.toISOString(), profile: { id: profile.id, name: profile.name } } : null,
         },
         issuance: latest ? toIssuance(latest) : null,
         currentCertificate: current ? toCertificate(current, revocations.get(current.id)) : null,

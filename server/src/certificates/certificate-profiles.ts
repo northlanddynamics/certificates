@@ -8,7 +8,7 @@
 // disabled nothing is issued under it (issuance.ts refuses to begin). Only Organization Administrators create, edit,
 // disable and enable them; every member lists the enabled ones.
 import { OpenAPIHono, createRoute, z } from "@hono/zod-openapi";
-import { and, asc, count, eq, isNull } from "drizzle-orm";
+import { and, asc, count, eq, inArray, isNull } from "drizzle-orm";
 import { isDeepStrictEqual } from "node:util";
 import type { Authorizer } from "../tenancy/authorization";
 import { roleCan } from "../tenancy/permissions";
@@ -64,6 +64,10 @@ export const CertificateProfile = z.object({
 });
 
 const CertificateProfileRead = CertificateProfile.extend({
+  linked: z
+    .number()
+    .int()
+    .openapi({ description: "How many live (approved, not archived) Managed Certificates were made from it and are still linked to it: those that stop renewing while it is disabled." }),
   pending: z
     .object({ proposals: z.number().int(), nameChanges: z.number().int() })
     .openapi({ description: "How many Proposals through it, and Name Changes of Managed Certificates made from it, await Approval: what disabling it holds, as they cannot be approved while it is disabled." }),
@@ -165,6 +169,15 @@ export async function requestedThrough(db: Db | Tx, acmeCas: AcmeCas, orgId: str
 export async function profileNameChangeRefusal(db: Db | Tx, profileId: string, names: string[], heldToNameRules: boolean) {
   const [row] = await db.select().from(certificateProfile).where(eq(certificateProfile.id, profileId));
   return disabledRefusal(row!) ?? (heldToNameRules ? profileNamesRefusal(row!.name, nameRulesOf(row!), names) : undefined);
+}
+
+/** How many live Managed Certificates are linked to the profile: approved, or made without needing Approval, and not archived. */
+async function linkedOf(db: Db, profileId: string) {
+  const [linked] = await db
+    .select({ n: count() })
+    .from(managedCertificate)
+    .where(and(eq(managedCertificate.certificateProfileId, profileId), isNull(managedCertificate.archivedAt), inArray(managedCertificate.approvalStatus, ["approved", "not_required"])));
+  return linked!.n;
 }
 
 /** How many Proposals through the profile, and Name Changes of what was made from it, await Approval; not those of an archived Managed Certificate, which cannot be approved. */
@@ -380,7 +393,7 @@ export function registerCertificateProfiles(ctx: {
       tags: ["Certificate Profiles"],
       description:
         "Everyone in the Organization may ask about an enabled one; only Organization Administrators about a disabled one (404 otherwise). " +
-        "`pending` counts what awaits Approval under it, which disabling it would hold.",
+        "`linked` counts the live Managed Certificates made from it, which stop renewing while it is disabled, and `pending` what awaits Approval under it, which disabling it would hold.",
       request: { params: ProfileParams },
       responses: { 200: json(CertificateProfileRead), ...errors(401, 403, 404) },
     }),
@@ -388,7 +401,7 @@ export function registerCertificateProfiles(ctx: {
       const { orgId, id } = c.req.valid("param");
       const { role } = await authorize(await requireUser(c), orgId, { certificateProfile: ["read"] });
       const row = await findProfile(orgId, id, role);
-      return c.json({ ...toProfile(row, (await defaultTeamsOf(orgId, [row]))(row)), pending: await pendingOf(db, row.id) }, 200);
+      return c.json({ ...toProfile(row, (await defaultTeamsOf(orgId, [row]))(row)), linked: await linkedOf(db, row.id), pending: await pendingOf(db, row.id) }, 200);
     },
   );
 
@@ -401,9 +414,10 @@ export function registerCertificateProfiles(ctx: {
         tags: ["Certificate Profiles"],
         summary: enabled ? "Enable a disabled Certificate Profile again" : "Disable a Certificate Profile: nothing more is issued under it until it is enabled again",
         description: enabled
-          ? "Members see it again and may request through it, and the Proposals and Name Changes from it that are pending may be approved again. 409 when it is already enabled. Only Organization Administrators may."
+          ? "Members see it again and may request through it, and the Proposals and Name Changes from it that are pending may be approved again; the Managed Certificates made from it renew again, a due one on the scheduler's next pass. 409 when it is already enabled. Only Organization Administrators may."
           : "Every request through it is refused (422), Organization Administrators' too, and members no longer see it. Proposals through it, and Name Changes of Managed Certificates made from it, " +
-            "stay pending: they may be rejected, and approving one is refused (422) until it is enabled again. Reading it counts them. 409 when it is already disabled. Only Organization Administrators may.",
+            "stay pending: they may be rejected, and approving one is refused (422) until it is enabled again. The live Managed Certificates made from it stop renewing: the scheduler marks a due one " +
+            "as blocked and tells its Subscribers once, and \"Renew now\" is refused (422). Reading it counts both. 409 when it is already disabled. Only Organization Administrators may.",
         request: { params: ProfileParams },
         responses: { 200: json(CertificateProfile, enabled ? "Enabled" : "Disabled"), ...errors(401, 403, 404, 409) },
       }),
@@ -417,6 +431,8 @@ export function registerCertificateProfiles(ctx: {
           const [current] = await tx.select().from(certificateProfile).where(eq(certificateProfile.id, id)).for("update");
           if (current!.enabled === enabled) throw new HttpError(409, `the Certificate Profile is already ${enabled ? "enabled" : "disabled"}`);
           const [row] = await tx.update(certificateProfile).set({ enabled }).where(eq(certificateProfile.id, id)).returning();
+          // What the scheduler found blocked renews again on its next pass, and is told of afresh if blocked again.
+          if (enabled) await tx.update(managedCertificate).set({ renewalBlockedAt: null }).where(eq(managedCertificate.certificateProfileId, id));
           await change.audit({
             organizationId: orgId,
             action: enabled ? "certificate_profile.enabled" : "certificate_profile.disabled",

@@ -172,6 +172,8 @@ export const managedCertificate = pgTable(
     archivedAt: timestamp("archived_at", { withTimezone: true }),
     /** The Certificate Profile it was requested through, whose settings it was made with; null for one made without, or detached from it. */
     certificateProfileId: uuid("certificate_profile_id"),
+    /** When the scheduler found it due for Renewal while its Certificate Profile was disabled, and so did not renew it; null while it is not blocked. Enabling the profile clears it. */
+    renewalBlockedAt: timestamp("renewal_blocked_at", { withTimezone: true }),
     createdAt: timestamp("created_at", { withTimezone: true }).notNull().defaultNow(),
   },
   (t) => [

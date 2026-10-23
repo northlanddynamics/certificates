@@ -1,5 +1,5 @@
-// Notifications: fans the events a Managed Certificate's Subscribers want to know of (upcoming expiry, Renewal succeeded
-// or failed, Deployment Run failed, Agent offline, Approval decided) out to them by email and webhook. There are no
+// Notifications: fans the events a Managed Certificate's Subscribers want to know of (upcoming expiry, Renewal succeeded,
+// failed or blocked, Deployment Run failed, Agent offline, Approval decided) out to them by email and webhook. There are no
 // default Subscribers (subscribers.ts), so a Managed Certificate nobody subscribed to tells nobody.
 //
 // A notice is queued on the transaction of the event it tells of, so an event that does not happen sends nothing, and is
@@ -65,6 +65,7 @@ export type NoticeOf =
   | { event: "certificate.expiring"; detail: { certificateId: string; fingerprint: string; notAfter: string; daysLeft: number } }
   | { event: "renewal.succeeded"; detail: { issuanceId: string; certificateId: string; fingerprint: string; notAfter: string } }
   | { event: "renewal.failed"; detail: { issuanceId: string; code: string; message: string } }
+  | { event: "renewal.blocked"; detail: { certificateProfile: { id: string; name: string }; dueAt: string } }
   | { event: "deployment_run.failed"; detail: { deploymentId: string; runId: string; agentId: string; hostName: string; exitCode: number | null } }
   | { event: "agent.offline"; detail: { agentId: string; hostName: string; lastContactAt: string } }
   | { event: "approval.decided"; detail: { of: "proposal" | "name_change"; decision: "approved" | "rejected"; reason: string | null; decidedBy: string; names: string[] } };
@@ -103,6 +104,16 @@ function render(names: string[], what: NoticeOf, link: string): { subject: strin
       return { subject: `${name}: renewed`, text: lines(`A new Certificate (${what.detail.fingerprint}) was issued; it ends at ${what.detail.notAfter}.`) };
     case "renewal.failed":
       return { subject: `${name}: Renewal failed`, text: lines(`The Renewal failed (${what.detail.code}): ${what.detail.message}`) };
+    case "renewal.blocked": {
+      const { certificateProfile, dueAt } = what.detail;
+      return {
+        subject: `${name}: Renewal blocked`,
+        text: lines(
+          `It was due for Renewal at ${dueAt}, but it was made from the Certificate Profile ${certificateProfile.name}, which is disabled, so nothing is issued under it. ` +
+            "It will not be renewed until an Organization Administrator enables the profile again.",
+        ),
+      };
+    }
     case "deployment_run.failed": {
       // Not the script's output, which may hold what only those who may see the Deployment should: a Subscriber may not.
       const { hostName, exitCode } = what.detail;

@@ -104,7 +104,7 @@ export function CertificateProfilesPage() {
   );
 }
 
-/** Asks before disabling the profile, saying what it stops and how many pending decisions it holds. */
+/** Asks before disabling the profile, saying what it stops: how many certificates stop renewing and how many pending decisions it holds. */
 function DisableDialog({ orgId, profile }: { orgId: string; profile: CertificateProfile }) {
   const [open, setOpen] = useState(false);
   // Counted as the dialog opens, so the numbers are those of now.
@@ -122,7 +122,7 @@ function DisableDialog({ orgId, profile }: { orgId: string; profile: Certificate
           setOpen(next);
         }}
         title={`Disable ${profile.name}?`}
-        description={read.data ? disableConsequence(read.data.pending) : read.error ? read.error.message : "Counting what awaits Approval under it…"}
+        description={read.data ? disableConsequence(read.data) : read.error ? read.error.message : "Counting what disabling it holds…"}
         confirmLabel="Disable"
         pending={disable.isPending || !read.data}
         error={disable.error}

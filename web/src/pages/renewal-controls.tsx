@@ -14,6 +14,7 @@ const when = (iso: string) => new Date(iso).toLocaleString();
 function summary(m: ManagedCertificate) {
   const { policy, dueAt, dueBecause, failing } = m.renewal;
   if (policy.mode === "manual") return "Renewed by hand only";
+  if (m.renewal.blocked) return `Renewal blocked: the Certificate Profile ${m.renewal.blocked.profile.name} is disabled`;
   const days = `${policy.daysBeforeExpiry} day${policy.daysBeforeExpiry === 1 ? "" : "s"} before expiry`;
   if (!dueAt) return `Renews automatically ${days}`;
   // The CA's own window, when it is the one that is due first, is the reason to name.
@@ -26,7 +27,8 @@ export function RenewNowButton({ org, m, userId, onChanged }: { org: Me["organiz
   // The server decides; this only keeps the button from those who surely may not (a Team's members may, too).
   const owns = isOwner(m, userId);
   const renew = useMutation({ mutationFn: () => api.renewNow(org.id, m.id), onSuccess: onChanged });
-  if (m.archivedAt || !m.currentCertificate || m.approval.status === "pending" || m.approval.status === "rejected" || !(can(org, "managedCertificate", "renew") || owns)) return null;
+  // Nothing is issued under a disabled Certificate Profile, so the server would refuse.
+  if (m.archivedAt || !m.currentCertificate || m.profile?.enabled === false || m.approval.status === "pending" || m.approval.status === "rejected" || !(can(org, "managedCertificate", "renew") || owns)) return null;
   return (
     <>
       <Button disabled={renew.isPending || m.issuance?.status === "running"} onClick={() => renew.mutate()}>
