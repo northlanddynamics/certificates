@@ -556,6 +556,32 @@ export interface NewManagedCertificate {
   validityDays?: number;
   owners?: OwnerRef[];
 }
+/** How the Organization issues one kind of Managed Certificate, which members request against. */
+export interface CertificateProfile {
+  id: string;
+  name: string;
+  description: string;
+  issuer: NewManagedCertificate["issuer"];
+  allowedKeyAlgorithms: KeyAlgorithm[];
+  /** For a Private CA issuer: the validity it fixes; none for the Issuing CA's default, and always none for an ACME CA. */
+  validityDays: number | null;
+  /** What each Managed Certificate made from it starts with. */
+  renewalPolicy: RenewalPolicy;
+  /** The Team made co-Owner of each Managed Certificate made from it. */
+  defaultTeam: { id: string; name: string } | null;
+  enabled: boolean;
+  createdAt: string;
+}
+/** A Certificate Profile as it is created, or edited: an edit gives only what changes, null removing the validity or default Team. */
+export interface CertificateProfileChanges {
+  name: string;
+  description: string;
+  issuer: CertificateProfile["issuer"];
+  allowedKeyAlgorithms: KeyAlgorithm[];
+  validityDays: number | null;
+  renewalPolicy: RenewalPolicy;
+  defaultTeamId: string | null;
+}
 export interface NotificationChannel {
   id: string;
   name: string;
@@ -784,6 +810,13 @@ export const api = {
     call<Deployment>(`/api/organizations/${orgId}/deployments/${id}/parameters`, { method: "PUT", body: parameters }),
   runDeploymentAgain: (orgId: string, id: string) => call<Deployment>(`/api/organizations/${orgId}/deployments/${id}/runs`, { method: "POST", body: {} }),
   privateCas: (orgId: string) => call<{ items: PrivateCa[] }>(`/api/organizations/${orgId}/private-cas`),
+  certificateProfiles: (orgId: string) => call<{ items: CertificateProfile[] }>(`/api/organizations/${orgId}/certificate-profiles`),
+  createCertificateProfile: (orgId: string, { validityDays, defaultTeamId, ...body }: CertificateProfileChanges) =>
+    call<CertificateProfile>(`/api/organizations/${orgId}/certificate-profiles`, {
+      body: { ...body, ...(validityDays !== null && { validityDays }), ...(defaultTeamId !== null && { defaultTeamId }) },
+    }),
+  updateCertificateProfile: (orgId: string, id: string, body: Partial<CertificateProfileChanges>) =>
+    call<CertificateProfile>(`/api/organizations/${orgId}/certificate-profiles/${id}`, { method: "PATCH", body }),
   createPrivateCa: (orgId: string, body: NewPrivateCa) => call<PrivateCa>(`/api/organizations/${orgId}/private-cas`, { body }),
   addIssuingCa: (orgId: string, id: string, body: NewIssuingCa) => call<IssuingCa>(`/api/organizations/${orgId}/private-cas/${id}/issuing-cas`, { body }),
   updateIssuingCa: (orgId: string, id: string, issuingCaId: string, body: { permittedNames?: PermittedNames; validity?: PrivateCaValidity }) =>

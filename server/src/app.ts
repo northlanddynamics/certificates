@@ -45,6 +45,7 @@ import { registerHistory } from "./certificates/history";
 import { registerIssuerRoutes } from "./issuance/issuer-routes";
 import { createManagedCertificateReader } from "./certificates/managed-certificate-reader";
 import { registerManagedCertificates } from "./certificates/managed-certificates";
+import { registerCertificateProfiles } from "./certificates/certificate-profiles";
 import { discardNameChangesOfRemoved } from "./certificates/name-change";
 import { registerNameChangeRoutes } from "./certificates/name-change-routes";
 import { registerOwnerRoutes } from "./certificates/owner-routes";
@@ -355,6 +356,7 @@ export function createApp(deps: AppDeps) {
   });
   const reader = createManagedCertificateReader({ db, authorize, clock, agentOfflineAfterSeconds: agentGateway.offlineAfterSeconds });
   registerManagedCertificates({ app, db, requireUser, authorize, unitOfWork, issuances, reader, acmeCas, clock, agentOfflineAfterSeconds: agentGateway.offlineAfterSeconds });
+  registerCertificateProfiles({ app, db, requireUser, authorize, unitOfWork, acmeCas });
   const apiKeys = registerApiKeys({ app, db, auth, authConfig, requireUser, authorize, admit: loginPolicies.admit, unitOfWork });
   registerCertificateExport({ app, db, apiKeys, unitOfWork, reader, issuers });
   registerOwnerRoutes({ app, requireUser, unitOfWork, reader });

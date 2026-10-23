@@ -1,4 +1,4 @@
-import { BadgeCheckIcon, BellIcon, BuildingIcon, PlugIcon, ScrollTextIcon, SendIcon, BotIcon, GlobeIcon, LandmarkIcon, FileKey2Icon, FileSearchIcon, FileTerminalIcon, KeyRoundIcon, LogInIcon, RocketIcon, ShieldCheckIcon, ShieldEllipsisIcon, ShieldUserIcon, TabletSmartphoneIcon, UserRoundIcon, UsersIcon, type LucideIcon } from "lucide-react";
+import { BadgeCheckIcon, FileBadgeIcon, BellIcon, BuildingIcon, PlugIcon, ScrollTextIcon, SendIcon, BotIcon, GlobeIcon, LandmarkIcon, FileKey2Icon, FileSearchIcon, FileTerminalIcon, KeyRoundIcon, LogInIcon, RocketIcon, ShieldCheckIcon, ShieldEllipsisIcon, ShieldUserIcon, TabletSmartphoneIcon, UserRoundIcon, UsersIcon, type LucideIcon } from "lucide-react";
 import { can, type Me } from "@/lib/api";
 
 type Org = Me["organizations"][number];
@@ -56,6 +56,8 @@ export function organizationNavGroups(org: Org): NavGroup[] {
           // Anyone may list them (to choose one for a Managed Certificate), but the page is for managing them.
           items: can(org, "privateCa", "create") ? [{ title: "Private CAs", url: `${base}/private-cas`, icon: ShieldEllipsisIcon }] : [],
         },
+        // Every member lists the enabled ones (to request against one), but the page is for managing them.
+        ...(can(org, "certificateProfile", "create") ? [{ title: "Certificate Profiles", url: `${base}/certificate-profiles`, icon: FileBadgeIcon }] : []),
         {
           title: "Integrations",
           icon: PlugIcon,
