@@ -9,6 +9,7 @@ import { useCertificateFacts, useManagedCertificatePage } from "@/lib/use-manage
 import { IssuerControls } from "./issuer-controls";
 import { KeyAndCsrCard } from "./key-and-csr-card";
 import { NameChange } from "./name-change-controls";
+import { ProfileDetach } from "./profile-detach-controls";
 import { date } from "@/lib/utils";
 import { Owners } from "./owner-controls";
 import { Renewal } from "./renewal-controls";
@@ -69,6 +70,7 @@ export function ManagedCertificateOverview() {
             <ProposalStatus m={m} />
           </dl>
           <IssuerControls org={org} m={m} onChanged={refresh} />
+          <ProfileDetach org={org} m={m} onChanged={refresh} />
           <NameChange org={org} m={m} userId={userId} onChanged={refresh} />
         </CardContent>
       </Card>
