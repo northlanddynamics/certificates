@@ -1,12 +1,14 @@
 import { useMutation } from "@tanstack/react-query";
 import { RefreshCwIcon } from "lucide-react";
 import { useState, type FormEvent } from "react";
+import { ConfirmDialog } from "@/components/confirm-dialog";
 import { Button } from "@/components/ui/button";
 import { Input } from "@/components/ui/input";
 import { Label } from "@/components/ui/label";
 import { Select, SelectContent, SelectItem, SelectTrigger, SelectValue } from "@/components/ui/select";
 import { api, can, type ManagedCertificate, type Me, type RenewalPolicy } from "@/lib/api";
 import { isOwner } from "@/lib/managed-certificate";
+import { renewalWindowOpens } from "@/lib/renewal-urgency";
 import { date } from "@/lib/utils";
 
 const when = (iso: string) => new Date(iso).toLocaleString();
@@ -28,12 +30,18 @@ export function nextRenewal(m: ManagedCertificate): { headline: string; detail: 
   return { headline: `Automatic, ${date(dueAt)}`, detail: dueBecause === "ari" ? "In the CA's suggested window" : daysBefore(policy.daysBeforeExpiry), problem: false };
 }
 
-/** Starts a Renewal at once, for those who may: an Owner or an Organization Administrator, of one that has a Certificate and is approved and not archived. */
+/**
+ * Whether the caller may start a Renewal at once: an Owner or an Organization Administrator, of one that has a Certificate
+ * and is approved and not archived. The server decides; this only keeps the controls from those who surely may not (a
+ * Team's members may, too).
+ */
+export const mayRenewNow = (org: Me["organizations"][number], m: ManagedCertificate, userId?: string) =>
+  !m.archivedAt && m.currentCertificate !== null && m.approval.status !== "pending" && m.approval.status !== "rejected" && (can(org, "managedCertificate", "renew") || isOwner(m, userId));
+
+/** Starts a Renewal at once, for those who may: the page's first action while renewing is the thing to do (`renewalUrgent`). */
 export function RenewNowButton({ org, m, userId, onChanged }: { org: Me["organizations"][number]; m: ManagedCertificate; userId?: string; onChanged: () => void }) {
-  // The server decides; this only keeps the button from those who surely may not (a Team's members may, too).
-  const owns = isOwner(m, userId);
   const renew = useMutation({ mutationFn: () => api.renewNow(org.id, m.id), onSuccess: onChanged });
-  if (m.archivedAt || !m.currentCertificate || m.approval.status === "pending" || m.approval.status === "rejected" || !(can(org, "managedCertificate", "renew") || owns)) return null;
+  if (!mayRenewNow(org, m, userId)) return null;
   return (
     <>
       <Button disabled={renew.isPending || m.issuance?.status === "running"} onClick={() => renew.mutate()}>
@@ -42,6 +50,37 @@ export function RenewNowButton({ org, m, userId, onChanged }: { org: Me["organiz
       </Button>
       {renew.error && <span className="text-sm text-destructive">{renew.error.message}</span>}
     </>
+  );
+}
+
+/** Asks before renewing one that is not yet due, as the "⋯" menu offers it then: a new Certificate early is seldom wanted. */
+export function RenewEarlyDialog({ org, m, open, onOpenChange, onChanged }: { org: Me["organizations"][number]; m: ManagedCertificate; open: boolean; onOpenChange: (open: boolean) => void; onChanged: () => void }) {
+  const renew = useMutation({
+    mutationFn: () => api.renewNow(org.id, m.id),
+    onSuccess: () => {
+      onOpenChange(false);
+      onChanged();
+    },
+  });
+  const opens = renewalWindowOpens(m);
+  return (
+    <ConfirmDialog
+      open={open}
+      onOpenChange={onOpenChange}
+      title="Renew before it is due?"
+      description={
+        <>
+          {opens ? `It is not due to renew until ${date(opens.toISOString())}. ` : ""}Renewing now issues a new Certificate at once, which then has to be deployed wherever the
+          current one is used.
+        </>
+      }
+      confirmLabel="Renew now"
+      dismissLabel="Not now"
+      destructive={false}
+      pending={renew.isPending}
+      error={renew.error}
+      onConfirm={() => renew.mutate()}
+    />
   );
 }
 

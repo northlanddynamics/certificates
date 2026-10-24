@@ -1,5 +1,5 @@
 import { Link, Outlet, useLocation, useParams } from "@tanstack/react-router";
-import { ArchiveIcon } from "lucide-react";
+import { ArchiveIcon, DownloadIcon } from "lucide-react";
 import { DownloadDialog } from "@/components/download-dialog";
 import { IssuerName } from "@/components/issuer-name";
 import { LoadError } from "@/components/load-error";
@@ -12,6 +12,7 @@ import { Skeleton } from "@/components/ui/skeleton";
 import { ApiError, can, type ManagedCertificate } from "@/lib/api";
 import { useAcmeCas } from "@/lib/acme-cas";
 import { expiryPhrase, keyAlgorithmLabel, primaryName, profileLabel, status } from "@/lib/managed-certificate";
+import { renewalUrgent } from "@/lib/renewal-urgency";
 import { useManagedCertificatePage } from "@/lib/use-managed-certificate";
 import { AlertStrip } from "./certificate-alerts";
 import { Lifecycle } from "./certificate-lifecycle";
@@ -55,6 +56,7 @@ export function ManagedCertificateDetailsPage() {
   }
 
   const state = status(m);
+  const urgent = renewalUrgent(m, new Date());
   const expiry = expiryPhrase(m.currentCertificate);
   return (
     <div className="flex flex-col gap-4">
@@ -74,10 +76,22 @@ export function ManagedCertificateDetailsPage() {
             </span>
           </div>
         </div>
+        {/* Renewing comes first only when it is the thing to do; otherwise Download does, and Renew now waits in the menu. */}
         <div className="flex flex-wrap items-center gap-2">
-          <RenewNowButton org={org} m={m} userId={userId} onChanged={refresh} />
-          {m.currentCertificate && can(org, "managedCertificate", "download") && <DownloadDialog orgId={org.id} id={m.id} />}
-          <ManageMenu org={org} m={m} userId={userId} onChanged={refresh} />
+          {urgent && <RenewNowButton org={org} m={m} userId={userId} onChanged={refresh} />}
+          {m.currentCertificate && can(org, "managedCertificate", "download") && (
+            <DownloadDialog
+              orgId={org.id}
+              id={m.id}
+              trigger={
+                <Button variant={urgent ? "outline" : "default"}>
+                  <DownloadIcon />
+                  Download
+                </Button>
+              }
+            />
+          )}
+          <ManageMenu org={org} m={m} userId={userId} renewEarly={!urgent} onChanged={refresh} />
         </div>
       </header>
       {m.archivedAt && (

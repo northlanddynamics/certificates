@@ -4,7 +4,11 @@
 
 **Blocked by:** none
 
-**Status:** needs-triage
+**Status:** done
 
-- [ ] Decide the rule. Proposal: Download is primary while healthy; Renew now becomes primary when the latest Issuance failed or the certificate is inside its renewal window; otherwise Renew now moves to the ⋯ menu.
-- [ ] Renew now asks for confirmation when the certificate is far from its renewal window.
+- [x] Decide the rule. Proposal: Download is primary while healthy; Renew now becomes primary when the latest Issuance failed or the certificate is inside its renewal window; otherwise Renew now moves to the ⋯ menu.
+- [x] Renew now asks for confirmation when the certificate is far from its renewal window.
+
+## Comments
+
+Decided as proposed. `renewalUrgent` (`web/src/lib/renewal-urgency.ts`) is the rule: the latest Issuance failed or Renewal is failing, or the renewal window has opened (when the scheduler renews it, or for a manual one its policy's days before expiry).
