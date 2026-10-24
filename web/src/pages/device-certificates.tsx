@@ -1,8 +1,9 @@
 import { keepPreviousData, useMutation, useQuery, useQueryClient } from "@tanstack/react-query";
-import { Link, useParams } from "@tanstack/react-router";
+import { useParams } from "@tanstack/react-router";
 import { createColumnHelper, rowExpandingFeature, rowPaginationFeature, tableFeatures, useTable, type PaginationState } from "@tanstack/react-table";
-import { BanIcon, ChevronLeftIcon, DownloadIcon, SearchIcon, XIcon } from "lucide-react";
+import { BanIcon, DownloadIcon, SearchIcon, XIcon } from "lucide-react";
 import { useEffect, useState } from "react";
+import { usePageCrumbs } from "@/components/page-crumbs";
 import { DataTable } from "@/components/data-table/data-table";
 import { DataTablePagination } from "@/components/data-table/data-table-pagination";
 import { ExpandButton } from "@/components/data-table/expand-button";
@@ -109,18 +110,12 @@ export function DeviceCertificatesPage() {
     getRowCanExpand: () => true,
   });
   const narrowed = q !== "" || status !== undefined || weakKey;
+  // After Enrollment Profiles in the breadcrumb.
+  usePageCrumbs([...(profile.data ? [{ label: profile.data.name }] : []), { label: "Device Certificates" }]);
 
   return (
     <div className="flex flex-col gap-6">
-      <div className="flex flex-col gap-2">
-        <Button variant="ghost" size="sm" className="self-start" asChild>
-          <Link to="/organizations/$orgId/enrollment-profiles" params={{ orgId }}>
-            <ChevronLeftIcon />
-            Enrollment Profiles
-          </Link>
-        </Button>
-        <h1 className="text-xl font-semibold">{profile.data ? `${profile.data.name}: Device Certificates` : "Device Certificates"}</h1>
-      </div>
+      <h1 className="text-xl font-semibold">{profile.data ? `${profile.data.name}: Device Certificates` : "Device Certificates"}</h1>
       {org && !allowed ? (
         <p className="text-sm text-muted-foreground">Only Organization Administrators see Device Certificates.</p>
       ) : (

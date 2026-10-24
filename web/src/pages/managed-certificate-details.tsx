@@ -1,8 +1,8 @@
-import { Link, Outlet, useParams } from "@tanstack/react-router";
-import { ArrowLeftIcon, ArchiveIcon } from "lucide-react";
-import type { ReactNode } from "react";
+import { Link, Outlet, useLocation, useParams } from "@tanstack/react-router";
+import { ArchiveIcon } from "lucide-react";
 import { DownloadDialog } from "@/components/download-dialog";
 import { LoadError } from "@/components/load-error";
+import { usePageCrumbs } from "@/components/page-crumbs";
 import { Alert, AlertDescription, AlertTitle } from "@/components/ui/alert";
 import { Badge } from "@/components/ui/badge";
 import { Button } from "@/components/ui/button";
@@ -32,6 +32,10 @@ export function ManagedCertificateDetailsPage() {
   const { org, userId, me, certificate, refresh } = useManagedCertificatePage(orgId, id);
   const acmeCas = useAcmeCas(orgId).data?.items;
   const m = certificate.data;
+  // After Managed Certificates in the breadcrumb: its name, then the tab when it is not Overview.
+  const { pathname } = useLocation();
+  const tab = TABS.find((t) => !t.exact && pathname.endsWith(t.to.slice(t.to.lastIndexOf("/"))));
+  usePageCrumbs(m ? [{ label: primaryName(m) ?? "Managed Certificate", url: `/organizations/${orgId}/certificates/${id}` }, ...(tab ? [{ label: tab.label }] : [])] : []);
 
   if (me.isPending || (certificate.isPending && org)) return <DetailsSkeleton />;
   // The same answer whether it is missing, is not the caller's to see, or is in an Organization the caller is not in.
@@ -53,7 +57,6 @@ export function ManagedCertificateDetailsPage() {
   const expiry = expiryPhrase(m.currentCertificate);
   return (
     <div className="flex flex-col gap-4">
-      <BackLink />
       <header className="flex flex-wrap items-start justify-between gap-4">
         <div className="flex min-w-0 flex-col gap-2">
           <div className="flex flex-wrap items-center gap-2">
@@ -126,24 +129,12 @@ function OtherNames({ m }: { m: ManagedCertificate }) {
   );
 }
 
-function BackLink(): ReactNode {
-  const { orgId } = useParams({ from: ROUTE });
-  return (
-    <Link to="/organizations/$orgId/certificates" params={{ orgId }} className="flex w-fit items-center gap-1 text-sm text-muted-foreground hover:text-foreground">
-      <ArrowLeftIcon className="size-4" />
-      Managed Certificates
-    </Link>
-  );
-}
-
 function NotFound() {
+  usePageCrumbs([{ label: "Not found" }]);
   return (
-    <div className="flex flex-col gap-4">
-      <BackLink />
-      <div className="flex flex-col gap-1 rounded-lg border border-dashed p-10 text-center">
-        <h1 className="text-base font-medium">Managed Certificate not found</h1>
-        <p className="text-sm text-muted-foreground">It does not exist, or you may not see it.</p>
-      </div>
+    <div className="flex flex-col gap-1 rounded-lg border border-dashed p-10 text-center">
+      <h1 className="text-base font-medium">Managed Certificate not found</h1>
+      <p className="text-sm text-muted-foreground">It does not exist, or you may not see it.</p>
     </div>
   );
 }
@@ -152,7 +143,6 @@ function NotFound() {
 function DetailsSkeleton() {
   return (
     <div className="flex flex-col gap-4" role="status" aria-label="Loading">
-      <Skeleton className="h-4 w-36" />
       <div className="flex justify-between gap-4">
         <div className="flex flex-col gap-2">
           <Skeleton className="h-7 w-72" />

@@ -4,8 +4,8 @@
 
 **Blocked by:** none
 
-**Status:** ready-for-agent
+**Status:** done
 
-- [ ] Breadcrumb: Organization › Managed Certificates (link) › common name, then the tab when not Overview.
-- [ ] The "← Managed Certificates" link above the title is removed.
-- [ ] Same pattern for Device Certificates under an Enrollment Profile.
+- [x] Breadcrumb: Organization › Managed Certificates (link) › common name, then the tab when not Overview.
+- [x] The "← Managed Certificates" link above the title is removed.
+- [x] Same pattern for Device Certificates under an Enrollment Profile.

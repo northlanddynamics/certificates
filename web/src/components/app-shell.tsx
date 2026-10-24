@@ -1,13 +1,16 @@
 import { useQuery } from "@tanstack/react-query";
-import { Navigate, Outlet, useLocation, useParams } from "@tanstack/react-router";
+import { Fragment, useState } from "react";
+import { Link, Navigate, Outlet, useLocation, useParams } from "@tanstack/react-router";
 import { AppSidebar } from "@/components/app-sidebar";
 import { LoadError } from "@/components/load-error";
-import { Breadcrumb, BreadcrumbItem, BreadcrumbList, BreadcrumbPage, BreadcrumbSeparator } from "@/components/ui/breadcrumb";
+import { PageCrumbsContext, type Crumb } from "@/components/page-crumbs";
+import { Breadcrumb, BreadcrumbItem, BreadcrumbLink, BreadcrumbList, BreadcrumbPage, BreadcrumbSeparator } from "@/components/ui/breadcrumb";
 import { Separator } from "@/components/ui/separator";
 import { SidebarInset, SidebarProvider, SidebarTrigger } from "@/components/ui/sidebar";
 import { Button } from "@/components/ui/button";
 import { TooltipProvider } from "@/components/ui/tooltip";
 import { ApiError, api } from "@/lib/api";
+import { cn } from "@/lib/utils";
 import { ACCOUNT_SECURITY_URL, accountNav, isOnPage, organizationNav, platformNav, signInSettingsUrl } from "@/lib/navigation";
 import { useSignOut } from "@/lib/use-sign-out";
 
@@ -17,6 +20,8 @@ export function AppShell() {
   const { orgId } = useParams({ strict: false });
   const me = useQuery({ queryKey: ["me"], queryFn: api.me });
   const signOut = useSignOut();
+  // What the open page adds after its own name, such as the Managed Certificate it shows.
+  const [crumbs, setCrumbs] = useState<Crumb[]>([]);
 
   if (me.isPending) return <p className="p-6 text-muted-foreground">Loading…</p>;
   // Replacing the page they asked for, so that Back does not bring them here again, and back to it once signed in. The
@@ -51,30 +56,46 @@ export function AppShell() {
   const active = me.data.organizations.find((o) => o.id === orgId) ?? me.data.organizations[0];
   const page = [...(active ? organizationNav(active) : []), ...platformNav, ...accountNav].find((item) => isOnPage(pathname, item.url));
 
+  const trail: Crumb[] = [
+    ...(page && orgId && active ? [{ label: active.name }] : []),
+    page ? { label: page.title, url: page.url } : { label: "Home" },
+    ...crumbs,
+  ];
+
   return (
     <TooltipProvider>
       <SidebarProvider>
         <AppSidebar me={me.data} active={active} />
         <SidebarInset className="min-w-0 bg-canvas">
-          <header className="flex h-14 shrink-0 items-center gap-2 border-b px-4">
+          <header className="flex h-14 min-w-0 shrink-0 items-center gap-2 border-b px-4">
             <SidebarTrigger className="-ml-1" />
             <Separator orientation="vertical" className="mr-2 data-[orientation=vertical]:h-4" />
-            <Breadcrumb>
-              <BreadcrumbList>
-                {page && orgId && active && (
-                  <>
-                    <BreadcrumbItem>{active.name}</BreadcrumbItem>
-                    <BreadcrumbSeparator />
-                  </>
-                )}
-                <BreadcrumbItem>
-                  <BreadcrumbPage>{page?.title ?? "Home"}</BreadcrumbPage>
-                </BreadcrumbItem>
+            <Breadcrumb className="min-w-0">
+              <BreadcrumbList className="flex-nowrap [&>li]:whitespace-nowrap">
+                {trail.map((crumb, i) => (
+                  // A phone shows only the last two, the page and the one above it.
+                  <Fragment key={i}>
+                    {i > 0 && <BreadcrumbSeparator className={cn(i < trail.length - 1 && "max-sm:hidden")} />}
+                    <BreadcrumbItem className={cn("min-w-0", i < trail.length - 2 && "max-sm:hidden")}>
+                      {i === trail.length - 1 ? (
+                        <BreadcrumbPage className="truncate">{crumb.label}</BreadcrumbPage>
+                      ) : crumb.url ? (
+                        <BreadcrumbLink asChild className="truncate">
+                          <Link to={crumb.url}>{crumb.label}</Link>
+                        </BreadcrumbLink>
+                      ) : (
+                        <span className="truncate">{crumb.label}</span>
+                      )}
+                    </BreadcrumbItem>
+                  </Fragment>
+                ))}
               </BreadcrumbList>
             </Breadcrumb>
           </header>
           <main className="flex min-w-0 flex-1 flex-col gap-6 p-6">
-            <Outlet />
+            <PageCrumbsContext value={setCrumbs}>
+              <Outlet />
+            </PageCrumbsContext>
           </main>
         </SidebarInset>
       </SidebarProvider>
