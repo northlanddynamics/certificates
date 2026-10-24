@@ -73,6 +73,8 @@ export const acceptInvitationRoute = createRoute({
 const certificatesRoute = createRoute({
   getParentRoute: () => appRoute,
   path: "/organizations/$orgId/certificates",
+  // `q` is the search of the inventory, kept in the address so that it survives Back and can be shared.
+  validateSearch: (search: Record<string, unknown>): { q?: string } => (typeof search.q === "string" && search.q !== "" ? { q: search.q } : {}),
   component: CertificatesPage,
 });
 

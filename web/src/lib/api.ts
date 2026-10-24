@@ -106,6 +106,8 @@ export const ownerFromKey = (key: string): OwnerRef => ({ type: key.startsWith("
 export const ownerLabel = (o: Owner) => (o.type === "user" ? o.email : `${o.name} (Team)`);
 /** The inventory's filters; each narrows what is listed, and they combine. */
 export interface InventoryFilters {
+  /** Part of any of its names, ignoring case. */
+  q?: string;
   expiringSoon?: boolean;
   renewalFailing?: boolean;
   agentOffline?: boolean;

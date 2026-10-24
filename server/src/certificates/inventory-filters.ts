@@ -40,7 +40,14 @@ const currentCertificateEnds = sql`(select ${certificate.notAfter} from ${certif
 /** Has a Certificate, and an Issuance has failed since the last that succeeded, which is then a Renewal: what `renewal.failing` on the Managed Certificate says. */
 const renewalFailing = sql`exists (select 1 from ${certificate} where ${certificate.managedCertificateId} = ${managedCertificate.id}) and exists (select 1 from ${issuance} where ${issuance.managedCertificateId} = ${managedCertificate.id} and ${issuance.status} = 'failed' and ${issuance.createdAt} > coalesce((select max(s.created_at) from ${issuance} as s where s.managed_certificate_id = ${managedCertificate.id} and s.status = 'succeeded'), '-infinity'::timestamptz))`;
 
+/** `text` as a LIKE pattern that matches it anywhere, its wildcards taken literally. */
+const containing = (text: string) => `%${text.replace(/[\\%_]/g, (c) => `\\${c}`)}%`;
+
 export const INVENTORY_FILTERS = {
+  q: filter(
+    z.string().trim().min(1).max(200).meta({ description: "Matches part of any of its names (the common name is one of them), ignoring case." }),
+    (value) => sql`exists (select 1 from unnest(${managedCertificate.names}) as name where name ilike ${containing(value)})`,
+  ),
   expiringSoon: filter(on.meta({ description: `Whose current Certificate ends within ${EXPIRING_SOON_DAYS} days, or has ended.` }), (_, { now }) => {
     const threshold = new Date(now.getTime() + EXPIRING_SOON_DAYS * 86_400_000);
     return sql`${currentCertificateEnds} <= ${threshold}`;

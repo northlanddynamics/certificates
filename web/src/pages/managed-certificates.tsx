@@ -1,14 +1,15 @@
 import { keepPreviousData, useMutation, useQuery, useQueryClient } from "@tanstack/react-query";
-import { Link } from "@tanstack/react-router";
+import { Link, useNavigate, useSearch } from "@tanstack/react-router";
 import { createColumnHelper, rowPaginationFeature, tableFeatures, useTable, type PaginationState } from "@tanstack/react-table";
-import { XIcon } from "lucide-react";
-import { useMemo, useState, type ReactNode } from "react";
+import { SearchIcon, XIcon } from "lucide-react";
+import { useEffect, useMemo, useState, type ReactNode } from "react";
 import { DataTable } from "@/components/data-table/data-table";
 import { DataTableFacetedFilter } from "@/components/data-table/data-table-faceted-filter";
 import { DataTablePagination } from "@/components/data-table/data-table-pagination";
 import { Badge } from "@/components/ui/badge";
 import { Button } from "@/components/ui/button";
 import { Input } from "@/components/ui/input";
+import { InputGroup, InputGroupAddon, InputGroupInput } from "@/components/ui/input-group";
 import { Tabs, TabsContent, TabsList, TabsTrigger } from "@/components/ui/tabs";
 import { Table, TableBody, TableCell, TableHead, TableHeader, TableRow } from "@/components/ui/table";
 import { api, can, ownerLabel, type AcmeCa, type AcmeCaTag, type InventoryFilters, type ManagedCertificate, type Me } from "@/lib/api";
@@ -80,18 +81,38 @@ interface Facets {
   keyCustody: string[];
 }
 const NO_FACETS: Facets = { status: [], tag: [], keyAlgorithm: [], keyCustody: [] };
-const toFilters = (facets: Facets): InventoryFilters => ({
+const toFilters = (facets: Facets, q: string): InventoryFilters => ({
+  q: q || undefined,
   ...Object.fromEntries(facets.status.map((name) => [name, true])),
   tag: facets.tag as AcmeCaTag[],
   keyAlgorithm: facets.keyAlgorithm,
   keyCustody: facets.keyCustody[0] as InventoryFilters["keyCustody"],
 });
 
+const SEARCH_DELAY_MS = 300;
+const ROUTE = "/app/organizations/$orgId/certificates";
+
 export function ManagedCertificates({ org }: { org: Org }) {
   const queryClient = useQueryClient();
+  const navigate = useNavigate({ from: "/organizations/$orgId/certificates" });
+  const q = useSearch({ from: ROUTE }).q ?? "";
+  const [typed, setTyped] = useState(q);
   const [facets, setFacets] = useState<Facets>(NO_FACETS);
   const [pagination, setPagination] = useState<PaginationState>({ pageIndex: 0, pageSize: 25 });
-  const filters = toFilters(facets);
+  const search = (next: string) => navigate({ search: (prev) => ({ ...prev, q: next || undefined }), replace: true });
+  // The address follows the box once typing pauses, and a new search starts again from the first page.
+  useEffect(() => {
+    const settled = typed.trim();
+    if (settled === q) return;
+    const timer = setTimeout(() => {
+      void search(settled);
+      setPagination((p) => ({ ...p, pageIndex: 0 }));
+    }, SEARCH_DELAY_MS);
+    return () => clearTimeout(timer);
+  }, [typed, q]);
+  // ...and the box follows the address, when Back changes it.
+  useEffect(() => setTyped((t) => (t.trim() === q ? t : q)), [q]);
+  const filters = toFilters(facets, q);
   const inventory = useQuery({
     queryKey: ["inventory", org.id, filters, pagination],
     queryFn: () => api.managedCertificates(org.id, filters, { page: pagination.pageIndex + 1, pageSize: pagination.pageSize }),
@@ -116,11 +137,16 @@ export function ManagedCertificates({ org }: { org: Org }) {
     onPaginationChange: setPagination,
     getRowId: (m) => m.id,
   });
-  const narrowed = Object.values(facets).some((values) => values.length > 0);
+  const narrowed = q !== "" || Object.values(facets).some((values) => values.length > 0);
   // A new narrowing starts again from the first page.
   const narrow = (next: Partial<Facets>) => {
     setFacets({ ...facets, ...next });
     setPagination({ ...pagination, pageIndex: 0 });
+  };
+  const reset = () => {
+    setTyped("");
+    void search("");
+    narrow(NO_FACETS);
   };
 
   const mayApprove = can(org, "approval", "read");
@@ -131,6 +157,12 @@ export function ManagedCertificates({ org }: { org: Org }) {
   const certificates = (
     <div className="flex flex-col gap-4">
       <div className="flex flex-wrap items-center gap-2">
+        <InputGroup className="w-full sm:w-72">
+          <InputGroupAddon>
+            <SearchIcon />
+          </InputGroupAddon>
+          <InputGroupInput aria-label="Search Managed Certificates" placeholder="Search names" value={typed} onChange={(e) => setTyped(e.target.value)} />
+        </InputGroup>
         <DataTableFacetedFilter
           title="Status"
           options={STATUS_FACETS.map(([value, label]) => ({ value, label }))}
@@ -152,7 +184,7 @@ export function ManagedCertificates({ org }: { org: Org }) {
         />
         <DataTableFacetedFilter title="Key Custody" options={[{ value: "owner", label: "Owner" }, { value: "agent", label: "Agent" }]} value={facets.keyCustody} onChange={(keyCustody) => narrow({ keyCustody })} />
         {narrowed && (
-          <Button variant="ghost" size="sm" onClick={() => narrow(NO_FACETS)}>
+          <Button variant="ghost" size="sm" onClick={reset}>
             Reset
             <XIcon />
           </Button>
@@ -164,7 +196,14 @@ export function ManagedCertificates({ org }: { org: Org }) {
           inventory.isPending
             ? "Loading…"
             : narrowed
-              ? "No Managed Certificates match."
+              ? (
+                  <div className="flex flex-col items-center gap-2">
+                    {q ? <>No Managed Certificate matches “{q}”.</> : "No Managed Certificates match."}
+                    <Button variant="outline" size="sm" onClick={reset}>
+                      Clear
+                    </Button>
+                  </div>
+                )
               : can(org, "managedCertificate", "read")
                 ? "No Managed Certificates yet."
                 : "You do not own any Managed Certificates yet."

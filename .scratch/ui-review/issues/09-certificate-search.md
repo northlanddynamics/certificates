@@ -4,9 +4,9 @@
 
 **Blocked by:** none
 
-**Status:** ready-for-agent
+**Status:** done
 
-- [ ] A search input before the facet filters matches common name and every SAN, case-insensitively, as you type.
-- [ ] The query is kept in the URL search params so it survives Back and can be shared.
-- [ ] If the list is paged on the server, the search goes to the API; otherwise it filters client-side.
-- [ ] The empty state says no certificate matches, with Clear.
+- [x] A search input before the facet filters matches common name and every SAN, case-insensitively, as you type.
+- [x] The query is kept in the URL search params so it survives Back and can be shared.
+- [x] If the list is paged on the server, the search goes to the API; otherwise it filters client-side.
+- [x] The empty state says no certificate matches, with Clear.
