@@ -1,18 +1,22 @@
 import { useQuery } from "@tanstack/react-query";
 import { Link, Navigate, Outlet, useLocation, useParams } from "@tanstack/react-router";
 import { AppSidebar } from "@/components/app-sidebar";
+import { LoadError } from "@/components/load-error";
 import { Breadcrumb, BreadcrumbItem, BreadcrumbList, BreadcrumbPage, BreadcrumbSeparator } from "@/components/ui/breadcrumb";
 import { Separator } from "@/components/ui/separator";
 import { SidebarInset, SidebarProvider, SidebarTrigger } from "@/components/ui/sidebar";
+import { Button } from "@/components/ui/button";
 import { TooltipProvider } from "@/components/ui/tooltip";
 import { ApiError, api } from "@/lib/api";
 import { ACCOUNT_SECURITY_URL, accountNav, isOnPage, organizationNav, platformNav, signInSettingsUrl } from "@/lib/navigation";
+import { useSignOut } from "@/lib/use-sign-out";
 
 /** The signed-in pages: the left navigation around whichever page is open. */
 export function AppShell() {
   const { pathname } = useLocation();
   const { orgId } = useParams({ strict: false });
   const me = useQuery({ queryKey: ["me"], queryFn: api.me });
+  const signOut = useSignOut();
 
   if (me.isPending) return <p className="p-6 text-muted-foreground">Loading…</p>;
   if (me.error instanceof ApiError && me.error.status === 401) {
@@ -25,7 +29,23 @@ export function AppShell() {
       </p>
     );
   }
-  if (me.error) return <p className="p-6 text-destructive">Something went wrong.</p>;
+  // Retried a few times already (see main.tsx): the platform is down or unreachable, which may pass.
+  if (me.error) {
+    return (
+      <div className="min-h-svh bg-canvas p-6">
+        <LoadError
+          title="Can't reach the platform"
+          description="The platform did not answer. Check your connection and try again in a moment."
+          onRetry={() => me.refetch()}
+          retrying={me.isFetching}
+        >
+          <Button variant="outline" onClick={() => signOut.mutate()} disabled={signOut.isPending}>
+            Sign out
+          </Button>
+        </LoadError>
+      </div>
+    );
+  }
   // An Organization of theirs requires MFA and they have none: nothing else answers them until they set it up, except
   // the sign-in settings (where the login policy is), so that an Organization Administrator can still undo the requirement.
   if (me.data.user.mfa.setupRequired && pathname !== ACCOUNT_SECURITY_URL && !(orgId && pathname === signInSettingsUrl(orgId))) {

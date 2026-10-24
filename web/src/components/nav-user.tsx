@@ -1,4 +1,3 @@
-import { useMutation, useQueryClient } from "@tanstack/react-query";
 import { useNavigate } from "@tanstack/react-router";
 import { ChevronsUpDownIcon, LogOutIcon, MonitorIcon, MoonIcon, ShieldUserIcon, SunIcon, SunMoonIcon } from "lucide-react";
 import { useTheme } from "next-themes";
@@ -17,21 +16,15 @@ import {
   DropdownMenuTrigger,
 } from "@/components/ui/dropdown-menu";
 import { SidebarMenu, SidebarMenuButton, SidebarMenuItem, useSidebar } from "@/components/ui/sidebar";
-import { api, type Me } from "@/lib/api";
+import type { Me } from "@/lib/api";
 import { ACCOUNT_SECURITY_URL, organizationAccountNav } from "@/lib/navigation";
+import { useSignOut } from "@/lib/use-sign-out";
 
 /** `active` is the Organization whose pages of the user's own the menu offers. */
 export function NavUser({ user, active }: { user: Me["user"]; active: Me["organizations"][number] | undefined }) {
   const { isMobile } = useSidebar();
   const navigate = useNavigate();
-  const queryClient = useQueryClient();
-  const signOut = useMutation({
-    mutationFn: api.signOut,
-    onSuccess: async () => {
-      queryClient.clear();
-      await navigate({ to: "/sign-in" });
-    },
-  });
+  const signOut = useSignOut();
   const initials = (user.name || user.email).slice(0, 2).toUpperCase();
 
   return (

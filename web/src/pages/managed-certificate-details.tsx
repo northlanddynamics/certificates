@@ -2,6 +2,7 @@ import { Link, Outlet, useParams } from "@tanstack/react-router";
 import { ArrowLeftIcon, ArchiveIcon } from "lucide-react";
 import type { ReactNode } from "react";
 import { DownloadDialog } from "@/components/download-dialog";
+import { LoadError } from "@/components/load-error";
 import { Alert, AlertDescription, AlertTitle } from "@/components/ui/alert";
 import { Badge } from "@/components/ui/badge";
 import { Button } from "@/components/ui/button";
@@ -37,7 +38,16 @@ export function ManagedCertificateDetailsPage() {
   if (!org || (certificate.error instanceof ApiError && (certificate.error.status === 404 || certificate.error.status === 403))) {
     return <NotFound />;
   }
-  if (!m) return <p className="text-destructive">{certificate.error?.message ?? "Something went wrong."}</p>;
+  if (!m) {
+    return (
+      <LoadError
+        title="Can't load this Managed Certificate"
+        description={certificate.error?.message ?? "The platform did not answer."}
+        onRetry={() => certificate.refetch()}
+        retrying={certificate.isFetching}
+      />
+    );
+  }
 
   const state = status(m);
   const expiry = expiryPhrase(m.currentCertificate);
