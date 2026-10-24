@@ -11,12 +11,13 @@ import { Button } from "@/components/ui/button";
 import { Input } from "@/components/ui/input";
 import { InputGroup, InputGroupAddon, InputGroupInput } from "@/components/ui/input-group";
 import { Tabs, TabsContent, TabsList, TabsTrigger } from "@/components/ui/tabs";
+import { Tooltip, TooltipContent, TooltipTrigger } from "@/components/ui/tooltip";
 import { Table, TableBody, TableCell, TableHead, TableHeader, TableRow } from "@/components/ui/table";
 import { api, can, ownerLabel, type AcmeCa, type AcmeCaTag, type InventoryFilters, type ManagedCertificate, type Me } from "@/lib/api";
 import { KEY_ALGORITHMS, KEY_ALGORITHM_LABELS } from "@/lib/csr-generator";
 import { AcmeCaTagBadge } from "@/components/acme-ca-tag";
 import { ACME_CA_TAG_LABELS, useAcmeCas } from "@/lib/acme-cas";
-import { issuerLabel, keyAlgorithmLabel, profileLabel, status } from "@/lib/managed-certificate";
+import { issuerLabel, keyAlgorithmLabel, primaryName, profileLabel, status } from "@/lib/managed-certificate";
 import { chosenValidityLabel } from "@/lib/private-ca";
 
 type Org = Me["organizations"][number];
@@ -25,21 +26,27 @@ type Org = Me["organizations"][number];
 const features = tableFeatures({ rowPaginationFeature });
 const columnHelper = createColumnHelper<typeof features, ManagedCertificate>();
 const makeColumns = (orgId: string, acmeCas: AcmeCa[] | undefined) => columnHelper.columns([
-  columnHelper.accessor((m) => m.commonName ?? "—", {
-    id: "commonName",
-    header: "Common name",
-    cell: ({ cell, row }) => <ManagedCertificateLink orgId={orgId} id={row.original.id}>{cell.getValue()}</ManagedCertificateLink>,
-  }),
+  // The common name (else the first name), then how many others, which a tooltip lists.
   columnHelper.accessor((m) => m.names.join(", "), {
     id: "names",
-    header: "SANs",
-    cell: ({ cell }) => <span className="block max-w-80 truncate text-muted-foreground">{cell.getValue()}</span>,
+    header: "Names",
+    cell: ({ row }) => <Names orgId={orgId} m={row.original} />,
   }),
-  // The tag of its ACME CA, as that CA has it now; none for one from a Private CA.
+  // The tag of its ACME CA, as that CA has it now; a Private CA's are all private.
   columnHelper.accessor((m) => (m.acmeCaId ? (acmeCas?.find((ca) => ca.id === m.acmeCaId)?.tag ?? null) : null), {
     id: "tag",
     header: "Environment tag",
-    cell: ({ cell }) => <AcmeCaTagBadge tag={cell.getValue()} />,
+    cell: ({ cell, row }) => {
+      const { issuer } = row.original;
+      if (issuer.kind === "private_ca") {
+        return (
+          <Badge variant="outline" title={`Private CA ${issuer.privateCa.name}`}>
+            Private
+          </Badge>
+        );
+      }
+      return <AcmeCaTagBadge tag={cell.getValue()} />;
+    },
   }),
   columnHelper.accessor((m) => keyAlgorithmLabel(m.keyAlgorithm), { id: "keyAlgorithm", header: "Key algorithm" }),
   columnHelper.accessor((m) => status(m).label, {
@@ -51,10 +58,44 @@ const makeColumns = (orgId: string, acmeCas: AcmeCa[] | undefined) => columnHelp
   columnHelper.accessor((m) => (m.owners.length === 0 ? "None" : m.owners.map(ownerLabel).join(", ")), {
     id: "owners",
     header: "Owners",
-    cell: ({ cell }) => <span className="block max-w-56 truncate text-muted-foreground">{cell.getValue()}</span>,
+    // Nobody to tell when it needs attention, nor to hold its key: worth noticing.
+    cell: ({ cell, row }) =>
+      row.original.owners.length === 0 ? (
+        <span className="text-amber-700 dark:text-amber-400">None</span>
+      ) : (
+        <span className="block max-w-56 truncate text-muted-foreground" title={cell.getValue()}>
+          {cell.getValue()}
+        </span>
+      ),
   }),
 ]);
 const noRows: ManagedCertificate[] = [];
+
+function Names({ orgId, m }: { orgId: string; m: ManagedCertificate }) {
+  const primary = primaryName(m);
+  const others = m.names.filter((name) => name !== primary);
+  return (
+    <span className="flex items-center gap-2">
+      <ManagedCertificateLink orgId={orgId} id={m.id}>
+        {primary}
+      </ManagedCertificateLink>
+      {others.length > 0 && (
+        <Tooltip>
+          <TooltipTrigger asChild>
+            <span tabIndex={0} className="cursor-default text-xs text-muted-foreground" aria-label={`${others.length} more: ${others.join(", ")}`}>
+              +{others.length}
+            </span>
+          </TooltipTrigger>
+          <TooltipContent className="font-mono">
+            {others.map((name) => (
+              <div key={name}>{name}</div>
+            ))}
+          </TooltipContent>
+        </Tooltip>
+      )}
+    </span>
+  );
+}
 
 /** A Managed Certificate's names, as the way to its page. */
 function ManagedCertificateLink({ orgId, id, children }: { orgId: string; id: string; children: ReactNode }) {
@@ -157,7 +198,7 @@ export function ManagedCertificates({ org }: { org: Org }) {
   const certificates = (
     <div className="flex flex-col gap-4">
       <div className="flex flex-wrap items-center gap-2">
-        <InputGroup className="w-full sm:w-72">
+        <InputGroup className="w-full bg-card sm:w-72">
           <InputGroupAddon>
             <SearchIcon />
           </InputGroupAddon>

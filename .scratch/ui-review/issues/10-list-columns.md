@@ -4,8 +4,8 @@
 
 **Blocked by:** 09
 
-**Status:** ready-for-agent
+**Status:** done
 
-- [ ] Names column: the common name, then the other names muted, or "+N" with a tooltip listing them.
-- [ ] Environment tag shows "Private" (or the CA name) for a Private-CA certificate, instead of blank.
-- [ ] Owners shows avatars or names, with "None" in a warning tone (see ticket 13).
+- [x] Names column: the common name, then the other names muted, or "+N" with a tooltip listing them.
+- [x] Environment tag shows "Private" (or the CA name) for a Private-CA certificate, instead of blank.
+- [x] Owners shows avatars or names, with "None" in a warning tone (see ticket 13).
