@@ -16,6 +16,7 @@ import { Input } from "@/components/ui/input";
 import { Select, SelectContent, SelectItem, SelectTrigger, SelectValue } from "@/components/ui/select";
 import { Tabs, TabsContent, TabsList, TabsTrigger } from "@/components/ui/tabs";
 import { Table, TableBody, TableCell, TableHead, TableHeader, TableRow } from "@/components/ui/table";
+import { PageHeader } from "@/components/page-header";
 import { api, roleLabel, type OrgMember, type PendingInvitation } from "@/lib/api";
 import { useAction } from "@/lib/use-action";
 
@@ -62,10 +63,7 @@ export function MembersPage() {
 
   return (
     <div className="flex flex-col gap-6">
-      <div className="flex items-center justify-between gap-4">
-        <h1 className="text-xl font-semibold">Members</h1>
-        <InviteDialog orgId={orgId} roles={roles} />
-      </div>
+      <PageHeader title="Members" action={<InviteDialog orgId={orgId} roles={roles} />} />
       <Tabs defaultValue="members" className="gap-4">
         <TabsList>
           <TabsTrigger value="members">Members</TabsTrigger>

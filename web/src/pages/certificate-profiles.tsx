@@ -1,7 +1,7 @@
 import { useQuery } from "@tanstack/react-query";
 import { useParams } from "@tanstack/react-router";
 import { createColumnHelper, tableFeatures, useTable } from "@tanstack/react-table";
-import { ChevronDownIcon, ClipboardCheckIcon, GlobeIcon, KeyRoundIcon, LandmarkIcon, PlusIcon, RefreshCwIcon, TagIcon, UsersIcon, type LucideIcon } from "lucide-react";
+import { ClipboardCheckIcon, GlobeIcon, KeyRoundIcon, LandmarkIcon, PlusIcon, RefreshCwIcon, TagIcon, UsersIcon, type LucideIcon } from "lucide-react";
 import { useState } from "react";
 import { ConfirmDialog } from "@/components/confirm-dialog";
 import { DataTable } from "@/components/data-table/data-table";
@@ -11,13 +11,13 @@ import { SummaryRows } from "@/components/summary-rows";
 import { Badge } from "@/components/ui/badge";
 import { Button } from "@/components/ui/button";
 import { Checkbox } from "@/components/ui/checkbox";
-import { Collapsible, CollapsibleContent, CollapsibleTrigger } from "@/components/ui/collapsible";
 import { Dialog, DialogContent, DialogDescription, DialogTitle, DialogTrigger } from "@/components/ui/dialog";
 import { Field, FieldDescription, FieldError, FieldGroup, FieldLabel, FieldLegend, FieldSet } from "@/components/ui/field";
 import { Input } from "@/components/ui/input";
 import { Label } from "@/components/ui/label";
 import { Select, SelectContent, SelectItem, SelectTrigger, SelectValue } from "@/components/ui/select";
 import { Textarea } from "@/components/ui/textarea";
+import { PageHeader } from "@/components/page-header";
 import { acmeCaName, useAcmeCas } from "@/lib/acme-cas";
 import { CERTIFICATE_PROFILE_GUIDE } from "@/lib/certificate-profile-guide";
 import { api, can, type CertificateProfile, type CertificateProfileChanges, type RenewalPolicy } from "@/lib/api";
@@ -105,15 +105,13 @@ export function CertificateProfilesPage() {
 
   return (
     <div className="flex flex-col gap-6">
-      <div className="flex items-center justify-between gap-4">
-        <h1 className="text-xl font-semibold">Certificate Profiles</h1>
-        {mayCreate && <ProfileDialog orgId={orgId} />}
-      </div>
-      <p className="text-sm text-muted-foreground">
-        A profile says once how a kind of certificate is issued: from which CA, with which keys, for how long, and how it renews. Members request against a profile instead of
-        choosing these themselves. Each Managed Certificate keeps the settings it was made with, so editing a profile changes only what is requested after.
-      </p>
-      <ProfileGuide />
+      <PageHeader
+        title="Certificate Profiles"
+        action={mayCreate && <ProfileDialog orgId={orgId} />}
+        description="A profile says once how a kind of certificate is issued: from which CA, with which keys, for how long, and how it renews."
+        howItWorksTitle="How Certificate Profiles work"
+        howItWorks={<ProfileGuide />}
+      />
       <DataTable table={table} empty={profiles.isPending ? "Loading…" : "No Certificate Profile yet."} />
       {profiles.error && <p className="text-sm text-destructive">{profiles.error.message}</p>}
       {mayEdit && <RequireProfileSetting orgId={orgId} />}
@@ -121,29 +119,20 @@ export function CertificateProfilesPage() {
   );
 }
 
-/** How profiles work, folded away until asked for: setting one up, proposing through one, disabling and detaching. */
+/** How profiles work: members requesting against them, setting one up, proposing through one, disabling and detaching. */
 function ProfileGuide() {
   return (
-    <Collapsible className="group/guide">
-      <CollapsibleTrigger asChild>
-        <Button type="button" variant="ghost" size="sm" className="-ml-2">
-          <ChevronDownIcon className="transition-transform group-data-[state=closed]/guide:-rotate-90" />
-          How Certificate Profiles work
-        </Button>
-      </CollapsibleTrigger>
-      <CollapsibleContent className="flex max-w-3xl flex-col gap-4 pt-2">
-        {CERTIFICATE_PROFILE_GUIDE.map((section) => (
-          <section key={section.title} className="flex flex-col gap-2">
-            <h2 className="text-sm font-medium">{section.title}</h2>
-            {section.paragraphs.map((paragraph) => (
-              <p key={paragraph} className="text-sm text-muted-foreground">
-                {paragraph}
-              </p>
-            ))}
-          </section>
-        ))}
-      </CollapsibleContent>
-    </Collapsible>
+    <>
+      <p>Members request against a profile instead of choosing these themselves. Each Managed Certificate keeps the settings it was made with, so editing a profile changes only what is requested after.</p>
+      {CERTIFICATE_PROFILE_GUIDE.map((section) => (
+        <section key={section.title} className="flex flex-col gap-2 pt-2">
+          <h2 className="text-sm font-medium text-foreground">{section.title}</h2>
+          {section.paragraphs.map((paragraph) => (
+            <p key={paragraph}>{paragraph}</p>
+          ))}
+        </section>
+      ))}
+    </>
   );
 }
 

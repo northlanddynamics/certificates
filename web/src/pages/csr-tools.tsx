@@ -9,6 +9,7 @@ import { Field, FieldDescription, FieldError, FieldGroup, FieldLabel } from "@/c
 import { Input } from "@/components/ui/input";
 import { Select, SelectContent, SelectItem, SelectTrigger, SelectValue } from "@/components/ui/select";
 import { Textarea } from "@/components/ui/textarea";
+import { PageHeader } from "@/components/page-header";
 import {
   DEFAULT_KEY_ALGORITHM,
   KEY_ALGORITHMS,
@@ -110,12 +111,11 @@ export function CsrToolsPage() {
 
   return (
     <form className="flex flex-col gap-6" onSubmit={generate}>
-      <div>
-        <h1 className="text-xl font-semibold">CSR Generator</h1>
-        <p className="text-sm text-muted-foreground">
-          A key and a CSR made in your browser. The key is never sent to the platform, which cannot recover it for you: keep it, and give the CSR to whoever signs it.
-        </p>
-      </div>
+      <PageHeader
+        title="CSR Generator"
+        description="A key and a CSR made in your browser."
+        howItWorks={<p>The key is never sent to the platform, which cannot recover it for you: keep it, and give the CSR to whoever signs it.</p>}
+      />
       <div className="grid items-start gap-6 lg:grid-cols-2">
         <Card>
           <CardHeader>

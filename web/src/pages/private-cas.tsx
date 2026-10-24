@@ -23,6 +23,7 @@ import { api, can, issuingCaRevocationReasons, type IssuingCa, type PermittedNam
 import { useOrg } from "@/lib/use-org";
 import { KEY_ALGORITHM_LABELS, isMlDsa, type KeyAlgorithm } from "@/lib/csr-generator";
 import { useKeyAlgorithms } from "@/components/issuer-choice";
+import { PageHeader } from "@/components/page-header";
 import { splitNames } from "@/lib/csr-names";
 import { keyAlgorithmLabel } from "@/lib/managed-certificate";
 import { DEFAULT_VALIDITY_DAYS, MAX_LIFETIME_YEARS, MAX_VALIDITY_DAYS, commonNameOf, daysLabel, isValidityDays, rootSubjectOf, validityLabel } from "@/lib/private-ca";
@@ -124,15 +125,18 @@ export function PrivateCasPage() {
 
   return (
     <div className="flex flex-col gap-6">
-      <div className="flex items-center justify-between gap-4">
-        <h1 className="text-xl font-semibold">Private CAs</h1>
-        {org && can(org, "privateCa", "create") && <CreatePrivateCaDialog orgId={orgId} />}
-      </div>
-      <p className="text-sm text-muted-foreground">
-        The Organization's own CAs, for internal names a public CA will not validate. Each is a root and one or more Issuing CAs under it, each with its own key in the KMS,
-        which never leaves it. A Managed Certificate is issued from one Issuing CA and needs no DCV; download the root to install it wherever its Certificates must be trusted.
-        Add an Issuing CA under the same root, for other names or to roll over, and nothing that trusts the root needs anything new.
-      </p>
+      <PageHeader
+        title="Private CAs"
+        action={org && can(org, "privateCa", "create") && <CreatePrivateCaDialog orgId={orgId} />}
+        description="The Organization's own CAs, for internal names a public CA will not validate."
+        howItWorks={
+          <>
+            <p>Each is a root and one or more Issuing CAs under it, each with its own key in the KMS, which never leaves it.</p>
+            <p>A Managed Certificate is issued from one Issuing CA and needs no DCV; download the root to install it wherever its Certificates must be trusted.</p>
+            <p>Add an Issuing CA under the same root, for other names or to roll over, and nothing that trusts the root needs anything new.</p>
+          </>
+        }
+      />
       {org && !allowed ? (
         <p className="text-sm text-muted-foreground">You may not see the Private CAs.</p>
       ) : (

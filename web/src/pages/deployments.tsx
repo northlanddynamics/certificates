@@ -12,6 +12,7 @@ import { Badge } from "@/components/ui/badge";
 import { Button } from "@/components/ui/button";
 import { Dialog, DialogContent, DialogDescription, DialogHeader, DialogTitle, DialogTrigger } from "@/components/ui/dialog";
 import { FieldError } from "@/components/ui/field";
+import { PageHeader } from "@/components/page-header";
 import { ApiError, api, can, type Deployment, type DeploymentRun, type DeploymentState, type Me, type ScriptParameter } from "@/lib/api";
 import { useOrg } from "@/lib/use-org";
 import { useAction } from "@/lib/use-action";
@@ -151,14 +152,17 @@ export function DeploymentsPage() {
 
   return (
     <div className="flex flex-col gap-6">
-      <div className="flex items-center justify-between gap-4">
-        <h1 className="text-xl font-semibold">Deployments</h1>
-        {org && can(org, "deployment", "create") && <NewDeploymentDialog org={org} />}
-      </div>
-      <p className="text-sm text-muted-foreground">
-        A Deployment has one Agent make the private key for a Managed Certificate on its own host, so the key never reaches the platform, and run a Deployment Script with the
-        Certificate and the key's location each time a Certificate is issued for it. The Agent does its part when it next polls.
-      </p>
+      <PageHeader
+        title="Deployments"
+        action={org && can(org, "deployment", "create") && <NewDeploymentDialog org={org} />}
+        description="A Deployment has one Agent make a Managed Certificate's private key on its own host, so the key never reaches the platform."
+        howItWorks={
+          <p>
+            The Agent runs a Deployment Script with the Certificate and the key's location each time a Certificate is issued for it. The Agent does its part when it next
+            polls.
+          </p>
+        }
+      />
       {org && !allowed ? (
         <p className="text-sm text-muted-foreground">Only Organization Administrators see the Deployments.</p>
       ) : (

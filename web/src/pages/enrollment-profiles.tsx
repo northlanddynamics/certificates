@@ -36,6 +36,7 @@ import { DropdownMenu, DropdownMenuContent, DropdownMenuItem, DropdownMenuSepara
 import { Field, FieldDescription, FieldError, FieldGroup, FieldLabel, FieldLegend, FieldSet } from "@/components/ui/field";
 import { Input } from "@/components/ui/input";
 import { Select, SelectContent, SelectItem, SelectTrigger, SelectValue } from "@/components/ui/select";
+import { PageHeader } from "@/components/page-header";
 import { api, can, type CreatedEnrollmentProfile, type EnrollmentProfile } from "@/lib/api";
 import { useOrg } from "@/lib/use-org";
 import { daysLabel, findIssuingCa, issuingCaTitle, isValidityDays } from "@/lib/private-ca";
@@ -130,15 +131,17 @@ export function EnrollmentProfilesPage() {
 
   return (
     <div className="flex flex-col gap-6">
-      <div className="flex items-center justify-between gap-4">
-        <h1 className="text-xl font-semibold">Enrollment Profiles</h1>
-        {org && can(org, "enrollmentProfile", "create") && <NewProfileDialog orgId={orgId} />}
-      </div>
-      <p className="text-sm text-muted-foreground">
-        Devices enroll at a profile's SCEP URL and get a Device Certificate from its Issuing CA, with the profile's key usage, extended key usages and validity, and the
-        subject and names of their own request. Paste the SCEP URL into your device management platform's SCEP profile, and give its trusted certificate profile the
-        root.
-      </p>
+      <PageHeader
+        title="Enrollment Profiles"
+        action={org && can(org, "enrollmentProfile", "create") && <NewProfileDialog orgId={orgId} />}
+        description="Devices enroll at a profile's SCEP URL and get a Device Certificate from its Issuing CA."
+        howItWorks={
+          <p>
+            A Device Certificate has the profile's key usage, extended key usages and validity, and the subject and names of the device's own request. Paste the SCEP URL into
+            your device management platform's SCEP profile, and give its trusted certificate profile the root.
+          </p>
+        }
+      />
       {org && !allowed ? (
         <p className="text-sm text-muted-foreground">Only Organization Administrators see the Enrollment Profiles.</p>
       ) : (

@@ -8,6 +8,7 @@ import { Alert, AlertDescription } from "@/components/ui/alert";
 import { Card, CardContent, CardDescription, CardHeader, CardTitle } from "@/components/ui/card";
 import { Empty, EmptyDescription, EmptyHeader, EmptyMedia, EmptyTitle } from "@/components/ui/empty";
 import { Tabs, TabsList, TabsTrigger } from "@/components/ui/tabs";
+import { PageHeader } from "@/components/page-header";
 import { parseCertificateDetails, type CertificateReading } from "@/lib/certificate-details";
 import { parseCsrDetails, type CsrReading } from "@/lib/csr-details";
 import { fileBaseOf } from "@/lib/pki-convert";
@@ -78,12 +79,11 @@ export function ViewerPage() {
 
   return (
     <div className="flex flex-col gap-6">
-      <div>
-        <h1 className="text-xl font-semibold">PEM Parser</h1>
-        <p className="text-sm text-muted-foreground">
-          Paste, drop or choose a CSR or a certificate; you need not say which. See what it holds, and for a CSR whether the platform would take it, then convert it to PEM, DER, base64 or PKCS#7. It is read in your browser; nothing is sent.
-        </p>
-      </div>
+      <PageHeader
+        title="PEM Parser"
+        description="See what a CSR or certificate holds, and convert it to PEM, DER, base64 or PKCS#7. It is read in your browser; nothing is sent."
+        howItWorks={<p>Paste, drop or choose a CSR or a certificate; you need not say which. For a CSR, it also says whether the platform would take it.</p>}
+      />
       <div className="grid items-start gap-6 lg:grid-cols-[minmax(0,2fr)_minmax(0,3fr)]">
         {/* Kept in view while the details scroll; a column taller than the window scrolls by itself. */}
         <div className="flex flex-col gap-6 lg:sticky lg:top-4 lg:max-h-[calc(100vh-2rem)] lg:overflow-y-auto lg:-m-1 lg:p-1 [&>*]:shrink-0">

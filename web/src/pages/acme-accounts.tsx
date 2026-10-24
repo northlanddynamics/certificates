@@ -12,6 +12,7 @@ import { Dialog, DialogClose, DialogContent, DialogDescription, DialogFooter, Di
 import { Field, FieldDescription, FieldError, FieldGroup, FieldLabel, FieldLegend, FieldSet } from "@/components/ui/field";
 import { Input } from "@/components/ui/input";
 import { Label } from "@/components/ui/label";
+import { PageHeader } from "@/components/page-header";
 import { api, can, type AcmeAccount, type AcmeCa, type AcmeCaTag } from "@/lib/api";
 import { ACME_CA_TAG_LABELS, useAcmeCas } from "@/lib/acme-cas";
 import { useOrg } from "@/lib/use-org";
@@ -86,14 +87,17 @@ export function AcmeAccountsPage() {
 
   return (
     <div className="flex flex-col gap-6">
-      <div className="flex items-center justify-between gap-4">
-        <h1 className="text-xl font-semibold">ACME accounts</h1>
-        {org && can(org, "acmeAccount", "create") && !loading && <RegisterAccountDialog orgId={orgId} acmeCas={missing} />}
-      </div>
-      <p className="text-sm text-muted-foreground">
-        A Managed Certificate is issued under the Organization's account with its ACME CA. Each ACME CA needs an account of its own; register with Let's Encrypt Staging first to try an
-        Issuance before production. For any other ACME CA, add it as a custom ACME CA, with External Account Binding if it requires one: its account is registered as it is added.
-      </p>
+      <PageHeader
+        title="ACME accounts"
+        action={org && can(org, "acmeAccount", "create") && !loading && <RegisterAccountDialog orgId={orgId} acmeCas={missing} />}
+        description="A Managed Certificate is issued under the Organization's account with its ACME CA."
+        howItWorks={
+          <p>
+            Each ACME CA needs an account of its own; register with Let's Encrypt Staging first to try an Issuance before production. For any other ACME CA, add it as a custom
+            ACME CA, with External Account Binding if it requires one: its account is registered as it is added.
+          </p>
+        }
+      />
       {org && !allowed ? (
         <p className="text-sm text-muted-foreground">Only Organization Administrators see the ACME accounts.</p>
       ) : (

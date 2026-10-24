@@ -10,6 +10,7 @@ import { DataTablePagination } from "@/components/data-table/data-table-paginati
 import { Badge } from "@/components/ui/badge";
 import { Button } from "@/components/ui/button";
 import { Dialog, DialogClose, DialogContent, DialogDescription, DialogFooter, DialogHeader, DialogTitle, DialogTrigger } from "@/components/ui/dialog";
+import { PageHeader } from "@/components/page-header";
 import { api, can, type Agent } from "@/lib/api";
 import { useOrg } from "@/lib/use-org";
 import { useAction } from "@/lib/use-action";
@@ -86,15 +87,22 @@ export function AgentsPage() {
 
   return (
     <div className="flex flex-col gap-6">
-      <div className="flex items-center justify-between gap-4">
-        <h1 className="text-xl font-semibold">Agents</h1>
-        {org && can(org, "agent", "register") && <RegisterAgentDialog orgId={orgId} />}
-      </div>
-      <p className="text-sm text-muted-foreground">
-        An Agent runs on a host inside your network and only ever connects out to the platform. It registers once with a single-use token, and then authenticates with a
-        credential that it replaces by itself. An Agent that has not been in touch for two minutes is shown as offline.
-        {agents.data && <> The latest version is {agents.data.latestVersion}.</>}
-      </p>
+      <PageHeader
+        title="Agents"
+        action={org && can(org, "agent", "register") && <RegisterAgentDialog orgId={orgId} />}
+        description={
+          <>
+            An Agent runs on a host inside your network and only ever connects out to the platform.
+            {agents.data && <> The latest version is {agents.data.latestVersion}.</>}
+          </>
+        }
+        howItWorks={
+          <p>
+            It registers once with a single-use token, and then authenticates with a credential that it replaces by itself. An Agent that has not been in touch for two minutes
+            is shown as offline.
+          </p>
+        }
+      />
       {org && !can(org, "agent", "read") ? (
         <p className="text-sm text-muted-foreground">Only Organization Administrators see the Agents.</p>
       ) : (

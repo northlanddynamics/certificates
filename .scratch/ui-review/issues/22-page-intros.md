@@ -4,7 +4,7 @@
 
 **Blocked by:** none
 
-**Status:** ready-for-agent
+**Status:** done
 
-- [ ] A shared page header component: title, one-line description, primary action, optional collapsible "How it works".
-- [ ] Every page uses it, which also fixes the inconsistent title-to-description gap (CSR Generator and PEM Parser are tight, others loose).
+- [x] A shared page header component: title, one-line description, primary action, optional collapsible "How it works".
+- [x] Every page uses it, which also fixes the inconsistent title-to-description gap (CSR Generator and PEM Parser are tight, others loose).

@@ -10,6 +10,7 @@ import { Button } from "@/components/ui/button";
 import { Dialog, DialogClose, DialogContent, DialogDescription, DialogFooter, DialogHeader, DialogTitle, DialogTrigger } from "@/components/ui/dialog";
 import { Input } from "@/components/ui/input";
 import { Label } from "@/components/ui/label";
+import { PageHeader } from "@/components/page-header";
 import { api, can, type NotificationChannel } from "@/lib/api";
 import { useOrg } from "@/lib/use-org";
 import { useAction } from "@/lib/use-action";
@@ -54,14 +55,12 @@ export function NotificationChannelsPage() {
 
   return (
     <div className="flex flex-col gap-6">
-      <div className="flex items-center justify-between gap-4">
-        <h1 className="text-xl font-semibold">Notification channels</h1>
-        {mayConfigure && <AddChannelDialog orgId={orgId} />}
-      </div>
-      <p className="text-sm text-muted-foreground">
-        Besides people and Teams, a Managed Certificate's notices can go to a shared mailbox or to a webhook, which receives each notice as JSON. A channel is told only of the
-        Managed Certificates it is subscribed to; nothing is subscribed by default.
-      </p>
+      <PageHeader
+        title="Notification channels"
+        action={mayConfigure && <AddChannelDialog orgId={orgId} />}
+        description="Besides people and Teams, a Managed Certificate's notices can go to a shared mailbox or to a webhook."
+        howItWorks={<p>A webhook receives each notice as JSON. A channel is told only of the Managed Certificates it is subscribed to; nothing is subscribed by default.</p>}
+      />
       <DataTable table={table} empty={channels.isPending ? "Loading…" : "No notification channel is configured yet."} />
       {channels.error && <p className="text-sm text-destructive">{channels.error.message}</p>}
     </div>

@@ -8,6 +8,7 @@ import { Badge } from "@/components/ui/badge";
 import { Button } from "@/components/ui/button";
 import { Input } from "@/components/ui/input";
 import { Label } from "@/components/ui/label";
+import { PageHeader } from "@/components/page-header";
 import { api, can, type AuditEvent, type AuditFilters } from "@/lib/api";
 import { useOrg } from "@/lib/use-org";
 
@@ -70,10 +71,11 @@ export function AuditLogPage() {
 
   return (
     <div className="flex flex-col gap-6">
-      <h1 className="text-xl font-semibold">Audit log</h1>
-      <p className="text-sm text-muted-foreground">
-        Every change to the Organization, newest first. Audit Events are kept for ever and cannot be changed or deleted. To send them to a SIEM, see Audit forwarding.
-      </p>
+      <PageHeader
+        title="Audit log"
+        description="Every change to the Organization, newest first."
+        howItWorks={<p>Audit Events are kept for ever and cannot be changed or deleted. To send them to a SIEM, see Audit forwarding.</p>}
+      />
       <AuditFilterForm onSearch={setFilters} />
       <DataTable
         table={table}

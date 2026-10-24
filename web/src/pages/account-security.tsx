@@ -10,6 +10,7 @@ import { Card, CardAction, CardContent, CardDescription, CardHeader, CardTitle }
 import { Dialog, DialogClose, DialogContent, DialogDescription, DialogFooter, DialogHeader, DialogTitle, DialogTrigger } from "@/components/ui/dialog";
 import { Input } from "@/components/ui/input";
 import { Label } from "@/components/ui/label";
+import { PageHeader } from "@/components/page-header";
 import { api } from "@/lib/api";
 import { authClient, unwrap } from "@/lib/auth-client";
 import { useAction } from "@/lib/use-action";
@@ -28,7 +29,7 @@ export function AccountSecurityPage() {
 
   return (
     <div className="flex max-w-3xl flex-col gap-6">
-      <h1 className="text-xl font-semibold">Account security</h1>
+      <PageHeader title="Account security" />
       {mfa?.setupRequired && (
         <Alert variant="destructive">
           <ShieldAlertIcon />

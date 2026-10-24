@@ -12,6 +12,7 @@ import { Dialog, DialogClose, DialogContent, DialogDescription, DialogFooter, Di
 import { Input } from "@/components/ui/input";
 import { Label } from "@/components/ui/label";
 import { Select, SelectContent, SelectItem, SelectTrigger, SelectValue } from "@/components/ui/select";
+import { PageHeader } from "@/components/page-header";
 import { api, can, type ApiKey } from "@/lib/api";
 import { useOrg } from "@/lib/use-org";
 import { useAction } from "@/lib/use-action";
@@ -60,15 +61,21 @@ export function ApiKeysPage() {
 
   return (
     <div className="flex flex-col gap-6">
-      <div className="flex items-center justify-between gap-4">
-        <h1 className="text-xl font-semibold">API keys</h1>
-        <MakeKeyDialog orgId={orgId} mayMakeOrganizationKeys={org ? can(org, "apiKey", "create") : false} />
-      </div>
-      <p className="text-sm text-muted-foreground">
-        A key is sent in the <code>x-api-key</code> header and, so far, downloads Certificates. Your own key acts as you in this Organization, for what you may see and do, and
-        every use is recorded under your name. An Organization's key belongs to the Organization: it downloads every Managed Certificate in it, keeps working when whoever made it
-        leaves, and each use is recorded with the key and who made it.
-      </p>
+      <PageHeader
+        title="API keys"
+        action={<MakeKeyDialog orgId={orgId} mayMakeOrganizationKeys={org ? can(org, "apiKey", "create") : false} />}
+        description={
+          <>
+            A key is sent in the <code>x-api-key</code> header and, so far, downloads Certificates.
+          </>
+        }
+        howItWorks={
+          <p>
+            Your own key acts as you in this Organization, for what you may see and do, and every use is recorded under your name. An Organization's key belongs to the
+            Organization: it downloads every Managed Certificate in it, keeps working when whoever made it leaves, and each use is recorded with the key and who made it.
+          </p>
+        }
+      />
       <div className="flex flex-col gap-4">
         <DataTable table={table} empty={keys.isPending ? "Loading…" : "You have no API keys here."} />
         <DataTablePagination

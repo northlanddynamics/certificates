@@ -16,6 +16,7 @@ import { Input } from "@/components/ui/input";
 import { Label } from "@/components/ui/label";
 import { Select, SelectContent, SelectItem, SelectTrigger, SelectValue } from "@/components/ui/select";
 import { Textarea } from "@/components/ui/textarea";
+import { PageHeader } from "@/components/page-header";
 import { api, can, type LoginPolicy, type Me, type SsoConnection, type SsoConnectionChange } from "@/lib/api";
 import { useOrg } from "@/lib/use-org";
 import { useAction } from "@/lib/use-action";
@@ -40,7 +41,7 @@ export function SignInSettingsPage() {
 
   return (
     <div className="flex flex-col gap-6">
-      <h1 className="text-xl font-semibold">Sign-in settings</h1>
+      <PageHeader title="Sign-in settings" />
       <div className="grid items-start gap-6 lg:grid-cols-2">
         {org && can(org, "loginPolicy", "read") && <LoginPolicyCard orgId={orgId} mayChange={can(org, "loginPolicy", "update")} />}
         {org && can(org, "ssoConnection", "read") && <SsoConnectionsCard org={org} />}
