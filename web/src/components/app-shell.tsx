@@ -1,5 +1,5 @@
 import { useQuery } from "@tanstack/react-query";
-import { Link, Navigate, Outlet, useLocation, useParams } from "@tanstack/react-router";
+import { Navigate, Outlet, useLocation, useParams } from "@tanstack/react-router";
 import { AppSidebar } from "@/components/app-sidebar";
 import { LoadError } from "@/components/load-error";
 import { Breadcrumb, BreadcrumbItem, BreadcrumbList, BreadcrumbPage, BreadcrumbSeparator } from "@/components/ui/breadcrumb";
@@ -13,21 +13,16 @@ import { useSignOut } from "@/lib/use-sign-out";
 
 /** The signed-in pages: the left navigation around whichever page is open. */
 export function AppShell() {
-  const { pathname } = useLocation();
+  const { pathname, href } = useLocation();
   const { orgId } = useParams({ strict: false });
   const me = useQuery({ queryKey: ["me"], queryFn: api.me });
   const signOut = useSignOut();
 
   if (me.isPending) return <p className="p-6 text-muted-foreground">Loading…</p>;
+  // Replacing the page they asked for, so that Back does not bring them here again, and back to it once signed in. The
+  // shell still renders while the router moves to the sign-in page, which must not become the page to go back to.
   if (me.error instanceof ApiError && me.error.status === 401) {
-    return (
-      <p className="p-6">
-        <Link to="/sign-in" className="underline">
-          Sign in
-        </Link>{" "}
-        to continue.
-      </p>
-    );
+    return pathname === "/sign-in" ? null : <Navigate to="/sign-in" search={{ redirect: href }} replace />;
   }
   // Retried a few times already (see main.tsx): the platform is down or unreachable, which may pass.
   if (me.error) {

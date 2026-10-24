@@ -57,7 +57,13 @@ const publicRoute = createRoute({
 const appRoute = createRoute({ getParentRoute: () => rootRoute, id: "app", component: AppShell });
 
 const homeRoute = createRoute({ getParentRoute: () => appRoute, path: "/", component: HomePage });
-const signInRoute = createRoute({ getParentRoute: () => publicRoute, path: "/sign-in", component: SignInPage });
+// `redirect` is the page a signed-out visitor asked for, to go back to once signed in (checked by `safeRedirect`).
+const signInRoute = createRoute({
+  getParentRoute: () => publicRoute,
+  path: "/sign-in",
+  validateSearch: (search: Record<string, unknown>): { redirect?: string } => (typeof search.redirect === "string" ? { redirect: search.redirect } : {}),
+  component: SignInPage,
+});
 export const acceptInvitationRoute = createRoute({
   getParentRoute: () => publicRoute,
   path: "/accept-invitation/$invitationId",

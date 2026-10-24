@@ -4,9 +4,9 @@
 
 **Blocked by:** none
 
-**Status:** ready-for-agent
+**Status:** done
 
-- [ ] A 401 from `me` redirects to `/sign-in?redirect=<path>` (replace, so Back does not loop).
-- [ ] After password, second factor or passkey sign-in, the user lands on `redirect` when it is a same-origin path, else `/`.
-- [ ] The SSO `callbackURL` carries the same path.
-- [ ] An external or malformed `redirect` is ignored (no open redirect).
+- [x] A 401 from `me` redirects to `/sign-in?redirect=<path>` (replace, so Back does not loop).
+- [x] After password, second factor or passkey sign-in, the user lands on `redirect` when it is a same-origin path, else `/`.
+- [x] The SSO `callbackURL` carries the same path.
+- [x] An external or malformed `redirect` is ignored (no open redirect).
