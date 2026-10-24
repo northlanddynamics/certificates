@@ -4,7 +4,7 @@
 
 **Blocked by:** 15
 
-**Status:** ready-for-agent
+**Status:** done
 
-- [ ] Empty values read "None yet" in muted text, same size, everywhere in the preview.
-- [ ] Generate's disabled reason comes from ticket 15.
+- [x] Empty values read "None yet" in muted text, same size, everywhere in the preview.
+- [x] Generate's disabled reason comes from ticket 15.

@@ -24,7 +24,7 @@ import {
 } from "../../../server/src/enrollment/enrollment-profile-kinds";
 import { ConfirmDialog } from "@/components/confirm-dialog";
 import { CopyButton } from "@/components/copy-button";
-import { SteppedForm, STEPPED_DIALOG } from "@/components/stepped-form";
+import { SteppedForm, STEPPED_DIALOG, type Missing } from "@/components/stepped-form";
 import { SummaryRows } from "@/components/summary-rows";
 import { Alert, AlertDescription, AlertTitle } from "@/components/ui/alert";
 import { DataTable } from "@/components/data-table/data-table";
@@ -837,7 +837,6 @@ function NewProfileForm({ orgId, onDone }: { orgId: string; onDone: (created: Cr
   const takesNameRules = kindTakesNameRules(kinds.data?.items, kind);
   const [nameRulesDraft, setNameRulesDraft] = useState(EMPTY_NAME_RULES);
   const nameRules = takesNameRules ? rulesOf(nameRulesDraft) : { rules: null };
-  const intuneOk = TENANT.test(tenantId.trim()) && GUID.test(appId.trim()) && appSecret !== "";
   const validator = intune ? { kind, settings: { tenantId: tenantId.trim(), appId: appId.trim() }, secret: appSecret } : { kind };
   const create = useAction(
     () => api.createEnrollmentProfile(orgId, { name: name.trim(), issuingCaId, validityDays: Number(validityDays), retentionDays: Number(retentionDays), keyUsage, extendedKeyUsage, allowedKeyTypes, validator, ...("rules" in nameRules && nameRules.rules && { nameRules: nameRules.rules }) }),
@@ -847,13 +846,31 @@ function NewProfileForm({ orgId, onDone }: { orgId: string; onDone: (created: Cr
   const validityOk = isValidityDays(validityDays, MAX_DEVICE_VALIDITY_DAYS);
   const retentionOk = isRetentionDays(retentionDays);
 
-  // Whether each step holds what it needs; Review only shows what was entered.
-  const complete: Record<StepId, boolean> = {
-    issuer: name.trim() !== "" && issuingCaId !== "",
-    certificate: validityOk && retentionOk && extendedKeyUsage.length > 0 && keyUsage.length > 0,
-    keys: allowedKeyTypes.length > 0,
-    validator: kind !== "" && (!intune || intuneOk) && "rules" in nameRules,
-    review: true,
+  // What each step still needs; Review only shows what was entered.
+  const missing: Partial<Record<StepId, Missing>> = {
+    issuer: name.trim() === "" ? { reason: "Give the profile a name.", field: "profile-name" } : issuingCaId === "" ? { reason: "Choose the Issuing CA.", field: "profile-issuing-ca" } : undefined,
+    certificate: !validityOk
+      ? { reason: `Give a validity of 1 to ${MAX_DEVICE_VALIDITY_DAYS} days.`, field: "profile-validity" }
+      : !retentionOk
+        ? { reason: `Give a retention of 0 to ${MAX_DEVICE_RETENTION_DAYS} days.`, field: "profile-retention" }
+        : keyUsage.length === 0
+          ? { reason: "Choose at least one key usage.", field: `profile-ku-${DEVICE_KEY_USAGES[0]}` }
+          : extendedKeyUsage.length === 0
+            ? { reason: "Choose at least one extended key usage.", field: `profile-eku-${DEVICE_EXTENDED_KEY_USAGE_NAMES[0]}` }
+            : undefined,
+    keys: allowedKeyTypes.length > 0 ? undefined : { reason: "Allow at least one kind of device key.", field: `profile-keys-${DEVICE_KEY_TYPES[0]}` },
+    validator:
+      kind === ""
+        ? { reason: "Choose how devices are checked.", field: "profile-validator" }
+        : intune && !TENANT.test(tenantId.trim())
+          ? { reason: "Give the tenant as its ID or its domain.", field: "intune-tenant" }
+          : intune && !GUID.test(appId.trim())
+            ? { reason: "Give the app (client) ID, a GUID.", field: "intune-app" }
+            : intune && appSecret === ""
+              ? { reason: "Give the app's client secret.", field: "intune-secret" }
+              : "error" in nameRules
+                ? { reason: nameRules.error, field: "profile-name-rules-subject" }
+                : undefined,
   };
 
   return (
@@ -862,7 +879,7 @@ function NewProfileForm({ orgId, onDone }: { orgId: string; onDone: (created: Cr
       steps={STEPS}
       step={step}
       onStep={setStep}
-      complete={complete}
+      missing={missing}
       submitLabel="Create"
       pending={create.isPending}
       onSubmit={() => create.mutate(undefined)}

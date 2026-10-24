@@ -4,7 +4,7 @@ import { createColumnHelper, tableFeatures, useTable } from "@tanstack/react-tab
 import { ClipboardCheckIcon, KeyRoundIcon, LandmarkIcon, PlusIcon, ServerIcon } from "lucide-react";
 import { useState, type FormEvent } from "react";
 import { AcmeCaTagBadge } from "@/components/acme-ca-tag";
-import { SteppedForm, STEPPED_DIALOG, type Step } from "@/components/stepped-form";
+import { SteppedForm, STEPPED_DIALOG, type Missing, type Step } from "@/components/stepped-form";
 import { ConfirmDialog } from "@/components/confirm-dialog";
 import { DataTable } from "@/components/data-table/data-table";
 import { Button } from "@/components/ui/button";
@@ -306,11 +306,18 @@ function RegisterAccountForm({ orgId, acmeCas, onDone }: { orgId: string; acmeCa
     onDone,
   );
   const caName = chosen?.name ?? (name.trim() || "the CA");
-  const complete: Record<RegisterStepId, boolean> = {
-    ca: true,
-    details: name.trim() !== "" && directoryUrl.trim() !== "",
-    binding: (externalAccountKeyId.trim() === "") === (externalAccountHmacKey.trim() === ""),
-    account: agreed,
+  const bindingOk = (externalAccountKeyId.trim() === "") === (externalAccountHmacKey.trim() === "");
+  const missing: Partial<Record<RegisterStepId, Missing>> = {
+    details:
+      name.trim() === ""
+        ? { reason: "Give the CA a name.", field: "acme-ca-name" }
+        : directoryUrl.trim() === ""
+          ? { reason: "Give the CA's ACME directory URL.", field: "acme-ca-directory" }
+          : undefined,
+    binding: bindingOk
+      ? undefined
+      : { reason: "Give both the key id and the HMAC key, or neither.", field: externalAccountKeyId.trim() === "" ? "acme-ca-eab-key-id" : "acme-ca-eab-hmac-key" },
+    account: agreed ? undefined : { reason: `Agree to ${caName}'s terms of service.`, field: "acme-terms" },
   };
   return (
     <SteppedForm
@@ -318,7 +325,7 @@ function RegisterAccountForm({ orgId, acmeCas, onDone }: { orgId: string; acmeCa
       steps={chosen ? BUILT_IN_STEPS : CUSTOM_STEPS}
       step={step}
       onStep={setStep}
-      complete={complete}
+      missing={missing}
       submitLabel={chosen ? "Register" : "Add and register"}
       pending={register.isPending}
       onSubmit={() => register.mutate(undefined)}
@@ -393,7 +400,7 @@ function RegisterAccountForm({ orgId, acmeCas, onDone }: { orgId: string; acmeCa
             <Field>
               <FieldLabel htmlFor="acme-ca-eab-hmac-key">HMAC key</FieldLabel>
               <Input id="acme-ca-eab-hmac-key" type="password" autoComplete="off" value={externalAccountHmacKey} onChange={(e) => setExternalAccountHmacKey(e.target.value)} />
-              {!complete.binding && <FieldError>Give both the key id and the HMAC key, or neither.</FieldError>}
+              {!bindingOk && <FieldError>Give both the key id and the HMAC key, or neither.</FieldError>}
             </Field>
           </FieldGroup>
         </FieldSet>
@@ -407,7 +414,7 @@ function RegisterAccountForm({ orgId, acmeCas, onDone }: { orgId: string; acmeCa
               <Input id="acme-contact" type="email" autoFocus value={contactEmail} onChange={(e) => setContactEmail(e.target.value)} />
             </Field>
             <label className="flex items-start gap-2 text-sm">
-              <input type="checkbox" className="mt-1" checked={agreed} onChange={(e) => setAgreed(e.target.checked)} />
+              <input id="acme-terms" type="checkbox" className="mt-1" checked={agreed} onChange={(e) => setAgreed(e.target.checked)} />
               <span>I agree to {caName}'s terms of service on the Organization's behalf.</span>
             </label>
             {(chosen?.tag ?? tag) === "production" && <p className="text-sm text-muted-foreground">This is an account with a production CA, which may rate-limit.</p>}

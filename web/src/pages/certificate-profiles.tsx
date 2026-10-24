@@ -6,7 +6,7 @@ import { useState } from "react";
 import { ConfirmDialog } from "@/components/confirm-dialog";
 import { DataTable } from "@/components/data-table/data-table";
 import { IssuerChoiceFields, useIssuerChoice } from "@/components/issuer-choice";
-import { SteppedForm, STEPPED_DIALOG } from "@/components/stepped-form";
+import { SteppedForm, STEPPED_DIALOG, type Missing } from "@/components/stepped-form";
 import { SummaryRows } from "@/components/summary-rows";
 import { Badge } from "@/components/ui/badge";
 import { Button } from "@/components/ui/button";
@@ -282,17 +282,20 @@ function ProfileForm({ orgId, profile, onDone }: { orgId: string; profile?: Cert
     onDone,
   );
 
-  // Whether each step holds what it needs. The Issuer step does unless its validity is out of range or its ACME CA has no account; the Co-Owner step always
+  // What each step still needs. The Issuer step needs nothing unless its validity is out of range or its ACME CA has no account; the Co-Owner step never
   // does, a Team being optional; Review only shows what was entered.
-  const complete: Record<StepId, boolean> = {
-    details: changes.name !== "",
-    issuer: choice.validityOk && choice.registered !== false,
-    keys: allowedKeys.length > 0,
-    names: maxNamesOk,
-    renewal: daysOk,
-    team: true,
-    review: true,
+  const missing: Partial<Record<StepId, Missing>> = {
+    details: changes.name === "" ? { reason: "Give the profile a name.", field: "profile-name" } : undefined,
+    issuer: !choice.validityOk
+      ? { reason: "Give a validity the Issuing CA allows.", field: "profile-validity" }
+      : choice.registered === false
+        ? { reason: "The Organization has no account with that ACME CA: choose another." }
+        : undefined,
+    keys: allowedKeys.length > 0 ? undefined : { reason: "Allow at least one key algorithm.", field: `profile-key-${choice.keyAlgorithms[0]}` },
+    names: maxNamesOk ? undefined : { reason: `Give at most ${MAX_NAMES} names, or leave it empty for any.`, field: "profile-max-names" },
+    renewal: daysOk ? undefined : { reason: "Give 1 to 365 days before expiry.", field: "profile-renewal-days" },
   };
+
   const title = profile ? `Edit ${profile.name}` : "New Certificate Profile";
 
   return (
@@ -301,7 +304,7 @@ function ProfileForm({ orgId, profile, onDone }: { orgId: string; profile?: Cert
       steps={STEPS}
       step={step}
       onStep={setStep}
-      complete={complete}
+      missing={missing}
       submitLabel={profile ? "Save" : "Create"}
       pending={save.isPending}
       onSubmit={() => save.mutate(undefined)}
@@ -419,7 +422,7 @@ function ProfileForm({ orgId, profile, onDone }: { orgId: string; profile?: Cert
                 <SelectItem value="manual">Manual</SelectItem>
               </SelectContent>
             </Select>
-            <Input type="number" min={1} max={365} step={1} className="w-20" aria-label="Days before expiry" aria-invalid={!daysOk} value={days} onChange={(e) => setDays(e.target.value)} />
+            <Input id="profile-renewal-days" type="number" min={1} max={365} step={1} className="w-20" aria-label="Days before expiry" aria-invalid={!daysOk} value={days} onChange={(e) => setDays(e.target.value)} />
             <span className="text-sm text-muted-foreground">days before expiry</span>
           </div>
           {!daysOk && <FieldError>Between 1 and 365 days.</FieldError>}

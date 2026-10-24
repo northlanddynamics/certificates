@@ -14,7 +14,7 @@ import { RadioGroup, RadioGroupItem } from "@/components/ui/radio-group";
 import { Textarea } from "@/components/ui/textarea";
 import { Tooltip, TooltipContent, TooltipTrigger } from "@/components/ui/tooltip";
 import { ConfirmDialog } from "@/components/confirm-dialog";
-import { SteppedForm, STEPPED_DIALOG, type Step } from "@/components/stepped-form";
+import { SteppedForm, STEPPED_DIALOG, type Missing, type Step } from "@/components/stepped-form";
 import { SummaryRows } from "@/components/summary-rows";
 import { useCertificateText } from "@/components/use-certificate-text";
 import { Field, FieldDescription, FieldError, FieldGroup, FieldLabel, FieldLegend, FieldSet } from "@/components/ui/field";
@@ -717,11 +717,16 @@ function AddIssuingCaForm({ orgId, ca, onDone }: { orgId: string; ca: PrivateCa;
   const platformRoot = ca.kind === "platform_root";
   const lifetimeOk = !platformRoot || lifetimeYears.trim() === "" || (/^\d+$/.test(lifetimeYears.trim()) && Number(lifetimeYears) >= 1 && Number(lifetimeYears) <= MAX_LIFETIME_YEARS);
   const untilRootEnds = `Until the root ends${ca.root ? `, ${date(ca.root.notAfter)}` : ""}`;
-  const complete: Record<AddStepId, boolean> = {
-    issuing: subject.trim() !== "" && lifetimeOk,
-    names: hasRules(rules),
-    validity: validityProblem(validity) === undefined,
-    review: true,
+  const validityMissing = validityProblem(validity);
+  const missing: Partial<Record<AddStepId, Missing>> = {
+    issuing:
+      subject.trim() === ""
+        ? { reason: "Give the Issuing CA a subject, such as CN=Acme Internal TLS.", field: `add-issuing-${ca.id}-subject` }
+        : !lifetimeOk
+          ? { reason: `Give a lifetime of 1 to ${MAX_LIFETIME_YEARS} years, or leave it empty.`, field: `add-issuing-${ca.id}-lifetime` }
+          : undefined,
+    names: hasRules(rules) ? undefined : { reason: "Give at least one zone or exact name it may issue for.", field: `add-issuing-${ca.id}-zones` },
+    validity: validityMissing ? { reason: validityMissing, field: `add-issuing-${ca.id}-validity-default` } : undefined,
   };
   return (
     <SteppedForm
@@ -729,7 +734,7 @@ function AddIssuingCaForm({ orgId, ca, onDone }: { orgId: string; ca: PrivateCa;
       steps={ADD_STEPS}
       step={step}
       onStep={setStep}
-      complete={complete}
+      missing={missing}
       submitLabel="Add"
       pending={add.isPending}
       onSubmit={() => add.mutate(undefined)}
@@ -888,13 +893,13 @@ function CreatePrivateCaForm({ orgId, onDone }: { orgId: string; onDone: () => v
     onDone,
   );
   const lifetimeOk = !platformRoot || (Number.isInteger(Number(lifetimeYears)) && Number(lifetimeYears) >= 1 && Number(lifetimeYears) <= MAX_LIFETIME_YEARS);
-  const complete: Record<CreateStepId, boolean> = {
-    hierarchy: name.trim() !== "",
-    issuing: subject.trim() !== "",
-    key: lifetimeOk,
-    names: hasRules(rules),
-    validity: validityProblem(validity) === undefined,
-    review: true,
+  const validityMissing = validityProblem(validity);
+  const missing: Partial<Record<CreateStepId, Missing>> = {
+    hierarchy: name.trim() === "" ? { reason: "Give the Private CA a name.", field: "private-ca-name" } : undefined,
+    issuing: subject.trim() === "" ? { reason: "Give the Issuing CA a subject, such as CN=Acme Internal TLS.", field: "private-ca-subject" } : undefined,
+    key: lifetimeOk ? undefined : { reason: `Give a lifetime of 1 to ${MAX_LIFETIME_YEARS} years.`, field: "private-ca-lifetime" },
+    names: hasRules(rules) ? undefined : { reason: "Give at least one zone or exact name it may issue for.", field: "private-ca-new-zones" },
+    validity: validityMissing ? { reason: validityMissing, field: "private-ca-new-validity-default" } : undefined,
   };
   const hierarchy = HIERARCHIES.find((h) => h.value === kind);
   return (
@@ -903,7 +908,7 @@ function CreatePrivateCaForm({ orgId, onDone }: { orgId: string; onDone: () => v
       steps={CREATE_STEPS}
       step={step}
       onStep={setStep}
-      complete={complete}
+      missing={missing}
       submitLabel="Create"
       pending={create.isPending}
       onSubmit={() => create.mutate(undefined)}

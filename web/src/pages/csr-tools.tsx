@@ -1,6 +1,7 @@
-import { ChevronDownIcon, CopyIcon, DownloadIcon, KeyRoundIcon, LoaderIcon } from "lucide-react";
+import { ChevronDownIcon, CircleAlertIcon, CopyIcon, DownloadIcon, KeyRoundIcon, LoaderIcon } from "lucide-react";
 import { useState, type FormEvent } from "react";
 import { KeyAlgorithmChoice, SaveKey, downloadPem, emptyKeySource, type KeySourceState } from "@/components/csr-key-source";
+import type { Missing } from "@/components/stepped-form";
 import { Button } from "@/components/ui/button";
 import { Card, CardContent, CardDescription, CardHeader, CardTitle } from "@/components/ui/card";
 import { Collapsible, CollapsibleContent, CollapsibleTrigger } from "@/components/ui/collapsible";
@@ -79,8 +80,19 @@ export function CsrToolsPage() {
     ...(commonName ? [`CN=${commonName}`] : []),
   ].join(", ");
 
+  // What generating still needs, said beside the button once it is pressed, rather than the button being greyed out with no reason.
+  const needs: Missing | undefined =
+    problems.length > 0 ? { reason: problems[0]!, field: "csr-names" } : countryProblem ? { reason: countryProblem, field: "csr-c" } : undefined;
+  const [told, setTold] = useState(false);
+
   async function generate(e: FormEvent) {
     e.preventDefault();
+    if (needs) {
+      setTold(true);
+      if (needs.field) document.getElementById(needs.field)?.focus();
+      return;
+    }
+    setTold(false);
     setError(null);
     setWorking(true);
     try {
@@ -211,7 +223,7 @@ export function CsrToolsPage() {
             <CardContent className="flex flex-col gap-4 text-sm">
               <dl className="grid grid-cols-[7rem_1fr] gap-x-4 gap-y-2">
                 <dt className="text-muted-foreground">Subject</dt>
-                <dd className="font-mono text-xs break-all">{subjectLine || <span className="font-sans text-muted-foreground">Empty</span>}</dd>
+                <dd className="break-all">{subjectLine ? <span className="font-mono text-xs">{subjectLine}</span> : <span className="text-muted-foreground">None yet</span>}</dd>
                 <dt className="text-muted-foreground">Names</dt>
                 <dd>
                   {distinct.length > 0 ? (
@@ -241,11 +253,19 @@ export function CsrToolsPage() {
                 </Collapsible>
               )}
               {error && <FieldError>{error}</FieldError>}
-              <div>
-                <Button type="submit" disabled={working || problems.length > 0 || !!countryProblem}>
+              <div className="flex flex-wrap items-center gap-3">
+                <Button type="submit" disabled={working}>
                   {working ? <LoaderIcon className="animate-spin" /> : <KeyRoundIcon />}
                   {working ? "Generating…" : generated ? "Generate a new key and CSR" : "Generate key and CSR"}
                 </Button>
+                <p role="status" className="flex items-center gap-1.5 text-sm text-destructive">
+                  {told && needs && (
+                    <>
+                      <CircleAlertIcon className="size-4 shrink-0" aria-hidden />
+                      {needs.reason}
+                    </>
+                  )}
+                </p>
               </div>
             </CardContent>
           </Card>

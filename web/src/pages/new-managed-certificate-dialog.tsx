@@ -4,7 +4,7 @@ import { useEffect, useState, type ReactNode } from "react";
 import { ConfirmDialog } from "@/components/confirm-dialog";
 import { KeySource, SaveKey, csrOf, emptyKeySource, keyAtRisk, useKeySourceReady, type KeySourceState } from "@/components/csr-key-source";
 import { IssuerChoiceFields, useIssuerChoice } from "@/components/issuer-choice";
-import { SteppedForm, STEPPED_DIALOG } from "@/components/stepped-form";
+import { SteppedForm, STEPPED_DIALOG, type Missing } from "@/components/stepped-form";
 import { SummaryRows } from "@/components/summary-rows";
 import { Alert, AlertDescription, AlertTitle } from "@/components/ui/alert";
 import { Button } from "@/components/ui/button";
@@ -161,17 +161,21 @@ function NewManagedCertificateForm({
   );
   // The step that is open: the first, when the one chosen is not among them (no profiles to offer after all).
   const shown = steps.some((s) => s.id === step) ? step : steps[0]!.id;
-  // Whether each step holds what it needs. The Authority step does unless its validity is out of range (one CA is always chosen). The Key step does once a key is
-  // generated for these names, or a CSR that matches them is pasted; the Save step once that key is saved and the user says so. The Ownership and Review steps
-  // always do: Owners are optional, and Review only shows what was entered.
-  const complete: Record<StepId, boolean> = {
-    profile: (customOpen && profileValue === CUSTOM) || profile !== undefined,
-    authority: validityOk,
-    names: problems.length === 0,
-    key: generating ? csrOf(keySource, parsedNames, keyAlgorithm) !== "" : keyReady,
-    save: keyReady && keySource.confirmed,
-    ownership: true,
-    review: true,
+  // What each step still needs. The Authority step needs nothing unless its validity is out of range (one CA is always chosen). The Key step needs a key
+  // generated for these names, or a pasted CSR that matches them; the Save step that key saved and the user saying so. The Ownership and Review steps need
+  // nothing: Owners are optional, and Review only shows what was entered.
+  const missing: Partial<Record<StepId, Missing>> = {
+    profile: (customOpen && profileValue === CUSTOM) || profile !== undefined ? undefined : { reason: "Choose a profile." },
+    authority: validityOk ? undefined : { reason: "Give a validity the Issuing CA allows.", field: "new-mc-validity" },
+    names: problems.length === 0 ? undefined : { reason: problems[0]!, field: "new-mc-names" },
+    key: generating
+      ? csrOf(keySource, parsedNames, keyAlgorithm) !== ""
+        ? undefined
+        : { reason: "Generate the key and CSR first.", field: "new-mc-key-generate" }
+      : keyReady
+        ? undefined
+        : { reason: "Paste a CSR for these names and key type.", field: "new-mc-key-pasted" },
+    save: !keySource.keySaved ? { reason: "Download or copy the key first." } : !keySource.confirmed ? { reason: "Tick that you've stored the key.", field: "save-key-confirm" } : undefined,
   };
 
   return (
@@ -180,7 +184,7 @@ function NewManagedCertificateForm({
       steps={steps}
       step={shown}
       onStep={setStep}
-      complete={complete}
+      missing={missing}
       submitLabel={direct ? "Create and issue" : "Propose"}
       pending={create.isPending}
       onSubmit={() => create.mutate()}

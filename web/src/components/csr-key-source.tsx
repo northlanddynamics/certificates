@@ -365,7 +365,7 @@ export function KeySource({
           )}
           {(!state.generated || stale) && (
             <div className="flex flex-wrap items-center gap-3">
-              <Button type="button" disabled={working || distinct.length === 0} onClick={generate}>
+              <Button type="button" id={`${idPrefix}-generate`} disabled={working || distinct.length === 0} onClick={generate}>
                 {working ? <LoaderIcon className="animate-spin" /> : <KeyRoundIcon />}
                 {working ? "Generating…" : "Generate key and CSR"}
               </Button>

@@ -4,8 +4,12 @@
 
 **Blocked by:** none
 
-**Status:** ready-for-agent
+**Status:** done
 
-- [ ] `components/stepped-form.tsx` lets each step give a reason it is incomplete; Next stays enabled and, on click, shows the reason by the field and focuses it.
-- [ ] Or, if Next stays disabled, a tooltip and a line above the footer give the reason.
-- [ ] Applied to every stepped form and the CSR Generator.
+- [x] `components/stepped-form.tsx` lets each step give a reason it is incomplete; Next stays enabled and, on click, shows the reason by the field and focuses it.
+- [ ] Or, if Next stays disabled, a tooltip and a line above the footer give the reason. (Not needed: Next stays enabled.)
+- [x] Applied to every stepped form and the CSR Generator.
+
+## Comments
+
+The reason shows beside Next (and beside Generate on the CSR Generator), announced as a status, and focus moves to the field; the forms' own inline field errors are unchanged. `useSteps` and `StepReason` in `stepped-form.tsx` also serve the New Deployment form, which has its own stepper.
