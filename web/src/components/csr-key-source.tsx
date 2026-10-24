@@ -122,7 +122,7 @@ export function KeyAlgorithmChoice<T extends KeyAlgorithm>({ value, options, onC
 function Line({ ok, children }: { ok: boolean; children: ReactNode }) {
   return (
     <span className="flex items-center gap-2">
-      {ok ? <CheckIcon className="size-4 shrink-0 text-emerald-600 dark:text-emerald-400" /> : <XIcon className="size-4 shrink-0 text-destructive" />}
+      {ok ? <CheckIcon className="size-4 shrink-0 text-success" /> : <XIcon className="size-4 shrink-0 text-destructive" />}
       <span>{children}</span>
     </span>
   );
@@ -158,7 +158,7 @@ export function CsrCheck({
   const match = matchCsr(facts, names, keyAlgorithm);
   const namesOk = match.missing.length === 0 && match.extra.length === 0;
   return (
-    <div className={cn("flex flex-col gap-1 rounded-md border p-3 text-sm", match.ok ? "border-emerald-600/40 bg-emerald-600/5" : "border-destructive/40 bg-destructive/5")}>
+    <div className={cn("flex flex-col gap-1 rounded-md border p-3 text-sm", match.ok ? "border-success/40 bg-success/5" : "border-destructive/40 bg-destructive/5")}>
       <Line ok={match.algorithmOk}>
         {facts.keyLabel} key
         {match.algorithmOk && keyTypeFromCsr && <span className="text-muted-foreground"> — the key type is taken from the CSR</span>}
@@ -221,16 +221,16 @@ export function SaveKey({
   const saved = () => onChange({ ...state, keySaved: true });
   return (
     <div className="flex flex-col gap-3">
-      <div className={cn("flex flex-col gap-3 rounded-md border p-4", state.keySaved ? "border-emerald-600/40" : "border-amber-500/60 bg-amber-500/5")}>
+      <div className={cn("flex flex-col gap-3 rounded-md border p-4", state.keySaved ? "border-success/40" : "border-warning/50 bg-warning/5")}>
         <div className="flex items-center gap-2 text-sm font-medium">
           <KeyRoundIcon className="size-4" />
           {generated.fileBase}.key.pem
           {state.keySaved ? (
-            <span className="ml-auto flex items-center gap-1 text-xs text-emerald-700 dark:text-emerald-400">
+            <span className="ml-auto flex items-center gap-1 text-xs text-success">
               <CheckIcon className="size-3" /> saved
             </span>
           ) : (
-            <span className="ml-auto text-xs text-amber-700 dark:text-amber-400">not saved yet</span>
+            <span className="ml-auto text-xs text-warning">not saved yet</span>
           )}
         </div>
         <p className="text-sm text-muted-foreground">Made in this browser and never sent to the platform. There is no other copy: if it is lost, you will need a new key and CSR.</p>
@@ -369,8 +369,8 @@ export function KeySource({
       {state.mode === "generate" && (
         <div className="flex flex-col gap-3">
           {stale && (
-            <p className="flex items-start gap-2 rounded-md border border-amber-500/60 bg-amber-500/5 p-3 text-sm">
-              <CircleAlertIcon className="mt-0.5 size-4 shrink-0 text-amber-600 dark:text-amber-400" />
+            <p className="flex items-start gap-2 rounded-md border border-warning/50 bg-warning/5 p-3 text-sm">
+              <CircleAlertIcon className="mt-0.5 size-4 shrink-0 text-warning" />
               The names or key type changed since this key was made, so its CSR no longer fits. Generate a new one.
             </p>
           )}
@@ -405,7 +405,7 @@ export function KeySource({
           />
           {state.generated && !stale && saveInline && <SaveKey state={state} onChange={onChange} />}
           {state.generated && !stale && !saveInline && (
-            <p className="flex items-center gap-2 text-sm text-emerald-700 dark:text-emerald-400">
+            <p className="flex items-center gap-2 text-sm text-success">
               <CheckIcon className="size-4" /> {KEY_ALGORITHM_LABELS[keyAlgorithm]} key and CSR made. You save the key next.
             </p>
           )}

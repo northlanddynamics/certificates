@@ -273,7 +273,7 @@ export function CsrToolsPage() {
           {generated && (
             <Card aria-live="polite">
               <CardContent className="flex flex-col gap-5">
-                {stale && <p className="text-sm text-amber-700 dark:text-amber-400">You have changed what to ask for since these were made; generate again for a CSR that holds it.</p>}
+                {stale && <p className="text-sm text-warning">You have changed what to ask for since these were made; generate again for a CSR that holds it.</p>}
                 <section className="flex flex-col gap-2" aria-label="Private key">
                   <h2 className="text-sm font-medium">1. Private key (PKCS#8 PEM)</h2>
                   <SaveKey state={keySource} onChange={setKeySource} showCsr={false} />

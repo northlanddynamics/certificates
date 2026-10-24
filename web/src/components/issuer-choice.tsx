@@ -147,8 +147,8 @@ export function IssuerChoiceFields({ choice, idPrefix, trying }: { choice: Retur
         </Select>
       </Field>
       {known && !issuer && (
-        <Alert className="border-amber-500/60 bg-amber-500/5">
-          <TriangleAlertIcon className="text-amber-600 dark:text-amber-400" />
+        <Alert className="border-warning/50 bg-warning/5">
+          <TriangleAlertIcon className="text-warning" />
           <AlertTitle>Nothing can issue yet</AlertTitle>
           <AlertDescription>An ACME CA needs an ACME account, and a Private CA an active Issuing CA, before it can issue.</AlertDescription>
         </Alert>
@@ -225,8 +225,8 @@ export function IssuerChoiceFields({ choice, idPrefix, trying }: { choice: Retur
         </Field>
       )}
       {issuer?.kind === "acme" && acmeCasKnown && !registered && (
-        <Alert className="border-amber-500/60 bg-amber-500/5">
-          <TriangleAlertIcon className="text-amber-600 dark:text-amber-400" />
+        <Alert className="border-warning/50 bg-warning/5">
+          <TriangleAlertIcon className="text-warning" />
           <AlertTitle>No ACME account with {acmeCaName(acmeCas, issuer.acmeCaId)}</AlertTitle>
           <AlertDescription>
             Issuance would fail until the Organization has one.{" "}

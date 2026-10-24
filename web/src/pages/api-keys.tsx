@@ -27,7 +27,7 @@ const columnHelper = createColumnHelper<typeof features, ApiKey>();
 const columns = columnHelper.columns([
   columnHelper.accessor("name", { header: "Name", cell: ({ cell }) => <span className="font-medium">{cell.getValue()}</span> }),
   columnHelper.accessor("start", { header: "Key", cell: ({ cell }) => <span className="font-mono text-xs text-muted-foreground">{cell.getValue()}…</span> }),
-  columnHelper.accessor("type", { header: "Whose", cell: ({ cell }) => <Badge variant={cell.getValue() === "organization" ? "default" : "secondary"}>{TYPE_LABEL[cell.getValue()]}</Badge> }),
+  columnHelper.accessor("type", { header: "Whose", cell: ({ cell }) => <Badge variant={cell.getValue() === "organization" ? "outline" : "secondary"}>{TYPE_LABEL[cell.getValue()]}</Badge> }),
   columnHelper.accessor((k) => k.createdBy?.email, { id: "createdBy", header: "Made by", cell: ({ cell }) => cell.getValue() ?? <span className="text-muted-foreground">You</span> }),
   columnHelper.accessor("createdAt", { header: "Made", cell: ({ cell }) => date(cell.getValue()) }),
   columnHelper.accessor("expiresAt", { header: "Expires", cell: ({ cell }) => (cell.getValue() ? date(cell.getValue()!) : <span className="text-muted-foreground">Never</span>) }),

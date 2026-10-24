@@ -1,7 +1,7 @@
 // Whether a Managed Certificate's page offers Renew now first, as web/src/lib works it out: only when its latest Issuance
 // failed or it is inside its renewal window; otherwise Download is first and Renew now asks before renewing early.
 import { describe, expect, test } from "bun:test";
-import { renewalUrgent, renewalWindowOpens } from "../../web/src/lib/renewal-urgency";
+import { expiryTone, renewalUrgent, renewalWindowOpens } from "../../web/src/lib/renewal-urgency";
 
 const DAY = 86_400_000;
 const now = new Date("2026-10-24T12:00:00Z");
@@ -39,5 +39,21 @@ describe("renewing first", () => {
 
   test("never for one with no Certificate and no failure", () => {
     expect(renewalUrgent(healthy({ dueAt: null }, { currentCertificate: null, issuance: null }), now)).toBe(false);
+  });
+});
+
+describe("how near its end it is", () => {
+  test("well while its window is closed", () => {
+    expect(expiryTone(healthy(), now)).toBeNull();
+  });
+
+  test("a warning once its window has opened, and at fault once it has ended or been revoked", () => {
+    expect(expiryTone(healthy({ dueAt: at(-1) }), now)).toBe("warning");
+    expect(expiryTone(healthy({}, { currentCertificate: { notAfter: at(-1) } as Renewal["currentCertificate"] }), now)).toBe("danger");
+    expect(expiryTone(healthy({}, { currentCertificate: { notAfter: at(89), revocation: { reason: "keyCompromise" } } as unknown as Renewal["currentCertificate"] }), now)).toBe("danger");
+  });
+
+  test("nothing with no Certificate", () => {
+    expect(expiryTone(healthy({ dueAt: null }, { currentCertificate: null }), now)).toBeNull();
   });
 });

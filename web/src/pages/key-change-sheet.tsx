@@ -229,7 +229,7 @@ export function NamesDiff({ before, after }: { before: string[]; after: string[]
   return (
     <ul className="flex flex-col gap-0.5 rounded-md border p-3 font-mono text-xs">
       {added.map((name) => (
-        <li key={`+${name}`} className="text-emerald-700 dark:text-emerald-400">
+        <li key={`+${name}`} className="text-success">
           + {name}
         </li>
       ))}

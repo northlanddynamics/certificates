@@ -362,8 +362,8 @@ function NewManagedCertificateForm({
             />
           </FieldSet>
           {owners.length + fixedOwners.length === 0 && (
-            <Alert className="border-amber-500/60 bg-amber-500/5">
-              <TriangleAlertIcon className="text-amber-600 dark:text-amber-400" />
+            <Alert className="border-warning/50 bg-warning/5">
+              <TriangleAlertIcon className="text-warning" />
               <AlertTitle>Nobody will own it</AlertTitle>
               <AlertDescription>Its key is held by its Owners, and they are who hear when it needs attention. Go back to Ownership to add one.</AlertDescription>
             </Alert>

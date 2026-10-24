@@ -90,7 +90,7 @@ const columns = columnHelper.columns([
     cell: ({ row }) => (
       <span className="flex items-center gap-2">
         <DeviceCertificatesLink profile={row.original} />
-        {!row.original.enabled && <Badge variant="secondary">Disabled</Badge>}
+        {!row.original.enabled && <Badge variant="neutral">Disabled</Badge>}
       </span>
     ),
   }),

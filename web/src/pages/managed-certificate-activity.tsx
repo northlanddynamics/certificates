@@ -125,7 +125,7 @@ function NamesChange({ from, to }: { from: string[]; to: string[] }) {
   return (
     <span className="flex flex-wrap gap-x-3 font-mono text-xs">
       {added.map((name) => (
-        <span key={`+${name}`} className="text-emerald-700 dark:text-emerald-400">
+        <span key={`+${name}`} className="text-success">
           + {name}
         </span>
       ))}

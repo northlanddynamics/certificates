@@ -25,12 +25,12 @@ const ROUTE = "/app/organizations/$orgId/enrollment-profiles/$id/device-certific
 const SEARCH_DELAY_MS = 300;
 
 const STATUS_LABEL: Record<DeviceCertificateStatus, string> = { active: "Active", expired: "Expired", revoked: "Revoked" };
-const STATUS_VARIANT: Record<DeviceCertificateStatus, "default" | "secondary" | "destructive"> = { active: "default", expired: "secondary", revoked: "destructive" };
+const STATUS_VARIANT: Record<DeviceCertificateStatus, "success" | "neutral" | "destructive"> = { active: "success", expired: "neutral", revoked: "destructive" };
 const ANY_STATUS = "any";
 const isWeak = (c: DeviceCertificate) => c.keyType === WEAK_DEVICE_KEY_TYPE;
 /** Marks a Device Certificate whose key can be broken, to be found and replaced. */
 const WeakKeyBadge = () => (
-  <Badge variant="outline" className="border-destructive text-destructive" title="A 1024-bit RSA key, which can be broken">
+  <Badge variant="destructive" title="A 1024-bit RSA key, which can be broken">
     Weak key
   </Badge>
 );

@@ -48,7 +48,7 @@ function AuthenticatorApp({ enabled }: { enabled: boolean }) {
     <Card>
       <CardHeader>
         <CardTitle className="flex items-center gap-2">
-          Authenticator app {enabled ? <Badge>On</Badge> : <Badge variant="secondary">Off</Badge>}
+          Authenticator app {enabled ? <Badge variant="success">On</Badge> : <Badge variant="neutral">Off</Badge>}
         </CardTitle>
         <CardDescription>When it is on, signing in with your password also asks for a code from an app such as 1Password, Google Authenticator or Microsoft Authenticator.</CardDescription>
         <CardAction>{enabled ? null : <SetUpAuthenticator />}</CardAction>

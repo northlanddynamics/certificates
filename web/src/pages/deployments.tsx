@@ -20,13 +20,13 @@ import { NewDeploymentDialog } from "./new-deployment-dialog";
 
 const ROUTE = "/app/organizations/$orgId/deployments";
 
-const STATE: Record<DeploymentState, { label: string; hint: string; variant: "default" | "secondary" | "destructive" | "outline" }> = {
-  awaiting_key: { label: "Awaiting key", hint: "Waiting for the Agent to make the key and send a CSR", variant: "outline" },
+const STATE: Record<DeploymentState, { label: string; hint: string; variant: "success" | "warning" | "destructive" }> = {
+  awaiting_key: { label: "Awaiting key", hint: "Waiting for the Agent to make the key and send a CSR", variant: "warning" },
   key_failed: { label: "Key failed", hint: "The Agent could not make the key, or its CSR was refused", variant: "destructive" },
-  issuing: { label: "Issuing…", hint: "The Certificate is being issued", variant: "secondary" },
+  issuing: { label: "Issuing…", hint: "The Certificate is being issued", variant: "warning" },
   issuance_failed: { label: "Issuance failed", hint: "See the Managed Certificate for why, and try issuing it again", variant: "destructive" },
-  awaiting_deployment: { label: "Awaiting deployment", hint: "Waiting for the Agent to run the script for the Certificate", variant: "outline" },
-  deployed: { label: "Deployed", hint: "The script succeeded for the current Certificate", variant: "default" },
+  awaiting_deployment: { label: "Awaiting deployment", hint: "Waiting for the Agent to run the script for the Certificate", variant: "warning" },
+  deployed: { label: "Deployed", hint: "The script succeeded for the current Certificate", variant: "success" },
   deployment_failed: { label: "Deployment failed", hint: "The script did not succeed for the current Certificate", variant: "destructive" },
 };
 /** The states that move on without anyone: worth looking at again soon. */
@@ -43,7 +43,7 @@ const noRows: Deployment[] = [];
 /** How a run ended, in a word: its exit code, or that the script was not started. */
 function RunResult({ run }: { run: DeploymentRun }) {
   return (
-    <Badge variant={run.status === "succeeded" ? "default" : "destructive"}>
+    <Badge variant={run.status === "succeeded" ? "success" : "destructive"}>
       {run.exitCode === null ? "Not run" : run.status === "succeeded" ? "Succeeded" : `Exit ${run.exitCode}`}
     </Badge>
   );

@@ -62,7 +62,7 @@ const columns = (orgId: string, mayEdit: boolean, mayDisable: boolean) =>
       cell: ({ row }) => (
         <div className="flex flex-col gap-1">
           <span className="font-medium">
-            {row.original.name} {!row.original.enabled && <Badge variant="secondary">Disabled</Badge>}
+            {row.original.name} {!row.original.enabled && <Badge variant="neutral">Disabled</Badge>}
           </span>
           {row.original.description && <span className="text-sm text-muted-foreground">{row.original.description}</span>}
         </div>

@@ -57,7 +57,7 @@ function Item({ icon, tone, title, children, actions }: { icon: ReactNode; tone:
       <span
         className={cn(
           "flex size-7 items-center justify-center rounded-full [&_svg]:size-4",
-          tone === "problem" ? "bg-destructive/10 text-destructive" : "bg-amber-100 text-amber-800 dark:bg-amber-950 dark:text-amber-300",
+          tone === "problem" ? "bg-destructive/10 text-destructive" : "bg-warning/10 text-warning dark:bg-warning/15",
         )}
       >
         {icon}

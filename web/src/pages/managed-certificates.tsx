@@ -19,6 +19,7 @@ import { AcmeCaTagBadge } from "@/components/acme-ca-tag";
 import { ACME_CA_TAG_LABELS, useAcmeCas } from "@/lib/acme-cas";
 import { issuerLabel, keyAlgorithmLabel, primaryName, profileLabel, status } from "@/lib/managed-certificate";
 import { chosenValidityLabel } from "@/lib/private-ca";
+import { expiryTone } from "@/lib/renewal-urgency";
 
 type Org = Me["organizations"][number];
 
@@ -54,14 +55,19 @@ const makeColumns = (orgId: string, acmeCas: AcmeCa[] | undefined) => columnHelp
     header: "Status",
     cell: ({ row }) => <Badge variant={status(row.original).variant}>{status(row.original).label}</Badge>,
   }),
-  columnHelper.accessor((m) => (m.currentCertificate ? new Date(m.currentCertificate.notAfter).toLocaleDateString() : "—"), { id: "validUntil", header: "Valid until" }),
+  // Amber once its renewal window has opened, red once it has ended.
+  columnHelper.accessor((m) => (m.currentCertificate ? new Date(m.currentCertificate.notAfter).toLocaleDateString() : "—"), {
+    id: "validUntil",
+    header: "Valid until",
+    cell: ({ cell, row }) => <span className={TONE_TEXT[expiryTone(row.original, new Date()) ?? "none"]}>{cell.getValue()}</span>,
+  }),
   columnHelper.accessor((m) => (m.owners.length === 0 ? "None" : m.owners.map(ownerLabel).join(", ")), {
     id: "owners",
     header: "Owners",
     // Nobody to tell when it needs attention, nor to hold its key: worth noticing.
     cell: ({ cell, row }) =>
       row.original.owners.length === 0 ? (
-        <span className="text-amber-700 dark:text-amber-400">None</span>
+        <span className="text-warning">None</span>
       ) : (
         <span className="block max-w-56 truncate text-muted-foreground" title={cell.getValue()}>
           {cell.getValue()}
@@ -70,6 +76,7 @@ const makeColumns = (orgId: string, acmeCas: AcmeCa[] | undefined) => columnHelp
   }),
 ]);
 const noRows: ManagedCertificate[] = [];
+const TONE_TEXT = { warning: "text-warning", danger: "text-destructive", none: undefined };
 
 function Names({ orgId, m }: { orgId: string; m: ManagedCertificate }) {
   const primary = primaryName(m);

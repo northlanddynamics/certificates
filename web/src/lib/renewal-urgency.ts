@@ -22,3 +22,15 @@ export function renewalUrgent(m: Renewable, now: Date): boolean {
   const opens = renewalWindowOpens(m);
   return opens !== null && opens <= now;
 }
+
+/**
+ * How near its end the current Certificate is, as a status's tone: danger once it has ended or been revoked, warning
+ * once its renewal window has opened; none while it is well, or with no Certificate.
+ */
+export function expiryTone(m: Renewable, now: Date): "warning" | "danger" | null {
+  const current = m.currentCertificate;
+  if (!current) return null;
+  if (current.revocation || new Date(current.notAfter) <= now) return "danger";
+  const opens = renewalWindowOpens(m);
+  return opens !== null && opens <= now ? "warning" : null;
+}

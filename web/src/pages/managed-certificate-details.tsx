@@ -67,7 +67,7 @@ export function ManagedCertificateDetailsPage() {
             <OtherNames m={m} />
           </div>
           <div className="flex flex-wrap items-center gap-x-3 gap-y-1 text-sm">
-            <Badge variant={state.variant}>{expiry && !m.archivedAt && m.approval.status !== "pending" ? `${state.label} · ${expiry}` : state.label}</Badge>
+            <Badge variant={state.variant}>{expiry && state.label === "Issued" ? `${state.label} · ${expiry}` : state.label}</Badge>
             <span className="text-muted-foreground">
               <IssuerName org={org} issuer={m.issuer} acmeCas={acmeCas} />
               {[keyAlgorithmLabel(m.keyAlgorithm), m.keyCustody === "owner" ? "Key held by its Owners" : "Key held by an Agent", m.profile && `Profile ${profileLabel(m.profile)}`]

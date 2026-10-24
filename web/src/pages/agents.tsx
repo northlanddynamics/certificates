@@ -17,7 +17,7 @@ import { useAction } from "@/lib/use-action";
 
 const ROUTE = "/app/organizations/$orgId/agents";
 const STATUS_LABEL: Record<Agent["status"], string> = { online: "Online", offline: "Offline", revoked: "Revoked" };
-const STATUS_VARIANT: Record<Agent["status"], "default" | "secondary" | "destructive"> = { online: "default", offline: "secondary", revoked: "destructive" };
+const STATUS_VARIANT: Record<Agent["status"], "success" | "warning" | "destructive"> = { online: "success", offline: "warning", revoked: "destructive" };
 const OS_LABEL: Record<Agent["os"], string> = { linux: "Linux", windows: "Windows", macos: "macOS" };
 
 // Paging and narrowing are the server's (Page<Agent>); the table lays out the page it was given.
@@ -31,7 +31,7 @@ const columns = columnHelper.columns([
     cell: ({ row }) => (
       <span className="flex items-center gap-2">
         {row.original.version}
-        {row.original.outdated && <Badge variant="outline" className="border-amber-500">Outdated</Badge>}
+        {row.original.outdated && <Badge variant="warning">Outdated</Badge>}
       </span>
     ),
   }),

@@ -42,7 +42,7 @@ const rowsOf = (ca: PrivateCa): CaRow[] => [
   ...ca.issuingCas.map((issuing): CaRow => ({ id: issuing.id, ca, level: "issuing", issuing, subject: issuing.subject, notAfter: issuing.notAfter ?? undefined })),
 ];
 
-const StatusBadge = ({ status }: { status: IssuingCa["status"] }) => <Badge variant={status === "active" ? "default" : status === "revoked" ? "destructive" : "secondary"}>{STATUS_LABEL[status]}</Badge>;
+const StatusBadge = ({ status }: { status: IssuingCa["status"] }) => <Badge variant={status === "active" ? "success" : status === "revoked" ? "destructive" : status === "awaiting_signature" ? "warning" : "neutral"}>{STATUS_LABEL[status]}</Badge>;
 
 // The server lists every Private CA, and an Organization has few, so there is nothing to page.
 const features = tableFeatures({});
