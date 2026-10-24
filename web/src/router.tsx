@@ -25,6 +25,7 @@ import { IssuedCertificatesTab } from "./pages/issued-certificates";
 import { ActivityTab } from "./pages/managed-certificate-activity";
 import { NotificationsTab } from "./pages/subscriber-controls";
 import { NotificationChannelsPage } from "./pages/notification-channels";
+import { auditSearchOf } from "./lib/audit-search";
 import { AuditLogPage } from "./pages/audit-log";
 import { AuditForwardingPage } from "./pages/audit-forwarding";
 import { SignInSettingsPage } from "./pages/sign-in-settings";
@@ -178,6 +179,8 @@ const notificationChannelsRoute = createRoute({
 const auditLogRoute = createRoute({
   getParentRoute: () => appRoute,
   path: "/organizations/$orgId/audit-log",
+  // The search is kept in the address, so that it survives Back and can be shared.
+  validateSearch: auditSearchOf,
   component: AuditLogPage,
 });
 

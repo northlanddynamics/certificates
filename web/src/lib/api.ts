@@ -645,8 +645,11 @@ export interface AuditEvent {
 }
 /** What the audit log is searched by; every filter given must match. `action` may be a prefix, such as `team.*`. */
 export interface AuditFilters {
+  /** Part of the actor's email or of the action, in any case. */
+  q?: string;
   actor?: string;
   action?: string;
+  /** Any of these, comma-separated. */
   targetType?: string;
   targetId?: string;
   /** ISO times: from inclusive, to exclusive. */
@@ -741,6 +744,7 @@ export const api = {
     if (cursor) query.set("cursor", cursor);
     return call<{ items: AuditEvent[]; nextCursor: string | null }>(`/api/organizations/${orgId}/audit-events?${query}`);
   },
+  auditTargetTypes: (orgId: string) => call<{ items: string[] }>(`/api/organizations/${orgId}/audit-events/target-types`),
   loginPolicy: (orgId: string) => call<LoginPolicy>(`/api/organizations/${orgId}/login-policy`),
   setLoginPolicy: (orgId: string, policy: Partial<LoginPolicy>) => call<LoginPolicy>(`/api/organizations/${orgId}/login-policy`, { method: "PUT", body: policy }),
   auditForwarders: (orgId: string) => call<{ items: AuditForwarder[] }>(`/api/organizations/${orgId}/audit-forwarders`),

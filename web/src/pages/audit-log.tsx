@@ -1,18 +1,21 @@
-import { useInfiniteQuery } from "@tanstack/react-query";
-import { useParams } from "@tanstack/react-router";
+import { useInfiniteQuery, useQuery } from "@tanstack/react-query";
+import { useNavigate, useParams, useSearch } from "@tanstack/react-router";
 import { createColumnHelper, rowExpandingFeature, tableFeatures, useTable } from "@tanstack/react-table";
-import { ChevronDownIcon, ListFilterIcon } from "lucide-react";
-import { useState, type ComponentProps, type FormEvent } from "react";
+import { SearchIcon, XIcon } from "lucide-react";
+import { useEffect, useMemo, useState } from "react";
 import { DataTable } from "@/components/data-table/data-table";
+import { DataTableFacetedFilter } from "@/components/data-table/data-table-faceted-filter";
 import { ExpandButton } from "@/components/data-table/expand-button";
+import { PageHeader } from "@/components/page-header";
 import { Badge } from "@/components/ui/badge";
 import { Button } from "@/components/ui/button";
 import { Input } from "@/components/ui/input";
+import { InputGroup, InputGroupAddon, InputGroupInput } from "@/components/ui/input-group";
 import { Label } from "@/components/ui/label";
-import { PageHeader } from "@/components/page-header";
-import { api, can, type AuditEvent, type AuditFilters } from "@/lib/api";
+import { Select, SelectContent, SelectItem, SelectTrigger, SelectValue } from "@/components/ui/select";
+import { api, can, type AuditEvent } from "@/lib/api";
+import { AUDIT_RANGES, auditFiltersOf, targetTypeLabel, type AuditRange, type AuditSearch } from "@/lib/audit-search";
 import { useOrg } from "@/lib/use-org";
-import { cn } from "@/lib/utils";
 
 const ROUTE = "/app/organizations/$orgId/audit-log";
 
@@ -48,19 +51,31 @@ const columns = columnHelper.columns([
 ]);
 const noRows: AuditEvent[] = [];
 
-/** A local date and time from a `datetime-local` input, as an ISO time; none if empty. */
+/** An ISO time as a `datetime-local` input shows it, in local time; and back. */
+const localOf = (iso: string | undefined) => {
+  if (!iso) return "";
+  const d = new Date(iso);
+  return new Date(d.getTime() - d.getTimezoneOffset() * 60_000).toISOString().slice(0, 16);
+};
 const isoOf = (local: string) => (local ? new Date(local).toISOString() : undefined);
+
+const RANGE_LABEL: Record<AuditRange | "all", string> = { all: "All time", "24h": "Last 24 hours", "7d": "Last 7 days", "30d": "Last 30 days", custom: "Custom range" };
+const SEARCH_DELAY_MS = 300;
 
 /**
  * The Organization's audit log, newest first: every change to its state, who made it and what it was done to, kept for
- * ever. Organization Administrators search it by actor, action (or every action of a resource, as `team.*`), target and
- * time range.
+ * ever. Organization Administrators search it by part of an actor's email or an action, narrow it to types of target
+ * and a time range, all kept in the address.
  */
 export function AuditLogPage() {
   const { orgId } = useParams({ from: ROUTE });
   const org = useOrg(orgId);
   const allowed = org ? can(org, "audit", "read") : false;
-  const [filters, setFilters] = useState<AuditFilters>({});
+  const search = useSearch({ from: ROUTE });
+  const navigate = useNavigate({ from: "/organizations/$orgId/audit-log" });
+  const change = (next: AuditSearch) => navigate({ search: next, replace: true });
+  // A quick range counts back from when it was chosen, not from each refetch.
+  const filters = useMemo(() => auditFiltersOf(search, new Date()), [search]);
   const events = useInfiniteQuery({
     queryKey: ["audit-events", orgId, filters],
     queryFn: ({ pageParam }) => api.auditEvents(orgId, filters, pageParam),
@@ -68,8 +83,20 @@ export function AuditLogPage() {
     getNextPageParam: (last) => last.nextCursor ?? undefined,
     enabled: allowed,
   });
+  const targetTypes = useQuery({ queryKey: ["audit-target-types", orgId], queryFn: () => api.auditTargetTypes(orgId), enabled: allowed });
   const rows = events.data?.pages.flatMap((p) => p.items) ?? noRows;
   const table = useTable({ features, columns, data: rows, getRowId: (e) => e.id, getRowCanExpand: (row) => hasDetail(row.original) });
+
+  // The box follows typing, and the address follows the box once typing pauses (and the box the address, on Back).
+  const [typed, setTyped] = useState(search.q ?? "");
+  useEffect(() => {
+    const settled = typed.trim();
+    if (settled === (search.q ?? "")) return;
+    const timer = setTimeout(() => void change({ ...search, q: settled || undefined }), SEARCH_DELAY_MS);
+    return () => clearTimeout(timer);
+  }, [typed, search]);
+  useEffect(() => setTyped((t) => (t.trim() === (search.q ?? "") ? t : (search.q ?? ""))), [search.q]);
+  const narrowed = Object.keys(search).length > 0;
 
   return (
     <div className="flex flex-col gap-6">
@@ -78,7 +105,62 @@ export function AuditLogPage() {
         description="Every change to the Organization, newest first."
         howItWorks={<p>Audit Events are kept for ever and cannot be changed or deleted. To send them to a SIEM, see Audit forwarding.</p>}
       />
-      <AuditFilterForm onSearch={setFilters} />
+      <div className="flex flex-col gap-3">
+        <div className="flex flex-wrap items-center gap-2">
+          <InputGroup className="w-full bg-card sm:w-72">
+            <InputGroupAddon>
+              <SearchIcon />
+            </InputGroupAddon>
+            <InputGroupInput aria-label="Search the audit log" placeholder="Actor's email or action" value={typed} onChange={(e) => setTyped(e.target.value)} />
+          </InputGroup>
+          <DataTableFacetedFilter
+            title="Target"
+            options={(targetTypes.data?.items ?? []).map((value) => ({ value, label: targetTypeLabel(value) }))}
+            value={search.types ?? []}
+            onChange={(types) => void change({ ...search, types: types.length > 0 ? types : undefined })}
+          />
+          <Select
+            value={search.range ?? "all"}
+            onValueChange={(value) => void change({ ...search, range: value === "all" ? undefined : (value as AuditRange), from: undefined, to: undefined })}
+          >
+            <SelectTrigger size="sm" className="w-40 bg-card" aria-label="Time range">
+              <SelectValue />
+            </SelectTrigger>
+            <SelectContent>
+              {(["all", ...AUDIT_RANGES] as const).map((range) => (
+                <SelectItem key={range} value={range}>
+                  {RANGE_LABEL[range]}
+                </SelectItem>
+              ))}
+            </SelectContent>
+          </Select>
+          {narrowed && (
+            <Button
+              variant="ghost"
+              size="sm"
+              onClick={() => {
+                setTyped("");
+                void change({});
+              }}
+            >
+              Reset
+              <XIcon />
+            </Button>
+          )}
+        </div>
+        {search.range === "custom" && (
+          <div className="flex flex-wrap items-end gap-3">
+            <div className="flex flex-col gap-2">
+              <Label htmlFor="audit-from">From</Label>
+              <Input id="audit-from" type="datetime-local" className="w-56 bg-card" value={localOf(search.from)} onChange={(e) => void change({ ...search, from: isoOf(e.target.value) })} />
+            </div>
+            <div className="flex flex-col gap-2">
+              <Label htmlFor="audit-to">Until</Label>
+              <Input id="audit-to" type="datetime-local" className="w-56 bg-card" value={localOf(search.to)} onChange={(e) => void change({ ...search, to: isoOf(e.target.value) })} />
+            </div>
+          </div>
+        )}
+      </div>
       <DataTable
         table={table}
         empty={events.isPending && allowed ? "Loading…" : "No Audit Event matches."}
@@ -93,61 +175,6 @@ export function AuditLogPage() {
           </Button>
         </div>
       )}
-    </div>
-  );
-}
-
-function AuditFilterForm({ onSearch }: { onSearch: (filters: AuditFilters) => void }) {
-  const [actor, setActor] = useState("");
-  const [action, setAction] = useState("");
-  const [targetType, setTargetType] = useState("");
-  const [targetId, setTargetId] = useState("");
-  const [from, setFrom] = useState("");
-  const [to, setTo] = useState("");
-  const [open, setOpen] = useState(false);
-  const field = (id: string, label: string, value: string, set: (v: string) => void, props: Partial<ComponentProps<typeof Input>> = {}) => (
-    <div className="flex flex-col gap-2">
-      <Label htmlFor={id}>{label}</Label>
-      <Input id={id} value={value} onChange={(e) => set(e.target.value)} {...props} />
-    </div>
-  );
-  // A phone keeps the fields behind a Filters button, so that the events are on the first screen.
-  return (
-    <div className="flex flex-col gap-3">
-      <Button type="button" variant="outline" size="sm" className="self-start sm:hidden" aria-expanded={open} aria-controls="audit-filters" onClick={() => setOpen(!open)}>
-        <ListFilterIcon />
-        Filters
-        <ChevronDownIcon className={cn("transition-transform", !open && "-rotate-90")} />
-      </Button>
-      <div id="audit-filters" className={cn(!open && "max-sm:hidden")}>
-        <form
-          className="grid gap-4 sm:grid-cols-2 lg:grid-cols-3"
-          onSubmit={(e: FormEvent) => {
-            e.preventDefault();
-            onSearch({ actor: actor.trim(), action: action.trim(), targetType: targetType.trim(), targetId: targetId.trim(), from: isoOf(from), to: isoOf(to) });
-          }}
-        >
-          {field("audit-actor", "Actor", actor, setActor, { placeholder: "Email or user id", autoComplete: "off" })}
-          {field("audit-action", "Action", action, setAction, { placeholder: "team.created, or team.*", autoComplete: "off" })}
-          {field("audit-target-type", "Target type", targetType, setTargetType, { placeholder: "managed_certificate", autoComplete: "off" })}
-          {field("audit-target-id", "Target id", targetId, setTargetId, { autoComplete: "off" })}
-          {field("audit-from", "From", from, setFrom, { type: "datetime-local" })}
-          {field("audit-to", "Until", to, setTo, { type: "datetime-local" })}
-          <div className="flex gap-2 sm:col-span-2 lg:col-span-3">
-            <Button type="submit">Search</Button>
-            <Button
-              type="button"
-              variant="outline"
-              onClick={() => {
-                for (const set of [setActor, setAction, setTargetType, setTargetId, setFrom, setTo]) set("");
-                onSearch({});
-              }}
-            >
-              Clear
-            </Button>
-          </div>
-        </form>
-      </div>
     </div>
   );
 }

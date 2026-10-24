@@ -53,6 +53,24 @@ describe("searching the audit log", () => {
     expect(await actions({ actor: "other@acme.test" })).toEqual(["invitation.accepted", "team.created"]);
   });
 
+  test("searches part of the actor's email or the action, in any case, and narrows to any of several target types", async () => {
+    await join("other@acme.test", "organization-administrator");
+    await createTeam("Web");
+    expect(await actions({ q: "OTHER@" })).toEqual(["invitation.accepted"]);
+    expect(await actions({ q: "team.creat" })).toEqual(["team.created"]);
+    // LIKE's wildcards are matched as themselves.
+    expect(await actions({ q: "%" })).toEqual([]);
+    expect(await actions({ targetType: "team" })).toEqual(["team.created"]);
+    expect(await actions({ targetType: "team,invitation" })).toEqual(["invitation.accepted", "invitation.created", "invitation.accepted", "team.created"]);
+    expect((await search({ targetType: "team;drop" })).status).toBe(400);
+    // What the log can be narrowed to is what it holds, and only in the Organization's own log.
+    const types = (await api("/audit-events/target-types")).body.items as string[];
+    expect(types).toEqual(expect.arrayContaining(["invitation", "team"]));
+    expect(types).toEqual([...types].sort());
+    expect((await api("/audit-events/target-types", { target: globex })).body.items).not.toContain("team");
+    expect((await api("/audit-events/target-types", { cookie: await join("member@acme.test", "member") })).status).toBe(403);
+  });
+
   test("filters by time range, newest first if asked, a page at a time", async () => {
     for (const [at, name] of [["2026-02-01T00:00:00Z", "A"], ["2026-02-02T00:00:00Z", "B"], ["2026-02-03T00:00:00Z", "C"], ["2026-02-04T00:00:00Z", "D"]] as const) {
       h.setNow(new Date(at));
@@ -83,7 +101,8 @@ describe("searching the audit log", () => {
   test("nothing in the API changes or deletes an Audit Event", async () => {
     const doc = (await h.api("/api/openapi.json")).body;
     const auditPaths = Object.entries(doc.paths as Record<string, Record<string, unknown>>).filter(([path]) => path.includes("audit-events"));
-    expect(auditPaths.flatMap(([, ops]) => Object.keys(ops))).toEqual(["get"]);
+    // Searching it, and listing what it can be narrowed to.
+    expect(auditPaths.flatMap(([, ops]) => Object.keys(ops))).toEqual(["get", "get"]);
     const [event] = (await search({ limit: "1" })).body.items;
     for (const method of ["DELETE", "PUT", "PATCH"]) {
       for (const path of [`/audit-events/${event.id}`, "/audit-events"]) {
