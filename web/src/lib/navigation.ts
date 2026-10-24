@@ -25,7 +25,7 @@ export interface NavGroup {
 
 export const isNavSection = (entry: NavItem | NavSection): entry is NavSection => "items" in entry;
 
-/** The pages of one Organization that the caller may open, under the headings the sidebar gives them; a heading or section with no page left under it is not shown. */
+/** The pages of one Organization that the caller may open, under the headings the sidebar gives them; a heading or section with no page left under it is not shown, and a section with one is just that page. */
 export function organizationNavGroups(org: Org): NavGroup[] {
   const base = `/organizations/${org.id}`;
   const groups: NavGroup[] = [
@@ -55,10 +55,14 @@ export function organizationNavGroups(org: Org): NavGroup[] {
       label: "Administration",
       items: [
         {
+          // Where certificates come from: the Organization's own CAs, and its accounts with ACME CAs.
           title: "Certificate authorities",
           icon: BadgeCheckIcon,
-          // Anyone may list them (to choose one for a Managed Certificate), but the page is for managing them.
-          items: can(org, "privateCa", "create") ? [{ title: "Private CAs", url: `${base}/private-cas`, icon: ShieldEllipsisIcon }] : [],
+          items: [
+            // Anyone may list them (to choose one for a Managed Certificate), but the page is for managing them.
+            ...(can(org, "privateCa", "create") ? [{ title: "Private CAs", url: `${base}/private-cas`, icon: ShieldEllipsisIcon }] : []),
+            ...(can(org, "acmeAccount", "read") ? [{ title: "ACME accounts", url: `${base}/acme-accounts`, icon: LandmarkIcon }] : []),
+          ],
         },
         // Every member lists the enabled ones (to request against one), but the page is for managing them.
         ...(can(org, "certificateProfile", "create") ? [{ title: "Certificate Profiles", url: `${base}/certificate-profiles`, icon: FileBadgeIcon }] : []),
@@ -66,7 +70,6 @@ export function organizationNavGroups(org: Org): NavGroup[] {
           title: "Integrations",
           icon: PlugIcon,
           items: [
-            ...(can(org, "acmeAccount", "read") ? [{ title: "ACME accounts", url: `${base}/acme-accounts`, icon: LandmarkIcon }] : []),
             ...(can(org, "dnsProvider", "read") ? [{ title: "DNS Providers", url: `${base}/dns-providers`, icon: GlobeIcon }] : []),
             // Anyone may list the channels (to choose one as a Subscriber), but the page is for configuring them.
             ...(can(org, "notificationChannel", "create") ? [{ title: "Notification channels", url: `${base}/notification-channels`, icon: BellIcon }] : []),
@@ -96,8 +99,9 @@ export function organizationNavGroups(org: Org): NavGroup[] {
       ],
     },
   ];
+  // A section with no page left under it is not shown, and one with a single page is that page, with nothing to fold.
   return groups
-    .map((g) => ({ ...g, items: g.items.filter((entry) => !isNavSection(entry) || entry.items.length > 0) }))
+    .map((g) => ({ ...g, items: g.items.filter((entry) => !isNavSection(entry) || entry.items.length > 0).map((entry) => (isNavSection(entry) && entry.items.length === 1 ? entry.items[0]! : entry)) }))
     .filter((g) => g.items.length > 0);
 }
 
