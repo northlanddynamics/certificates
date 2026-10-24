@@ -91,8 +91,8 @@ export function AgentsPage() {
         {org && can(org, "agent", "register") && <RegisterAgentDialog orgId={orgId} />}
       </div>
       <p className="text-sm text-muted-foreground">
-        An Agent runs on a host inside your network and only ever connects out to the platform. It registers once with a single-use token, and then identifies itself with a
-        certificate of its own that it renews by itself. An Agent that has not been in touch for two minutes is shown as offline.
+        An Agent runs on a host inside your network and only ever connects out to the platform. It registers once with a single-use token, and then authenticates with a
+        credential that it replaces by itself. An Agent that has not been in touch for two minutes is shown as offline.
         {agents.data && <> The latest version is {agents.data.latestVersion}.</>}
       </p>
       {org && !can(org, "agent", "read") ? (

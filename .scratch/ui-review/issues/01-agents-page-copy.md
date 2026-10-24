@@ -4,7 +4,7 @@
 
 **Blocked by:** none
 
-**Status:** ready-for-agent
+**Status:** done
 
-- [ ] The intro says the Agent registers with a single-use token and then authenticates with a credential it replaces by itself, matching ADR 0006.
-- [ ] No other web copy mentions an Agent certificate or mTLS (grep `web/src`).
+- [x] The intro says the Agent registers with a single-use token and then authenticates with a credential it replaces by itself, matching ADR 0006.
+- [x] No other web copy mentions an Agent certificate or mTLS (grep `web/src`).
