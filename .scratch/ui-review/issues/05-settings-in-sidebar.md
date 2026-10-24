@@ -4,8 +4,12 @@
 
 **Blocked by:** none
 
-**Status:** needs-triage
+**Status:** done
 
-- [ ] Decide: move them to a sidebar Settings group, or show them in both places.
-- [ ] The group keeps today's permission checks (Sign-in settings while MFA setup is required stays reachable).
-- [ ] The user menu keeps Account security, theme (ticket 02) and Sign out.
+- [x] Decide: move them to a sidebar Settings group, or show them in both places.
+- [x] The group keeps today's permission checks (Sign-in settings while MFA setup is required stays reachable).
+- [x] The user menu keeps Account security, theme (ticket 02) and Sign out.
+
+## Comments
+
+Decided: move each to the sidebar group it belongs with, and out of the user menu. Sign-in settings joins Members and Teams under Organization; Notification channels joins ACME accounts and DNS Providers under Administration › Integrations; API keys, open to every member, sits under Automation. The user menu keeps Account security, Theme and Sign out.

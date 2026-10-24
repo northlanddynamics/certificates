@@ -40,12 +40,16 @@ export function organizationNavGroups(org: Org): NavGroup[] {
     },
     {
       label: "Organization",
-      items: can(org, "invitation", "create")
-        ? [
-            { title: "Members", url: `${base}/members`, icon: UserRoundIcon },
-            { title: "Teams", url: `${base}/teams`, icon: UsersIcon },
-          ]
-        : [],
+      items: [
+        ...(can(org, "invitation", "create")
+          ? [
+              { title: "Members", url: `${base}/members`, icon: UserRoundIcon },
+              { title: "Teams", url: `${base}/teams`, icon: UsersIcon },
+            ]
+          : []),
+        // Shown to whoever may see either of its sections, which each check for themselves.
+        ...(can(org, "loginPolicy", "read") || can(org, "ssoConnection", "read") ? [{ title: "Sign-in settings", url: signInSettingsUrl(org.id), icon: LogInIcon }] : []),
+      ],
     },
     {
       label: "Administration",
@@ -64,6 +68,8 @@ export function organizationNavGroups(org: Org): NavGroup[] {
           items: [
             ...(can(org, "acmeAccount", "read") ? [{ title: "ACME accounts", url: `${base}/acme-accounts`, icon: LandmarkIcon }] : []),
             ...(can(org, "dnsProvider", "read") ? [{ title: "DNS Providers", url: `${base}/dns-providers`, icon: GlobeIcon }] : []),
+            // Anyone may list the channels (to choose one as a Subscriber), but the page is for configuring them.
+            ...(can(org, "notificationChannel", "create") ? [{ title: "Notification channels", url: `${base}/notification-channels`, icon: BellIcon }] : []),
           ],
         },
       ],
@@ -85,6 +91,8 @@ export function organizationNavGroups(org: Org): NavGroup[] {
         ...(can(org, "agent", "read") ? [{ title: "Agents", url: `${base}/agents`, icon: BotIcon }] : []),
         ...(can(org, "deployment", "read") ? [{ title: "Deployments", url: `${base}/deployments`, icon: RocketIcon }] : []),
         ...(can(org, "deploymentScript", "read") ? [{ title: "Deployment Scripts", url: `${base}/deployment-scripts`, icon: FileTerminalIcon }] : []),
+        // Anyone may make their own keys, so the page is open to all.
+        { title: "API keys", url: `${base}/api-keys`, icon: KeyRoundIcon },
       ],
     },
   ];
@@ -94,27 +102,16 @@ export function organizationNavGroups(org: Org): NavGroup[] {
 }
 
 /** The same pages in one list, to find the one that is open. */
-export const organizationNav = (org: Org): NavItem[] =>
-  [...organizationNavGroups(org).flatMap((g) => g.items.flatMap((entry) => (isNavSection(entry) ? entry.items : [entry]))), ...organizationAccountNav(org)];
+export const organizationNav = (org: Org): NavItem[] => organizationNavGroups(org).flatMap((g) => g.items.flatMap((entry) => (isNavSection(entry) ? entry.items : [entry])));
 
 export const platformNav: NavItem[] = [{ title: "Organizations", url: "/platform/organizations", icon: BuildingIcon }];
 
 /** An Organization's sign-in settings (its login policy and SSO connections), which stay open to a user the login policy holds up, so that the requirement can be undone. */
 export const signInSettingsUrl = (orgId: string) => `/organizations/${orgId}/sign-in-settings`;
 
-/** The signed-in user's own page, which the user menu opens. */
+/** The signed-in user's own page, which the user menu opens; an Organization's settings are in the sidebar. */
 export const ACCOUNT_SECURITY_URL = "/account/security";
 export const accountNav: NavItem[] = [{ title: "Account security", url: ACCOUNT_SECURITY_URL, icon: ShieldUserIcon }];
-
-/** The pages of one Organization that the user menu opens, below the user's own. */
-export const organizationAccountNav = (org: Org): NavItem[] => [
-  // Shown to whoever may see either of its sections, which each check for themselves.
-  ...(can(org, "loginPolicy", "read") || can(org, "ssoConnection", "read") ? [{ title: "Sign-in settings", url: signInSettingsUrl(org.id), icon: LogInIcon }] : []),
-  // Anyone may list the channels (to choose one as a Subscriber), but the page is for configuring them.
-  ...(can(org, "notificationChannel", "create") ? [{ title: "Notification channels", url: `/organizations/${org.id}/notification-channels`, icon: BellIcon }] : []),
-  // Anyone may make their own keys, so the page is open to all.
-  { title: "API keys", url: `/organizations/${org.id}/api-keys`, icon: KeyRoundIcon },
-];
 
 /** Whether `pathname` is on the page `url`. */
 export const isOnPage = (pathname: string, url: string) => pathname === url || pathname.startsWith(`${url}/`);
