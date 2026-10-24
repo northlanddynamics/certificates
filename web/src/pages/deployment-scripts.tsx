@@ -13,7 +13,7 @@ import { Input } from "@/components/ui/input";
 import { Label } from "@/components/ui/label";
 import { Table, TableBody, TableCell, TableHead, TableHeader, TableRow } from "@/components/ui/table";
 import { Textarea } from "@/components/ui/textarea";
-import { PageHeader } from "@/components/page-header";
+import { ActionLabel, PageHeader } from "@/components/page-header";
 import { api, can, type DeploymentScript } from "@/lib/api";
 import { useOrg } from "@/lib/use-org";
 import { useAction } from "@/lib/use-action";
@@ -220,7 +220,7 @@ function UploadDialog({ orgId }: { orgId: string }) {
       <DialogTrigger asChild>
         <Button>
           <PlusIcon />
-          Upload a script
+          <ActionLabel>Upload a script</ActionLabel>
         </Button>
       </DialogTrigger>
       <DialogContent className="sm:max-w-2xl">

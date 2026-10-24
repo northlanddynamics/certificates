@@ -13,6 +13,7 @@ import { Dialog, DialogContent, DialogDescription, DialogTitle, DialogTrigger } 
 import { Field, FieldContent, FieldDescription, FieldError, FieldGroup, FieldLabel, FieldLegend, FieldSet, FieldTitle } from "@/components/ui/field";
 import { RadioGroup, RadioGroupItem } from "@/components/ui/radio-group";
 import { Textarea } from "@/components/ui/textarea";
+import { ActionLabel } from "@/components/page-header";
 import { acmeCaName } from "@/lib/acme-cas";
 import { api, can, ownerFromKey, ownerKey, type CertificateProfile, type ManagedCertificate, type Me } from "@/lib/api";
 import { KEY_ALGORITHM_LABELS, type KeyAlgorithm } from "@/lib/csr-generator";
@@ -67,7 +68,7 @@ export function NewManagedCertificateDialog({ org, onCreated }: { org: Org; onCr
       <DialogTrigger asChild>
         <Button>
           <PlusIcon />
-          New Managed Certificate
+          <ActionLabel>New Managed Certificate</ActionLabel>
         </Button>
       </DialogTrigger>
       <DialogContent className={STEPPED_DIALOG}>

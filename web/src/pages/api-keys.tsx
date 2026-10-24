@@ -12,7 +12,7 @@ import { Dialog, DialogClose, DialogContent, DialogDescription, DialogFooter, Di
 import { Input } from "@/components/ui/input";
 import { Label } from "@/components/ui/label";
 import { Select, SelectContent, SelectItem, SelectTrigger, SelectValue } from "@/components/ui/select";
-import { PageHeader } from "@/components/page-header";
+import { ActionLabel, PageHeader } from "@/components/page-header";
 import { api, can, type ApiKey } from "@/lib/api";
 import { useOrg } from "@/lib/use-org";
 import { useAction } from "@/lib/use-action";
@@ -124,7 +124,7 @@ function MakeKeyDialog({ orgId, mayMakeOrganizationKeys }: { orgId: string; mayM
       <DialogTrigger asChild>
         <Button>
           <PlusIcon />
-          Make an API key
+          <ActionLabel>Make an API key</ActionLabel>
         </Button>
       </DialogTrigger>
       <DialogContent className="sm:max-w-lg">

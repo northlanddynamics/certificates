@@ -14,7 +14,7 @@ import { DropdownMenu, DropdownMenuContent, DropdownMenuItem, DropdownMenuTrigge
 import { Field, FieldError, FieldGroup, FieldLabel } from "@/components/ui/field";
 import { Input } from "@/components/ui/input";
 import { Select, SelectContent, SelectItem, SelectTrigger, SelectValue } from "@/components/ui/select";
-import { PageHeader } from "@/components/page-header";
+import { ActionLabel, PageHeader } from "@/components/page-header";
 import { api, type Team } from "@/lib/api";
 import { useAction } from "@/lib/use-action";
 
@@ -197,7 +197,7 @@ function NewTeamDialog({ orgId }: { orgId: string }) {
       trigger={
         <Button>
           <PlusIcon />
-          New Team
+          <ActionLabel>New Team</ActionLabel>
         </Button>
       }
     />

@@ -13,6 +13,7 @@ import { Input } from "@/components/ui/input";
 import { RadioGroup, RadioGroupItem } from "@/components/ui/radio-group";
 import { Select, SelectContent, SelectItem, SelectTrigger, SelectValue } from "@/components/ui/select";
 import { Textarea } from "@/components/ui/textarea";
+import { ActionLabel } from "@/components/page-header";
 import { ApiError, api, can, type Me, type RenewalPolicy } from "@/lib/api";
 import { KEY_ALGORITHM_LABELS, isMlDsa, type KeyAlgorithm } from "@/lib/csr-generator";
 import { nameProblems, splitNames } from "@/lib/csr-names";
@@ -37,7 +38,7 @@ export function NewDeploymentDialog({ org }: { org: Me["organizations"][number] 
       <DialogTrigger asChild>
         <Button>
           <PlusIcon />
-          Set up a Deployment
+          <ActionLabel>Set up a Deployment</ActionLabel>
         </Button>
       </DialogTrigger>
       <DialogContent className="sm:max-w-2xl">

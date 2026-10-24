@@ -17,7 +17,7 @@ import { Input } from "@/components/ui/input";
 import { Label } from "@/components/ui/label";
 import { Select, SelectContent, SelectItem, SelectTrigger, SelectValue } from "@/components/ui/select";
 import { Textarea } from "@/components/ui/textarea";
-import { PageHeader } from "@/components/page-header";
+import { ActionLabel, PageHeader } from "@/components/page-header";
 import { acmeCaName, useAcmeCas } from "@/lib/acme-cas";
 import { CERTIFICATE_PROFILE_GUIDE } from "@/lib/certificate-profile-guide";
 import { api, can, type CertificateProfile, type CertificateProfileChanges, type RenewalPolicy } from "@/lib/api";
@@ -218,7 +218,7 @@ function ProfileDialog({ orgId, profile }: { orgId: string; profile?: Certificat
         ) : (
           <Button>
             <PlusIcon />
-            New profile
+            <ActionLabel>New profile</ActionLabel>
           </Button>
         )}
       </DialogTrigger>

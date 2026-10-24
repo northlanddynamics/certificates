@@ -10,7 +10,7 @@ import { Button } from "@/components/ui/button";
 import { Dialog, DialogClose, DialogContent, DialogDescription, DialogFooter, DialogHeader, DialogTitle, DialogTrigger } from "@/components/ui/dialog";
 import { Input } from "@/components/ui/input";
 import { Label } from "@/components/ui/label";
-import { PageHeader } from "@/components/page-header";
+import { ActionLabel, PageHeader } from "@/components/page-header";
 import { api, can, type NotificationChannel } from "@/lib/api";
 import { useOrg } from "@/lib/use-org";
 import { useAction } from "@/lib/use-action";
@@ -102,7 +102,7 @@ function AddChannelDialog({ orgId }: { orgId: string }) {
       <DialogTrigger asChild>
         <Button>
           <PlusIcon />
-          Add a channel
+          <ActionLabel>Add a channel</ActionLabel>
         </Button>
       </DialogTrigger>
       <DialogContent>

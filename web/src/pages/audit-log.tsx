@@ -1,6 +1,7 @@
 import { useInfiniteQuery } from "@tanstack/react-query";
 import { useParams } from "@tanstack/react-router";
 import { createColumnHelper, rowExpandingFeature, tableFeatures, useTable } from "@tanstack/react-table";
+import { ChevronDownIcon, ListFilterIcon } from "lucide-react";
 import { useState, type ComponentProps, type FormEvent } from "react";
 import { DataTable } from "@/components/data-table/data-table";
 import { ExpandButton } from "@/components/data-table/expand-button";
@@ -11,6 +12,7 @@ import { Label } from "@/components/ui/label";
 import { PageHeader } from "@/components/page-header";
 import { api, can, type AuditEvent, type AuditFilters } from "@/lib/api";
 import { useOrg } from "@/lib/use-org";
+import { cn } from "@/lib/utils";
 
 const ROUTE = "/app/organizations/$orgId/audit-log";
 
@@ -102,39 +104,50 @@ function AuditFilterForm({ onSearch }: { onSearch: (filters: AuditFilters) => vo
   const [targetId, setTargetId] = useState("");
   const [from, setFrom] = useState("");
   const [to, setTo] = useState("");
+  const [open, setOpen] = useState(false);
   const field = (id: string, label: string, value: string, set: (v: string) => void, props: Partial<ComponentProps<typeof Input>> = {}) => (
     <div className="flex flex-col gap-2">
       <Label htmlFor={id}>{label}</Label>
       <Input id={id} value={value} onChange={(e) => set(e.target.value)} {...props} />
     </div>
   );
+  // A phone keeps the fields behind a Filters button, so that the events are on the first screen.
   return (
-    <form
-      className="grid gap-4 sm:grid-cols-2 lg:grid-cols-3"
-      onSubmit={(e: FormEvent) => {
-        e.preventDefault();
-        onSearch({ actor: actor.trim(), action: action.trim(), targetType: targetType.trim(), targetId: targetId.trim(), from: isoOf(from), to: isoOf(to) });
-      }}
-    >
-      {field("audit-actor", "Actor", actor, setActor, { placeholder: "Email or user id", autoComplete: "off" })}
-      {field("audit-action", "Action", action, setAction, { placeholder: "team.created, or team.*", autoComplete: "off" })}
-      {field("audit-target-type", "Target type", targetType, setTargetType, { placeholder: "managed_certificate", autoComplete: "off" })}
-      {field("audit-target-id", "Target id", targetId, setTargetId, { autoComplete: "off" })}
-      {field("audit-from", "From", from, setFrom, { type: "datetime-local" })}
-      {field("audit-to", "Until", to, setTo, { type: "datetime-local" })}
-      <div className="flex gap-2 sm:col-span-2 lg:col-span-3">
-        <Button type="submit">Search</Button>
-        <Button
-          type="button"
-          variant="outline"
-          onClick={() => {
-            for (const set of [setActor, setAction, setTargetType, setTargetId, setFrom, setTo]) set("");
-            onSearch({});
+    <div className="flex flex-col gap-3">
+      <Button type="button" variant="outline" size="sm" className="self-start sm:hidden" aria-expanded={open} aria-controls="audit-filters" onClick={() => setOpen(!open)}>
+        <ListFilterIcon />
+        Filters
+        <ChevronDownIcon className={cn("transition-transform", !open && "-rotate-90")} />
+      </Button>
+      <div id="audit-filters" className={cn(!open && "max-sm:hidden")}>
+        <form
+          className="grid gap-4 sm:grid-cols-2 lg:grid-cols-3"
+          onSubmit={(e: FormEvent) => {
+            e.preventDefault();
+            onSearch({ actor: actor.trim(), action: action.trim(), targetType: targetType.trim(), targetId: targetId.trim(), from: isoOf(from), to: isoOf(to) });
           }}
         >
-          Clear
-        </Button>
+          {field("audit-actor", "Actor", actor, setActor, { placeholder: "Email or user id", autoComplete: "off" })}
+          {field("audit-action", "Action", action, setAction, { placeholder: "team.created, or team.*", autoComplete: "off" })}
+          {field("audit-target-type", "Target type", targetType, setTargetType, { placeholder: "managed_certificate", autoComplete: "off" })}
+          {field("audit-target-id", "Target id", targetId, setTargetId, { autoComplete: "off" })}
+          {field("audit-from", "From", from, setFrom, { type: "datetime-local" })}
+          {field("audit-to", "Until", to, setTo, { type: "datetime-local" })}
+          <div className="flex gap-2 sm:col-span-2 lg:col-span-3">
+            <Button type="submit">Search</Button>
+            <Button
+              type="button"
+              variant="outline"
+              onClick={() => {
+                for (const set of [setActor, setAction, setTargetType, setTargetId, setFrom, setTo]) set("");
+                onSearch({});
+              }}
+            >
+              Clear
+            </Button>
+          </div>
+        </form>
       </div>
-    </form>
+    </div>
   );
 }

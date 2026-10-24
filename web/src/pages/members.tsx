@@ -16,7 +16,7 @@ import { Input } from "@/components/ui/input";
 import { Select, SelectContent, SelectItem, SelectTrigger, SelectValue } from "@/components/ui/select";
 import { Tabs, TabsContent, TabsList, TabsTrigger } from "@/components/ui/tabs";
 import { Table, TableBody, TableCell, TableHead, TableHeader, TableRow } from "@/components/ui/table";
-import { PageHeader } from "@/components/page-header";
+import { ActionLabel, PageHeader } from "@/components/page-header";
 import { api, roleLabel, type OrgMember, type PendingInvitation } from "@/lib/api";
 import { useAction } from "@/lib/use-action";
 
@@ -183,7 +183,7 @@ function InviteDialog({ orgId, roles }: { orgId: string; roles: string[] }) {
       <DialogTrigger asChild>
         <Button>
           <PlusIcon />
-          Invite member
+          <ActionLabel>Invite member</ActionLabel>
         </Button>
       </DialogTrigger>
       <DialogContent>

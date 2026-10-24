@@ -11,6 +11,7 @@ import { Input } from "@/components/ui/input";
 import { RadioGroup, RadioGroupItem } from "@/components/ui/radio-group";
 import { Select, SelectContent, SelectItem, SelectTrigger, SelectValue } from "@/components/ui/select";
 import { Textarea } from "@/components/ui/textarea";
+import { ActionLabel } from "@/components/page-header";
 import { TSIG_ALGORITHMS, api, type Agent, type DnsProvider, type DnsProviderSettings, type DnsProviderType } from "@/lib/api";
 import { useAction } from "@/lib/use-action";
 
@@ -118,7 +119,7 @@ export function AddDnsProviderDialog({ orgId, relay }: { orgId: string; relay: R
       <DialogTrigger asChild>
         <Button>
           <PlusIcon />
-          Add a DNS Provider
+          <ActionLabel>Add a DNS Provider</ActionLabel>
         </Button>
       </DialogTrigger>
       <WizardDialogContent title="Add a DNS Provider" description="The secret is stored encrypted and is never shown again.">

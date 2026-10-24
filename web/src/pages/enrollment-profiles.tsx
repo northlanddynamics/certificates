@@ -36,7 +36,7 @@ import { DropdownMenu, DropdownMenuContent, DropdownMenuItem, DropdownMenuSepara
 import { Field, FieldDescription, FieldError, FieldGroup, FieldLabel, FieldLegend, FieldSet } from "@/components/ui/field";
 import { Input } from "@/components/ui/input";
 import { Select, SelectContent, SelectItem, SelectTrigger, SelectValue } from "@/components/ui/select";
-import { PageHeader } from "@/components/page-header";
+import { ActionLabel, PageHeader } from "@/components/page-header";
 import { api, can, type CreatedEnrollmentProfile, type EnrollmentProfile } from "@/lib/api";
 import { useOrg } from "@/lib/use-org";
 import { daysLabel, findIssuingCa, issuingCaTitle, isValidityDays } from "@/lib/private-ca";
@@ -675,7 +675,7 @@ function NewProfileDialog({ orgId }: { orgId: string }) {
       <DialogTrigger asChild>
         <Button>
           <PlusIcon />
-          New profile
+          <ActionLabel>New profile</ActionLabel>
         </Button>
       </DialogTrigger>
       {created?.sharedChallenge ? (

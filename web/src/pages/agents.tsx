@@ -10,7 +10,7 @@ import { DataTablePagination } from "@/components/data-table/data-table-paginati
 import { Badge } from "@/components/ui/badge";
 import { Button } from "@/components/ui/button";
 import { Dialog, DialogClose, DialogContent, DialogDescription, DialogFooter, DialogHeader, DialogTitle, DialogTrigger } from "@/components/ui/dialog";
-import { PageHeader } from "@/components/page-header";
+import { ActionLabel, PageHeader } from "@/components/page-header";
 import { api, can, type Agent } from "@/lib/api";
 import { useOrg } from "@/lib/use-org";
 import { useAction } from "@/lib/use-action";
@@ -176,7 +176,7 @@ function RegisterAgentDialog({ orgId }: { orgId: string }) {
       <DialogTrigger asChild>
         <Button>
           <PlusIcon />
-          Register an Agent
+          <ActionLabel>Register an Agent</ActionLabel>
         </Button>
       </DialogTrigger>
       <DialogContent className="sm:max-w-lg">

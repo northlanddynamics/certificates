@@ -10,7 +10,7 @@ import { Button } from "@/components/ui/button";
 import { Dialog, DialogClose, DialogContent, DialogDescription, DialogFooter, DialogHeader, DialogTitle, DialogTrigger } from "@/components/ui/dialog";
 import { Input } from "@/components/ui/input";
 import { Label } from "@/components/ui/label";
-import { PageHeader } from "@/components/page-header";
+import { ActionLabel, PageHeader } from "@/components/page-header";
 import { api, can, type AuditForwarder } from "@/lib/api";
 import { useOrg } from "@/lib/use-org";
 import { useAction } from "@/lib/use-action";
@@ -120,7 +120,7 @@ function AddForwarderDialog({ orgId }: { orgId: string }) {
       <DialogTrigger asChild>
         <Button>
           <PlusIcon />
-          Add a forwarder
+          <ActionLabel>Add a forwarder</ActionLabel>
         </Button>
       </DialogTrigger>
       <DialogContent>

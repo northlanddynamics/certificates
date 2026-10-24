@@ -3,6 +3,11 @@ import type { ReactNode } from "react";
 import { Button } from "@/components/ui/button";
 import { Collapsible, CollapsibleContent, CollapsibleTrigger } from "@/components/ui/collapsible";
 
+/** A page action's words, which a phone leaves to its icon (still read out), so that the title keeps its line. */
+export function ActionLabel({ children }: { children: ReactNode }) {
+  return <span className="max-sm:sr-only">{children}</span>;
+}
+
 /**
  * The top of a page: its title, with its primary action beside it, then one sentence on what the page is for; the rest
  * of the explanation, if any, folded under "How it works" (or `howItWorksTitle`) until asked for.

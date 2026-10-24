@@ -23,7 +23,7 @@ import { api, can, issuingCaRevocationReasons, type IssuingCa, type PermittedNam
 import { useOrg } from "@/lib/use-org";
 import { KEY_ALGORITHM_LABELS, isMlDsa, type KeyAlgorithm } from "@/lib/csr-generator";
 import { useKeyAlgorithms } from "@/components/issuer-choice";
-import { PageHeader } from "@/components/page-header";
+import { ActionLabel, PageHeader } from "@/components/page-header";
 import { splitNames } from "@/lib/csr-names";
 import { keyAlgorithmLabel } from "@/lib/managed-certificate";
 import { DEFAULT_VALIDITY_DAYS, MAX_LIFETIME_YEARS, MAX_VALIDITY_DAYS, commonNameOf, daysLabel, isValidityDays, rootSubjectOf, validityLabel } from "@/lib/private-ca";
@@ -844,7 +844,7 @@ function CreatePrivateCaDialog({ orgId }: { orgId: string }) {
       <DialogTrigger asChild>
         <Button>
           <PlusIcon />
-          New Private CA
+          <ActionLabel>New Private CA</ActionLabel>
         </Button>
       </DialogTrigger>
       <DialogContent className={STEPPED_DIALOG}>

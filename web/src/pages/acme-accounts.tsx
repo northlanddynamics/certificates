@@ -12,7 +12,7 @@ import { Dialog, DialogClose, DialogContent, DialogDescription, DialogFooter, Di
 import { Field, FieldDescription, FieldError, FieldGroup, FieldLabel, FieldLegend, FieldSet } from "@/components/ui/field";
 import { Input } from "@/components/ui/input";
 import { Label } from "@/components/ui/label";
-import { PageHeader } from "@/components/page-header";
+import { ActionLabel, PageHeader } from "@/components/page-header";
 import { api, can, type AcmeAccount, type AcmeCa, type AcmeCaTag } from "@/lib/api";
 import { ACME_CA_TAG_LABELS, useAcmeCas } from "@/lib/acme-cas";
 import { useOrg } from "@/lib/use-org";
@@ -255,7 +255,7 @@ function RegisterAccountDialog({ orgId, acmeCas }: { orgId: string; acmeCas: Acm
       <DialogTrigger asChild>
         <Button>
           <PlusIcon />
-          Register an account
+          <ActionLabel>Register an account</ActionLabel>
         </Button>
       </DialogTrigger>
       <DialogContent className={STEPPED_DIALOG}>

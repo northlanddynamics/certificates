@@ -4,8 +4,12 @@
 
 **Blocked by:** 22
 
-**Status:** ready-for-agent
+**Status:** done
 
-- [ ] Below `sm`, the primary action is an icon button with an accessible label (or moves under the title).
-- [ ] The Audit log filters collapse behind a Filters button on mobile (with ticket 23).
-- [ ] Checked at 390px on every list page.
+- [x] Below `sm`, the primary action is an icon button with an accessible label (or moves under the title).
+- [x] The Audit log filters collapse behind a Filters button on mobile (with ticket 23).
+- [x] Checked at 390px on every list page.
+
+## Comments
+
+The Audit log's fields are folded as they are; the search box and chips of ticket 23 are still to decide. Tables still scroll sideways at 390px (ticket 24).
