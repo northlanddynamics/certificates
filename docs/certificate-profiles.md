@@ -56,7 +56,7 @@ The confirmation states how many live Managed Certificates will stop renewing an
 
 ## Detaching
 
-To let one Managed Certificate renew while its profile stays disabled, an Organization Administrator detaches it: **Detach from profile…** on its details page, or `DELETE /api/organizations/{orgId}/managed-certificates/{id}/profile`. It becomes an ordinary Managed Certificate. It keeps its issuer, validity, key algorithm, Renewal Policy, names, Owners and Subscribers. Its Name Changes are no longer checked against the profile's name rules, and the profile being disabled no longer stops its Issuance, so one whose Renewal was blocked renews on the scheduler's next pass.
+To let one Managed Certificate renew while its profile stays disabled, an Organization Administrator detaches it: **Detach from profile…** in the ⋯ menu of its details page, or `DELETE /api/organizations/{orgId}/managed-certificates/{id}/profile`. It becomes an ordinary Managed Certificate. It keeps its issuer, validity, key algorithm, Renewal Policy, names, Owners and Subscribers. Its Name Changes are no longer checked against the profile's name rules, and the profile being disabled no longer stops its Issuance, so one whose Renewal was blocked renews on the scheduler's next pass.
 
 Detaching cannot be undone: a Managed Certificate is never attached to a profile again, nor is an existing one moved onto a profile. A Proposal cannot be detached, pending or rejected; it stays linked to its profile.
 

@@ -1,35 +1,34 @@
-import { useState } from "react";
 import { Button } from "@/components/ui/button";
-import { Dialog, DialogClose, DialogContent, DialogDescription, DialogFooter, DialogHeader, DialogTitle, DialogTrigger } from "@/components/ui/dialog";
+import { Dialog, DialogClose, DialogContent, DialogDescription, DialogFooter, DialogHeader, DialogTitle } from "@/components/ui/dialog";
 import { api, can, type ManagedCertificate, type Me } from "@/lib/api";
 import { useAction } from "@/lib/use-action";
 
 /**
- * For Organization Administrators, detaching a Managed Certificate from the Certificate Profile it was made from: it
- * becomes an ordinary Managed Certificate, keeping its settings and Owners, and the profile's name rules and disabled
- * state no longer apply to it. A Proposal stays linked to its profile, so is offered no Detach.
+ * Whether the caller may detach a Managed Certificate from the Certificate Profile it was made from: Organization
+ * Administrators may, of one that is not archived. A Proposal stays linked to its profile, so is offered no Detach.
  */
-export function ProfileDetach({ org, m, onChanged }: { org: Me["organizations"][number]; m: ManagedCertificate; onChanged: () => void }) {
-  const [open, setOpen] = useState(false);
+export const mayDetach = (org: Me["organizations"][number], m: ManagedCertificate) =>
+  !!m.profile && can(org, "managedCertificate", "detachProfile") && !m.archivedAt && m.approval.status !== "pending" && m.approval.status !== "rejected";
+
+/**
+ * Detaching a Managed Certificate from its Certificate Profile: it becomes an ordinary Managed Certificate, keeping its
+ * settings and Owners, and the profile's name rules and disabled state no longer apply to it.
+ */
+export function DetachDialog({ org, m, open, onOpenChange, onChanged }: { org: Me["organizations"][number]; m: ManagedCertificate; open: boolean; onOpenChange: (open: boolean) => void; onChanged: () => void }) {
   const detach = useAction(() => api.detachProfile(org.id, m.id), ["certificate-profiles"], () => {
-    setOpen(false);
+    onOpenChange(false);
     onChanged();
   });
   const profile = m.profile;
-  if (!profile || !can(org, "managedCertificate", "detachProfile") || m.archivedAt || m.approval.status === "pending" || m.approval.status === "rejected") return null;
+  if (!profile) return null;
   return (
     <Dialog
       open={open}
       onOpenChange={(next) => {
-        setOpen(next);
+        onOpenChange(next);
         detach.reset();
       }}
     >
-      <DialogTrigger asChild>
-        <Button variant="outline" size="sm" className="self-start">
-          Detach from profile…
-        </Button>
-      </DialogTrigger>
       <DialogContent className="sm:max-w-lg">
         <DialogHeader>
           <DialogTitle>Detach from {profile.name}</DialogTitle>
