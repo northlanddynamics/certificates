@@ -10,3 +10,7 @@
 - [ ] If so: the title names the Organization and role, and the email is pre-filled and read-only.
 - [ ] "Already have an account? Sign in" goes to `/sign-in?redirect=/accept-invitation/<id>` (ticket 04), and a signed-in visitor sees a one-click Accept.
 - [ ] Password field shows the 12-character rule as a hint, not in the label.
+
+## Comments
+
+Findings: Better Auth's `GET /organization/get-invitation` returns the Organization's name, the role and the inviter, but only to a signed-in user whose email is the invitation's (`routes/crud-invites.mjs`); `accept-invitation` checks the same. The invitation email already names the Organization in its subject. A public lookup would be a platform route keyed by the invitation id (an unguessable UUID, as good as the emailed link) that returns the Organization's name, the role and the email, for a pending, unexpired invitation only. Trade-off: anyone holding the link learns those three things, which the email already tells them. Waiting on a decision.
