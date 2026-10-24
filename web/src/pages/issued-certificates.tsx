@@ -57,7 +57,7 @@ export function IssuedCertificatesTab() {
   const mayDownload = can(org, "managedCertificate", "download");
   return (
     <>
-      <div className="rounded-lg border">
+      <div className="rounded-lg border bg-card">
         <Table>
           <TableHeader>
             <TableRow>

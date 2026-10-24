@@ -21,7 +21,7 @@ export function DataTable<TFeatures extends TableFeatures, TData extends object>
   const rows = table.getRowModel().rows;
   const columnCount = table.getAllLeafColumns().length;
   return (
-    <div className="rounded-md border">
+    <div className="rounded-md border bg-card">
       <Table>
         <TableHeader>
           {table.getHeaderGroups().map((group) => (
