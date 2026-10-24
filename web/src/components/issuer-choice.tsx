@@ -1,12 +1,15 @@
 import { useQuery } from "@tanstack/react-query";
+import { Link } from "@tanstack/react-router";
+import { TriangleAlertIcon } from "lucide-react";
 import { useState } from "react";
+import { Alert, AlertDescription, AlertTitle } from "@/components/ui/alert";
 import { Field, FieldContent, FieldDescription, FieldError, FieldLabel, FieldTitle } from "@/components/ui/field";
 import { Input } from "@/components/ui/input";
 import { RadioGroup, RadioGroupItem } from "@/components/ui/radio-group";
 import { Select, SelectContent, SelectItem, SelectTrigger, SelectValue } from "@/components/ui/select";
 import { AcmeCaTagBadge } from "@/components/acme-ca-tag";
 import { ACME_CA_FILTERS, acmeCaChoices, type AcmeCaFilter } from "@/lib/acme-ca-choices";
-import { ACME_CA_TAG_LABELS, DEFAULT_ACME_CA_ID, acmeCaName, useAcmeCas } from "@/lib/acme-cas";
+import { ACME_CA_TAG_LABELS, acmeCaName, useAcmeCas } from "@/lib/acme-cas";
 import { api, type AcmeCa, type IssuerRef } from "@/lib/api";
 import { KEY_ALGORITHM_LABELS, NO_KEY_ALGORITHMS } from "@/lib/csr-generator";
 import { commonNameOf, daysLabel, findIssuingCa, isValidityDays, permittedNamesLabel, validityLabel } from "@/lib/private-ca";
@@ -42,13 +45,17 @@ const ACME_CA_FILTER_LABELS: Record<AcmeCaFilter, string> = { all: "Every tag", 
 export const useKeyAlgorithms = () => useQuery({ queryKey: ["key-algorithms"], queryFn: () => api.keyAlgorithms(), staleTime: Infinity });
 
 /**
- * The state of choosing where Certificates are issued from: an ACME CA (Let's Encrypt Staging to begin with) or an
- * active Issuing CA under an active root, and for an Issuing CA a validity (empty for its default), starting from `initial`
- * when given. Anyone may list the ACME CAs, and see which the Organization has an account with; the Private CAs are
- * fetched only for whoever may read them.
+ * The state of choosing where Certificates are issued from: an ACME CA or an active Issuing CA under an active root, and
+ * for an Issuing CA a validity (empty for its default), starting from `initial` when given, and otherwise from the first
+ * that can issue, in the order they are offered; none while nothing can. Anyone may list the ACME CAs, and see which the
+ * Organization has an account with; the Private CAs are fetched only for whoever may read them. `canRegisterAcmeAccounts`
+ * says whether the caller may register an account with an ACME CA that has none.
  */
-export function useIssuerChoice(orgId: string, { canReadPrivateCas, initial }: { canReadPrivateCas: boolean; initial?: { issuer: IssuerChoice; validityDays: number | null } }) {
-  const [issuer, setIssuer] = useState<IssuerChoice>(initial?.issuer ?? { kind: "acme", acmeCaId: DEFAULT_ACME_CA_ID });
+export function useIssuerChoice(
+  orgId: string,
+  { canReadPrivateCas, canRegisterAcmeAccounts = false, initial }: { canReadPrivateCas: boolean; canRegisterAcmeAccounts?: boolean; initial?: { issuer: IssuerChoice; validityDays: number | null } },
+) {
+  const [picked, setIssuer] = useState<IssuerChoice | null>(initial?.issuer ?? null);
   const [validityDays, setValidityDays] = useState(initial?.validityDays == null ? "" : String(initial.validityDays));
   const [acmeCaFilter, setAcmeCaFilter] = useState<AcmeCaFilter>("all");
   const acmeCas = useAcmeCas(orgId);
@@ -59,16 +66,30 @@ export function useIssuerChoice(orgId: string, { canReadPrivateCas, initial }: {
     .filter((ca) => ca.status === "active")
     .map((ca) => ({ ...ca, issuingCas: ca.issuingCas.filter((i) => i.status === "active") }))
     .filter((ca) => ca.issuingCas.length > 0);
-  const chosenCa = issuer.kind === "private_ca" ? findIssuingCa(activeCas, issuer.issuingCaId) : undefined;
+  // Decided once both lists are read, so that it does not move as they arrive.
+  const known = acmeCas.data !== undefined && (!canReadPrivateCas || privateCas.data !== undefined);
+  const readyAcmeCa = acmeCas.data?.items.find((ca) => ca.hasAccount);
+  const readyIssuingCa = activeCas[0]?.issuingCas[0];
+  const firstReady: IssuerChoice | null = !known
+    ? null
+    : readyAcmeCa
+      ? { kind: "acme", acmeCaId: readyAcmeCa.id }
+      : readyIssuingCa
+        ? { kind: "private_ca", issuingCaId: readyIssuingCa.id }
+        : null;
+  const issuer = picked ?? firstReady;
+  const chosenCa = issuer?.kind === "private_ca" ? findIssuingCa(activeCas, issuer.issuingCaId) : undefined;
   // What a Managed Certificate on the chosen CA may have, as the server says; none until it has said.
-  const takes = issuer.kind === "private_ca" ? chosenCa?.certificateKeyAlgorithms : keyAlgorithms.data?.acmeKeyAlgorithms;
+  const takes = !issuer ? undefined : issuer.kind === "private_ca" ? chosenCa?.certificateKeyAlgorithms : keyAlgorithms.data?.acmeKeyAlgorithms;
   // The validity chosen, in days; none for the Issuing CA's default.
   const chosenValidity = validityDays.trim() === "" ? null : Number(validityDays);
   const validityOk = !chosenCa || chosenValidity === null || isValidityDays(validityDays, chosenCa.validity.maximumDays);
   // Whether the chosen ACME CA has an account to issue through; unknown (undefined) until the ACME CAs are read.
-  const registered = issuer.kind !== "acme" || acmeCas.data?.items.find((ca) => ca.id === issuer.acmeCaId)?.hasAccount;
-  const title = issuer.kind === "acme" ? acmeCaName(acmeCas.data?.items, issuer.acmeCaId) : chosenCa?.name;
+  const registered = !issuer ? undefined : issuer.kind !== "acme" || acmeCas.data?.items.find((ca) => ca.id === issuer.acmeCaId)?.hasAccount;
+  const title = !issuer ? undefined : issuer.kind === "acme" ? acmeCaName(acmeCas.data?.items, issuer.acmeCaId) : chosenCa?.name;
   return {
+    orgId,
+    /** The issuer chosen; none while nothing that can issue has been chosen. */
     issuer,
     setIssuer,
     validityDays,
@@ -86,12 +107,15 @@ export function useIssuerChoice(orgId: string, { canReadPrivateCas, initial }: {
     validityOk,
     registered,
     acmeCasKnown: acmeCas.data !== undefined,
+    /** Whether both lists are read, and so whether no issuer means that nothing can issue. */
+    known,
+    canRegisterAcmeAccounts,
     /** The issuer chosen in words, for a summary. */
     title,
     /** The validity chosen in words, for a summary; none for an ACME CA, which decides its own. */
     validityText: chosenCa ? (chosenValidity !== null ? daysLabel(chosenValidity) : `${daysLabel(chosenCa.validity.defaultDays)} (the default)`) : null,
-    /** What the API is given: the issuer, and for an Issuing CA the validity when one is chosen. */
-    request: { issuer, ...(issuer.kind === "private_ca" && chosenValidity !== null && { validityDays: chosenValidity }) },
+    /** What the API is given: the issuer, and for an Issuing CA the validity when one is chosen; none while no issuer is. */
+    request: issuer && { issuer, ...(issuer.kind === "private_ca" && chosenValidity !== null && { validityDays: chosenValidity }) },
   };
 }
 
@@ -101,7 +125,7 @@ export function useIssuerChoice(orgId: string, { canReadPrivateCas, initial }: {
  * the ids apart between forms.
  */
 export function IssuerChoiceFields({ choice, idPrefix, trying }: { choice: ReturnType<typeof useIssuerChoice>; idPrefix: string; trying: string }) {
-  const { issuer, setIssuer, validityDays, setValidityDays, acmeCas, acmeCaFilter, setAcmeCaFilter, activeCas, chosenCa, validityOk, registered, acmeCasKnown } = choice;
+  const { orgId, issuer, setIssuer, validityDays, setValidityDays, acmeCas, acmeCaFilter, setAcmeCaFilter, activeCas, chosenCa, validityOk, registered, acmeCasKnown, known, canRegisterAcmeAccounts } = choice;
   const listed = acmeCaChoices(acmeCas, acmeCaFilter);
   return (
     <>
@@ -122,7 +146,14 @@ export function IssuerChoiceFields({ choice, idPrefix, trying }: { choice: Retur
           </SelectContent>
         </Select>
       </Field>
-      <RadioGroup value={issuerValue(issuer)} onValueChange={(value) => setIssuer(issuerOfValue(value))}>
+      {known && !issuer && (
+        <Alert className="border-amber-500/60 bg-amber-500/5">
+          <TriangleAlertIcon className="text-amber-600 dark:text-amber-400" />
+          <AlertTitle>Nothing can issue yet</AlertTitle>
+          <AlertDescription>An ACME CA needs an ACME account, and a Private CA an active Issuing CA, before it can issue.</AlertDescription>
+        </Alert>
+      )}
+      <RadioGroup value={issuer ? issuerValue(issuer) : ""} onValueChange={(value) => setIssuer(issuerOfValue(value))}>
         {listed.length === 0 && <p className="text-sm text-muted-foreground">No ACME CA has that tag.</p>}
         {listed.map(({ ca, disabled }) => (
           <FieldLabel key={ca.id} htmlFor={`${idPrefix}-acme-${ca.id}`}>
@@ -132,7 +163,18 @@ export function IssuerChoiceFields({ choice, idPrefix, trying }: { choice: Retur
                   {ca.name} <AcmeCaTagBadge tag={ca.tag} />
                 </FieldTitle>
                 {acmeCaDescription(ca, trying) && <FieldDescription>{acmeCaDescription(ca, trying)}</FieldDescription>}
-                {disabled && <FieldDescription>No ACME account yet.</FieldDescription>}
+                {disabled && (
+                  <FieldDescription>
+                    No ACME account yet.{" "}
+                    {canRegisterAcmeAccounts ? (
+                      <Link to="/organizations/$orgId/acme-accounts" params={{ orgId }}>
+                        Register an account
+                      </Link>
+                    ) : (
+                      "Ask an Organization Administrator to register one."
+                    )}
+                  </FieldDescription>
+                )}
               </FieldContent>
               <RadioGroupItem value={`acme:${ca.id}`} id={`${idPrefix}-acme-${ca.id}`} disabled={disabled} />
             </Field>
@@ -182,10 +224,21 @@ export function IssuerChoiceFields({ choice, idPrefix, trying }: { choice: Retur
           {!validityOk && <FieldError>Choose a whole number of days from 1 to {chosenCa.validity.maximumDays}.</FieldError>}
         </Field>
       )}
-      {issuer.kind === "acme" && acmeCasKnown && !registered && (
-        <FieldError>
-          The Organization has no ACME account with {acmeCaName(acmeCas, issuer.acmeCaId)} yet, so Issuance would fail. An Organization Administrator can register one under ACME accounts.
-        </FieldError>
+      {issuer?.kind === "acme" && acmeCasKnown && !registered && (
+        <Alert className="border-amber-500/60 bg-amber-500/5">
+          <TriangleAlertIcon className="text-amber-600 dark:text-amber-400" />
+          <AlertTitle>No ACME account with {acmeCaName(acmeCas, issuer.acmeCaId)}</AlertTitle>
+          <AlertDescription>
+            Issuance would fail until the Organization has one.{" "}
+            {canRegisterAcmeAccounts ? (
+              <Link to="/organizations/$orgId/acme-accounts" params={{ orgId }} className="underline underline-offset-4">
+                Register an account
+              </Link>
+            ) : (
+              "Ask an Organization Administrator to register one."
+            )}
+          </AlertDescription>
+        </Alert>
       )}
     </>
   );

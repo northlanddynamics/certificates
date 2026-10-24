@@ -251,7 +251,7 @@ function ProfileForm({ orgId, profile, onDone }: { orgId: string; profile?: Cert
   const [step, setStep] = useState<StepId>("details");
   const [name, setName] = useState(profile?.name ?? "");
   const [description, setDescription] = useState(profile?.description ?? "");
-  const choice = useIssuerChoice(orgId, { canReadPrivateCas: org ? can(org, "privateCa", "read") : false, initial: profile && { issuer: profile.issuer, validityDays: profile.validityDays } });
+  const choice = useIssuerChoice(orgId, { canReadPrivateCas: org ? can(org, "privateCa", "read") : false, canRegisterAcmeAccounts: org ? can(org, "acmeAccount", "create") : false, initial: profile && { issuer: profile.issuer, validityDays: profile.validityDays } });
   const [keys, setKeys] = useState<KeyAlgorithm[]>(profile?.allowedKeyAlgorithms ?? ["ecdsa-p256"]);
   const [mode, setMode] = useState<RenewalPolicy["mode"]>(profile?.renewalPolicy.mode ?? "automatic");
   const [days, setDays] = useState(String(profile?.renewalPolicy.daysBeforeExpiry ?? 30));
@@ -266,18 +266,22 @@ function ProfileForm({ orgId, profile, onDone }: { orgId: string; profile?: Cert
   const allowedKeys = choice.keyAlgorithms.filter((algorithm) => keys.includes(algorithm));
   const daysOk = /^\d+$/.test(days) && Number(days) >= 1 && Number(days) <= 365;
   const maxNamesOk = maxNames.trim() === "" || (/^\d+$/.test(maxNames.trim()) && Number(maxNames) >= 1 && Number(maxNames) <= MAX_NAMES);
-  const changes: CertificateProfileChanges = {
+  const settings = {
     name: name.trim(),
     description: description.trim(),
-    issuer: choice.issuer,
     allowedKeyAlgorithms: allowedKeys,
-    validityDays: choice.issuer.kind === "private_ca" ? choice.chosenValidity : null,
     renewalPolicy: { mode, daysBeforeExpiry: Number(days) },
     defaultTeamId: teamId === NO_TEAM ? null : teamId,
     nameRules: { exact: splitNames(exactNames), zones: splitNames(zones), maxNames: maxNames.trim() === "" ? null : Number(maxNames), wildcards },
   };
+  // None until an issuer is chosen, which the Issuer step asks for before Review.
+  const { issuer } = choice;
+  const changes: CertificateProfileChanges | null = issuer && { ...settings, issuer, validityDays: issuer.kind === "private_ca" ? choice.chosenValidity : null };
   const save = useAction(
-    () => (profile ? api.updateCertificateProfile(orgId, profile.id, changes) : api.createCertificateProfile(orgId, changes)),
+    async () => {
+      if (!changes) throw new Error("Choose where it is issued from.");
+      return profile ? api.updateCertificateProfile(orgId, profile.id, changes) : api.createCertificateProfile(orgId, changes);
+    },
     ["certificate-profiles", "audit-events"],
     onDone,
   );
@@ -285,8 +289,10 @@ function ProfileForm({ orgId, profile, onDone }: { orgId: string; profile?: Cert
   // What each step still needs. The Issuer step needs nothing unless its validity is out of range or its ACME CA has no account; the Co-Owner step never
   // does, a Team being optional; Review only shows what was entered.
   const missing: Partial<Record<StepId, Missing>> = {
-    details: changes.name === "" ? { reason: "Give the profile a name.", field: "profile-name" } : undefined,
-    issuer: !choice.validityOk
+    details: settings.name === "" ? { reason: "Give the profile a name.", field: "profile-name" } : undefined,
+    issuer: !issuer
+      ? { reason: "Choose where it is issued from." }
+      : !choice.validityOk
       ? { reason: "Give a validity the Issuing CA allows.", field: "profile-validity" }
       : choice.registered === false
         ? { reason: "The Organization has no account with that ACME CA: choose another." }
@@ -464,13 +470,13 @@ function ProfileForm({ orgId, profile, onDone }: { orgId: string; profile?: Cert
             </FieldDescription>
             <SummaryRows
               rows={[
-                { label: "Name", value: changes.name },
-                ...(changes.description ? [{ label: "Description", value: changes.description }] : []),
+                { label: "Name", value: settings.name },
+                ...(settings.description ? [{ label: "Description", value: settings.description }] : []),
                 { label: "Issued from", value: choice.title ?? "" },
                 ...(choice.validityText ? [{ label: "Validity", value: choice.validityText }] : []),
                 { label: "Key algorithms", value: allowedKeys.map((algorithm) => KEY_ALGORITHM_LABELS[algorithm]).join(", ") },
-                { label: "Names", value: nameRulesLabel(changes.nameRules) ?? <span className="text-muted-foreground">Any the issuer takes</span> },
-                { label: "Renewal", value: renewalLabel(changes.renewalPolicy) },
+                { label: "Names", value: nameRulesLabel(settings.nameRules) ?? <span className="text-muted-foreground">Any the issuer takes</span> },
+                { label: "Renewal", value: renewalLabel(settings.renewalPolicy) },
                 { label: "Co-Owner", value: teams.data?.items.find((team) => team.id === teamId)?.name ?? <span className="text-muted-foreground">None</span> },
               ]}
             />

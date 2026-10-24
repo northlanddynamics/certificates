@@ -4,8 +4,8 @@
 
 **Blocked by:** none
 
-**Status:** ready-for-agent
+**Status:** done
 
-- [ ] The default is the first issuer that can issue (has an ACME Account, or is an active Issuing CA); none when nothing can.
-- [ ] An ACME CA with no account is shown but not selectable, with "Register an account" linking to ACME accounts for those who may, and "Ask an Organization Administrator" for the rest.
-- [ ] The warning is an amber notice, not red error text.
+- [x] The default is the first issuer that can issue (has an ACME Account, or is an active Issuing CA); none when nothing can.
+- [x] An ACME CA with no account is shown but not selectable, with "Register an account" linking to ACME accounts for those who may, and "Ask an Organization Administrator" for the rest.
+- [x] The warning is an amber notice, not red error text.

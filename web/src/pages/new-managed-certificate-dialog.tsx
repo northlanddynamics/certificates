@@ -104,7 +104,7 @@ function NewManagedCertificateForm({
   onCreated: (created: ManagedCertificate) => void;
 }) {
   const [step, setStep] = useState<StepId>("profile");
-  const choice = useIssuerChoice(org.id, { canReadPrivateCas: can(org, "privateCa", "read") });
+  const choice = useIssuerChoice(org.id, { canReadPrivateCas: can(org, "privateCa", "read"), canRegisterAcmeAccounts: can(org, "acmeAccount", "create") });
   const { chosenCa, validityOk } = choice;
   const profiles = useQuery({ queryKey: ["certificate-profiles", org.id], queryFn: () => api.certificateProfiles(org.id), enabled: can(org, "certificateProfile", "read") });
   // Custom only for those who may request without a profile: the Organization may require one of those who may not create outright.
@@ -166,7 +166,11 @@ function NewManagedCertificateForm({
   // nothing: Owners are optional, and Review only shows what was entered.
   const missing: Partial<Record<StepId, Missing>> = {
     profile: (customOpen && profileValue === CUSTOM) || profile !== undefined ? undefined : { reason: "Choose a profile." },
-    authority: validityOk ? undefined : { reason: "Give a validity the Issuing CA allows.", field: "new-mc-validity" },
+    authority: !choice.issuer
+      ? { reason: "Choose where it is issued from." }
+      : validityOk
+        ? undefined
+        : { reason: "Give a validity the Issuing CA allows.", field: "new-mc-validity" },
     names: problems.length === 0 ? undefined : { reason: problems[0]!, field: "new-mc-names" },
     key: generating
       ? csrOf(keySource, parsedNames, keyAlgorithm) !== ""

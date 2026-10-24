@@ -62,7 +62,7 @@ function NewDeploymentForm({ org, onDone }: { org: Me["organizations"][number]; 
   const [agentId, setAgentId] = useState("");
   const [names, setNames] = useState("");
   const [keyAlgorithm, setKeyAlgorithm] = useState<KeyAlgorithm>("ecdsa-p256");
-  const choice = useIssuerChoice(orgId, { canReadPrivateCas: can(org, "privateCa", "read") });
+  const choice = useIssuerChoice(orgId, { canReadPrivateCas: can(org, "privateCa", "read"), canRegisterAcmeAccounts: can(org, "acmeAccount", "create") });
   // Only what the chosen CA takes is offered, as the server says: choosing a CA that does not take the key algorithm chosen moves to its first.
   const offered = choice.keyAlgorithms.length > 0 ? choice.keyAlgorithms : [keyAlgorithm];
   useEffect(() => {
@@ -93,8 +93,9 @@ function NewDeploymentForm({ org, onDone }: { org: Me["organizations"][number]; 
   const unfilled = missingParameters(declared, parameters);
   const missing: Partial<Record<StepId, Missing>> = {
     agent: chosenAgent ? undefined : { reason: "Choose the Agent that will hold the key.", field: "new-deployment-agent" },
-    certificate:
-      problems.length > 0
+    certificate: !choice.issuer
+      ? { reason: "Choose where it is issued from." }
+      : problems.length > 0
         ? { reason: problems[0]!, field: "new-deployment-names" }
         : !choice.validityOk
           ? { reason: "Give a validity the Issuing CA allows.", field: "new-deployment-validity" }
@@ -111,8 +112,10 @@ function NewDeploymentForm({ org, onDone }: { org: Me["organizations"][number]; 
   const { index, last, complete, reachable, goTo, next, told } = useSteps(STEPS, step, setStep, missing);
 
   const create = useMutation({
-    mutationFn: () =>
-      api.createDeployment(orgId, {
+    mutationFn: async () => {
+      // The Certificate step asks for an issuer before Review.
+      if (!choice.request) throw new Error("Choose where it is issued from.");
+      return api.createDeployment(orgId, {
         agentId,
         scriptId,
         ...(version !== LATEST && { scriptVersion: Number(version) }),
@@ -121,7 +124,8 @@ function NewDeploymentForm({ org, onDone }: { org: Me["organizations"][number]; 
         keyAlgorithm,
         ...choice.request,
         renewalPolicy: { mode, daysBeforeExpiry: daysValid ? daysNumber : 30 },
-      }),
+      });
+    },
     onSuccess: async () => {
       await Promise.all([queryClient.invalidateQueries({ queryKey: ["deployments"] }), queryClient.invalidateQueries({ queryKey: ["inventory"] })]);
       onDone();
