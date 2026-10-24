@@ -1,22 +1,25 @@
 import { keepPreviousData, useMutation, useQuery, useQueryClient } from "@tanstack/react-query";
-import { Link } from "@tanstack/react-router";
+import { Link, useNavigate, useSearch } from "@tanstack/react-router";
 import { createColumnHelper, rowPaginationFeature, tableFeatures, useTable, type PaginationState } from "@tanstack/react-table";
-import { XIcon } from "lucide-react";
-import { useMemo, useState, type ReactNode } from "react";
+import { SearchIcon, XIcon } from "lucide-react";
+import { useEffect, useMemo, useState, type ReactNode } from "react";
 import { DataTable } from "@/components/data-table/data-table";
 import { DataTableFacetedFilter } from "@/components/data-table/data-table-faceted-filter";
 import { DataTablePagination } from "@/components/data-table/data-table-pagination";
 import { Badge } from "@/components/ui/badge";
 import { Button } from "@/components/ui/button";
 import { Input } from "@/components/ui/input";
+import { InputGroup, InputGroupAddon, InputGroupInput } from "@/components/ui/input-group";
 import { Tabs, TabsContent, TabsList, TabsTrigger } from "@/components/ui/tabs";
+import { Tooltip, TooltipContent, TooltipTrigger } from "@/components/ui/tooltip";
 import { Table, TableBody, TableCell, TableHead, TableHeader, TableRow } from "@/components/ui/table";
 import { api, can, ownerLabel, type AcmeCa, type AcmeCaTag, type InventoryFilters, type ManagedCertificate, type Me } from "@/lib/api";
 import { KEY_ALGORITHMS, KEY_ALGORITHM_LABELS } from "@/lib/csr-generator";
 import { AcmeCaTagBadge } from "@/components/acme-ca-tag";
 import { ACME_CA_TAG_LABELS, useAcmeCas } from "@/lib/acme-cas";
-import { issuerLabel, keyAlgorithmLabel, profileLabel, status } from "@/lib/managed-certificate";
+import { issuerLabel, keyAlgorithmLabel, primaryName, profileLabel, status } from "@/lib/managed-certificate";
 import { chosenValidityLabel } from "@/lib/private-ca";
+import { expiryTone } from "@/lib/renewal-urgency";
 
 type Org = Me["organizations"][number];
 
@@ -24,21 +27,27 @@ type Org = Me["organizations"][number];
 const features = tableFeatures({ rowPaginationFeature });
 const columnHelper = createColumnHelper<typeof features, ManagedCertificate>();
 const makeColumns = (orgId: string, acmeCas: AcmeCa[] | undefined) => columnHelper.columns([
-  columnHelper.accessor((m) => m.commonName ?? "—", {
-    id: "commonName",
-    header: "Common name",
-    cell: ({ cell, row }) => <ManagedCertificateLink orgId={orgId} id={row.original.id}>{cell.getValue()}</ManagedCertificateLink>,
-  }),
+  // The common name (else the first name), then how many others, which a tooltip lists.
   columnHelper.accessor((m) => m.names.join(", "), {
     id: "names",
-    header: "SANs",
-    cell: ({ cell }) => <span className="block max-w-80 truncate text-muted-foreground">{cell.getValue()}</span>,
+    header: "Names",
+    cell: ({ row }) => <Names orgId={orgId} m={row.original} />,
   }),
-  // The tag of its ACME CA, as that CA has it now; none for one from a Private CA.
+  // The tag of its ACME CA, as that CA has it now; a Private CA's are all private.
   columnHelper.accessor((m) => (m.acmeCaId ? (acmeCas?.find((ca) => ca.id === m.acmeCaId)?.tag ?? null) : null), {
     id: "tag",
     header: "Environment tag",
-    cell: ({ cell }) => <AcmeCaTagBadge tag={cell.getValue()} />,
+    cell: ({ cell, row }) => {
+      const { issuer } = row.original;
+      if (issuer.kind === "private_ca") {
+        return (
+          <Badge variant="outline" title={issuerLabel(issuer, acmeCas)}>
+            Private
+          </Badge>
+        );
+      }
+      return <AcmeCaTagBadge tag={cell.getValue()} />;
+    },
   }),
   columnHelper.accessor((m) => keyAlgorithmLabel(m.keyAlgorithm), { id: "keyAlgorithm", header: "Key algorithm" }),
   columnHelper.accessor((m) => status(m).label, {
@@ -46,14 +55,54 @@ const makeColumns = (orgId: string, acmeCas: AcmeCa[] | undefined) => columnHelp
     header: "Status",
     cell: ({ row }) => <Badge variant={status(row.original).variant}>{status(row.original).label}</Badge>,
   }),
-  columnHelper.accessor((m) => (m.currentCertificate ? new Date(m.currentCertificate.notAfter).toLocaleDateString() : "—"), { id: "validUntil", header: "Valid until" }),
+  // Amber once its renewal window has opened, red once it has ended.
+  columnHelper.accessor((m) => (m.currentCertificate ? new Date(m.currentCertificate.notAfter).toLocaleDateString() : "—"), {
+    id: "validUntil",
+    header: "Valid until",
+    cell: ({ cell, row }) => <span className={TONE_TEXT[expiryTone(row.original, new Date()) ?? "none"]}>{cell.getValue()}</span>,
+  }),
   columnHelper.accessor((m) => (m.owners.length === 0 ? "None" : m.owners.map(ownerLabel).join(", ")), {
     id: "owners",
     header: "Owners",
-    cell: ({ cell }) => <span className="block max-w-56 truncate text-muted-foreground">{cell.getValue()}</span>,
+    // Nobody to tell when it needs attention, nor to hold its key: worth noticing.
+    cell: ({ cell, row }) =>
+      row.original.owners.length === 0 ? (
+        <span className="text-warning">None</span>
+      ) : (
+        <span className="block max-w-56 truncate text-muted-foreground" title={cell.getValue()}>
+          {cell.getValue()}
+        </span>
+      ),
   }),
 ]);
 const noRows: ManagedCertificate[] = [];
+const TONE_TEXT = { warning: "text-warning", danger: "text-destructive", none: undefined };
+
+function Names({ orgId, m }: { orgId: string; m: ManagedCertificate }) {
+  const primary = primaryName(m);
+  const others = m.names.filter((name) => name !== primary);
+  return (
+    <span className="flex items-center gap-2">
+      <ManagedCertificateLink orgId={orgId} id={m.id}>
+        {primary}
+      </ManagedCertificateLink>
+      {others.length > 0 && (
+        <Tooltip>
+          <TooltipTrigger asChild>
+            <span tabIndex={0} className="cursor-default text-xs text-muted-foreground" aria-label={`${others.length} more: ${others.join(", ")}`}>
+              +{others.length}
+            </span>
+          </TooltipTrigger>
+          <TooltipContent className="font-mono">
+            {others.map((name) => (
+              <div key={name}>{name}</div>
+            ))}
+          </TooltipContent>
+        </Tooltip>
+      )}
+    </span>
+  );
+}
 
 /** A Managed Certificate's names, as the way to its page. */
 function ManagedCertificateLink({ orgId, id, children }: { orgId: string; id: string; children: ReactNode }) {
@@ -80,18 +129,38 @@ interface Facets {
   keyCustody: string[];
 }
 const NO_FACETS: Facets = { status: [], tag: [], keyAlgorithm: [], keyCustody: [] };
-const toFilters = (facets: Facets): InventoryFilters => ({
+const toFilters = (facets: Facets, q: string): InventoryFilters => ({
+  q: q || undefined,
   ...Object.fromEntries(facets.status.map((name) => [name, true])),
   tag: facets.tag as AcmeCaTag[],
   keyAlgorithm: facets.keyAlgorithm,
   keyCustody: facets.keyCustody[0] as InventoryFilters["keyCustody"],
 });
 
+const SEARCH_DELAY_MS = 300;
+const ROUTE = "/app/organizations/$orgId/certificates";
+
 export function ManagedCertificates({ org }: { org: Org }) {
   const queryClient = useQueryClient();
+  const navigate = useNavigate({ from: "/organizations/$orgId/certificates" });
+  const q = useSearch({ from: ROUTE }).q ?? "";
+  const [typed, setTyped] = useState(q);
   const [facets, setFacets] = useState<Facets>(NO_FACETS);
   const [pagination, setPagination] = useState<PaginationState>({ pageIndex: 0, pageSize: 25 });
-  const filters = toFilters(facets);
+  const search = (next: string) => navigate({ search: (prev) => ({ ...prev, q: next || undefined }), replace: true });
+  // The address follows the box once typing pauses, and a new search starts again from the first page.
+  useEffect(() => {
+    const settled = typed.trim();
+    if (settled === q) return;
+    const timer = setTimeout(() => {
+      void search(settled);
+      setPagination((p) => ({ ...p, pageIndex: 0 }));
+    }, SEARCH_DELAY_MS);
+    return () => clearTimeout(timer);
+  }, [typed, q]);
+  // ...and the box follows the address, when Back changes it.
+  useEffect(() => setTyped((t) => (t.trim() === q ? t : q)), [q]);
+  const filters = toFilters(facets, q);
   const inventory = useQuery({
     queryKey: ["inventory", org.id, filters, pagination],
     queryFn: () => api.managedCertificates(org.id, filters, { page: pagination.pageIndex + 1, pageSize: pagination.pageSize }),
@@ -116,11 +185,16 @@ export function ManagedCertificates({ org }: { org: Org }) {
     onPaginationChange: setPagination,
     getRowId: (m) => m.id,
   });
-  const narrowed = Object.values(facets).some((values) => values.length > 0);
+  const narrowed = q !== "" || Object.values(facets).some((values) => values.length > 0);
   // A new narrowing starts again from the first page.
   const narrow = (next: Partial<Facets>) => {
     setFacets({ ...facets, ...next });
     setPagination({ ...pagination, pageIndex: 0 });
+  };
+  const reset = () => {
+    setTyped("");
+    void search("");
+    narrow(NO_FACETS);
   };
 
   const mayApprove = can(org, "approval", "read");
@@ -131,6 +205,12 @@ export function ManagedCertificates({ org }: { org: Org }) {
   const certificates = (
     <div className="flex flex-col gap-4">
       <div className="flex flex-wrap items-center gap-2">
+        <InputGroup className="w-full bg-card sm:w-72">
+          <InputGroupAddon>
+            <SearchIcon />
+          </InputGroupAddon>
+          <InputGroupInput aria-label="Search Managed Certificates" placeholder="Search names" value={typed} onChange={(e) => setTyped(e.target.value)} />
+        </InputGroup>
         <DataTableFacetedFilter
           title="Status"
           options={STATUS_FACETS.map(([value, label]) => ({ value, label }))}
@@ -152,7 +232,7 @@ export function ManagedCertificates({ org }: { org: Org }) {
         />
         <DataTableFacetedFilter title="Key Custody" options={[{ value: "owner", label: "Owner" }, { value: "agent", label: "Agent" }]} value={facets.keyCustody} onChange={(keyCustody) => narrow({ keyCustody })} />
         {narrowed && (
-          <Button variant="ghost" size="sm" onClick={() => narrow(NO_FACETS)}>
+          <Button variant="ghost" size="sm" onClick={reset}>
             Reset
             <XIcon />
           </Button>
@@ -164,7 +244,14 @@ export function ManagedCertificates({ org }: { org: Org }) {
           inventory.isPending
             ? "Loading…"
             : narrowed
-              ? "No Managed Certificates match."
+              ? (
+                  <div className="flex flex-col items-center gap-2">
+                    {q ? <>No Managed Certificate matches “{q}”.</> : "No Managed Certificates match."}
+                    <Button variant="outline" size="sm" onClick={reset}>
+                      Clear
+                    </Button>
+                  </div>
+                )
               : can(org, "managedCertificate", "read")
                 ? "No Managed Certificates yet."
                 : "You do not own any Managed Certificates yet."

@@ -2,7 +2,7 @@ import type { ReactNode } from "react";
 import { Button } from "@/components/ui/button";
 import { Dialog, DialogContent, DialogDescription, DialogFooter, DialogHeader, DialogTitle } from "@/components/ui/dialog";
 
-/** Asks before something that cannot be taken back; `error` is what the server said when it was refused. */
+/** Asks before something that cannot be taken back, or is seldom wanted (`destructive` false); `error` is what the server said when it was refused. */
 export function ConfirmDialog({
   open,
   onOpenChange,
@@ -13,6 +13,7 @@ export function ConfirmDialog({
   pending,
   error,
   onConfirm,
+  destructive = true,
 }: {
   open: boolean;
   onOpenChange: (open: boolean) => void;
@@ -24,6 +25,7 @@ export function ConfirmDialog({
   pending: boolean;
   error: Error | null;
   onConfirm: () => void;
+  destructive?: boolean;
 }) {
   return (
     <Dialog open={open} onOpenChange={onOpenChange}>
@@ -37,7 +39,7 @@ export function ConfirmDialog({
           <Button type="button" variant="outline" onClick={() => onOpenChange(false)}>
             {dismissLabel}
           </Button>
-          <Button type="button" variant="destructive" disabled={pending} onClick={onConfirm}>
+          <Button type="button" variant={destructive ? "destructive" : "default"} disabled={pending} onClick={onConfirm}>
             {confirmLabel}
           </Button>
         </DialogFooter>

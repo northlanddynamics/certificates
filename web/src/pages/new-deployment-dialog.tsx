@@ -2,6 +2,7 @@ import { useMutation, useQuery, useQueryClient } from "@tanstack/react-query";
 import { BotIcon, CheckIcon, ClipboardCheckIcon, FileTerminalIcon, GlobeIcon, PlusIcon, RefreshCwIcon, TriangleAlertIcon, type LucideIcon } from "lucide-react";
 import { useEffect, useState, type FormEvent } from "react";
 import { IssuerChoiceFields, useIssuerChoice } from "@/components/issuer-choice";
+import { StepReason, useSteps, type Missing } from "@/components/stepped-form";
 import { ParameterFields, missingParameters, namesDeclared, shownValues } from "@/components/parameter-fields";
 import { SummaryRows } from "@/components/summary-rows";
 import { Alert, AlertDescription, AlertTitle } from "@/components/ui/alert";
@@ -12,6 +13,7 @@ import { Input } from "@/components/ui/input";
 import { RadioGroup, RadioGroupItem } from "@/components/ui/radio-group";
 import { Select, SelectContent, SelectItem, SelectTrigger, SelectValue } from "@/components/ui/select";
 import { Textarea } from "@/components/ui/textarea";
+import { ActionLabel } from "@/components/page-header";
 import { ApiError, api, can, type Me, type RenewalPolicy } from "@/lib/api";
 import { KEY_ALGORITHM_LABELS, isMlDsa, type KeyAlgorithm } from "@/lib/csr-generator";
 import { nameProblems, splitNames } from "@/lib/csr-names";
@@ -36,7 +38,7 @@ export function NewDeploymentDialog({ org }: { org: Me["organizations"][number] 
       <DialogTrigger asChild>
         <Button>
           <PlusIcon />
-          Set up a Deployment
+          <ActionLabel>Set up a Deployment</ActionLabel>
         </Button>
       </DialogTrigger>
       <DialogContent className="sm:max-w-2xl">
@@ -61,7 +63,7 @@ function NewDeploymentForm({ org, onDone }: { org: Me["organizations"][number]; 
   const [agentId, setAgentId] = useState("");
   const [names, setNames] = useState("");
   const [keyAlgorithm, setKeyAlgorithm] = useState<KeyAlgorithm>("ecdsa-p256");
-  const choice = useIssuerChoice(orgId, { canReadPrivateCas: can(org, "privateCa", "read") });
+  const choice = useIssuerChoice(orgId, { canReadPrivateCas: can(org, "privateCa", "read"), canRegisterAcmeAccounts: can(org, "acmeAccount", "create") });
   // Only what the chosen CA takes is offered, as the server says: choosing a CA that does not take the key algorithm chosen moves to its first.
   const offered = choice.keyAlgorithms.length > 0 ? choice.keyAlgorithms : [keyAlgorithm];
   useEffect(() => {
@@ -89,24 +91,32 @@ function NewDeploymentForm({ org, onDone }: { org: Me["organizations"][number]; 
   const problems = nameProblems(parsedNames);
   const daysNumber = Number(days);
   const daysValid = Number.isInteger(daysNumber) && daysNumber >= 1 && daysNumber <= 365;
-  const complete: Record<StepId, boolean> = {
-    agent: chosenAgent !== undefined,
-    certificate: problems.length === 0 && choice.validityOk,
-    script: chosenScript !== undefined && chosenVersion !== undefined && missingParameters(declared, parameters).length === 0,
-    renewal: mode === "manual" || daysValid,
-    review: true,
+  const unfilled = missingParameters(declared, parameters);
+  const missing: Partial<Record<StepId, Missing>> = {
+    agent: chosenAgent ? undefined : { reason: "Choose the Agent that will hold the key.", field: "new-deployment-agent" },
+    certificate: !choice.issuer
+      ? { reason: "Choose where it is issued from." }
+      : problems.length > 0
+        ? { reason: problems[0]!, field: "new-deployment-names" }
+        : !choice.validityOk
+          ? { reason: "Give a validity the Issuing CA allows.", field: "new-deployment-validity" }
+          : undefined,
+    script: !chosenScript
+      ? { reason: "Choose the Deployment Script.", field: "new-deployment-script" }
+      : !chosenVersion
+        ? { reason: "Choose the script's version.", field: "new-deployment-version" }
+        : unfilled.length > 0
+          ? { reason: `Give a value for ${declared.find((p) => p.name === unfilled[0])?.label ?? unfilled[0]}.`, field: `new-deployment-parameter-${unfilled[0]}` }
+          : undefined,
+    renewal: mode === "manual" || daysValid ? undefined : { reason: "Give 1 to 365 days before expiry.", field: "new-deployment-days" },
   };
-  const index = STEPS.findIndex((s) => s.id === step);
-  const last = index === STEPS.length - 1;
-  const reachable = (i: number) => STEPS.slice(0, i).every((s) => complete[s.id]);
-  const goTo = (i: number) => {
-    const target = STEPS[i];
-    if (target && reachable(i)) setStep(target.id);
-  };
+  const { index, last, complete, reachable, goTo, next, told } = useSteps(STEPS, step, setStep, missing);
 
   const create = useMutation({
-    mutationFn: () =>
-      api.createDeployment(orgId, {
+    mutationFn: async () => {
+      // The Certificate step asks for an issuer before Review.
+      if (!choice.request) throw new Error("Choose where it is issued from.");
+      return api.createDeployment(orgId, {
         agentId,
         scriptId,
         ...(version !== LATEST && { scriptVersion: Number(version) }),
@@ -115,7 +125,8 @@ function NewDeploymentForm({ org, onDone }: { org: Me["organizations"][number]; 
         keyAlgorithm,
         ...choice.request,
         renewalPolicy: { mode, daysBeforeExpiry: daysValid ? daysNumber : 30 },
-      }),
+      });
+    },
     onSuccess: async () => {
       await Promise.all([queryClient.invalidateQueries({ queryKey: ["deployments"] }), queryClient.invalidateQueries({ queryKey: ["inventory"] })]);
       onDone();
@@ -132,8 +143,8 @@ function NewDeploymentForm({ org, onDone }: { org: Me["organizations"][number]; 
       className="flex flex-col gap-4"
       onSubmit={(e: FormEvent) => {
         e.preventDefault();
-        if (!last) goTo(index + 1);
-        else if (STEPS.every((s) => complete[s.id])) create.mutate();
+        if (!last) void next();
+        else if (STEPS.every((s) => complete(s.id))) create.mutate();
       }}
     >
       <ol className="flex flex-wrap items-center gap-x-4 gap-y-1 text-sm" aria-label="Steps">
@@ -146,7 +157,7 @@ function NewDeploymentForm({ org, onDone }: { org: Me["organizations"][number]; 
               disabled={!reachable(i)}
               onClick={() => goTo(i)}
             >
-              {i < index && complete[s.id] ? <CheckIcon className="size-4 text-primary" /> : <s.icon className="size-4" />}
+              {i < index && complete(s.id) ? <CheckIcon className="size-4 text-primary" /> : <s.icon className="size-4" />}
               {s.title}
             </button>
           </li>
@@ -375,12 +386,13 @@ function NewDeploymentForm({ org, onDone }: { org: Me["organizations"][number]; 
         <Button type="button" variant="outline" disabled={index === 0} onClick={() => goTo(index - 1)}>
           Back
         </Button>
+        <StepReason missing={told} />
         {last ? (
           <Button key="deploy" type="submit" disabled={create.isPending}>
             Deploy
           </Button>
         ) : (
-          <Button key="next" type="button" disabled={!complete[step]} onClick={() => goTo(index + 1)}>
+          <Button key="next" type="button" onClick={() => void next()}>
             Next
           </Button>
         )}

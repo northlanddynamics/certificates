@@ -1,24 +1,30 @@
-import { useMutation, useQueryClient } from "@tanstack/react-query";
 import { useNavigate } from "@tanstack/react-router";
-import { ChevronsUpDownIcon, LogOutIcon, ShieldUserIcon } from "lucide-react";
+import { ChevronsUpDownIcon, LogOutIcon, MonitorIcon, MoonIcon, ShieldUserIcon, SunIcon, SunMoonIcon } from "lucide-react";
+import { useTheme } from "next-themes";
 import { Avatar, AvatarFallback } from "@/components/ui/avatar";
-import { DropdownMenu, DropdownMenuContent, DropdownMenuItem, DropdownMenuLabel, DropdownMenuSeparator, DropdownMenuTrigger } from "@/components/ui/dropdown-menu";
+import {
+  DropdownMenu,
+  DropdownMenuContent,
+  DropdownMenuItem,
+  DropdownMenuLabel,
+  DropdownMenuRadioGroup,
+  DropdownMenuRadioItem,
+  DropdownMenuSeparator,
+  DropdownMenuSub,
+  DropdownMenuSubContent,
+  DropdownMenuSubTrigger,
+  DropdownMenuTrigger,
+} from "@/components/ui/dropdown-menu";
 import { SidebarMenu, SidebarMenuButton, SidebarMenuItem, useSidebar } from "@/components/ui/sidebar";
-import { api, type Me } from "@/lib/api";
-import { ACCOUNT_SECURITY_URL, organizationAccountNav } from "@/lib/navigation";
+import type { Me } from "@/lib/api";
+import { ACCOUNT_SECURITY_URL } from "@/lib/navigation";
+import { useSignOut } from "@/lib/use-sign-out";
 
-/** `active` is the Organization whose pages of the user's own the menu offers. */
-export function NavUser({ user, active }: { user: Me["user"]; active: Me["organizations"][number] | undefined }) {
+/** The signed-in user's own things: their account security, the theme, and signing out. */
+export function NavUser({ user }: { user: Me["user"] }) {
   const { isMobile } = useSidebar();
   const navigate = useNavigate();
-  const queryClient = useQueryClient();
-  const signOut = useMutation({
-    mutationFn: api.signOut,
-    onSuccess: async () => {
-      queryClient.clear();
-      await navigate({ to: "/sign-in" });
-    },
-  });
+  const signOut = useSignOut();
   const initials = (user.name || user.email).slice(0, 2).toUpperCase();
 
   return (
@@ -44,13 +50,8 @@ export function NavUser({ user, active }: { user: Me["user"]; active: Me["organi
               <ShieldUserIcon />
               Account security
             </DropdownMenuItem>
-            {active &&
-              organizationAccountNav(active).map((item) => (
-                <DropdownMenuItem key={item.url} onClick={() => navigate({ to: item.url })}>
-                  <item.icon />
-                  {item.title}
-                </DropdownMenuItem>
-              ))}
+            <ThemeMenu />
+            <DropdownMenuSeparator />
             <DropdownMenuItem onClick={() => signOut.mutate()}>
               <LogOutIcon />
               Sign out
@@ -59,5 +60,33 @@ export function NavUser({ user, active }: { user: Me["user"]; active: Me["organi
         </DropdownMenu>
       </SidebarMenuItem>
     </SidebarMenu>
+  );
+}
+
+const THEMES = [
+  { value: "light", label: "Light", icon: SunIcon },
+  { value: "dark", label: "Dark", icon: MoonIcon },
+  { value: "system", label: "System", icon: MonitorIcon },
+];
+
+function ThemeMenu() {
+  const { theme = "system", setTheme } = useTheme();
+  return (
+    <DropdownMenuSub>
+      <DropdownMenuSubTrigger>
+        <SunMoonIcon />
+        Theme
+      </DropdownMenuSubTrigger>
+      <DropdownMenuSubContent>
+        <DropdownMenuRadioGroup value={theme} onValueChange={setTheme}>
+          {THEMES.map((t) => (
+            <DropdownMenuRadioItem key={t.value} value={t.value}>
+              <t.icon />
+              {t.label}
+            </DropdownMenuRadioItem>
+          ))}
+        </DropdownMenuRadioGroup>
+      </DropdownMenuSubContent>
+    </DropdownMenuSub>
   );
 }

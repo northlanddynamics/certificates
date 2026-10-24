@@ -1,5 +1,6 @@
 import type { QueryClient } from "@tanstack/react-query";
 import { Outlet, createRootRouteWithContext, createRoute, createRouter, redirect } from "@tanstack/react-router";
+import { ThemeProvider } from "next-themes";
 import { AppShell } from "./components/app-shell";
 import { Toaster } from "./components/ui/sonner";
 import { AcceptInvitationPage } from "./pages/accept-invitation";
@@ -24,6 +25,7 @@ import { IssuedCertificatesTab } from "./pages/issued-certificates";
 import { ActivityTab } from "./pages/managed-certificate-activity";
 import { NotificationsTab } from "./pages/subscriber-controls";
 import { NotificationChannelsPage } from "./pages/notification-channels";
+import { auditSearchOf } from "./lib/audit-search";
 import { AuditLogPage } from "./pages/audit-log";
 import { AuditForwardingPage } from "./pages/audit-forwarding";
 import { SignInSettingsPage } from "./pages/sign-in-settings";
@@ -33,11 +35,12 @@ import { TeamsPage } from "./pages/teams";
 import { SignInPage } from "./pages/sign-in";
 
 const rootRoute = createRootRouteWithContext<{ queryClient: QueryClient }>()({
+  // The theme sits above every route, so the public pages follow it too.
   component: () => (
-    <>
+    <ThemeProvider attribute="class" defaultTheme="system" enableSystem disableTransitionOnChange>
       <Outlet />
       <Toaster />
-    </>
+    </ThemeProvider>
   ),
 });
 
@@ -55,7 +58,13 @@ const publicRoute = createRoute({
 const appRoute = createRoute({ getParentRoute: () => rootRoute, id: "app", component: AppShell });
 
 const homeRoute = createRoute({ getParentRoute: () => appRoute, path: "/", component: HomePage });
-const signInRoute = createRoute({ getParentRoute: () => publicRoute, path: "/sign-in", component: SignInPage });
+// `redirect` is the page a signed-out visitor asked for, to go back to once signed in (checked by `safeRedirect`).
+const signInRoute = createRoute({
+  getParentRoute: () => publicRoute,
+  path: "/sign-in",
+  validateSearch: (search: Record<string, unknown>): { redirect?: string } => (typeof search.redirect === "string" ? { redirect: search.redirect } : {}),
+  component: SignInPage,
+});
 export const acceptInvitationRoute = createRoute({
   getParentRoute: () => publicRoute,
   path: "/accept-invitation/$invitationId",
@@ -65,6 +74,8 @@ export const acceptInvitationRoute = createRoute({
 const certificatesRoute = createRoute({
   getParentRoute: () => appRoute,
   path: "/organizations/$orgId/certificates",
+  // `q` is the search of the inventory, kept in the address so that it survives Back and can be shared.
+  validateSearch: (search: Record<string, unknown>): { q?: string } => (typeof search.q === "string" && search.q !== "" ? { q: search.q } : {}),
   component: CertificatesPage,
 });
 
@@ -168,6 +179,8 @@ const notificationChannelsRoute = createRoute({
 const auditLogRoute = createRoute({
   getParentRoute: () => appRoute,
   path: "/organizations/$orgId/audit-log",
+  // The search is kept in the address, so that it survives Back and can be shared.
+  validateSearch: auditSearchOf,
   component: AuditLogPage,
 });
 

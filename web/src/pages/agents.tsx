@@ -10,13 +10,14 @@ import { DataTablePagination } from "@/components/data-table/data-table-paginati
 import { Badge } from "@/components/ui/badge";
 import { Button } from "@/components/ui/button";
 import { Dialog, DialogClose, DialogContent, DialogDescription, DialogFooter, DialogHeader, DialogTitle, DialogTrigger } from "@/components/ui/dialog";
+import { ActionLabel, PageHeader } from "@/components/page-header";
 import { api, can, type Agent } from "@/lib/api";
 import { useOrg } from "@/lib/use-org";
 import { useAction } from "@/lib/use-action";
 
 const ROUTE = "/app/organizations/$orgId/agents";
 const STATUS_LABEL: Record<Agent["status"], string> = { online: "Online", offline: "Offline", revoked: "Revoked" };
-const STATUS_VARIANT: Record<Agent["status"], "default" | "secondary" | "destructive"> = { online: "default", offline: "secondary", revoked: "destructive" };
+const STATUS_VARIANT: Record<Agent["status"], "success" | "warning" | "destructive"> = { online: "success", offline: "warning", revoked: "destructive" };
 const OS_LABEL: Record<Agent["os"], string> = { linux: "Linux", windows: "Windows", macos: "macOS" };
 
 // Paging and narrowing are the server's (Page<Agent>); the table lays out the page it was given.
@@ -30,7 +31,7 @@ const columns = columnHelper.columns([
     cell: ({ row }) => (
       <span className="flex items-center gap-2">
         {row.original.version}
-        {row.original.outdated && <Badge variant="outline" className="border-amber-500">Outdated</Badge>}
+        {row.original.outdated && <Badge variant="warning">Outdated</Badge>}
       </span>
     ),
   }),
@@ -86,15 +87,22 @@ export function AgentsPage() {
 
   return (
     <div className="flex flex-col gap-6">
-      <div className="flex items-center justify-between gap-4">
-        <h1 className="text-xl font-semibold">Agents</h1>
-        {org && can(org, "agent", "register") && <RegisterAgentDialog orgId={orgId} />}
-      </div>
-      <p className="text-sm text-muted-foreground">
-        An Agent runs on a host inside your network and only ever connects out to the platform. It registers once with a single-use token, and then identifies itself with a
-        certificate of its own that it renews by itself. An Agent that has not been in touch for two minutes is shown as offline.
-        {agents.data && <> The latest version is {agents.data.latestVersion}.</>}
-      </p>
+      <PageHeader
+        title="Agents"
+        action={org && can(org, "agent", "register") && <RegisterAgentDialog orgId={orgId} />}
+        description={
+          <>
+            An Agent runs on a host inside your network and only ever connects out to the platform.
+            {agents.data && <> The latest version is {agents.data.latestVersion}.</>}
+          </>
+        }
+        howItWorks={
+          <p>
+            It registers once with a single-use token, and then authenticates with a credential that it replaces by itself. An Agent that has not been in touch for two minutes
+            is shown as offline.
+          </p>
+        }
+      />
       {org && !can(org, "agent", "read") ? (
         <p className="text-sm text-muted-foreground">Only Organization Administrators see the Agents.</p>
       ) : (
@@ -168,7 +176,7 @@ function RegisterAgentDialog({ orgId }: { orgId: string }) {
       <DialogTrigger asChild>
         <Button>
           <PlusIcon />
-          Register an Agent
+          <ActionLabel>Register an Agent</ActionLabel>
         </Button>
       </DialogTrigger>
       <DialogContent className="sm:max-w-lg">

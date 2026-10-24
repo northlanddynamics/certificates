@@ -14,6 +14,7 @@ import { DropdownMenu, DropdownMenuContent, DropdownMenuItem, DropdownMenuTrigge
 import { Field, FieldError, FieldGroup, FieldLabel } from "@/components/ui/field";
 import { Input } from "@/components/ui/input";
 import { Select, SelectContent, SelectItem, SelectTrigger, SelectValue } from "@/components/ui/select";
+import { ActionLabel, PageHeader } from "@/components/page-header";
 import { api, type Team } from "@/lib/api";
 import { useAction } from "@/lib/use-action";
 
@@ -69,10 +70,7 @@ export function TeamsPage() {
 
   return (
     <div className="flex flex-col gap-6">
-      <div className="flex items-center justify-between gap-4">
-        <h1 className="text-xl font-semibold">Teams</h1>
-        <NewTeamDialog orgId={orgId} />
-      </div>
+      <PageHeader title="Teams" action={<NewTeamDialog orgId={orgId} />} />
       <div className="flex flex-col gap-4">
         <div className="flex flex-wrap items-center gap-2">
           <DataTableFacetedFilter title="Members" options={MEMBERSHIP_FACETS} value={membership} onChange={narrow} />
@@ -199,7 +197,7 @@ function NewTeamDialog({ orgId }: { orgId: string }) {
       trigger={
         <Button>
           <PlusIcon />
-          New Team
+          <ActionLabel>New Team</ActionLabel>
         </Button>
       }
     />

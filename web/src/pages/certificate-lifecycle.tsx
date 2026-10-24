@@ -3,6 +3,7 @@ import type { ReactNode } from "react";
 import { Card, CardContent, CardDescription, CardHeader, CardTitle } from "@/components/ui/card";
 import type { ManagedCertificate } from "@/lib/api";
 import { ISSUANCE_KIND_WORDS, lifeOf } from "@/lib/managed-certificate";
+import { expiryTone } from "@/lib/renewal-urgency";
 import { cn, date } from "@/lib/utils";
 import { nextRenewal } from "./renewal-controls";
 
@@ -30,10 +31,10 @@ export function Lifecycle({ m }: { m: ManagedCertificate }) {
       <CardContent className="flex flex-col gap-4 text-sm">
         <ValidityBar m={m} now={now} />
         <div className="grid gap-3 sm:grid-cols-3">
-          <Tile label="Remaining" value={current.revocation ? "Revoked" : left === null ? "Expired" : `${left} of ${total} days`} problem={!!current.revocation || left === null}>
+          <Tile label="Remaining" value={current.revocation ? "Revoked" : left === null ? "Expired" : `${left} of ${total} days`} tone={expiryTone(m, new Date(now))}>
             Until {new Date(current.notAfter).toLocaleString()}
           </Tile>
-          <Tile label="Next Renewal" value={next.headline} problem={next.problem}>
+          <Tile label="Next Renewal" value={next.headline} tone={next.problem ? "danger" : null}>
             {next.detail}
           </Tile>
           <LastIssuance m={m} />
@@ -43,11 +44,11 @@ export function Lifecycle({ m }: { m: ManagedCertificate }) {
   );
 }
 
-function Tile({ label, value, problem = false, children }: { label: string; value: string; problem?: boolean; children: ReactNode }) {
+function Tile({ label, value, tone = null, children }: { label: string; value: string; tone?: "warning" | "danger" | null; children: ReactNode }) {
   return (
     <div className="flex flex-col gap-0.5 rounded-md border px-3 py-2.5">
       <span className="text-xs font-medium text-muted-foreground">{label}</span>
-      <span className={cn("text-base font-semibold", problem && "text-destructive")}>{value}</span>
+      <span className={cn("text-base font-semibold", tone === "warning" && "text-warning", tone === "danger" && "text-destructive")}>{value}</span>
       <span className="text-muted-foreground">{children}</span>
     </div>
   );
@@ -60,7 +61,7 @@ function LastIssuance({ m }: { m: ManagedCertificate }) {
   if (!latest) return <Tile label="Last Issuance" value="None recorded">No Issuance attempt is on record</Tile>;
   const by = latest.requestedBy ? `asked for by ${latest.requestedBy.email}` : "by the Renewal scheduler";
   return (
-    <Tile label="Last Issuance" value={`${ISSUANCE_KIND_WORDS[latest.kind]} ${ISSUANCE_STATUS_WORDS[latest.status]}`} problem={latest.status === "failed"}>
+    <Tile label="Last Issuance" value={`${ISSUANCE_KIND_WORDS[latest.kind]} ${ISSUANCE_STATUS_WORDS[latest.status]}`} tone={latest.status === "failed" ? "danger" : null}>
       {date(latest.finishedAt ?? latest.startedAt)}, {by}
     </Tile>
   );

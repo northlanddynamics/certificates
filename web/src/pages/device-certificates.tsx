@@ -1,8 +1,9 @@
 import { keepPreviousData, useMutation, useQuery, useQueryClient } from "@tanstack/react-query";
-import { Link, useParams } from "@tanstack/react-router";
+import { useParams } from "@tanstack/react-router";
 import { createColumnHelper, rowExpandingFeature, rowPaginationFeature, tableFeatures, useTable, type PaginationState } from "@tanstack/react-table";
-import { BanIcon, ChevronLeftIcon, DownloadIcon, SearchIcon, XIcon } from "lucide-react";
+import { BanIcon, DownloadIcon, SearchIcon, XIcon } from "lucide-react";
 import { useEffect, useState } from "react";
+import { usePageCrumbs } from "@/components/page-crumbs";
 import { DataTable } from "@/components/data-table/data-table";
 import { DataTablePagination } from "@/components/data-table/data-table-pagination";
 import { ExpandButton } from "@/components/data-table/expand-button";
@@ -13,6 +14,7 @@ import { Checkbox } from "@/components/ui/checkbox";
 import { Field, FieldLabel } from "@/components/ui/field";
 import { InputGroup, InputGroupAddon, InputGroupInput } from "@/components/ui/input-group";
 import { Select, SelectContent, SelectItem, SelectTrigger, SelectValue } from "@/components/ui/select";
+import { PageHeader } from "@/components/page-header";
 import { DEVICE_KEY_TYPE_LABELS, WEAK_DEVICE_KEY_TYPE } from "../../../server/src/enrollment/enrollment-profile-kinds";
 import { DEVICE_CERTIFICATE_STATUSES, api, can, revocationReasonLabel, revocationReasonsOf, type DeviceCertificate, type DeviceCertificateStatus, type EnrollmentProfile, type Me } from "@/lib/api";
 import { useOrg } from "@/lib/use-org";
@@ -23,12 +25,12 @@ const ROUTE = "/app/organizations/$orgId/enrollment-profiles/$id/device-certific
 const SEARCH_DELAY_MS = 300;
 
 const STATUS_LABEL: Record<DeviceCertificateStatus, string> = { active: "Active", expired: "Expired", revoked: "Revoked" };
-const STATUS_VARIANT: Record<DeviceCertificateStatus, "default" | "secondary" | "destructive"> = { active: "default", expired: "secondary", revoked: "destructive" };
+const STATUS_VARIANT: Record<DeviceCertificateStatus, "success" | "neutral" | "destructive"> = { active: "success", expired: "neutral", revoked: "destructive" };
 const ANY_STATUS = "any";
 const isWeak = (c: DeviceCertificate) => c.keyType === WEAK_DEVICE_KEY_TYPE;
 /** Marks a Device Certificate whose key can be broken, to be found and replaced. */
 const WeakKeyBadge = () => (
-  <Badge variant="outline" className="border-destructive text-destructive" title="A 1024-bit RSA key, which can be broken">
+  <Badge variant="destructive" title="A 1024-bit RSA key, which can be broken">
     Weak key
   </Badge>
 );
@@ -109,18 +111,12 @@ export function DeviceCertificatesPage() {
     getRowCanExpand: () => true,
   });
   const narrowed = q !== "" || status !== undefined || weakKey;
+  // After Enrollment Profiles in the breadcrumb.
+  usePageCrumbs([...(profile.data ? [{ label: profile.data.name }] : []), { label: "Device Certificates" }]);
 
   return (
     <div className="flex flex-col gap-6">
-      <div className="flex flex-col gap-2">
-        <Button variant="ghost" size="sm" className="self-start" asChild>
-          <Link to="/organizations/$orgId/enrollment-profiles" params={{ orgId }}>
-            <ChevronLeftIcon />
-            Enrollment Profiles
-          </Link>
-        </Button>
-        <h1 className="text-xl font-semibold">{profile.data ? `${profile.data.name}: Device Certificates` : "Device Certificates"}</h1>
-      </div>
+      <PageHeader title={profile.data ? `${profile.data.name}: Device Certificates` : "Device Certificates"} />
       {org && !allowed ? (
         <p className="text-sm text-muted-foreground">Only Organization Administrators see Device Certificates.</p>
       ) : (

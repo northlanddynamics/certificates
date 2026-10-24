@@ -9,7 +9,7 @@ export function CsrSignatureWarning({ pem }: { pem: string }) {
   const warning = weakSignatureWarning(pem);
   if (!warning) return null;
   return (
-    <p role="note" className="flex items-start gap-2 text-sm text-amber-700 dark:text-amber-400">
+    <p role="note" className="flex items-start gap-2 text-sm text-warning">
       <TriangleAlertIcon className="mt-0.5 size-4 shrink-0" />
       {warning}
     </p>

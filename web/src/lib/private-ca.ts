@@ -15,7 +15,7 @@ export function permittedNamesLabel({ exact, zones }: PermittedNames): string {
 export const commonNameOf = (subject: string) => /(?:^|,\s*)CN=([^,]+)/i.exec(subject)?.[1]?.trim() ?? subject;
 
 /** An Issuing CA as it is named to someone choosing it: its common name, and its Private CA's name. */
-export const issuingCaTitle = (privateCaName: string, issuingCaSubject: string) => `${commonNameOf(issuingCaSubject)} (Private CA ${privateCaName})`;
+export const issuingCaTitle = (privateCaName: string, issuingCaSubject: string) => `${commonNameOf(issuingCaSubject)} · ${privateCaName}`;
 
 /** The Issuing CA among the Private CAs' with that id, its `name` the title it is chosen by; none when there is none. */
 export function findIssuingCa(

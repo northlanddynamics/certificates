@@ -13,6 +13,7 @@ import { Input } from "@/components/ui/input";
 import { Label } from "@/components/ui/label";
 import { Table, TableBody, TableCell, TableHead, TableHeader, TableRow } from "@/components/ui/table";
 import { Textarea } from "@/components/ui/textarea";
+import { ActionLabel, PageHeader } from "@/components/page-header";
 import { api, can, type DeploymentScript } from "@/lib/api";
 import { useOrg } from "@/lib/use-org";
 import { useAction } from "@/lib/use-action";
@@ -89,14 +90,17 @@ export function DeploymentScriptsPage() {
 
   return (
     <div className="flex flex-col gap-6">
-      <div className="flex items-center justify-between gap-4">
-        <h1 className="text-xl font-semibold">Deployment Scripts</h1>
-        {mayUpload && <UploadDialog orgId={orgId} />}
-      </div>
-      <p className="text-sm text-muted-foreground">
-        A Deployment Script is the Bash or PowerShell that an Agent runs to place a new key and Certificate where they are needed. It runs with the Agent's rights on the Agent's
-        host, so only Organization Administrators can upload one. Uploading a change adds a version; earlier versions stay as they were.
-      </p>
+      <PageHeader
+        title="Deployment Scripts"
+        action={mayUpload && <UploadDialog orgId={orgId} />}
+        description="The Bash or PowerShell that an Agent runs to place a new key and Certificate where they are needed."
+        howItWorks={
+          <p>
+            A script runs with the Agent's rights on the Agent's host, so only Organization Administrators can upload one. Uploading a change adds a version; earlier versions
+            stay as they were.
+          </p>
+        }
+      />
       {org && !allowed ? (
         <p className="text-sm text-muted-foreground">Only Organization Administrators see the Deployment Scripts.</p>
       ) : (
@@ -216,7 +220,7 @@ function UploadDialog({ orgId }: { orgId: string }) {
       <DialogTrigger asChild>
         <Button>
           <PlusIcon />
-          Upload a script
+          <ActionLabel>Upload a script</ActionLabel>
         </Button>
       </DialogTrigger>
       <DialogContent className="sm:max-w-2xl">

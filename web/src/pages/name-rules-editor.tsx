@@ -101,7 +101,7 @@ export function NameRulesEditor({ id, draft, onChange }: { id: string; draft: Na
       <FieldGroup>
         <Field>
           <FieldLabel htmlFor={`${id}-required`}>Required subject attributes</FieldLabel>
-          <Input id={`${id}-required`} value={draft.required} onChange={(e) => onChange({ ...draft, required: e.target.value })} placeholder="CN" />
+          <Input id={`${id}-required`} value={draft.required} onChange={(e) => onChange({ ...draft, required: e.target.value })} placeholder="e.g. CN" />
           <FieldDescription>Comma-separated; each may hold any value unless it has patterns below.</FieldDescription>
         </Field>
         <Field>

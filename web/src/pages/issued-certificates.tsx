@@ -10,18 +10,19 @@ import { Skeleton } from "@/components/ui/skeleton";
 import { Table, TableBody, TableCell, TableHead, TableHeader, TableRow } from "@/components/ui/table";
 import { api, can, type Certificate, type ManagedCertificate, type Me } from "@/lib/api";
 import { acmeCaName, useAcmeCas } from "@/lib/acme-cas";
-import { caLabel } from "@/lib/managed-certificate";
+import { caLabel, type StatusVariant } from "@/lib/managed-certificate";
 import { useCertificateFacts, useCertificates, useManagedCertificatePage } from "@/lib/use-managed-certificate";
 import { date } from "@/lib/utils";
 import { RevokeDialog, revokedLine } from "./revocation-controls";
 
-type CertificateState = { label: "Current" | "Superseded" | "Expired" | "Revoked"; variant: "default" | "secondary" | "destructive" | "outline" };
+type CertificateState = { label: "Current" | "Superseded" | "Expired" | "Revoked"; variant: StatusVariant };
 
 /** Where a Certificate stands: revoked or ended whatever else, otherwise the Managed Certificate's current one or superseded. */
 function stateOf(c: Certificate, isCurrent: boolean): CertificateState {
   if (c.revocation) return { label: "Revoked", variant: "destructive" };
-  if (Date.parse(c.notAfter) <= Date.now()) return { label: "Expired", variant: "outline" };
-  return isCurrent ? { label: "Current", variant: "default" } : { label: "Superseded", variant: "secondary" };
+  // An old one that has ended is history; only the current one ending is at fault.
+  if (Date.parse(c.notAfter) <= Date.now()) return { label: "Expired", variant: isCurrent ? "destructive" : "neutral" };
+  return isCurrent ? { label: "Current", variant: "success" } : { label: "Superseded", variant: "neutral" };
 }
 
 /** Every Certificate the Managed Certificate has had, newest first; one opens in a side sheet with its full facts. */

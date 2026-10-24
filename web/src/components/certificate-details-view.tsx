@@ -20,7 +20,7 @@ function Verdict({ details }: { details: CertificateDetails }) {
   const ok = status === "valid";
   return (
     <Alert variant={ok ? "default" : "destructive"}>
-      {ok ? <CircleCheckIcon className="text-emerald-600" /> : <CircleAlertIcon />}
+      {ok ? <CircleCheckIcon className="text-success" /> : <CircleAlertIcon />}
       <AlertTitle>
         {status === "valid" && (count === 0 ? "Valid, and expires within a day" : `Valid for ${days(count)} more`)}
         {status === "expired" && (count === 0 ? "Expired today" : `Expired ${days(count)} ago`)}
@@ -37,7 +37,7 @@ function Verdict({ details }: { details: CertificateDetails }) {
           </p>
         )}
         {details.warnings.map((warning) => (
-          <p key={warning} role="note" className="mt-2 flex items-start gap-2 text-amber-700 dark:text-amber-400">
+          <p key={warning} role="note" className="mt-2 flex items-start gap-2 text-warning">
             <TriangleAlertIcon className="mt-0.5 size-4 shrink-0" />
             {warning}
           </p>

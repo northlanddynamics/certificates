@@ -356,6 +356,23 @@ describe("filters", () => {
     expect(await filtered("?keyCustody=owner&noOwners=true")).toEqual([unowned.id, pending]);
   });
 
+  test("a search matches part of any name, ignoring case, and combines with the filters", async () => {
+    const apps = `apps-${randomBytes(3).toString("hex")}`;
+    const both = (await admin().create(await request([`www.${apps}.${BIND.zone}`, `API.${apps}.${BIND.zone}`]))).body.id as string;
+    const other = await adminCreates();
+    await h.settleIssuances();
+
+    expect(await filtered(`?q=${apps}`)).toEqual([both]);
+    expect(await filtered(`?q=api.${apps.toUpperCase()}`)).toEqual([both]);
+    expect(await filtered(`?q=${apps}&noOwners=true`)).toEqual([both]);
+    expect(await filtered(`?q=${apps}&pendingApproval=true`)).toEqual([]);
+    expect(await filtered(`?q=nothing-is-called-this`)).toEqual([]);
+    // LIKE's wildcards are matched as themselves, and no name has either.
+    expect(await filtered(`?q=t_`)).toEqual([]);
+    expect(await filtered(`?q=%25`)).toEqual([]);
+    expect(await filtered("")).toEqual([both, other.id]);
+  });
+
   test("archived Managed Certificates are shown only when asked for", async () => {
     const [kept, retired] = [await adminCreates(), await adminCreates()];
     await archive(retired.id);

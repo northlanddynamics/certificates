@@ -1,23 +1,23 @@
 import { useQuery } from "@tanstack/react-query";
 import { useParams } from "@tanstack/react-router";
 import { createColumnHelper, tableFeatures, useTable } from "@tanstack/react-table";
-import { ChevronDownIcon, ClipboardCheckIcon, GlobeIcon, KeyRoundIcon, LandmarkIcon, PlusIcon, RefreshCwIcon, TagIcon, UsersIcon, type LucideIcon } from "lucide-react";
+import { ClipboardCheckIcon, GlobeIcon, KeyRoundIcon, LandmarkIcon, PlusIcon, RefreshCwIcon, TagIcon, UsersIcon, type LucideIcon } from "lucide-react";
 import { useState } from "react";
 import { ConfirmDialog } from "@/components/confirm-dialog";
 import { DataTable } from "@/components/data-table/data-table";
 import { IssuerChoiceFields, useIssuerChoice } from "@/components/issuer-choice";
-import { SteppedForm, STEPPED_DIALOG } from "@/components/stepped-form";
+import { SteppedForm, STEPPED_DIALOG, type Missing } from "@/components/stepped-form";
 import { SummaryRows } from "@/components/summary-rows";
 import { Badge } from "@/components/ui/badge";
 import { Button } from "@/components/ui/button";
 import { Checkbox } from "@/components/ui/checkbox";
-import { Collapsible, CollapsibleContent, CollapsibleTrigger } from "@/components/ui/collapsible";
 import { Dialog, DialogContent, DialogDescription, DialogTitle, DialogTrigger } from "@/components/ui/dialog";
 import { Field, FieldDescription, FieldError, FieldGroup, FieldLabel, FieldLegend, FieldSet } from "@/components/ui/field";
 import { Input } from "@/components/ui/input";
 import { Label } from "@/components/ui/label";
 import { Select, SelectContent, SelectItem, SelectTrigger, SelectValue } from "@/components/ui/select";
 import { Textarea } from "@/components/ui/textarea";
+import { ActionLabel, PageHeader } from "@/components/page-header";
 import { acmeCaName, useAcmeCas } from "@/lib/acme-cas";
 import { CERTIFICATE_PROFILE_GUIDE } from "@/lib/certificate-profile-guide";
 import { api, can, type CertificateProfile, type CertificateProfileChanges, type RenewalPolicy } from "@/lib/api";
@@ -62,7 +62,7 @@ const columns = (orgId: string, mayEdit: boolean, mayDisable: boolean) =>
       cell: ({ row }) => (
         <div className="flex flex-col gap-1">
           <span className="font-medium">
-            {row.original.name} {!row.original.enabled && <Badge variant="secondary">Disabled</Badge>}
+            {row.original.name} {!row.original.enabled && <Badge variant="neutral">Disabled</Badge>}
           </span>
           {row.original.description && <span className="text-sm text-muted-foreground">{row.original.description}</span>}
         </div>
@@ -105,15 +105,13 @@ export function CertificateProfilesPage() {
 
   return (
     <div className="flex flex-col gap-6">
-      <div className="flex items-center justify-between gap-4">
-        <h1 className="text-xl font-semibold">Certificate Profiles</h1>
-        {mayCreate && <ProfileDialog orgId={orgId} />}
-      </div>
-      <p className="text-sm text-muted-foreground">
-        A profile says once how a kind of certificate is issued: from which CA, with which keys, for how long, and how it renews. Members request against a profile instead of
-        choosing these themselves. Each Managed Certificate keeps the settings it was made with, so editing a profile changes only what is requested after.
-      </p>
-      <ProfileGuide />
+      <PageHeader
+        title="Certificate Profiles"
+        action={mayCreate && <ProfileDialog orgId={orgId} />}
+        description="A profile says once how a kind of certificate is issued: from which CA, with which keys, for how long, and how it renews."
+        howItWorksTitle="How Certificate Profiles work"
+        howItWorks={<ProfileGuide />}
+      />
       <DataTable table={table} empty={profiles.isPending ? "Loading…" : "No Certificate Profile yet."} />
       {profiles.error && <p className="text-sm text-destructive">{profiles.error.message}</p>}
       {mayEdit && <RequireProfileSetting orgId={orgId} />}
@@ -121,29 +119,20 @@ export function CertificateProfilesPage() {
   );
 }
 
-/** How profiles work, folded away until asked for: setting one up, proposing through one, disabling and detaching. */
+/** How profiles work: members requesting against them, setting one up, proposing through one, disabling and detaching. */
 function ProfileGuide() {
   return (
-    <Collapsible className="group/guide">
-      <CollapsibleTrigger asChild>
-        <Button type="button" variant="ghost" size="sm" className="-ml-2">
-          <ChevronDownIcon className="transition-transform group-data-[state=closed]/guide:-rotate-90" />
-          How Certificate Profiles work
-        </Button>
-      </CollapsibleTrigger>
-      <CollapsibleContent className="flex max-w-3xl flex-col gap-4 pt-2">
-        {CERTIFICATE_PROFILE_GUIDE.map((section) => (
-          <section key={section.title} className="flex flex-col gap-2">
-            <h2 className="text-sm font-medium">{section.title}</h2>
-            {section.paragraphs.map((paragraph) => (
-              <p key={paragraph} className="text-sm text-muted-foreground">
-                {paragraph}
-              </p>
-            ))}
-          </section>
-        ))}
-      </CollapsibleContent>
-    </Collapsible>
+    <>
+      <p>Members request against a profile instead of choosing these themselves. Each Managed Certificate keeps the settings it was made with, so editing a profile changes only what is requested after.</p>
+      {CERTIFICATE_PROFILE_GUIDE.map((section) => (
+        <section key={section.title} className="flex flex-col gap-2 pt-2">
+          <h2 className="text-sm font-medium text-foreground">{section.title}</h2>
+          {section.paragraphs.map((paragraph) => (
+            <p key={paragraph}>{paragraph}</p>
+          ))}
+        </section>
+      ))}
+    </>
   );
 }
 
@@ -229,7 +218,7 @@ function ProfileDialog({ orgId, profile }: { orgId: string; profile?: Certificat
         ) : (
           <Button>
             <PlusIcon />
-            New profile
+            <ActionLabel>New profile</ActionLabel>
           </Button>
         )}
       </DialogTrigger>
@@ -251,7 +240,7 @@ function ProfileForm({ orgId, profile, onDone }: { orgId: string; profile?: Cert
   const [step, setStep] = useState<StepId>("details");
   const [name, setName] = useState(profile?.name ?? "");
   const [description, setDescription] = useState(profile?.description ?? "");
-  const choice = useIssuerChoice(orgId, { canReadPrivateCas: org ? can(org, "privateCa", "read") : false, initial: profile && { issuer: profile.issuer, validityDays: profile.validityDays } });
+  const choice = useIssuerChoice(orgId, { canReadPrivateCas: org ? can(org, "privateCa", "read") : false, canRegisterAcmeAccounts: org ? can(org, "acmeAccount", "create") : false, initial: profile && { issuer: profile.issuer, validityDays: profile.validityDays } });
   const [keys, setKeys] = useState<KeyAlgorithm[]>(profile?.allowedKeyAlgorithms ?? ["ecdsa-p256"]);
   const [mode, setMode] = useState<RenewalPolicy["mode"]>(profile?.renewalPolicy.mode ?? "automatic");
   const [days, setDays] = useState(String(profile?.renewalPolicy.daysBeforeExpiry ?? 30));
@@ -266,33 +255,42 @@ function ProfileForm({ orgId, profile, onDone }: { orgId: string; profile?: Cert
   const allowedKeys = choice.keyAlgorithms.filter((algorithm) => keys.includes(algorithm));
   const daysOk = /^\d+$/.test(days) && Number(days) >= 1 && Number(days) <= 365;
   const maxNamesOk = maxNames.trim() === "" || (/^\d+$/.test(maxNames.trim()) && Number(maxNames) >= 1 && Number(maxNames) <= MAX_NAMES);
-  const changes: CertificateProfileChanges = {
+  const settings = {
     name: name.trim(),
     description: description.trim(),
-    issuer: choice.issuer,
     allowedKeyAlgorithms: allowedKeys,
-    validityDays: choice.issuer.kind === "private_ca" ? choice.chosenValidity : null,
     renewalPolicy: { mode, daysBeforeExpiry: Number(days) },
     defaultTeamId: teamId === NO_TEAM ? null : teamId,
     nameRules: { exact: splitNames(exactNames), zones: splitNames(zones), maxNames: maxNames.trim() === "" ? null : Number(maxNames), wildcards },
   };
+  // None until an issuer is chosen, which the Issuer step asks for before Review.
+  const { issuer } = choice;
+  const changes: CertificateProfileChanges | null = issuer && { ...settings, issuer, validityDays: issuer.kind === "private_ca" ? choice.chosenValidity : null };
   const save = useAction(
-    () => (profile ? api.updateCertificateProfile(orgId, profile.id, changes) : api.createCertificateProfile(orgId, changes)),
+    async () => {
+      if (!changes) throw new Error("Choose where it is issued from.");
+      return profile ? api.updateCertificateProfile(orgId, profile.id, changes) : api.createCertificateProfile(orgId, changes);
+    },
     ["certificate-profiles", "audit-events"],
     onDone,
   );
 
-  // Whether each step holds what it needs. The Issuer step does unless its validity is out of range or its ACME CA has no account; the Co-Owner step always
+  // What each step still needs. The Issuer step needs nothing unless its validity is out of range or its ACME CA has no account; the Co-Owner step never
   // does, a Team being optional; Review only shows what was entered.
-  const complete: Record<StepId, boolean> = {
-    details: changes.name !== "",
-    issuer: choice.validityOk && choice.registered !== false,
-    keys: allowedKeys.length > 0,
-    names: maxNamesOk,
-    renewal: daysOk,
-    team: true,
-    review: true,
+  const missing: Partial<Record<StepId, Missing>> = {
+    details: settings.name === "" ? { reason: "Give the profile a name.", field: "profile-name" } : undefined,
+    issuer: !issuer
+      ? { reason: "Choose where it is issued from." }
+      : !choice.validityOk
+      ? { reason: "Give a validity the Issuing CA allows.", field: "profile-validity" }
+      : choice.registered === false
+        ? { reason: "The Organization has no account with that ACME CA: choose another." }
+        : undefined,
+    keys: allowedKeys.length > 0 ? undefined : { reason: "Allow at least one key algorithm.", field: `profile-key-${choice.keyAlgorithms[0]}` },
+    names: maxNamesOk ? undefined : { reason: `Give at most ${MAX_NAMES} names, or leave it empty for any.`, field: "profile-max-names" },
+    renewal: daysOk ? undefined : { reason: "Give 1 to 365 days before expiry.", field: "profile-renewal-days" },
   };
+
   const title = profile ? `Edit ${profile.name}` : "New Certificate Profile";
 
   return (
@@ -301,7 +299,7 @@ function ProfileForm({ orgId, profile, onDone }: { orgId: string; profile?: Cert
       steps={STEPS}
       step={step}
       onStep={setStep}
-      complete={complete}
+      missing={missing}
       submitLabel={profile ? "Save" : "Create"}
       pending={save.isPending}
       onSubmit={() => save.mutate(undefined)}
@@ -316,7 +314,7 @@ function ProfileForm({ orgId, profile, onDone }: { orgId: string; profile?: Cert
           <FieldGroup>
             <Field>
               <FieldLabel htmlFor="profile-name">Name</FieldLabel>
-              <Input id="profile-name" autoFocus value={name} maxLength={100} onChange={(e) => setName(e.target.value)} placeholder="Internal web servers" />
+              <Input id="profile-name" autoFocus value={name} maxLength={100} onChange={(e) => setName(e.target.value)} placeholder="e.g. Internal web servers" />
             </Field>
             <Field>
               <FieldLabel htmlFor="profile-description">Description</FieldLabel>
@@ -366,12 +364,12 @@ function ProfileForm({ orgId, profile, onDone }: { orgId: string; profile?: Cert
             <div className="grid gap-4 sm:grid-cols-2">
               <Field>
                 <FieldLabel htmlFor="profile-exact-names">Names</FieldLabel>
-                <Textarea id="profile-exact-names" rows={4} value={exactNames} onChange={(e) => setExactNames(e.target.value)} placeholder="www.example.com" />
+                <Textarea id="profile-exact-names" rows={4} value={exactNames} onChange={(e) => setExactNames(e.target.value)} placeholder="e.g. www.example.com" />
                 <FieldDescription>One per line, each allowed exactly; a wildcard as *.example.com.</FieldDescription>
               </Field>
               <Field>
                 <FieldLabel htmlFor="profile-zones">Zones</FieldLabel>
-                <Textarea id="profile-zones" rows={4} value={zones} onChange={(e) => setZones(e.target.value)} placeholder="internal.example.com" />
+                <Textarea id="profile-zones" rows={4} value={zones} onChange={(e) => setZones(e.target.value)} placeholder="e.g. internal.example.com" />
                 <FieldDescription>One per line, each allowing the name and everything beneath it.</FieldDescription>
               </Field>
             </div>
@@ -419,7 +417,7 @@ function ProfileForm({ orgId, profile, onDone }: { orgId: string; profile?: Cert
                 <SelectItem value="manual">Manual</SelectItem>
               </SelectContent>
             </Select>
-            <Input type="number" min={1} max={365} step={1} className="w-20" aria-label="Days before expiry" aria-invalid={!daysOk} value={days} onChange={(e) => setDays(e.target.value)} />
+            <Input id="profile-renewal-days" type="number" min={1} max={365} step={1} className="w-20" aria-label="Days before expiry" aria-invalid={!daysOk} value={days} onChange={(e) => setDays(e.target.value)} />
             <span className="text-sm text-muted-foreground">days before expiry</span>
           </div>
           {!daysOk && <FieldError>Between 1 and 365 days.</FieldError>}
@@ -461,13 +459,13 @@ function ProfileForm({ orgId, profile, onDone }: { orgId: string; profile?: Cert
             </FieldDescription>
             <SummaryRows
               rows={[
-                { label: "Name", value: changes.name },
-                ...(changes.description ? [{ label: "Description", value: changes.description }] : []),
+                { label: "Name", value: settings.name },
+                ...(settings.description ? [{ label: "Description", value: settings.description }] : []),
                 { label: "Issued from", value: choice.title ?? "" },
                 ...(choice.validityText ? [{ label: "Validity", value: choice.validityText }] : []),
                 { label: "Key algorithms", value: allowedKeys.map((algorithm) => KEY_ALGORITHM_LABELS[algorithm]).join(", ") },
-                { label: "Names", value: nameRulesLabel(changes.nameRules) ?? <span className="text-muted-foreground">Any the issuer takes</span> },
-                { label: "Renewal", value: renewalLabel(changes.renewalPolicy) },
+                { label: "Names", value: nameRulesLabel(settings.nameRules) ?? <span className="text-muted-foreground">Any the issuer takes</span> },
+                { label: "Renewal", value: renewalLabel(settings.renewalPolicy) },
                 { label: "Co-Owner", value: teams.data?.items.find((team) => team.id === teamId)?.name ?? <span className="text-muted-foreground">None</span> },
               ]}
             />
