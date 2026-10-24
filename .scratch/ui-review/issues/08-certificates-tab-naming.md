@@ -4,7 +4,7 @@
 
 **Blocked by:** none
 
-**Status:** ready-for-agent
+**Status:** done
 
-- [ ] The page tab reads "Issued certificates" (as `.scratch/certificate-details/spec.md` named it).
-- [ ] The Overview button reads "View history" or similar and goes to that tab.
+- [x] The page tab reads "Issued certificates" (as `.scratch/certificate-details/spec.md` named it).
+- [x] The Overview button reads "View history" or similar and goes to that tab.

@@ -21,7 +21,7 @@ const ROUTE = "/app/organizations/$orgId/certificates/$id";
 
 const TABS = [
   { to: "/organizations/$orgId/certificates/$id", label: "Overview", exact: true },
-  { to: "/organizations/$orgId/certificates/$id/issued", label: "Certificates", exact: false },
+  { to: "/organizations/$orgId/certificates/$id/issued", label: "Issued certificates", exact: false },
   { to: "/organizations/$orgId/certificates/$id/activity", label: "Activity", exact: false },
   { to: "/organizations/$orgId/certificates/$id/notifications", label: "Notifications", exact: false },
 ] as const;

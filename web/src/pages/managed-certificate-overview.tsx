@@ -135,7 +135,7 @@ function CurrentCertificateCard({ org, m, userId, onChanged }: { org: Org; m: Ma
           {current && <RevokeDialog org={org} m={m} certificate={current} userId={userId} onChanged={onChanged} />}
           <Button variant="outline" size="sm" asChild>
             <Link to="/organizations/$orgId/certificates/$id/issued" params={{ orgId: org.id, id: m.id }}>
-              All Certificates
+              View history
             </Link>
           </Button>
         </CardAction>
