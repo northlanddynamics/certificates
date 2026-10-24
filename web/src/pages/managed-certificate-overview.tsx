@@ -3,11 +3,12 @@ import { Link, useParams } from "@tanstack/react-router";
 import { PencilIcon } from "lucide-react";
 import { useState, type ReactNode } from "react";
 import { CopyButton } from "@/components/copy-button";
+import { IssuerName } from "@/components/issuer-name";
 import { Button } from "@/components/ui/button";
 import { Card, CardAction, CardContent, CardHeader, CardTitle } from "@/components/ui/card";
-import { api, type ManagedCertificate, type Me } from "@/lib/api";
+import { api, type AcmeCa, type Certificate, type ManagedCertificate, type Me } from "@/lib/api";
 import { acmeCaName, useAcmeCas } from "@/lib/acme-cas";
-import { caLabel, issuerLabel, keyAlgorithmLabel, profileLabel } from "@/lib/managed-certificate";
+import { caLabel, keyAlgorithmLabel, profileLabel } from "@/lib/managed-certificate";
 import { chosenValidityLabel } from "@/lib/private-ca";
 import { useCertificateFacts, useManagedCertificatePage } from "@/lib/use-managed-certificate";
 import { date } from "@/lib/utils";
@@ -108,6 +109,17 @@ function NamesCard({ org, m, userId, onChange }: { org: Org; m: ManagedCertifica
   );
 }
 
+/**
+ * Who issued `certificate`, named as the Managed Certificate's issuer is when it is that one; one issued before the
+ * issuer was changed goes by its CA's name.
+ */
+function CertificateIssuer({ org, m, certificate, acmeCas }: { org: Org; m: ManagedCertificate; certificate: Certificate; acmeCas: AcmeCa[] | undefined }) {
+  const { issuer } = m;
+  const same = issuer.kind === "acme" ? certificate.acmeCaId === issuer.acmeCaId : certificate.issuingCaId === issuer.issuingCa.id;
+  if (same) return <IssuerName org={org} issuer={issuer} acmeCas={acmeCas} />;
+  return <>{certificate.acmeCaId ? acmeCaName(acmeCas, certificate.acmeCaId) : caLabel(certificate.ca)}</>;
+}
+
 /** A fingerprint shortened to its ends, which is enough to tell one from another, with the whole of it on request. */
 function Fingerprint({ value }: { value: string }) {
   const [whole, setWhole] = useState(false);
@@ -144,7 +156,16 @@ function CurrentCertificateCard({ org, m, userId, onChanged }: { org: Org; m: Ma
         {current ? (
           <dl className="flex flex-col gap-3">
             <Fact label="Issued by">
-              {facts.data?.issuer ?? (facts.error ? <span className="text-destructive">{facts.error.message}</span> : <span className="text-muted-foreground">…</span>)}
+              <span className="flex flex-col gap-0.5">
+                <span>
+                  <CertificateIssuer org={org} m={m} certificate={current} acmeCas={acmeCas} />
+                </span>
+                {facts.data ? (
+                  <span className="font-mono text-xs break-all text-muted-foreground">{facts.data.issuer}</span>
+                ) : (
+                  facts.error && <span className="text-xs text-destructive">{facts.error.message}</span>
+                )}
+              </span>
             </Fact>
             <Fact label="Valid">
               {date(current.notBefore)} – {date(current.notAfter)}
@@ -155,12 +176,10 @@ function CurrentCertificateCard({ org, m, userId, onChanged }: { org: Org; m: Ma
             <Fact label="SHA-256" action={<CopyButton text={current.fingerprint} label="Copy the fingerprint" />}>
               <Fingerprint value={current.fingerprint} />
             </Fact>
-            {current.acmeCaId ? (
+            {current.acmeCaId && (
               <Fact label="ACME Account">
-                {acmeCaName(acmeCas, current.acmeCaId)} <span className="font-mono text-xs text-muted-foreground">{current.acmeAccountId}</span>
+                <span className="font-mono text-xs text-muted-foreground">{current.acmeAccountId}</span>
               </Fact>
-            ) : (
-              <Fact label="CA">{caLabel(current.ca)}</Fact>
             )}
             {current.revocation && (
               <Fact label="Revoked">
@@ -230,7 +249,9 @@ function IssuerSection({ org, m, onChanged }: { org: Org; m: ManagedCertificate;
         )
       }
     >
-      <span>{issuerLabel(m.issuer, acmeCas)}</span>
+      <span>
+        <IssuerName org={org} issuer={m.issuer} acmeCas={acmeCas} />
+      </span>
       {m.issuer.kind === "private_ca" && <span className="text-muted-foreground">Validity: {chosenValidityLabel(m.validityDays)}</span>}
       {m.profile && <span className="text-muted-foreground">From the Certificate Profile {profileLabel(m.profile)}</span>}
       <IssuingCaStopped org={org} m={m} />

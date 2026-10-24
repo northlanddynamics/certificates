@@ -1,6 +1,7 @@
 import { Link, Outlet, useLocation, useParams } from "@tanstack/react-router";
 import { ArchiveIcon } from "lucide-react";
 import { DownloadDialog } from "@/components/download-dialog";
+import { IssuerName } from "@/components/issuer-name";
 import { LoadError } from "@/components/load-error";
 import { usePageCrumbs } from "@/components/page-crumbs";
 import { Alert, AlertDescription, AlertTitle } from "@/components/ui/alert";
@@ -10,7 +11,7 @@ import { Popover, PopoverContent, PopoverTrigger } from "@/components/ui/popover
 import { Skeleton } from "@/components/ui/skeleton";
 import { ApiError, can, type ManagedCertificate } from "@/lib/api";
 import { useAcmeCas } from "@/lib/acme-cas";
-import { expiryPhrase, issuerLabel, keyAlgorithmLabel, primaryName, profileLabel, status } from "@/lib/managed-certificate";
+import { expiryPhrase, keyAlgorithmLabel, primaryName, profileLabel, status } from "@/lib/managed-certificate";
 import { useManagedCertificatePage } from "@/lib/use-managed-certificate";
 import { AlertStrip } from "./certificate-alerts";
 import { Lifecycle } from "./certificate-lifecycle";
@@ -66,9 +67,10 @@ export function ManagedCertificateDetailsPage() {
           <div className="flex flex-wrap items-center gap-x-3 gap-y-1 text-sm">
             <Badge variant={state.variant}>{expiry && !m.archivedAt && m.approval.status !== "pending" ? `${state.label} · ${expiry}` : state.label}</Badge>
             <span className="text-muted-foreground">
-              {[issuerLabel(m.issuer, acmeCas), keyAlgorithmLabel(m.keyAlgorithm), m.keyCustody === "owner" ? "Key held by its Owners" : "Key held by an Agent", m.profile && `Profile ${profileLabel(m.profile)}`]
+              <IssuerName org={org} issuer={m.issuer} acmeCas={acmeCas} />
+              {[keyAlgorithmLabel(m.keyAlgorithm), m.keyCustody === "owner" ? "Key held by its Owners" : "Key held by an Agent", m.profile && `Profile ${profileLabel(m.profile)}`]
                 .filter(Boolean)
-                .join(" · ")}
+                .map((part) => ` · ${part}`)}
             </span>
           </div>
         </div>

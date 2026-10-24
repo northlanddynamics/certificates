@@ -4,8 +4,8 @@
 
 **Blocked by:** none
 
-**Status:** ready-for-agent
+**Status:** done
 
-- [ ] One helper formats an issuer as "<Issuing CA> · <Private CA>" or "<ACME CA>", used by the header, Overview, the list and the wizard.
-- [ ] Current Certificate keeps the full Issuer DN as a secondary, monospace line.
-- [ ] The CA name links to the Private CAs or ACME accounts page for those who may open it.
+- [x] One helper formats an issuer as "<Issuing CA> · <Private CA>" or "<ACME CA>", used by the header, Overview, the list and the wizard.
+- [x] Current Certificate keeps the full Issuer DN as a secondary, monospace line.
+- [x] The CA name links to the Private CAs or ACME accounts page for those who may open it.

@@ -40,7 +40,7 @@ const makeColumns = (orgId: string, acmeCas: AcmeCa[] | undefined) => columnHelp
       const { issuer } = row.original;
       if (issuer.kind === "private_ca") {
         return (
-          <Badge variant="outline" title={`Private CA ${issuer.privateCa.name}`}>
+          <Badge variant="outline" title={issuerLabel(issuer, acmeCas)}>
             Private
           </Badge>
         );
