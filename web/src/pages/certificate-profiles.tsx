@@ -1,17 +1,19 @@
 import { useQuery } from "@tanstack/react-query";
 import { useParams } from "@tanstack/react-router";
 import { createColumnHelper, tableFeatures, useTable } from "@tanstack/react-table";
-import { ChevronDownIcon, PlusIcon } from "lucide-react";
-import { useState, type FormEvent } from "react";
+import { ChevronDownIcon, ClipboardCheckIcon, GlobeIcon, KeyRoundIcon, LandmarkIcon, PlusIcon, RefreshCwIcon, TagIcon, UsersIcon, type LucideIcon } from "lucide-react";
+import { useState } from "react";
 import { ConfirmDialog } from "@/components/confirm-dialog";
 import { DataTable } from "@/components/data-table/data-table";
 import { IssuerChoiceFields, useIssuerChoice } from "@/components/issuer-choice";
+import { SteppedForm, STEPPED_DIALOG } from "@/components/stepped-form";
+import { SummaryRows } from "@/components/summary-rows";
 import { Badge } from "@/components/ui/badge";
 import { Button } from "@/components/ui/button";
 import { Checkbox } from "@/components/ui/checkbox";
 import { Collapsible, CollapsibleContent, CollapsibleTrigger } from "@/components/ui/collapsible";
-import { Dialog, DialogClose, DialogContent, DialogDescription, DialogFooter, DialogHeader, DialogTitle, DialogTrigger } from "@/components/ui/dialog";
-import { Field, FieldDescription, FieldLabel, FieldLegend, FieldSet } from "@/components/ui/field";
+import { Dialog, DialogContent, DialogDescription, DialogTitle, DialogTrigger } from "@/components/ui/dialog";
+import { Field, FieldDescription, FieldError, FieldGroup, FieldLabel, FieldLegend, FieldSet } from "@/components/ui/field";
 import { Input } from "@/components/ui/input";
 import { Label } from "@/components/ui/label";
 import { Select, SelectContent, SelectItem, SelectTrigger, SelectValue } from "@/components/ui/select";
@@ -29,6 +31,16 @@ import { useOrg } from "@/lib/use-org";
 
 const ROUTE = "/app/organizations/$orgId/certificate-profiles";
 const NO_TEAM = "none";
+const STEPS = [
+  { id: "details", title: "Name", icon: TagIcon },
+  { id: "issuer", title: "Issuer", icon: LandmarkIcon },
+  { id: "keys", title: "Key algorithms", icon: KeyRoundIcon },
+  { id: "names", title: "Name rules", icon: GlobeIcon },
+  { id: "renewal", title: "Renewal", icon: RefreshCwIcon },
+  { id: "team", title: "Co-Owner Team", icon: UsersIcon },
+  { id: "review", title: "Review", icon: ClipboardCheckIcon },
+] as const satisfies readonly { id: string; title: string; icon: LucideIcon }[];
+type StepId = (typeof STEPS)[number]["id"];
 
 const renewalLabel = (policy: RenewalPolicy) => (policy.mode === "manual" ? "Renewed by hand" : `Automatic, ${policy.daysBeforeExpiry} days before expiry`);
 
@@ -204,7 +216,7 @@ function EnableButton({ orgId, profile }: { orgId: string; profile: CertificateP
   );
 }
 
-/** Creates a profile, or edits `profile` when given. */
+/** Creates a profile, or edits `profile` when given, in steps. */
 function ProfileDialog({ orgId, profile }: { orgId: string; profile?: CertificateProfile }) {
   const [open, setOpen] = useState(false);
   return (
@@ -221,13 +233,11 @@ function ProfileDialog({ orgId, profile }: { orgId: string; profile?: Certificat
           </Button>
         )}
       </DialogTrigger>
-      <DialogContent className="max-h-[90vh] overflow-y-auto sm:max-w-2xl">
-        <DialogHeader>
-          <DialogTitle>{profile ? `Edit ${profile.name}` : "New Certificate Profile"}</DialogTitle>
-          <DialogDescription>
-            {profile ? "Managed Certificates already made from it keep what they were made with." : "Members will request Managed Certificates with these settings."}
-          </DialogDescription>
-        </DialogHeader>
+      <DialogContent className={STEPPED_DIALOG}>
+        <DialogTitle className="sr-only">{profile ? `Edit ${profile.name}` : "New Certificate Profile"}</DialogTitle>
+        <DialogDescription className="sr-only">
+          {profile ? "Managed Certificates already made from it keep what they were made with." : "Members will request Managed Certificates with these settings."}
+        </DialogDescription>
         {/* Only mounted while open, so each opening starts from the profile as it is. */}
         {open && <ProfileForm orgId={orgId} profile={profile} onDone={() => setOpen(false)} />}
       </DialogContent>
@@ -235,8 +245,10 @@ function ProfileDialog({ orgId, profile }: { orgId: string; profile?: Certificat
   );
 }
 
+// Every step's state lives here, so moving between steps never loses what was entered. Editing starts with every step complete, so any can be opened from the side.
 function ProfileForm({ orgId, profile, onDone }: { orgId: string; profile?: CertificateProfile; onDone: () => void }) {
   const org = useOrg(orgId);
+  const [step, setStep] = useState<StepId>("details");
   const [name, setName] = useState(profile?.name ?? "");
   const [description, setDescription] = useState(profile?.description ?? "");
   const choice = useIssuerChoice(orgId, { canReadPrivateCas: org ? can(org, "privateCa", "read") : false, initial: profile && { issuer: profile.issuer, validityDays: profile.validityDays } });
@@ -269,135 +281,200 @@ function ProfileForm({ orgId, profile, onDone }: { orgId: string; profile?: Cert
     ["certificate-profiles", "audit-events"],
     onDone,
   );
-  const ready = changes.name !== "" && allowedKeys.length > 0 && choice.validityOk && choice.registered !== false && daysOk && maxNamesOk;
+
+  // Whether each step holds what it needs. The Issuer step does unless its validity is out of range or its ACME CA has no account; the Co-Owner step always
+  // does, a Team being optional; Review only shows what was entered.
+  const complete: Record<StepId, boolean> = {
+    details: changes.name !== "",
+    issuer: choice.validityOk && choice.registered !== false,
+    keys: allowedKeys.length > 0,
+    names: maxNamesOk,
+    renewal: daysOk,
+    team: true,
+    review: true,
+  };
+  const title = profile ? `Edit ${profile.name}` : "New Certificate Profile";
 
   return (
-    <form
-      className="flex flex-col gap-6"
-      onSubmit={(e: FormEvent) => {
-        e.preventDefault();
-        save.mutate(undefined);
-      }}
+    <SteppedForm
+      title={title}
+      steps={STEPS}
+      step={step}
+      onStep={setStep}
+      complete={complete}
+      submitLabel={profile ? "Save" : "Create"}
+      pending={save.isPending}
+      onSubmit={() => save.mutate(undefined)}
+      tall
     >
-      <Field>
-        <FieldLabel htmlFor="profile-name">Name</FieldLabel>
-        <Input id="profile-name" value={name} maxLength={100} onChange={(e) => setName(e.target.value)} placeholder="Internal web servers" />
-      </Field>
-      <Field>
-        <FieldLabel htmlFor="profile-description">Description</FieldLabel>
-        <Textarea id="profile-description" rows={2} value={description} maxLength={1000} onChange={(e) => setDescription(e.target.value)} />
-        <FieldDescription>What it is for, which members read when they choose a profile.</FieldDescription>
-      </Field>
-      <FieldSet>
-        <FieldLegend>Issuer</FieldLegend>
-        <IssuerChoiceFields choice={choice} idPrefix="profile" trying="a profile" />
-      </FieldSet>
-      <FieldSet>
-        <FieldLegend>Key algorithms</FieldLegend>
-        <FieldDescription>The keys a requester's CSR may be for: those the issuer takes. With one, the CSR Generator is set to it.</FieldDescription>
-        <div className="flex flex-wrap gap-4">
-          {choice.keyAlgorithms.map((algorithm) => (
-            <div key={algorithm} className="flex items-center gap-2">
-              <Checkbox
-                id={`profile-key-${algorithm}`}
-                checked={keys.includes(algorithm)}
-                onCheckedChange={(checked) => setKeys((held) => (checked === true ? [...held, algorithm] : held.filter((a) => a !== algorithm)))}
-              />
-              <FieldLabel htmlFor={`profile-key-${algorithm}`} className="font-normal">
-                {KEY_ALGORITHM_LABELS[algorithm]}
-              </FieldLabel>
-            </div>
-          ))}
-        </div>
-      </FieldSet>
-      <FieldSet>
-        <FieldLegend>Starting Renewal Policy</FieldLegend>
-        <div className="flex flex-wrap items-center gap-2">
-          <Select value={mode} onValueChange={(value) => setMode(value as RenewalPolicy["mode"])}>
-            <SelectTrigger aria-label="Renewal">
-              <SelectValue />
-            </SelectTrigger>
-            <SelectContent>
-              <SelectItem value="automatic">Automatic</SelectItem>
-              <SelectItem value="manual">Manual</SelectItem>
-            </SelectContent>
-          </Select>
-          <Input type="number" min={1} max={365} step={1} className="w-20" aria-label="Days before expiry" aria-invalid={!daysOk} value={days} onChange={(e) => setDays(e.target.value)} />
-          <span className="text-sm text-muted-foreground">days before expiry</span>
-        </div>
-      </FieldSet>
-      <FieldSet>
-        <FieldLegend>Name rules</FieldLegend>
-        <FieldDescription>
-          Which names members may request through it, within what the issuer allows. With no names and no zones, any name the issuer takes. Organization Administrators are held
-          only to the issuer's limits, and editing the rules does not re-check pending Proposals.
-        </FieldDescription>
-        <div className="grid gap-4 sm:grid-cols-2">
-          <Field>
-            <FieldLabel htmlFor="profile-exact-names">Names</FieldLabel>
-            <Textarea id="profile-exact-names" rows={3} value={exactNames} onChange={(e) => setExactNames(e.target.value)} placeholder="www.example.com" />
-            <FieldDescription>One per line, each allowed exactly; a wildcard as *.example.com.</FieldDescription>
-          </Field>
-          <Field>
-            <FieldLabel htmlFor="profile-zones">Zones</FieldLabel>
-            <Textarea id="profile-zones" rows={3} value={zones} onChange={(e) => setZones(e.target.value)} placeholder="internal.example.com" />
-            <FieldDescription>One per line, each allowing the name and everything beneath it.</FieldDescription>
-          </Field>
-        </div>
-        <div className="flex flex-wrap items-center gap-6">
-          <div className="flex items-center gap-2">
-            <Input
-              id="profile-max-names"
-              type="number"
-              min={1}
-              max={MAX_NAMES}
-              step={1}
-              className="w-20"
-              aria-invalid={!maxNamesOk}
-              value={maxNames}
-              onChange={(e) => setMaxNames(e.target.value)}
-              placeholder="Any"
-            />
-            <FieldLabel htmlFor="profile-max-names" className="font-normal">
-              names at most
-            </FieldLabel>
-          </div>
-          <div className="flex items-center gap-2">
-            <Checkbox id="profile-wildcards" checked={wildcards} onCheckedChange={(checked) => setWildcards(checked === true)} />
-            <FieldLabel htmlFor="profile-wildcards" className="font-normal">
-              Wildcards allowed
-            </FieldLabel>
-          </div>
-        </div>
-      </FieldSet>
-      <Field>
-        <FieldLabel htmlFor="profile-team">Co-Owner Team</FieldLabel>
-        <Select value={teamId} onValueChange={setTeamId}>
-          <SelectTrigger id="profile-team" className="w-60">
-            <SelectValue />
-          </SelectTrigger>
-          <SelectContent>
-            <SelectItem value={NO_TEAM}>None</SelectItem>
-            {(teams.data?.items ?? []).map((team) => (
-              <SelectItem key={team.id} value={team.id}>
-                {team.name}
-              </SelectItem>
+      {step === "details" && (
+        <FieldSet>
+          <FieldLegend>Name it</FieldLegend>
+          <FieldDescription>
+            {profile ? "Managed Certificates already made from it keep what they were made with." : "Members will request Managed Certificates with these settings."}
+          </FieldDescription>
+          <FieldGroup>
+            <Field>
+              <FieldLabel htmlFor="profile-name">Name</FieldLabel>
+              <Input id="profile-name" autoFocus value={name} maxLength={100} onChange={(e) => setName(e.target.value)} placeholder="Internal web servers" />
+            </Field>
+            <Field>
+              <FieldLabel htmlFor="profile-description">Description</FieldLabel>
+              <Textarea id="profile-description" rows={3} value={description} maxLength={1000} onChange={(e) => setDescription(e.target.value)} />
+              <FieldDescription>What it is for, which members read when they choose a profile.</FieldDescription>
+            </Field>
+          </FieldGroup>
+        </FieldSet>
+      )}
+
+      {step === "issuer" && (
+        <FieldSet>
+          <FieldLegend>Where is it issued from?</FieldLegend>
+          <IssuerChoiceFields choice={choice} idPrefix="profile" trying="a profile" />
+        </FieldSet>
+      )}
+
+      {step === "keys" && (
+        <FieldSet>
+          <FieldLegend>Key algorithms</FieldLegend>
+          <FieldDescription>The keys a requester's CSR may be for: those the issuer takes. With one, the CSR Generator is set to it.</FieldDescription>
+          <div className="flex flex-col gap-3">
+            {choice.keyAlgorithms.map((algorithm) => (
+              <Field key={algorithm} orientation="horizontal">
+                <Checkbox
+                  id={`profile-key-${algorithm}`}
+                  checked={keys.includes(algorithm)}
+                  onCheckedChange={(checked) => setKeys((held) => (checked === true ? [...held, algorithm] : held.filter((a) => a !== algorithm)))}
+                />
+                <FieldLabel htmlFor={`profile-key-${algorithm}`} className="font-normal">
+                  {KEY_ALGORITHM_LABELS[algorithm]}
+                </FieldLabel>
+              </Field>
             ))}
-          </SelectContent>
-        </Select>
-        <FieldDescription>Made an Owner of each certificate with the requester, so it is still looked after when they leave.</FieldDescription>
-      </Field>
-      {save.error && <p className="text-sm text-destructive">{save.error.message}</p>}
-      <DialogFooter>
-        <DialogClose asChild>
-          <Button type="button" variant="outline">
-            Cancel
-          </Button>
-        </DialogClose>
-        <Button type="submit" disabled={!ready || save.isPending}>
-          {profile ? "Save" : "Create"}
-        </Button>
-      </DialogFooter>
-    </form>
+          </div>
+        </FieldSet>
+      )}
+
+      {step === "names" && (
+        <FieldSet>
+          <FieldLegend>Name rules</FieldLegend>
+          <FieldDescription>
+            Which names members may request through it, within what the issuer allows. With no names and no zones, any name the issuer takes. Organization Administrators are
+            held only to the issuer's limits, and editing the rules does not re-check pending Proposals.
+          </FieldDescription>
+          <FieldGroup>
+            <div className="grid gap-4 sm:grid-cols-2">
+              <Field>
+                <FieldLabel htmlFor="profile-exact-names">Names</FieldLabel>
+                <Textarea id="profile-exact-names" rows={4} value={exactNames} onChange={(e) => setExactNames(e.target.value)} placeholder="www.example.com" />
+                <FieldDescription>One per line, each allowed exactly; a wildcard as *.example.com.</FieldDescription>
+              </Field>
+              <Field>
+                <FieldLabel htmlFor="profile-zones">Zones</FieldLabel>
+                <Textarea id="profile-zones" rows={4} value={zones} onChange={(e) => setZones(e.target.value)} placeholder="internal.example.com" />
+                <FieldDescription>One per line, each allowing the name and everything beneath it.</FieldDescription>
+              </Field>
+            </div>
+            <div className="flex flex-wrap items-center gap-6">
+              <div className="flex items-center gap-2">
+                <Input
+                  id="profile-max-names"
+                  type="number"
+                  min={1}
+                  max={MAX_NAMES}
+                  step={1}
+                  className="w-20"
+                  aria-invalid={!maxNamesOk}
+                  value={maxNames}
+                  onChange={(e) => setMaxNames(e.target.value)}
+                  placeholder="Any"
+                />
+                <FieldLabel htmlFor="profile-max-names" className="font-normal">
+                  names at most
+                </FieldLabel>
+              </div>
+              <div className="flex items-center gap-2">
+                <Checkbox id="profile-wildcards" checked={wildcards} onCheckedChange={(checked) => setWildcards(checked === true)} />
+                <FieldLabel htmlFor="profile-wildcards" className="font-normal">
+                  Wildcards allowed
+                </FieldLabel>
+              </div>
+            </div>
+            {!maxNamesOk && <FieldError>At most {MAX_NAMES} names, or leave it empty for any.</FieldError>}
+          </FieldGroup>
+        </FieldSet>
+      )}
+
+      {step === "renewal" && (
+        <FieldSet>
+          <FieldLegend>Starting Renewal Policy</FieldLegend>
+          <FieldDescription>What each Managed Certificate made from it starts with; its Owners may change it after.</FieldDescription>
+          <div className="flex flex-wrap items-center gap-2">
+            <Select value={mode} onValueChange={(value) => setMode(value as RenewalPolicy["mode"])}>
+              <SelectTrigger aria-label="Renewal">
+                <SelectValue />
+              </SelectTrigger>
+              <SelectContent>
+                <SelectItem value="automatic">Automatic</SelectItem>
+                <SelectItem value="manual">Manual</SelectItem>
+              </SelectContent>
+            </Select>
+            <Input type="number" min={1} max={365} step={1} className="w-20" aria-label="Days before expiry" aria-invalid={!daysOk} value={days} onChange={(e) => setDays(e.target.value)} />
+            <span className="text-sm text-muted-foreground">days before expiry</span>
+          </div>
+          {!daysOk && <FieldError>Between 1 and 365 days.</FieldError>}
+        </FieldSet>
+      )}
+
+      {step === "team" && (
+        <FieldSet>
+          <FieldLegend>Co-Owner Team</FieldLegend>
+          <FieldDescription>Optional: a Team made an Owner of each certificate with the requester, so it is still looked after when they leave.</FieldDescription>
+          <Field>
+            <FieldLabel htmlFor="profile-team" className="sr-only">
+              Co-Owner Team
+            </FieldLabel>
+            <Select value={teamId} onValueChange={setTeamId}>
+              <SelectTrigger id="profile-team" className="w-60">
+                <SelectValue />
+              </SelectTrigger>
+              <SelectContent>
+                <SelectItem value={NO_TEAM}>None</SelectItem>
+                {(teams.data?.items ?? []).map((team) => (
+                  <SelectItem key={team.id} value={team.id}>
+                    {team.name}
+                  </SelectItem>
+                ))}
+              </SelectContent>
+            </Select>
+          </Field>
+        </FieldSet>
+      )}
+
+      {step === "review" && (
+        <FieldGroup>
+          <FieldSet>
+            <FieldLegend>Review</FieldLegend>
+            <FieldDescription>
+              {profile ? "Managed Certificates already made from it keep what they were made with." : "Members will request Managed Certificates with these settings."} Use Back to
+              change anything.
+            </FieldDescription>
+            <SummaryRows
+              rows={[
+                { label: "Name", value: changes.name },
+                ...(changes.description ? [{ label: "Description", value: changes.description }] : []),
+                { label: "Issued from", value: choice.title ?? "" },
+                ...(choice.validityText ? [{ label: "Validity", value: choice.validityText }] : []),
+                { label: "Key algorithms", value: allowedKeys.map((algorithm) => KEY_ALGORITHM_LABELS[algorithm]).join(", ") },
+                { label: "Names", value: nameRulesLabel(changes.nameRules) ?? <span className="text-muted-foreground">Any the issuer takes</span> },
+                { label: "Renewal", value: renewalLabel(changes.renewalPolicy) },
+                { label: "Co-Owner", value: teams.data?.items.find((team) => team.id === teamId)?.name ?? <span className="text-muted-foreground">None</span> },
+              ]}
+            />
+          </FieldSet>
+          {save.error && <FieldError>{save.error.message}</FieldError>}
+        </FieldGroup>
+      )}
+    </SteppedForm>
   );
 }
