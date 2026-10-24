@@ -315,7 +315,7 @@ function AddPasskey() {
           }}
         >
           <Label htmlFor="passkey-name">Name</Label>
-          <Input id="passkey-name" placeholder="Work laptop" value={name} onChange={(e) => setName(e.target.value)} maxLength={100} />
+          <Input id="passkey-name" placeholder="e.g. Work laptop" value={name} onChange={(e) => setName(e.target.value)} maxLength={100} />
           {add.error && <p className="text-sm text-destructive">{add.error.message || "The passkey was not added."}</p>}
         </form>
         <DialogFooter>

@@ -368,7 +368,7 @@ function RegisterAccountForm({ orgId, acmeCas, onDone }: { orgId: string; acmeCa
             </Field>
             <Field>
               <FieldLabel htmlFor="acme-ca-directory">Directory URL</FieldLabel>
-              <Input id="acme-ca-directory" type="url" placeholder="https://ca.example.com/acme/directory" value={directoryUrl} onChange={(e) => setDirectoryUrl(e.target.value)} />
+              <Input id="acme-ca-directory" type="url" placeholder="e.g. https://ca.example.com/acme/directory" value={directoryUrl} onChange={(e) => setDirectoryUrl(e.target.value)} />
               <FieldDescription>https, and not a loopback or link-local address; a private address is fine. It cannot be changed once the CA is added.</FieldDescription>
             </Field>
             <Field>

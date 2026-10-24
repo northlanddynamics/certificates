@@ -891,7 +891,7 @@ function NewProfileForm({ orgId, onDone }: { orgId: string; onDone: (created: Cr
           <FieldGroup>
             <Field>
               <FieldLabel htmlFor="profile-name">Name</FieldLabel>
-              <Input id="profile-name" autoFocus value={name} onChange={(e) => setName(e.target.value)} placeholder="Wi-Fi" />
+              <Input id="profile-name" autoFocus value={name} onChange={(e) => setName(e.target.value)} placeholder="e.g. Wi-Fi" />
             </Field>
             <Field>
               <FieldLabel htmlFor="profile-issuing-ca">Issuing CA</FieldLabel>

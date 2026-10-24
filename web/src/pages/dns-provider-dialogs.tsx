@@ -240,14 +240,14 @@ function ProviderWizard({ orgId, provider, relay, onDone }: { orgId: string; pro
           </Field>
           <Field>
             <FieldLabel htmlFor="dns-zone">Zone</FieldLabel>
-            <Input id="dns-zone" value={fields.zone} placeholder="example.com" onChange={(e) => set({ zone: e.target.value })} required />
+            <Input id="dns-zone" value={fields.zone} placeholder="e.g. example.com" onChange={(e) => set({ zone: e.target.value })} required />
             <FieldDescription>The zone the records are published in, and only there.</FieldDescription>
           </Field>
           {fields.type === "rfc2136" ? (
             <div className="grid grid-cols-[1fr_6rem] gap-4">
               <Field>
                 <FieldLabel htmlFor="dns-server">Server</FieldLabel>
-                <Input id="dns-server" value={fields.server} placeholder="ns1.example.com" onChange={(e) => set({ server: e.target.value })} required />
+                <Input id="dns-server" value={fields.server} placeholder="e.g. ns1.example.com" onChange={(e) => set({ server: e.target.value })} required />
               </Field>
               <Field>
                 <FieldLabel htmlFor="dns-port">Port</FieldLabel>
@@ -258,7 +258,7 @@ function ProviderWizard({ orgId, provider, relay, onDone }: { orgId: string; pro
             <>
               <Field>
                 <FieldLabel htmlFor="dns-url">WAPI URL</FieldLabel>
-                <Input id="dns-url" value={fields.url} placeholder="https://gm.example.com/wapi/v2.12" onChange={(e) => set({ url: e.target.value })} required />
+                <Input id="dns-url" value={fields.url} placeholder="e.g. https://gm.example.com/wapi/v2.12" onChange={(e) => set({ url: e.target.value })} required />
                 <FieldDescription>With the WAPI version in it.</FieldDescription>
               </Field>
               <Field>

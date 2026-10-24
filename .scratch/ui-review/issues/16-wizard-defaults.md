@@ -4,8 +4,8 @@
 
 **Blocked by:** none
 
-**Status:** ready-for-agent
+**Status:** done
 
-- [ ] New Private CA: Subject defaults to `CN=<Name>` until edited.
-- [ ] Platform Organizations: Slug follows the name (lowercase, hyphens) until edited.
-- [ ] Placeholders that look like values (`Internal TLS`, `CN=Acme Internal TLS, O=Acme`) start with "e.g.".
+- [x] New Private CA: Subject defaults to `CN=<Name>` until edited.
+- [x] Platform Organizations: Slug follows the name (lowercase, hyphens) until edited.
+- [x] Placeholders that look like values (`Internal TLS`, `CN=Acme Internal TLS, O=Acme`) start with "e.g.".

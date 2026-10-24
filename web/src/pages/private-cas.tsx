@@ -414,12 +414,12 @@ function PermittedNamesFields({ id, value, onChange }: { id: string; value: Rule
     <>
       <div className="flex flex-col gap-2">
         <Label htmlFor={`${id}-zones`}>Permitted zones</Label>
-        <Textarea id={`${id}-zones`} rows={3} value={value.zones} onChange={(e) => onChange({ ...value, zones: e.target.value })} placeholder="internal.example" />
+        <Textarea id={`${id}-zones`} rows={3} value={value.zones} onChange={(e) => onChange({ ...value, zones: e.target.value })} placeholder="e.g. internal.example" />
         <p className="text-xs text-muted-foreground">Each zone permits its name and every name beneath it, wildcards included. One to a line.</p>
       </div>
       <div className="flex flex-col gap-2">
         <Label htmlFor={`${id}-exact`}>Permitted names</Label>
-        <Textarea id={`${id}-exact`} rows={3} value={value.exact} onChange={(e) => onChange({ ...value, exact: e.target.value })} placeholder="app.example.com" />
+        <Textarea id={`${id}-exact`} rows={3} value={value.exact} onChange={(e) => onChange({ ...value, exact: e.target.value })} placeholder="e.g. app.example.com" />
         <p className="text-xs text-muted-foreground">Each permits that name alone; a wildcard such as *.svc.example.com permits that wildcard alone. No IP addresses.</p>
       </div>
     </>
@@ -752,7 +752,7 @@ function AddIssuingCaForm({ orgId, ca, onDone }: { orgId: string; ca: PrivateCa;
                 autoFocus
                 value={subject}
                 onChange={(e) => setSubject(e.target.value)}
-                placeholder="CN=Acme Devices, O=Acme"
+                placeholder="e.g. CN=Acme Devices, O=Acme"
               />
               <FieldDescription>A distinguished name, with a common name, that no other Issuing CA of {ca.name} has.</FieldDescription>
             </Field>
@@ -870,7 +870,9 @@ function CreatePrivateCaForm({ orgId, onDone }: { orgId: string; onDone: () => v
   const [kind, setKind] = useState<PrivateCa["kind"]>("platform_root");
   const platformRoot = kind === "platform_root";
   const [name, setName] = useState("");
-  const [subject, setSubject] = useState("");
+  // CN=<name> until the subject is edited.
+  const [typedSubject, setSubject] = useState<string | null>(null);
+  const subject = typedSubject ?? (name.trim() ? `CN=${name.trim()}` : "");
   const [keyAlgorithm, setKeyAlgorithm] = useState<KeyAlgorithm>("ecdsa-p256");
   // What the server says its keys may be under the kind of root chosen.
   const underRoots = useKeyAlgorithms().data?.privateCaKeyAlgorithms;
@@ -920,7 +922,7 @@ function CreatePrivateCaForm({ orgId, onDone }: { orgId: string; onDone: () => v
           <FieldGroup>
             <Field>
               <FieldLabel htmlFor="private-ca-name">Name</FieldLabel>
-              <Input id="private-ca-name" autoFocus value={name} onChange={(e) => setName(e.target.value)} placeholder="Internal TLS" />
+              <Input id="private-ca-name" autoFocus value={name} onChange={(e) => setName(e.target.value)} placeholder="e.g. Internal TLS" />
             </Field>
             <Field>
               <FieldLabel>Hierarchy</FieldLabel>
@@ -954,7 +956,7 @@ function CreatePrivateCaForm({ orgId, onDone }: { orgId: string; onDone: () => v
           <FieldGroup>
             <Field>
               <FieldLabel htmlFor="private-ca-subject">Subject</FieldLabel>
-              <Input id="private-ca-subject" className="font-mono text-xs" autoFocus value={subject} onChange={(e) => setSubject(e.target.value)} placeholder="CN=Acme Internal TLS, O=Acme" />
+              <Input id="private-ca-subject" className="font-mono text-xs" autoFocus value={subject} onChange={(e) => setSubject(e.target.value)} placeholder="e.g. CN=Acme Internal TLS, O=Acme" />
               <FieldDescription>A distinguished name, with a common name.</FieldDescription>
             </Field>
             <Field>

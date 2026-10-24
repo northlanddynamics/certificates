@@ -319,7 +319,7 @@ function ProfileForm({ orgId, profile, onDone }: { orgId: string; profile?: Cert
           <FieldGroup>
             <Field>
               <FieldLabel htmlFor="profile-name">Name</FieldLabel>
-              <Input id="profile-name" autoFocus value={name} maxLength={100} onChange={(e) => setName(e.target.value)} placeholder="Internal web servers" />
+              <Input id="profile-name" autoFocus value={name} maxLength={100} onChange={(e) => setName(e.target.value)} placeholder="e.g. Internal web servers" />
             </Field>
             <Field>
               <FieldLabel htmlFor="profile-description">Description</FieldLabel>
@@ -369,12 +369,12 @@ function ProfileForm({ orgId, profile, onDone }: { orgId: string; profile?: Cert
             <div className="grid gap-4 sm:grid-cols-2">
               <Field>
                 <FieldLabel htmlFor="profile-exact-names">Names</FieldLabel>
-                <Textarea id="profile-exact-names" rows={4} value={exactNames} onChange={(e) => setExactNames(e.target.value)} placeholder="www.example.com" />
+                <Textarea id="profile-exact-names" rows={4} value={exactNames} onChange={(e) => setExactNames(e.target.value)} placeholder="e.g. www.example.com" />
                 <FieldDescription>One per line, each allowed exactly; a wildcard as *.example.com.</FieldDescription>
               </Field>
               <Field>
                 <FieldLabel htmlFor="profile-zones">Zones</FieldLabel>
-                <Textarea id="profile-zones" rows={4} value={zones} onChange={(e) => setZones(e.target.value)} placeholder="internal.example.com" />
+                <Textarea id="profile-zones" rows={4} value={zones} onChange={(e) => setZones(e.target.value)} placeholder="e.g. internal.example.com" />
                 <FieldDescription>One per line, each allowing the name and everything beneath it.</FieldDescription>
               </Field>
             </div>

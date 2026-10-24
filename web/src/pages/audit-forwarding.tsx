@@ -178,7 +178,7 @@ function AddForwarderForm({ orgId, onDone }: { orgId: string; onDone: () => void
         <>
           <div className="flex flex-col gap-2">
             <Label htmlFor="forwarder-url">Webhook URL</Label>
-            <Input id="forwarder-url" type="url" autoComplete="off" placeholder="https://siem.example.com/services/collector" value={url} onChange={(e) => setUrl(e.target.value)} />
+            <Input id="forwarder-url" type="url" autoComplete="off" placeholder="e.g. https://siem.example.com/services/collector" value={url} onChange={(e) => setUrl(e.target.value)} />
           </div>
           <div className="flex flex-col gap-2">
             <Label htmlFor="forwarder-authorization">Authorization header (optional)</Label>
@@ -189,7 +189,7 @@ function AddForwarderForm({ orgId, onDone }: { orgId: string; onDone: () => void
         <div className="grid grid-cols-[1fr_7rem] gap-4">
           <div className="flex flex-col gap-2">
             <Label htmlFor="forwarder-host">Host</Label>
-            <Input id="forwarder-host" autoComplete="off" placeholder="collector.example.com" value={host} onChange={(e) => setHost(e.target.value)} />
+            <Input id="forwarder-host" autoComplete="off" placeholder="e.g. collector.example.com" value={host} onChange={(e) => setHost(e.target.value)} />
           </div>
           <div className="flex flex-col gap-2">
             <Label htmlFor="forwarder-port">Port</Label>
