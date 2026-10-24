@@ -1,5 +1,6 @@
 import type { QueryClient } from "@tanstack/react-query";
 import { Outlet, createRootRouteWithContext, createRoute, createRouter, redirect } from "@tanstack/react-router";
+import { ThemeProvider } from "next-themes";
 import { AppShell } from "./components/app-shell";
 import { Toaster } from "./components/ui/sonner";
 import { AcceptInvitationPage } from "./pages/accept-invitation";
@@ -33,11 +34,12 @@ import { TeamsPage } from "./pages/teams";
 import { SignInPage } from "./pages/sign-in";
 
 const rootRoute = createRootRouteWithContext<{ queryClient: QueryClient }>()({
+  // The theme sits above every route, so the public pages follow it too.
   component: () => (
-    <>
+    <ThemeProvider attribute="class" defaultTheme="system" enableSystem disableTransitionOnChange>
       <Outlet />
       <Toaster />
-    </>
+    </ThemeProvider>
   ),
 });
 

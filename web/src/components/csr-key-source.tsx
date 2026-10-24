@@ -114,7 +114,7 @@ export function KeyAlgorithmChoice<T extends KeyAlgorithm>({ value, options, onC
 function Line({ ok, children }: { ok: boolean; children: ReactNode }) {
   return (
     <span className="flex items-center gap-2">
-      {ok ? <CheckIcon className="size-4 shrink-0 text-emerald-600" /> : <XIcon className="size-4 shrink-0 text-destructive" />}
+      {ok ? <CheckIcon className="size-4 shrink-0 text-emerald-600 dark:text-emerald-400" /> : <XIcon className="size-4 shrink-0 text-destructive" />}
       <span>{children}</span>
     </span>
   );
@@ -359,7 +359,7 @@ export function KeySource({
         <div className="flex flex-col gap-3">
           {stale && (
             <p className="flex items-start gap-2 rounded-md border border-amber-500/60 bg-amber-500/5 p-3 text-sm">
-              <CircleAlertIcon className="mt-0.5 size-4 shrink-0 text-amber-600" />
+              <CircleAlertIcon className="mt-0.5 size-4 shrink-0 text-amber-600 dark:text-amber-400" />
               The names or key type changed since this key was made, so its CSR no longer fits. Generate a new one.
             </p>
           )}

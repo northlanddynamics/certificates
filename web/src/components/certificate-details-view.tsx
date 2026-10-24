@@ -20,7 +20,7 @@ function Verdict({ details }: { details: CertificateDetails }) {
   const ok = status === "valid";
   return (
     <Alert variant={ok ? "default" : "destructive"}>
-      {ok ? <CircleCheckIcon className="text-emerald-600" /> : <CircleAlertIcon />}
+      {ok ? <CircleCheckIcon className="text-emerald-600 dark:text-emerald-400" /> : <CircleAlertIcon />}
       <AlertTitle>
         {status === "valid" && (count === 0 ? "Valid, and expires within a day" : `Valid for ${days(count)} more`)}
         {status === "expired" && (count === 0 ? "Expired today" : `Expired ${days(count)} ago`)}

@@ -15,7 +15,7 @@ function Fit({ check }: { check: CsrFitCheck }) {
   const Icon = check.ok === true ? CheckIcon : check.ok === false ? XIcon : MinusIcon;
   return (
     <li className="flex items-start gap-2">
-      <Icon className={cn("mt-0.5 size-4 shrink-0", check.ok === true && "text-emerald-600", check.ok === false && "text-destructive", check.ok === null && "text-muted-foreground")} />
+      <Icon className={cn("mt-0.5 size-4 shrink-0", check.ok === true && "text-emerald-600 dark:text-emerald-400", check.ok === false && "text-destructive", check.ok === null && "text-muted-foreground")} />
       <span>{check.text}</span>
     </li>
   );
@@ -25,7 +25,7 @@ function Fit({ check }: { check: CsrFitCheck }) {
 function Verdict({ details }: { details: CsrDetails }) {
   return (
     <Alert variant={details.acceptable ? "default" : "destructive"}>
-      {details.acceptable ? <CircleCheckIcon className="text-emerald-600" /> : <CircleAlertIcon />}
+      {details.acceptable ? <CircleCheckIcon className="text-emerald-600 dark:text-emerald-400" /> : <CircleAlertIcon />}
       <AlertTitle>{details.acceptable ? "The platform would take this CSR" : "The platform would refuse this CSR"}</AlertTitle>
       <AlertDescription>
         <ul className="mt-1 flex flex-col gap-1 text-foreground">

@@ -4,9 +4,9 @@
 
 **Blocked by:** none
 
-**Status:** ready-for-agent
+**Status:** done
 
-- [ ] A next-themes `ThemeProvider` (`attribute="class"`, `defaultTheme="system"`) wraps the root route, so the public pages follow it too.
-- [ ] The user menu offers Light, Dark and System.
-- [ ] Every page, dialog, badge and the Lifecycle bar is checked in dark; colours hard-coded outside the theme tokens are fixed.
-- [ ] Toasts follow the theme.
+- [x] A next-themes `ThemeProvider` (`attribute="class"`, `defaultTheme="system"`) wraps the root route, so the public pages follow it too.
+- [x] The user menu offers Light, Dark and System.
+- [x] Every page, dialog, badge and the Lifecycle bar is checked in dark; colours hard-coded outside the theme tokens are fixed.
+- [x] Toasts follow the theme.
