@@ -4,8 +4,8 @@
 
 **Blocked by:** none
 
-**Status:** ready-for-agent
+**Status:** done
 
-- [ ] `owners` starts with the signed-in user's key; they can untick it.
-- [ ] Review warns when Key Custody is Owners and nobody is an Owner.
-- [ ] On Overview, the Owners picker adds on select (drop the separate Add button).
+- [x] `owners` starts with the signed-in user's key; they can untick it.
+- [x] Review warns when Key Custody is Owners and nobody is an Owner.
+- [x] On Overview, the Owners picker adds on select (drop the separate Add button).

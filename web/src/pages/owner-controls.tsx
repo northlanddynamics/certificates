@@ -1,5 +1,4 @@
 import { useMutation, useQuery } from "@tanstack/react-query";
-import { useState, type FormEvent } from "react";
 import { Button } from "@/components/ui/button";
 import { Select, SelectContent, SelectItem, SelectTrigger, SelectValue } from "@/components/ui/select";
 import { isOwner } from "@/lib/managed-certificate";
@@ -17,7 +16,6 @@ export function Owners({ org, m, userId, onChanged }: { org: Me["organizations"]
   const people = useQuery({ queryKey: ["members", org.id], queryFn: () => api.members(org.id), enabled: mayChange });
   const teams = useQuery({ queryKey: ["teams", org.id], queryFn: () => api.teams(org.id) });
   const taken = new Set(m.owners.map(ownerKey));
-  const [choice, setChoice] = useState("");
   const error = add.error ?? remove.error;
 
   return (
@@ -44,15 +42,10 @@ export function Owners({ org, m, userId, onChanged }: { org: Me["organizations"]
           })}
         </ul>
       )}
+      {/* Choosing one adds it at once. */}
       {mayChange && (
-        <form
-          className="flex items-center gap-2"
-          onSubmit={(e: FormEvent) => {
-            e.preventDefault();
-            if (choice) add.mutate(ownerFromKey(choice), { onSuccess: () => setChoice("") });
-          }}
-        >
-          <Select value={choice} onValueChange={setChoice}>
+        <div>
+          <Select value="" onValueChange={(key) => add.mutate(ownerFromKey(key))} disabled={add.isPending}>
             <SelectTrigger size="sm" aria-label={`Add an Owner of ${m.names.join(", ")}`}>
               <SelectValue placeholder="Add an Owner…" />
             </SelectTrigger>
@@ -69,10 +62,7 @@ export function Owners({ org, m, userId, onChanged }: { org: Me["organizations"]
               ))}
             </SelectContent>
           </Select>
-          <Button type="submit" size="sm" variant="outline" disabled={!choice || add.isPending}>
-            Add
-          </Button>
-        </form>
+        </div>
       )}
       {error && <p className="text-destructive">{error.message}</p>}
     </div>

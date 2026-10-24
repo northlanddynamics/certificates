@@ -1,11 +1,12 @@
 import { useMutation, useQuery } from "@tanstack/react-query";
-import { ClipboardCheckIcon, FileBadgeIcon, GlobeIcon, KeyRoundIcon, LandmarkIcon, PlusIcon, ShieldCheckIcon, UsersIcon, type LucideIcon } from "lucide-react";
+import { ClipboardCheckIcon, FileBadgeIcon, GlobeIcon, KeyRoundIcon, LandmarkIcon, PlusIcon, ShieldCheckIcon, TriangleAlertIcon, UsersIcon, type LucideIcon } from "lucide-react";
 import { useEffect, useState, type ReactNode } from "react";
 import { ConfirmDialog } from "@/components/confirm-dialog";
 import { KeySource, SaveKey, csrOf, emptyKeySource, keyAtRisk, useKeySourceReady, type KeySourceState } from "@/components/csr-key-source";
 import { IssuerChoiceFields, useIssuerChoice } from "@/components/issuer-choice";
 import { SteppedForm, STEPPED_DIALOG } from "@/components/stepped-form";
 import { SummaryRows } from "@/components/summary-rows";
+import { Alert, AlertDescription, AlertTitle } from "@/components/ui/alert";
 import { Button } from "@/components/ui/button";
 import { Checkbox } from "@/components/ui/checkbox";
 import { Dialog, DialogContent, DialogDescription, DialogTitle, DialogTrigger } from "@/components/ui/dialog";
@@ -126,7 +127,9 @@ function NewManagedCertificateForm({
     setKeySourceState(next);
     onAtRisk(keyAtRisk(next));
   };
-  const [owners, setOwners] = useState<string[]>([]);
+  // The creator to begin with, who may untick themselves: otherwise it starts with nobody to hold its key or hear about it.
+  const userId = useQuery({ queryKey: ["me"], queryFn: api.me }).data?.user.id;
+  const [owners, setOwners] = useState<string[]>(() => (userId ? [ownerKey({ type: "user", id: userId })] : []));
   const people = useQuery({ queryKey: ["members", org.id], queryFn: () => api.members(org.id) });
   const teams = useQuery({ queryKey: ["teams", org.id], queryFn: () => api.teams(org.id) });
   const create = useMutation({
@@ -144,6 +147,9 @@ function NewManagedCertificateForm({
     ...(teams.data?.items.map((t) => ({ key: ownerKey({ type: "team", id: t.id }), label: `${t.name} (Team)` })) ?? []),
     ...(people.data?.items.map((p) => ({ key: ownerKey({ type: "user", id: p.userId }), label: p.email })) ?? []),
   ];
+  // A profile makes the creator an Owner, and its default Team, whatever is ticked.
+  const fixedOwners = profile ? [...(userId ? [ownerKey({ type: "user", id: userId })] : []), ...(profile.defaultTeam ? [ownerKey({ type: "team", id: profile.defaultTeam.id })] : [])] : [];
+  const ownedBy = (key: string) => owners.includes(key) || fixedOwners.includes(key);
 
   const parsedNames = splitNames(names);
   const problems = nameProblems(parsedNames);
@@ -296,7 +302,8 @@ function NewManagedCertificateForm({
                 <Field key={key} orientation="horizontal">
                   <Checkbox
                     id={`new-mc-owner-${key}`}
-                    checked={owners.includes(key)}
+                    checked={ownedBy(key)}
+                    disabled={fixedOwners.includes(key)}
                     onCheckedChange={(checked) => setOwners(checked === true ? [...owners, key] : owners.filter((o) => o !== key))}
                   />
                   <FieldLabel htmlFor={`new-mc-owner-${key}`} className="font-normal">
@@ -329,9 +336,16 @@ function NewManagedCertificateForm({
                     ? "Made with openssl"
                     : "Pasted"
               }
-              owners={ownerChoices.filter((c) => owners.includes(c.key)).map((c) => c.label)}
+              owners={ownerChoices.filter((c) => ownedBy(c.key)).map((c) => c.label)}
             />
           </FieldSet>
+          {owners.length + fixedOwners.length === 0 && (
+            <Alert className="border-amber-500/60 bg-amber-500/5">
+              <TriangleAlertIcon className="text-amber-600 dark:text-amber-400" />
+              <AlertTitle>Nobody will own it</AlertTitle>
+              <AlertDescription>Its key is held by its Owners, and they are who hear when it needs attention. Go back to Ownership to add one.</AlertDescription>
+            </Alert>
+          )}
           {create.error && <FieldError>{create.error.message}</FieldError>}
         </FieldGroup>
       )}
