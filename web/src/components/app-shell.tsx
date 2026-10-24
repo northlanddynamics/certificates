@@ -40,7 +40,7 @@ export function AppShell() {
     <TooltipProvider>
       <SidebarProvider>
         <AppSidebar me={me.data} active={active} />
-        <SidebarInset className="min-w-0">
+        <SidebarInset className="min-w-0 bg-canvas">
           <header className="flex h-14 shrink-0 items-center gap-2 border-b px-4">
             <SidebarTrigger className="-ml-1" />
             <Separator orientation="vertical" className="mr-2 data-[orientation=vertical]:h-4" />
