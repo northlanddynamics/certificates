@@ -4,7 +4,11 @@
 
 **Blocked by:** 15
 
-**Status:** needs-triage
+**Status:** done
 
-- [ ] Decide: Next generates the key when none exists yet, or the generate button stays and Next explains (ticket 15).
-- [ ] Regenerating after a key exists asks first, since the saved key would no longer match.
+- [x] Decide: Next generates the key when none exists yet, or the generate button stays and Next explains (ticket 15).
+- [x] Regenerating after a key exists asks first, since the saved key would no longer match.
+
+## Comments
+
+Decided: Next generates the key when none exists yet (`resolve` on `SteppedForm`/`useSteps`, `withNewKey` in `csr-key-source.tsx`). Once a key exists, making a new one (after the names or key type change) is a button on the step that asks first, in the Key change sheet too.

@@ -143,7 +143,7 @@ function NewDeploymentForm({ org, onDone }: { org: Me["organizations"][number]; 
       className="flex flex-col gap-4"
       onSubmit={(e: FormEvent) => {
         e.preventDefault();
-        if (!last) next();
+        if (!last) void next();
         else if (STEPS.every((s) => complete(s.id))) create.mutate();
       }}
     >
@@ -392,7 +392,7 @@ function NewDeploymentForm({ org, onDone }: { org: Me["organizations"][number]; 
             Deploy
           </Button>
         ) : (
-          <Button key="next" type="button" onClick={next}>
+          <Button key="next" type="button" onClick={() => void next()}>
             Next
           </Button>
         )}

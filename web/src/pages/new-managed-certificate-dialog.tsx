@@ -2,7 +2,7 @@ import { useMutation, useQuery } from "@tanstack/react-query";
 import { ClipboardCheckIcon, FileBadgeIcon, GlobeIcon, KeyRoundIcon, LandmarkIcon, PlusIcon, ShieldCheckIcon, TriangleAlertIcon, UsersIcon, type LucideIcon } from "lucide-react";
 import { useEffect, useState, type ReactNode } from "react";
 import { ConfirmDialog } from "@/components/confirm-dialog";
-import { KeySource, SaveKey, csrOf, emptyKeySource, keyAtRisk, useKeySourceReady, type KeySourceState } from "@/components/csr-key-source";
+import { KeySource, SaveKey, csrOf, emptyKeySource, keyAtRisk, useKeySourceReady, withNewKey, type KeySourceState } from "@/components/csr-key-source";
 import { IssuerChoiceFields, useIssuerChoice } from "@/components/issuer-choice";
 import { SteppedForm, STEPPED_DIALOG, type Missing } from "@/components/stepped-form";
 import { SummaryRows } from "@/components/summary-rows";
@@ -176,7 +176,7 @@ function NewManagedCertificateForm({
     key: generating
       ? csrOf(keySource, parsedNames, keyAlgorithm) !== ""
         ? undefined
-        : { reason: "Generate the key and CSR first.", field: "new-mc-key-generate" }
+        : { reason: keySource.generated ? "Generate a new key for these names first." : "The key could not be made here.", field: "new-mc-key-generate" }
       : keyReady
         ? undefined
         : { reason: "Paste a CSR for these names and key type.", field: "new-mc-key-pasted" },
@@ -190,6 +190,18 @@ function NewManagedCertificateForm({
       step={shown}
       onStep={setStep}
       missing={missing}
+      // Next makes the first key; a new one, for changed names, is asked for on the step itself.
+      resolve={{
+        key: async () => {
+          if (!generating || keySource.generated) return false;
+          try {
+            setKeySource(await withNewKey(keySource, parsedNames, keyAlgorithm));
+            return true;
+          } catch {
+            return false;
+          }
+        },
+      }}
       submitLabel={direct ? "Create and issue" : "Propose"}
       pending={create.isPending}
       onSubmit={() => create.mutate()}
@@ -284,6 +296,7 @@ function NewManagedCertificateForm({
             state={keySource}
             onChange={setKeySource}
             saveInline={false}
+            generateOnNext
             idPrefix="new-mc-key"
           />
         </FieldSet>

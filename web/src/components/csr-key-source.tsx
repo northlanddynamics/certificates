@@ -1,6 +1,7 @@
 import { CheckIcon, CircleAlertIcon, ClipboardPasteIcon, CopyIcon, DownloadIcon, EyeIcon, EyeOffIcon, KeyRoundIcon, LoaderIcon, SquareTerminalIcon, XIcon } from "lucide-react";
 import { useEffect, useState, type ReactNode } from "react";
 import { CsrSignatureWarning } from "@/components/csr-signature-warning";
+import { ConfirmDialog } from "@/components/confirm-dialog";
 import { Button } from "@/components/ui/button";
 import { Checkbox } from "@/components/ui/checkbox";
 import { Field, FieldContent, FieldDescription, FieldLabel, FieldLegend, FieldSet, FieldTitle } from "@/components/ui/field";
@@ -43,6 +44,13 @@ const madeFor = (names: string[], keyAlgorithm: KeyAlgorithm) => `${normalizedNa
 export function csrOf(state: KeySourceState, names: string[], keyAlgorithm: KeyAlgorithm): string {
   if (state.mode !== "generate") return state.pasted;
   return state.generated?.madeFor === madeFor(names, keyAlgorithm) ? state.generated.csrPem : "";
+}
+
+/** `state` with a new key and CSR made in the browser for `names`, as yet neither saved nor confirmed. */
+export async function withNewKey(state: KeySourceState, names: string[], keyAlgorithm: KeyAlgorithm): Promise<KeySourceState> {
+  const distinct = normalizedNames(names);
+  const made = await generateCsr({ keyAlgorithm, names: distinct, commonName: distinct.find((n) => n.length <= MAX_COMMON_NAME_LENGTH) ?? null });
+  return { ...state, generated: { ...made, fileBase: fileBaseOf(distinct[0] ?? null, "csr"), madeFor: madeFor(names, keyAlgorithm) }, keySaved: false, confirmed: false };
 }
 
 /** A generated key that has been neither downloaded nor copied exists nowhere else: closing would lose it. */
@@ -283,7 +291,8 @@ const MODES: { mode: KeySourceMode; title: string; icon: typeof KeyRoundIcon }[]
  * How the CSR for a form's names is provided. The key algorithm is the form's: fixed, unless the form passes
  * `onKeyAlgorithmChange`, when it is chosen here from `keyAlgorithms` (what the CA takes) and a pasted CSR's own is
  * taken. `onNamesChange` lets a pasted CSR's names replace the form's. With `saveInline` the generated key is saved
- * here; otherwise the form has a step for it.
+ * here; otherwise the form has a step for it. With `generateOnNext` the form's Next makes the first key (`withNewKey`),
+ * so there is no button for it here. Making a new key once there is one asks first.
  */
 export function KeySource({
   names,
@@ -294,6 +303,7 @@ export function KeySource({
   state,
   onChange,
   saveInline = true,
+  generateOnNext = false,
   idPrefix,
 }: {
   names: string[];
@@ -304,9 +314,11 @@ export function KeySource({
   state: KeySourceState;
   onChange: (state: KeySourceState) => void;
   saveInline?: boolean;
+  generateOnNext?: boolean;
   idPrefix: string;
 }) {
   const [working, setWorking] = useState(false);
+  const [replacing, setReplacing] = useState(false);
   const [error, setError] = useState<string | null>(null);
   useUnloadGuard(keyAtRisk(state));
   // Until the form knows what its CA takes, only its own key algorithm is offered.
@@ -325,8 +337,7 @@ export function KeySource({
     setWorking(true);
     setError(null);
     try {
-      const made = await generateCsr({ keyAlgorithm, names: distinct, commonName: distinct.find((n) => n.length <= MAX_COMMON_NAME_LENGTH) ?? null });
-      onChange({ ...state, generated: { ...made, fileBase: fileBaseOf(distinct[0] ?? null, "csr"), madeFor: madeFor(names, keyAlgorithm) }, keySaved: false, confirmed: false });
+      onChange(await withNewKey(state, names, keyAlgorithm));
     } catch (err) {
       setError(err instanceof Error ? err.message : "The browser could not make a key.");
     } finally {
@@ -363,17 +374,35 @@ export function KeySource({
               The names or key type changed since this key was made, so its CSR no longer fits. Generate a new one.
             </p>
           )}
-          {(!state.generated || stale) && (
+          {!state.generated && generateOnNext && (
+            <p className="text-sm text-muted-foreground">
+              Next makes the key and its CSR here in your browser: {KEY_ALGORITHM_LABELS[keyAlgorithm]}, for {distinct.length === 1 ? distinct[0] : `these ${distinct.length} names`}.
+            </p>
+          )}
+          {((!state.generated && !generateOnNext) || stale) && (
             <div className="flex flex-wrap items-center gap-3">
-              <Button type="button" id={`${idPrefix}-generate`} disabled={working || distinct.length === 0} onClick={generate}>
+              <Button type="button" id={`${idPrefix}-generate`} disabled={working || distinct.length === 0} onClick={() => (state.generated ? setReplacing(true) : void generate())}>
                 {working ? <LoaderIcon className="animate-spin" /> : <KeyRoundIcon />}
-                {working ? "Generating…" : "Generate key and CSR"}
+                {working ? "Generating…" : state.generated ? "Generate a new key and CSR" : "Generate key and CSR"}
               </Button>
               <span className="text-sm text-muted-foreground">
                 {KEY_ALGORITHM_LABELS[keyAlgorithm]}, for {distinct.length === 1 ? distinct[0] : `these ${distinct.length} names`}.
               </span>
             </div>
           )}
+          <ConfirmDialog
+            open={replacing}
+            onOpenChange={setReplacing}
+            title="Make a new key?"
+            description={`The key made earlier${state.keySaved ? ", which you saved," : ""} will no longer match the CSR, so nothing issued from here can be used with it.`}
+            confirmLabel="Make a new key"
+            pending={working}
+            error={null}
+            onConfirm={() => {
+              setReplacing(false);
+              void generate();
+            }}
+          />
           {state.generated && !stale && saveInline && <SaveKey state={state} onChange={onChange} />}
           {state.generated && !stale && !saveInline && (
             <p className="flex items-center gap-2 text-sm text-emerald-700 dark:text-emerald-400">

@@ -14,10 +14,17 @@ export type Missing = { reason: string; field?: string };
 
 /**
  * Moving through `steps`: which is open and whether it is the last, which are complete (`missing` says nothing for
- * them) and may be opened, and Next, which opens the next one or, on one that is not complete, keeps it open and says
- * what it needs (`told`, until another step opens) and moves to that field.
+ * them) and may be opened, and Next, which opens the next one or, on one that is not complete, first lets the step's
+ * `resolve` complete it (such as by making a key), and otherwise keeps it open and says what it needs (`told`, until
+ * another step opens) and moves to that field.
  */
-export function useSteps<Id extends string>(steps: readonly { id: Id }[], step: Id, onStep: (step: Id) => void, missing: Partial<Record<Id, Missing | undefined>>) {
+export function useSteps<Id extends string>(
+  steps: readonly { id: Id }[],
+  step: Id,
+  onStep: (step: Id) => void,
+  missing: Partial<Record<Id, Missing | undefined>>,
+  resolve: Partial<Record<Id, () => Promise<boolean>>> = {},
+) {
   // A step that has gone from `steps` since it was opened leaves the first one showing.
   const index = Math.max(0, steps.findIndex((s) => s.id === step));
   const last = index === steps.length - 1;
@@ -33,13 +40,30 @@ export function useSteps<Id extends string>(steps: readonly { id: Id }[], step: 
       onStep(target.id);
     }
   };
-  const next = () => {
+  // While a step's `resolve` does what Next asked of it, such as making a key.
+  const [resolving, setResolving] = useState(false);
+  const next = async () => {
     const needs = missing[current.id];
     if (!needs) return goTo(index + 1);
+    const resolver = resolve[current.id];
+    if (resolver && !resolving) {
+      setResolving(true);
+      try {
+        // It is complete once resolved, though `missing` says so only on the next render.
+        if (await resolver()) {
+          setToldFor(null);
+          const target = steps[index + 1];
+          if (target) onStep(target.id);
+          return;
+        }
+      } finally {
+        setResolving(false);
+      }
+    }
     setToldFor(current.id);
     if (needs.field) document.getElementById(needs.field)?.focus();
   };
-  return { index, last, complete, reachable, goTo, next, told: toldFor === current.id ? missing[current.id] : undefined };
+  return { index, last, complete, reachable, goTo, next, resolving, told: toldFor === current.id ? missing[current.id] : undefined };
 }
 
 /** What the open step still needs, beside its Next once Next has been pressed; empty otherwise, and announced when it changes. */
@@ -68,6 +92,7 @@ export function SteppedForm<Id extends string>({
   step,
   onStep,
   missing,
+  resolve,
   submitLabel,
   pending,
   onSubmit,
@@ -79,13 +104,15 @@ export function SteppedForm<Id extends string>({
   step: Id;
   onStep: (step: Id) => void;
   missing: Partial<Record<Id, Missing | undefined>>;
+  /** For a step that Next can complete itself: does so, and says whether it did. */
+  resolve?: Partial<Record<Id, () => Promise<boolean>>>;
   submitLabel: string;
   pending: boolean;
   onSubmit: () => void;
   tall?: boolean;
   children: ReactNode;
 }) {
-  const { index, last, complete, reachable, goTo, next, told } = useSteps(steps, step, onStep, missing);
+  const { index, last, complete, reachable, goTo, next, resolving, told } = useSteps(steps, step, onStep, missing, resolve);
   return (
     <SidebarProvider className={tall ? "h-[min(640px,85vh)] min-h-0 items-stretch" : "h-[min(600px,85vh)] min-h-0 items-stretch"}>
       <Sidebar collapsible="none" className="hidden border-r md:flex">
@@ -110,7 +137,7 @@ export function SteppedForm<Id extends string>({
         className="flex min-w-0 flex-1 flex-col"
         onSubmit={(e: FormEvent) => {
           e.preventDefault();
-          if (!last) next();
+          if (!last) void next();
           else if (steps.every((s) => complete(s.id))) onSubmit();
         }}
       >
@@ -139,8 +166,8 @@ export function SteppedForm<Id extends string>({
               {submitLabel}
             </Button>
           ) : (
-            <Button key="next" type="button" onClick={next}>
-              Next
+            <Button key="next" type="button" disabled={resolving} onClick={() => void next()}>
+              {resolving ? "Working…" : "Next"}
             </Button>
           )}
         </footer>
