@@ -3,6 +3,7 @@ import { useParams } from "@tanstack/react-router";
 import { createColumnHelper, rowExpandingFeature, rowPaginationFeature, tableFeatures, useTable, type PaginationState } from "@tanstack/react-table";
 import { BanIcon, DownloadIcon, SearchIcon, XIcon } from "lucide-react";
 import { useEffect, useState } from "react";
+import { toast } from "sonner";
 import { usePageCrumbs } from "@/components/page-crumbs";
 import { DataTable } from "@/components/data-table/data-table";
 import { DataTablePagination } from "@/components/data-table/data-table-pagination";
@@ -246,6 +247,7 @@ function RevokeDialog({ org, certificate }: { org: Me["organizations"][number]; 
     mutationFn: () => api.revokeDeviceCertificate(org.id, certificate.enrollmentProfileId, certificate.id, reason),
     onSuccess: async () => {
       setOpen(false);
+      toast.success(`The Device Certificate for ${certificate.subject} was revoked`);
       await queryClient.invalidateQueries({ queryKey: ["device-certificates", org.id, certificate.enrollmentProfileId] });
     },
   });

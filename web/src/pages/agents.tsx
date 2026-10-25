@@ -3,6 +3,7 @@ import { useParams } from "@tanstack/react-router";
 import { createColumnHelper, rowPaginationFeature, tableFeatures, useTable, type PaginationState } from "@tanstack/react-table";
 import { PlusIcon, XIcon } from "lucide-react";
 import { useState } from "react";
+import { toast } from "sonner";
 import { ConfirmDialog } from "@/components/confirm-dialog";
 import { DataTable } from "@/components/data-table/data-table";
 import { DataTableFacetedFilter } from "@/components/data-table/data-table-faceted-filter";
@@ -146,7 +147,10 @@ function RevokeAgent({ agent }: { agent: Agent }) {
   const { orgId } = useParams({ from: ROUTE });
   const org = useOrg(orgId);
   const [open, setOpen] = useState(false);
-  const revoke = useAction(() => api.revokeAgent(orgId, agent.id), ["agents"], () => setOpen(false));
+  const revoke = useAction(() => api.revokeAgent(orgId, agent.id), ["agents"], () => {
+    setOpen(false);
+    toast.success(`${agent.hostName} was revoked`);
+  });
   if (!org || !can(org, "agent", "revoke") || agent.status === "revoked") return null;
   return (
     <div className="flex justify-end">

@@ -1,6 +1,7 @@
 import { useMutation } from "@tanstack/react-query";
 import { BanIcon } from "lucide-react";
 import { useState } from "react";
+import { toast } from "sonner";
 import { ConfirmDialog } from "@/components/confirm-dialog";
 import { Button } from "@/components/ui/button";
 import { Dialog, DialogContent, DialogDescription, DialogFooter, DialogHeader, DialogTitle, DialogTrigger } from "@/components/ui/dialog";
@@ -20,6 +21,7 @@ export function ArchiveDialog({ org, m, open, onOpenChange, onChanged }: { org: 
     mutationFn: () => api.archive(org.id, m.id),
     onSuccess: () => {
       onOpenChange(false);
+      toast.success(`${m.names.join(", ")} archived`);
       onChanged();
     },
   });
@@ -53,6 +55,7 @@ export function RevokeDialog({ org, m, certificate, userId, onChanged }: { org: 
     mutationFn: () => api.revokeCertificate(org.id, m.id, certificate.id, reason),
     onSuccess: () => {
       setOpen(false);
+      toast.success(`The Certificate with serial ${certificate.serial} was revoked`);
       onChanged();
     },
   });

@@ -3,6 +3,7 @@ import { useParams } from "@tanstack/react-router";
 import { createColumnHelper, tableFeatures, useTable } from "@tanstack/react-table";
 import { ClipboardCheckIcon, KeyRoundIcon, LandmarkIcon, PlusIcon, ServerIcon } from "lucide-react";
 import { useState, type FormEvent } from "react";
+import { toast } from "sonner";
 import { AcmeCaTagBadge } from "@/components/acme-ca-tag";
 import { SteppedForm, STEPPED_DIALOG, type Missing, type Step } from "@/components/stepped-form";
 import { ConfirmDialog } from "@/components/confirm-dialog";
@@ -130,10 +131,16 @@ function AcmeCaActions({ ca, account }: { ca: AcmeCa; account?: AcmeAccount }) {
 }
 
 function TestAccount({ orgId, ca, account }: { orgId: string; ca: AcmeCa; account: AcmeAccount }) {
-  const test = useMutation({ mutationFn: () => api.testAcmeAccount(orgId, account.id) });
+  // A success is a toast; a failure stays by the button, where its reason can be read.
+  const test = useMutation({
+    mutationFn: () => api.testAcmeAccount(orgId, account.id),
+    onSuccess: (result) => {
+      if (result.ok) toast.success(`${ca.name}: the CA accepts the key`);
+    },
+  });
   return (
     <>
-      {test.data && (test.data.ok ? <span role="status" className="text-sm">The CA accepts the key.</span> : <span role="alert" className="text-sm text-destructive">{test.data.error}</span>)}
+      {test.data && !test.data.ok && <span role="alert" className="text-sm text-destructive">{test.data.error}</span>}
       {test.error && <span role="alert" className="text-sm text-destructive">{test.error.message}</span>}
       <Button variant="outline" size="sm" disabled={test.isPending} aria-label={`Test the account with ${ca.name}`} onClick={() => test.mutate()}>
         Test

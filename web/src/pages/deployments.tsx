@@ -3,6 +3,7 @@ import { Link, useParams } from "@tanstack/react-router";
 import { createColumnHelper, rowPaginationFeature, tableFeatures, useTable, type PaginationState } from "@tanstack/react-table";
 import { XIcon } from "lucide-react";
 import { useMemo, useState, type FormEvent } from "react";
+import { toast } from "sonner";
 import { DataTable } from "@/components/data-table/data-table";
 import { DataTableFacetedFilter } from "@/components/data-table/data-table-faceted-filter";
 import { DataTablePagination } from "@/components/data-table/data-table-pagination";
@@ -221,13 +222,12 @@ function DeploymentActions({ deployment }: { deployment: Deployment }) {
             size="sm"
             aria-label={`${keyFailed ? "Ask for the key of" : "Run"} ${deployment.names[0]} again`}
             disabled={!(hasCertificate || keyFailed) || deployment.runPending || runAgain.isPending}
-            onClick={() => runAgain.mutate(undefined)}
+            onClick={() => runAgain.mutate(undefined, { onError: (error) => toast.error(`${deployment.names[0]} was not run again`, { description: error.message }) })}
           >
             {keyFailed ? "Ask for the key again" : "Run again"}
           </Button>
         )}
       </div>
-      {runAgain.error && <span className="text-xs text-destructive">{runAgain.error.message}</span>}
     </div>
   );
 }

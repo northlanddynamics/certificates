@@ -1,4 +1,5 @@
 import { useMutation, useQuery } from "@tanstack/react-query";
+import { toast } from "sonner";
 import { Button } from "@/components/ui/button";
 import { Select, SelectContent, SelectItem, SelectTrigger, SelectValue } from "@/components/ui/select";
 import { isOwner } from "@/lib/managed-certificate";
@@ -16,7 +17,7 @@ export function Owners({ org, m, userId, onChanged }: { org: Me["organizations"]
   const people = useQuery({ queryKey: ["members", org.id], queryFn: () => api.members(org.id), enabled: mayChange });
   const teams = useQuery({ queryKey: ["teams", org.id], queryFn: () => api.teams(org.id) });
   const taken = new Set(m.owners.map(ownerKey));
-  const error = add.error ?? remove.error;
+  const failed = (what: string) => ({ onError: (error: Error) => toast.error(what, { description: error.message }) });
 
   return (
     <div className="flex flex-col gap-3 text-sm">
@@ -33,7 +34,7 @@ export function Owners({ org, m, userId, onChanged }: { org: Me["organizations"]
                   {o.type === "team" && <span className="text-muted-foreground">{members.length === 0 ? "No members" : members.map((member) => member.email).join(", ")}</span>}
                 </div>
                 {mayChange && (
-                  <Button variant="ghost" size="sm" aria-label={`Remove ${ownerLabel(o)} as an Owner`} disabled={remove.isPending} onClick={() => remove.mutate(o)}>
+                  <Button variant="ghost" size="sm" aria-label={`Remove ${ownerLabel(o)} as an Owner`} disabled={remove.isPending} onClick={() => remove.mutate(o, failed(`${ownerLabel(o)} was not removed as an Owner`))}>
                     Remove
                   </Button>
                 )}
@@ -45,7 +46,7 @@ export function Owners({ org, m, userId, onChanged }: { org: Me["organizations"]
       {/* Choosing one adds it at once. */}
       {mayChange && (
         <div>
-          <Select value="" onValueChange={(key) => add.mutate(ownerFromKey(key))} disabled={add.isPending}>
+          <Select value="" onValueChange={(key) => add.mutate(ownerFromKey(key), failed("The Owner was not added"))} disabled={add.isPending}>
             <SelectTrigger size="sm" aria-label={`Add an Owner of ${m.names.join(", ")}`}>
               <SelectValue placeholder="Add an Owner…" />
             </SelectTrigger>
@@ -64,7 +65,6 @@ export function Owners({ org, m, userId, onChanged }: { org: Me["organizations"]
           </Select>
         </div>
       )}
-      {error && <p className="text-destructive">{error.message}</p>}
     </div>
   );
 }

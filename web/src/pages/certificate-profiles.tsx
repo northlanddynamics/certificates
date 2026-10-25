@@ -3,6 +3,7 @@ import { useParams } from "@tanstack/react-router";
 import { createColumnHelper, tableFeatures, useTable } from "@tanstack/react-table";
 import { ClipboardCheckIcon, GlobeIcon, KeyRoundIcon, LandmarkIcon, PlusIcon, RefreshCwIcon, TagIcon, UsersIcon, type LucideIcon } from "lucide-react";
 import { useState } from "react";
+import { toast } from "sonner";
 import { ConfirmDialog } from "@/components/confirm-dialog";
 import { DataTable } from "@/components/data-table/data-table";
 import { IssuerChoiceFields, useIssuerChoice } from "@/components/issuer-choice";
@@ -148,7 +149,7 @@ function RequireProfileSetting({ orgId }: { orgId: string }) {
             id="require-profile"
             checked={settings.data.requireProfile}
             disabled={change.isPending}
-            onCheckedChange={(checked) => change.mutate(checked === true)}
+            onCheckedChange={(checked) => change.mutate(checked === true, { onError: (error) => toast.error("The setting was not changed", { description: error.message }) })}
           />
           <div className="flex flex-col gap-1">
             <Label htmlFor="require-profile">Require a Certificate Profile</Label>
@@ -159,7 +160,7 @@ function RequireProfileSetting({ orgId }: { orgId: string }) {
           </div>
         </div>
       )}
-      {(settings.error ?? change.error) && <p className="text-sm text-destructive">{(settings.error ?? change.error)!.message}</p>}
+      {settings.error && <p className="text-sm text-destructive">{settings.error.message}</p>}
     </div>
   );
 }
@@ -197,10 +198,9 @@ function EnableButton({ orgId, profile }: { orgId: string; profile: CertificateP
   const enable = useAction(() => api.enableCertificateProfile(orgId, profile.id), ["certificate-profiles"]);
   return (
     <div className="flex flex-col items-end gap-1">
-      <Button variant="ghost" size="sm" aria-label={`Enable ${profile.name}`} disabled={enable.isPending} onClick={() => enable.mutate(undefined)}>
+      <Button variant="ghost" size="sm" aria-label={`Enable ${profile.name}`} disabled={enable.isPending} onClick={() => enable.mutate(undefined, { onError: (error) => toast.error(`${profile.name} was not enabled`, { description: error.message }) })}>
         {enable.isPending ? "Enabling…" : "Enable"}
       </Button>
-      {enable.error && <span className="text-sm text-destructive">{enable.error.message}</span>}
     </div>
   );
 }

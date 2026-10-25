@@ -2,6 +2,7 @@ import { useMutation } from "@tanstack/react-query";
 import { Link } from "@tanstack/react-router";
 import { CircleAlertIcon, ClockIcon } from "lucide-react";
 import { useState, type FormEvent, type ReactNode } from "react";
+import { toast } from "sonner";
 import { Button } from "@/components/ui/button";
 import { Dialog, DialogContent, DialogDescription, DialogFooter, DialogHeader, DialogTitle } from "@/components/ui/dialog";
 import { Field, FieldLabel } from "@/components/ui/field";
@@ -15,7 +16,7 @@ import { NamesDiff } from "./key-change-sheet";
 const when = (iso: string) => new Date(iso).toLocaleString();
 
 /** Asks why, for a rejection, which cannot be made without one. */
-function RejectDialog({ open, onOpenChange, title, pending, error, onReject }: { open: boolean; onOpenChange: (open: boolean) => void; title: string; pending: boolean; error: Error | null; onReject: (reason: string) => void }) {
+function RejectDialog({ open, onOpenChange, title, pending, onReject }: { open: boolean; onOpenChange: (open: boolean) => void; title: string; pending: boolean; onReject: (reason: string) => void }) {
   const [reason, setReason] = useState("");
   return (
     <Dialog open={open} onOpenChange={onOpenChange}>
@@ -35,7 +36,6 @@ function RejectDialog({ open, onOpenChange, title, pending, error, onReject }: {
             <FieldLabel htmlFor="reject-reason">Reason</FieldLabel>
             <Textarea id="reject-reason" value={reason} onChange={(e) => setReason(e.target.value)} required autoFocus />
           </Field>
-          {error && <p className="text-sm text-destructive">{error.message}</p>}
           <DialogFooter>
             <Button type="button" variant="outline" onClick={() => onOpenChange(false)}>
               Cancel
@@ -72,7 +72,7 @@ function Item({ icon, tone, title, children, actions }: { icon: ReactNode; tone:
 }
 
 /** Something waiting for Approval: decided by an Approver who did not propose it, and only waited for by whoever did. */
-function Pending({ title, children, mayDecide, proposedByMe, onApprove, onReject, onWithdraw, busy, error, rejectTitle }: {
+function Pending({ title, children, mayDecide, proposedByMe, onApprove, onReject, onWithdraw, busy, rejectTitle }: {
   title: string;
   children: ReactNode;
   mayDecide: boolean;
@@ -82,7 +82,6 @@ function Pending({ title, children, mayDecide, proposedByMe, onApprove, onReject
   /** For whoever proposed it, taking it back; not every Proposal can be. */
   onWithdraw?: () => void;
   busy: boolean;
-  error: Error | null;
   rejectTitle: string;
 }) {
   const [rejecting, setRejecting] = useState(false);
@@ -110,13 +109,11 @@ function Pending({ title, children, mayDecide, proposedByMe, onApprove, onReject
     >
       {children}
       {proposedByMe && <p className="text-muted-foreground">An Approver other than you must decide it.</p>}
-      {error && !rejecting && <p className="text-destructive">{error.message}</p>}
       <RejectDialog
         open={rejecting}
         onOpenChange={setRejecting}
         title={rejectTitle}
         pending={busy}
-        error={error}
         onReject={(reason) => {
           onReject(reason);
           setRejecting(false);
@@ -140,12 +137,35 @@ export function AlertStrip({ org, m, userId, onChanged }: { org: Me["organizatio
 
   // One that has a Certificate is tried again as a Renewal, which its Owners may ask for; one with none, as its first Issuance.
   const renewing = m.currentCertificate !== null;
-  const retry = useMutation({ mutationFn: () => (renewing ? api.renewNow(org.id, m.id) : api.retryIssuance(org.id, m.id)), onSuccess: onChanged });
-  const approve = useMutation({ mutationFn: () => api.approve(org.id, m.id), onSuccess: onChanged });
-  const reject = useMutation({ mutationFn: (reason: string) => api.reject(org.id, m.id, reason), onSuccess: onChanged });
-  const approveNames = useMutation({ mutationFn: () => api.approveNameChange(org.id, m.id), onSuccess: onChanged });
-  const rejectNames = useMutation({ mutationFn: (reason: string) => api.rejectNameChange(org.id, m.id, reason), onSuccess: onChanged });
-  const withdrawNames = useMutation({ mutationFn: () => api.withdrawNameChange(org.id, m.id), onSuccess: onChanged });
+  // A decision takes what it decided off the strip, so a toast says what became of it; a refusal is a toast, too.
+  const names = m.names.join(", ");
+  const done = (what: string) => () => {
+    toast.success(what);
+    onChanged();
+  };
+  const refused = (what: string) => (error: Error) => toast.error(what, { description: error.message });
+  const retry = useMutation({
+    mutationFn: () => (renewing ? api.renewNow(org.id, m.id) : api.retryIssuance(org.id, m.id)),
+    onSuccess: onChanged,
+    onError: refused(`${names} was not ${renewing ? "renewed" : "issued"}`),
+  });
+  const approve = useMutation({ mutationFn: () => api.approve(org.id, m.id), onSuccess: done(`${names} approved`), onError: refused(`${names} was not approved`) });
+  const reject = useMutation({ mutationFn: (reason: string) => api.reject(org.id, m.id, reason), onSuccess: done(`${names} rejected`), onError: refused(`${names} was not rejected`) });
+  const approveNames = useMutation({
+    mutationFn: () => api.approveNameChange(org.id, m.id),
+    onSuccess: done(`The name change of ${names} was approved`),
+    onError: refused(`The name change of ${names} was not approved`),
+  });
+  const rejectNames = useMutation({
+    mutationFn: (reason: string) => api.rejectNameChange(org.id, m.id, reason),
+    onSuccess: done(`The name change of ${names} was rejected`),
+    onError: refused(`The name change of ${names} was not rejected`),
+  });
+  const withdrawNames = useMutation({
+    mutationFn: () => api.withdrawNameChange(org.id, m.id),
+    onSuccess: done(`The name change of ${names} was withdrawn`),
+    onError: refused(`The name change of ${names} was not withdrawn`),
+  });
 
   // The latest attempt is the newest: its failure stands until a later attempt succeeds, which replaces it.
   const failed = m.issuance?.status === "failed" ? m.issuance : null;
@@ -210,7 +230,6 @@ export function AlertStrip({ org, m, userId, onChanged }: { org: Me["organizatio
               {failedAt && <span>Last attempt {when(failedAt)}</span>}
               {m.renewal.failing?.nextAttemptAt && <span>Next attempt {when(m.renewal.failing.nextAttemptAt)}</span>}
             </p>
-            {retry.error && <p className="text-destructive">{retry.error.message}</p>}
           </Item>
         )}
         {proposal && (
@@ -221,7 +240,6 @@ export function AlertStrip({ org, m, userId, onChanged }: { org: Me["organizatio
             onApprove={() => approve.mutate()}
             onReject={(reason) => reject.mutate(reason)}
             busy={approve.isPending || reject.isPending}
-            error={approve.error ?? reject.error}
             rejectTitle={`Reject ${m.names.join(", ")}`}
           >
             <p>Proposed by {proposal.proposedBy?.email}. No Certificate is issued until it is approved; approving starts its first Issuance.</p>
@@ -241,7 +259,6 @@ export function AlertStrip({ org, m, userId, onChanged }: { org: Me["organizatio
             onReject={(reason) => rejectNames.mutate(reason)}
             onWithdraw={() => withdrawNames.mutate()}
             busy={approveNames.isPending || rejectNames.isPending || withdrawNames.isPending}
-            error={approveNames.error ?? rejectNames.error ?? withdrawNames.error}
             rejectTitle={`Reject the name change of ${m.names.join(", ")}`}
           >
             <p>
