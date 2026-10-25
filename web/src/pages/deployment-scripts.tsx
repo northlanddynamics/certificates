@@ -104,6 +104,7 @@ export function DeploymentScriptsPage() {
     <div className="flex flex-col gap-6">
       <PageHeader
         title="Deployment Scripts"
+        guide="deployment-scripts"
         action={
           <>
             {allowed && (

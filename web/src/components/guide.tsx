@@ -66,6 +66,8 @@ const LINK = "font-medium underline underline-offset-4 hover:text-primary";
 const FITS = `[&_code]:[overflow-wrap:anywhere] ${WRAPPING_TABLE}`;
 
 export const isGuide = (value: unknown): value is Guide => typeof value === "string" && value in GUIDES;
+/** The help panel's value for the open page's own "How it works", which its header gives. */
+const PAGE_HELP = "how-it-works";
 
 /** Whether a guide is being shown in the help panel rather than as a page: the panel prefixes its anchors, so the two never clash. */
 const InPanel = createContext(false);
@@ -74,7 +76,7 @@ export const GuidePanelFrame = ({ children }: { children: ReactNode }) => <InPan
 export const sectionElementId = (id: string, inPanel: boolean) => (inPanel ? `help-${id}` : id);
 
 /** The address of the current page with guide `guide` open in the help panel, at `section`. */
-function helpHref(location: { pathname: string; searchStr: string }, guide: Guide, section?: string) {
+function helpHref(location: { pathname: string; searchStr: string }, guide: Guide | typeof PAGE_HELP, section?: string) {
   const params = new URLSearchParams(location.searchStr);
   params.set("help", guide);
   if (section) params.set("section", section);
@@ -83,8 +85,9 @@ function helpHref(location: { pathname: string; searchStr: string }, guide: Guid
 }
 
 /**
- * The help panel's state, which lives in the address (`?help=<guide>&section=<id>`): opening a guide is a step in the
- * browser's history, so Back closes it, a reload keeps it, and a link to it can be shared.
+ * The help panel's state, which lives in the address (`?help=<guide>&section=<id>`, or `?help=how-it-works` for the
+ * page's own explanation): opening it is a step in the browser's history, so Back closes it, a reload keeps it, and a
+ * link to it can be shared.
  */
 export function useHelp() {
   const router = useRouter();
@@ -95,7 +98,9 @@ export function useHelp() {
   return {
     guide,
     section,
+    pageHelp: search.help === PAGE_HELP,
     open: (to: Guide, at?: string) => router.history.push(helpHref(location, to, at)),
+    openPageHelp: () => router.history.push(helpHref(location, PAGE_HELP)),
     close: () => {
       const params = new URLSearchParams(location.searchStr);
       params.delete("help");

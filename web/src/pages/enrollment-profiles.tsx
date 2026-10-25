@@ -135,6 +135,7 @@ export function EnrollmentProfilesPage() {
     <div className="flex flex-col gap-6">
       <PageHeader
         title="Enrollment Profiles"
+        guide="enrollment-profiles"
         action={
           <>
             <Button variant="outline" asChild>

@@ -1,7 +1,8 @@
-import { ChevronDownIcon } from "lucide-react";
+import { CircleHelpIcon } from "lucide-react";
 import type { ReactNode } from "react";
+import { GUIDES, GuideLink, useHelp, type Guide } from "@/components/guide";
+import { HelpSheet } from "@/components/help-sheet";
 import { Button } from "@/components/ui/button";
-import { Collapsible, CollapsibleContent, CollapsibleTrigger } from "@/components/ui/collapsible";
 
 /** A page action's words, which a phone leaves to its icon (still read out), so that the title keeps its line. */
 export function ActionLabel({ children }: { children: ReactNode }) {
@@ -10,7 +11,7 @@ export function ActionLabel({ children }: { children: ReactNode }) {
 
 /**
  * The top of a page: its title, with its primary action beside it, then one sentence on what the page is for; the rest
- * of the explanation, if any, folded under "How it works" (or `howItWorksTitle`) until asked for.
+ * of the explanation, if any, behind "How it works" (or `howItWorksTitle`), which opens it in the help panel over the page.
  */
 export function PageHeader({
   title,
@@ -18,13 +19,17 @@ export function PageHeader({
   action,
   howItWorks,
   howItWorksTitle = "How it works",
+  guide,
 }: {
   title: ReactNode;
   description?: ReactNode;
   action?: ReactNode;
   howItWorks?: ReactNode;
   howItWorksTitle?: string;
+  /** The page's full guide, which its explanation ends by pointing to. */
+  guide?: Guide;
 }) {
+  const help = useHelp();
   return (
     <header className="flex flex-col gap-1">
       <div className="flex min-h-9 items-center justify-between gap-4">
@@ -33,15 +38,26 @@ export function PageHeader({
       </div>
       {description && <p className="max-w-3xl text-sm text-muted-foreground">{description}</p>}
       {howItWorks && (
-        <Collapsible className="group/how">
-          <CollapsibleTrigger asChild>
-            <Button type="button" variant="ghost" size="sm" className="-ml-2">
-              <ChevronDownIcon className="transition-transform group-data-[state=closed]/how:-rotate-90" />
-              {howItWorksTitle}
-            </Button>
-          </CollapsibleTrigger>
-          <CollapsibleContent className="flex max-w-3xl flex-col gap-2 pt-1 text-sm text-muted-foreground">{howItWorks}</CollapsibleContent>
-        </Collapsible>
+        <>
+          <Button type="button" variant="ghost" size="sm" className="-ml-2 self-start" aria-haspopup="dialog" onClick={help.openPageHelp}>
+            <CircleHelpIcon />
+            {howItWorksTitle}
+          </Button>
+          <HelpSheet open={help.pageHelp} onClose={help.close} title={`Help: ${howItWorksTitle}`} description={`How the ${typeof title === "string" ? title : "page"} page works.`}>
+            <article className="flex flex-col gap-4 text-sm leading-relaxed text-muted-foreground">
+              <header className="flex flex-col gap-1 pr-8">
+                {typeof title === "string" && <span className="text-xs font-medium tracking-wide uppercase">{title}</span>}
+                <h2 className="text-xl font-semibold text-foreground">{howItWorksTitle}</h2>
+              </header>
+              {howItWorks}
+              {guide && (
+                <p className="border-t pt-4">
+                  More in <GuideLink guide={guide}>{GUIDES[guide].title}</GuideLink>.
+                </p>
+              )}
+            </article>
+          </HelpSheet>
+        </>
       )}
     </header>
   );

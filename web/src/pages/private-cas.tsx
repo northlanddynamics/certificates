@@ -131,6 +131,7 @@ export function PrivateCasPage() {
     <div className="flex flex-col gap-6">
       <PageHeader
         title="Private CAs"
+        guide="private-cas"
         action={
           <>
             <Button variant="outline" asChild>

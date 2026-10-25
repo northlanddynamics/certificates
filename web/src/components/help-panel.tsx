@@ -1,7 +1,7 @@
 import { useParams } from "@tanstack/react-router";
 import { useEffect, useRef, type ComponentType } from "react";
 import { GuidePanelFrame, GUIDES, sectionElementId, useHelp, type Guide } from "@/components/guide";
-import { Sheet, SheetContent, SheetDescription, SheetTitle } from "@/components/ui/sheet";
+import { HelpSheet } from "@/components/help-sheet";
 import { DcvGuidePage } from "@/pages/dcv-guide";
 import { DeploymentScriptGuidePage } from "@/pages/deployment-script-guide";
 import { EnrollmentGuidePage } from "@/pages/enrollment-guide";
@@ -38,18 +38,18 @@ export function HelpPanel() {
   }, [open, help.guide, help.section]);
 
   return (
-    <Sheet open={open} onOpenChange={(next) => !next && help.close()}>
-      <SheetContent side="right" className="w-full gap-0 data-[side=right]:w-full data-[side=right]:sm:max-w-2xl">
-        <SheetTitle className="sr-only">Help: {help.guide ? GUIDES[help.guide].title : ""}</SheetTitle>
-        <SheetDescription className="sr-only">A guide, shown over the page; close it to go on where you were.</SheetDescription>
-        <div ref={body} className="min-h-0 flex-1 overflow-y-auto p-6">
-          {Content && (
-            <GuidePanelFrame>
-              <Content />
-            </GuidePanelFrame>
-          )}
-        </div>
-      </SheetContent>
-    </Sheet>
+    <HelpSheet
+      open={open}
+      onClose={help.close}
+      title={`Help: ${help.guide ? GUIDES[help.guide].title : ""}`}
+      description="A guide, shown over the page; close it to go on where you were."
+      bodyRef={body}
+    >
+      {Content && (
+        <GuidePanelFrame>
+          <Content />
+        </GuidePanelFrame>
+      )}
+    </HelpSheet>
   );
 }
