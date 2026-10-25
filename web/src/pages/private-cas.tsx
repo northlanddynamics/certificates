@@ -3,6 +3,7 @@ import { useParams } from "@tanstack/react-router";
 import { createColumnHelper, tableFeatures, useTable } from "@tanstack/react-table";
 import { CalendarClockIcon, ClipboardCheckIcon, FingerprintIcon, GlobeIcon, KeyRoundIcon, MoreHorizontalIcon, NetworkIcon, PlusIcon } from "lucide-react";
 import { useMemo, useState, type FormEvent } from "react";
+import { toast } from "sonner";
 import { DataTable } from "@/components/data-table/data-table";
 import { Badge } from "@/components/ui/badge";
 import { Button } from "@/components/ui/button";
@@ -335,7 +336,10 @@ function IssuingCaActions({ ca, issuing }: { ca: PrivateCa; issuing: IssuingCa }
 }
 
 function RetireDialog({ orgId, ca, issuing, open, onOpenChange }: EditDialogProps) {
-  const retire = useAction(() => api.retireIssuingCa(orgId, ca.id, issuing.id), ["private-cas"], () => onOpenChange(false));
+  const retire = useAction(() => api.retireIssuingCa(orgId, ca.id, issuing.id), ["private-cas"], () => {
+    onOpenChange(false);
+    toast.success(`${commonNameOf(issuing.subject)} was retired`);
+  });
   return (
     <ConfirmDialog
       open={open}
@@ -355,7 +359,10 @@ function RetireDialog({ orgId, ca, issuing, open, onOpenChange }: EditDialogProp
 
 function RevokeIssuingCaDialog({ orgId, ca, issuing, open, onOpenChange }: EditDialogProps) {
   const [reason, setReason] = useState("");
-  const revoke = useAction(() => api.revokeIssuingCa(orgId, ca.id, issuing.id, reason), ["private-cas"], () => onOpenChange(false));
+  const revoke = useAction(() => api.revokeIssuingCa(orgId, ca.id, issuing.id, reason), ["private-cas"], () => {
+    onOpenChange(false);
+    toast.success(`${commonNameOf(issuing.subject)} was revoked`);
+  });
   const selectId = `issuing-ca-${issuing.id}-revocation-reason`;
   return (
     <Dialog

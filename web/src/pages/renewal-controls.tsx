@@ -1,6 +1,7 @@
 import { useMutation } from "@tanstack/react-query";
 import { RefreshCwIcon } from "lucide-react";
 import { useState, type FormEvent } from "react";
+import { toast } from "sonner";
 import { ConfirmDialog } from "@/components/confirm-dialog";
 import { Button } from "@/components/ui/button";
 import { Input } from "@/components/ui/input";
@@ -40,16 +41,17 @@ export const mayRenewNow = (org: Me["organizations"][number], m: ManagedCertific
 
 /** Starts a Renewal at once, for those who may: the page's first action while renewing is the thing to do (`renewalUrgent`). */
 export function RenewNowButton({ org, m, userId, onChanged }: { org: Me["organizations"][number]; m: ManagedCertificate; userId?: string; onChanged: () => void }) {
-  const renew = useMutation({ mutationFn: () => api.renewNow(org.id, m.id), onSuccess: onChanged });
+  const renew = useMutation({
+    mutationFn: () => api.renewNow(org.id, m.id),
+    onSuccess: onChanged,
+    onError: (error) => toast.error(`${m.names.join(", ")} was not renewed`, { description: error.message }),
+  });
   if (!mayRenewNow(org, m, userId)) return null;
   return (
-    <>
-      <Button disabled={renew.isPending || m.issuance?.status === "running"} onClick={() => renew.mutate()}>
-        <RefreshCwIcon />
-        Renew now
-      </Button>
-      {renew.error && <span className="text-sm text-destructive">{renew.error.message}</span>}
-    </>
+    <Button disabled={renew.isPending || m.issuance?.status === "running"} onClick={() => renew.mutate()}>
+      <RefreshCwIcon />
+      Renew now
+    </Button>
   );
 }
 

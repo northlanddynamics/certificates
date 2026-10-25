@@ -3,6 +3,7 @@ import { Link, useNavigate, useSearch } from "@tanstack/react-router";
 import { createColumnHelper, rowPaginationFeature, tableFeatures, useTable, type PaginationState } from "@tanstack/react-table";
 import { SearchIcon, XIcon } from "lucide-react";
 import { useEffect, useMemo, useState, type ReactNode } from "react";
+import { toast } from "sonner";
 import { DataTable } from "@/components/data-table/data-table";
 import { DataTableFacetedFilter } from "@/components/data-table/data-table-faceted-filter";
 import { DataTablePagination } from "@/components/data-table/data-table-pagination";
@@ -303,7 +304,11 @@ function ApprovalQueue({ org, onDecided: decided }: { org: Org; onDecided: () =>
   const items = queue.data?.items ?? [];
   const nameChanges = queue.data?.nameChanges ?? [];
   const busy = approve.isPending || reject.isPending || approveNames.isPending || rejectNames.isPending;
-  const error = approve.error ?? reject.error ?? approveNames.error ?? rejectNames.error;
+  // A decision takes its row away, so a toast says what became of it; a refusal is a toast, too.
+  const told = (label: string, verb: "approve" | "reject") => ({
+    onSuccess: () => toast.success(`${verb === "approve" ? "Approved" : "Rejected"} ${label}`),
+    onError: (error: Error) => toast.error(`Could not ${verb} ${label}`, { description: error.message }),
+  });
 
   // New Managed Certificates and name changes wait in one queue, and are decided the same way.
   const rows = [
@@ -315,8 +320,8 @@ function ApprovalQueue({ org, onDecided: decided }: { org: Org; onDecided: () =>
       detail: `${m.profile ? `Through the profile ${profileLabel(m.profile)}: ` : ""}${keyAlgorithmLabel(m.keyAlgorithm)}, ${issuerLabel(m.issuer, acmeCas)}${m.issuer.kind === "private_ca" ? `, valid for ${chosenValidityLabel(m.validityDays)}` : ""}`,
       proposedBy: m.approval.proposedBy?.email,
       label: m.names.join(", "),
-      approve: () => approve.mutate(m.id),
-      reject: (reason: string) => reject.mutate({ id: m.id, reason }),
+      approve: () => approve.mutate(m.id, told(m.names.join(", "), "approve")),
+      reject: (reason: string) => reject.mutate({ id: m.id, reason }, told(m.names.join(", "), "reject")),
     })),
     ...nameChanges.map((n) => ({
       key: `names:${n.managedCertificateId}`,
@@ -326,8 +331,8 @@ function ApprovalQueue({ org, onDecided: decided }: { org: Org; onDecided: () =>
       detail: `${n.profile ? `Through the profile ${profileLabel(n.profile)}: ` : ""}to ${n.names.join(", ")}${n.validityDays !== n.currentValidityDays ? `; validity from ${chosenValidityLabel(n.currentValidityDays)} to ${chosenValidityLabel(n.validityDays)}` : ""}`,
       proposedBy: n.proposedBy.email,
       label: `name change of ${n.currentNames.join(", ")}`,
-      approve: () => approveNames.mutate(n.managedCertificateId),
-      reject: (reason: string) => rejectNames.mutate({ id: n.managedCertificateId, reason }),
+      approve: () => approveNames.mutate(n.managedCertificateId, told(`the name change of ${n.currentNames.join(", ")}`, "approve")),
+      reject: (reason: string) => rejectNames.mutate({ id: n.managedCertificateId, reason }, told(`the name change of ${n.currentNames.join(", ")}`, "reject")),
     })),
   ];
 
@@ -394,7 +399,6 @@ function ApprovalQueue({ org, onDecided: decided }: { org: Org; onDecided: () =>
           </TableBody>
         </Table>
       </div>
-      {error && <p className="text-sm text-destructive">{error.message}</p>}
     </div>
   );
 }

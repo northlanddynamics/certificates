@@ -3,6 +3,7 @@ import { useParams } from "@tanstack/react-router";
 import { createColumnHelper, rowPaginationFeature, tableFeatures, useTable, type PaginationState } from "@tanstack/react-table";
 import { PlusIcon } from "lucide-react";
 import { useState, type FormEvent } from "react";
+import { toast } from "sonner";
 import { ConfirmDialog } from "@/components/confirm-dialog";
 import { DataTable } from "@/components/data-table/data-table";
 import { DataTablePagination } from "@/components/data-table/data-table-pagination";
@@ -94,7 +95,10 @@ export function ApiKeysPage() {
 function RevokeKey({ apiKey }: { apiKey: ApiKey }) {
   const { orgId } = useParams({ from: ROUTE });
   const [open, setOpen] = useState(false);
-  const revoke = useAction(() => api.revokeApiKey(orgId, apiKey.id), ["api-keys"], () => setOpen(false));
+  const revoke = useAction(() => api.revokeApiKey(orgId, apiKey.id), ["api-keys"], () => {
+    setOpen(false);
+    toast.success(`${apiKey.name} was revoked`);
+  });
   return (
     <div className="flex justify-end">
       <Button variant="outline" size="sm" aria-label={`Revoke ${apiKey.name}`} onClick={() => setOpen(true)}>

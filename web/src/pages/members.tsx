@@ -121,7 +121,7 @@ function RoleSelect({ member }: { member: OrgMember }) {
   const changeRole = useAction((role: string) => api.changeRole(orgId, member.id, role), ["members"]);
   return (
     <div className="flex flex-col gap-1">
-      <Select value={member.role} onValueChange={(role) => changeRole.mutate(role)}>
+      <Select value={member.role} onValueChange={(role) => changeRole.mutate(role, { onError: (error) => toast.error(`${member.email}'s role was not changed`, { description: error.message }) })}>
         <SelectTrigger size="sm" aria-label={`Role of ${member.email}`}>
           <SelectValue />
         </SelectTrigger>
@@ -133,7 +133,6 @@ function RoleSelect({ member }: { member: OrgMember }) {
           ))}
         </SelectContent>
       </Select>
-      {changeRole.error && <span className="text-xs text-destructive">{changeRole.error.message}</span>}
     </div>
   );
 }
@@ -170,6 +169,7 @@ function InviteDialog({ orgId, roles }: { orgId: string; roles: string[] }) {
   const [role, setRole] = useState("member");
   const invite = useAction(() => api.invite(orgId, email, role), ["invitations"], () => {
     setOpen(false);
+    toast.success(`Invitation sent to ${email}`);
     setEmail("");
   });
   return (
