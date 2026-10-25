@@ -2,6 +2,7 @@ import { useParams } from "@tanstack/react-router";
 import { useEffect, useRef, type ComponentType } from "react";
 import { GuidePanelFrame, GUIDES, sectionElementId, useHelp, type Guide } from "@/components/guide";
 import { HelpSheet } from "@/components/help-sheet";
+import { AcmeAccountGuidePage } from "@/pages/acme-account-guide";
 import { AgentGuidePage } from "@/pages/agent-guide";
 import { DcvGuidePage } from "@/pages/dcv-guide";
 import { DeploymentScriptGuidePage } from "@/pages/deployment-script-guide";
@@ -12,6 +13,7 @@ import { PrivateCaGuidePage } from "@/pages/private-ca-guide";
 
 const CONTENT: Record<Guide, ComponentType> = {
   "managed-certificates": ManagedCertificateGuidePage,
+  "acme-accounts": AcmeAccountGuidePage,
   agents: AgentGuidePage,
   "dns-providers": DnsProviderGuidePage,
   "deployment-scripts": DeploymentScriptGuidePage,

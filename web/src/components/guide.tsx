@@ -18,6 +18,18 @@ export const GUIDES = {
       status: "What the status means",
     },
   },
+  "acme-accounts": {
+    title: "Setting up ACME accounts",
+    path: "/organizations/$orgId/acme-accounts/guide",
+    sections: {
+      what: "What an ACME account is",
+      letsencrypt: "Starting with Let's Encrypt",
+      custom: "Adding another ACME CA",
+      eab: "External Account Binding",
+      tags: "Staging and Production tags",
+      manage: "Testing, changing and removing",
+    },
+  },
   agents: {
     title: "Setting up an Agent",
     path: "/organizations/$orgId/agents/guide",

@@ -1,7 +1,7 @@
 import { useMutation, useQuery } from "@tanstack/react-query";
 import { useParams } from "@tanstack/react-router";
 import { createColumnHelper, tableFeatures, useTable } from "@tanstack/react-table";
-import { ClipboardCheckIcon, KeyRoundIcon, LandmarkIcon, PlusIcon, ServerIcon } from "lucide-react";
+import { BookOpenIcon, ClipboardCheckIcon, KeyRoundIcon, LandmarkIcon, PlusIcon, ServerIcon } from "lucide-react";
 import { useState, type FormEvent } from "react";
 import { toast } from "sonner";
 import { AcmeCaTagBadge } from "@/components/acme-ca-tag";
@@ -14,6 +14,7 @@ import { Field, FieldDescription, FieldError, FieldGroup, FieldLabel, FieldLegen
 import { Input } from "@/components/ui/input";
 import { Label } from "@/components/ui/label";
 import { ActionLabel, PageHeader } from "@/components/page-header";
+import { GuideLink } from "@/components/guide";
 import { api, can, type AcmeAccount, type AcmeCa, type AcmeCaTag } from "@/lib/api";
 import { ACME_CA_TAG_LABELS, useAcmeCas } from "@/lib/acme-cas";
 import { useOrg } from "@/lib/use-org";
@@ -90,7 +91,20 @@ export function AcmeAccountsPage() {
     <div className="flex flex-col gap-6">
       <PageHeader
         title="ACME accounts"
-        action={org && can(org, "acmeAccount", "create") && !loading && <RegisterAccountDialog orgId={orgId} acmeCas={missing} />}
+        guide="acme-accounts"
+        action={
+          <>
+            {allowed && (
+              <Button variant="outline" asChild>
+                <GuideLink guide="acme-accounts" className="">
+                  <BookOpenIcon />
+                  <ActionLabel>Setup guide</ActionLabel>
+                </GuideLink>
+              </Button>
+            )}
+            {org && can(org, "acmeAccount", "create") && !loading && <RegisterAccountDialog orgId={orgId} acmeCas={missing} />}
+          </>
+        }
         description="A Managed Certificate is issued under the Organization's account with its ACME CA."
         howItWorks={
           <p>
@@ -344,7 +358,12 @@ function RegisterAccountForm({ orgId, acmeCas, onDone }: { orgId: string; acmeCa
       {step === "ca" && (
         <FieldSet>
           <FieldLegend>ACME CA</FieldLegend>
-          <FieldDescription>With a built-in ACME CA, or a custom one added in the same step. The platform makes the account's key and keeps it; it is never shown.</FieldDescription>
+          <FieldDescription>
+            With a built-in ACME CA, or a custom one added in the same step. The platform makes the account's key and keeps it; it is never shown.{" "}
+            <GuideLink guide="acme-accounts" section="letsencrypt">
+              Which should I choose?
+            </GuideLink>
+          </FieldDescription>
           <FieldGroup>
             <Field>
               <FieldLabel htmlFor="acme-ca">ACME CA</FieldLabel>
@@ -401,7 +420,10 @@ function RegisterAccountForm({ orgId, acmeCas, onDone }: { orgId: string; acmeCa
         <FieldSet>
           <FieldLegend>External Account Binding (optional)</FieldLegend>
           <FieldDescription>
-            For a CA that requires one: the key id and HMAC key it gave you. The HMAC key is kept as a secret and never shown again. Neither can be changed once the CA is added.
+            For a CA that requires one: the key id and HMAC key it gave you. The HMAC key is kept as a secret and never shown again. Neither can be changed once the CA is added.{" "}
+            <GuideLink guide="acme-accounts" section="eab">
+              What is this?
+            </GuideLink>
           </FieldDescription>
           <FieldGroup>
             <Field>
