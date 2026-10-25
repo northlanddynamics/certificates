@@ -57,7 +57,7 @@ export function DcvPlanSummary({ orgId, plan }: { orgId: string; plan: DcvPrevie
       {!plan.dnsProvider && (
         <dd className="col-span-2">
           <GuideLink orgId={orgId} guide="dcv" section="fails">
-            When DCV fails
+            When validation fails
           </GuideLink>
         </dd>
       )}

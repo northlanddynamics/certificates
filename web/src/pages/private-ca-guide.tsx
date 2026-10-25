@@ -11,17 +11,17 @@ import { TRUST_STORES } from "@/lib/trust-stores";
 import { useOrg } from "@/lib/use-org";
 
 const CHECK_STEPS = [
-  { title: "Relying party", body: "A server, load balancer, RADIUS server or browser is shown a Certificate." },
-  { title: "Reads the addresses", body: "The Certificate names where its CA's revocation list (CRL) and certificate can be fetched." },
-  { title: "Fetches them", body: "Over plain HTTP, without signing in: checking HTTPS would need a revocation check of its own." },
-  { title: "Decides", body: "A CRL it cannot fetch, or an expired one, can mean it refuses the Certificate." },
+  { title: "A Certificate is shown", body: "A server, app, Wi-Fi network or browser is given one of your Certificates." },
+  { title: "It finds the address", body: "The Certificate includes the web address of its revocation list (CRL): the list of Certificates that were cancelled." },
+  { title: "It downloads the list", body: "Over plain HTTP, without signing in." },
+  { title: "It decides", body: "If it can't download the list, or the list is out of date, it may reject the Certificate." },
 ];
 
 /** What a relying party must see when it fetches a CRL, each a sign of something only whoever runs the platform can fix. */
 const REACHABLE: [string, string][] = [
-  ["The file itself", "An answer of 200 with the CRL, not a sign-in page or an error."],
-  ["No redirect", "Not sent on to an https:// address: a relying party checking revocation will not follow it."],
-  ["From everywhere it is needed", "From every network your relying parties are on, including ones outside your VPN."],
+  ["The list itself", "The address returns the file, not a sign-in page or an error."],
+  ["No redirects", "It isn't sent on to an https:// address. Most apps won't follow that when checking revocation."],
+  ["Reachable everywhere", "Every network your apps and devices use can reach it, including outside your VPN."],
 ];
 
 /**
@@ -42,12 +42,12 @@ export function PrivateCaGuidePage() {
       guide="private-cas"
       title="Publishing a Private CA"
       back={{ to: "/organizations/$orgId/private-cas", label: "Private CAs", orgId }}
-      lede="Every Certificate a Private CA signs tells relying parties where to fetch its CA's revocation list and certificate. The platform publishes both. Your part is to check that your relying parties can reach them, and to make them trust the root."
+      lede="Apps and devices that use your Private CA's Certificates need two things: to trust your root certificate, and to be able to check whether a Certificate was revoked. The platform publishes what they need. Your part is to check they can reach it, and to install the root."
     >
       <Alert variant="destructive">
         <ShieldAlertIcon />
         <AlertTitle>Check this before you issue</AlertTitle>
-        <AlertDescription>The address is written into every Certificate when it is signed, and stays there. If it changes later, Certificates already issued still point at the old one.</AlertDescription>
+        <AlertDescription>Every Certificate includes the address where its revocation can be checked, and it can't be changed later. Make sure the address works before you issue.</AlertDescription>
       </Alert>
 
       <GuideSection guide="private-cas" id="how">
@@ -66,8 +66,8 @@ export function PrivateCaGuidePage() {
       <GuideSection guide="private-cas" id="url">
         {publication ? <PublicationSummary publication={publication} /> : <p className="text-muted-foreground">{cas.isPending && allowed ? "Loading…" : "Not available to you."}</p>}
         <p className="text-muted-foreground">
-          It is the same for every Private CA on the platform, and is set by whoever runs the platform, not here. If the Private CAs page warns about it, ask them before you
-          issue anything. The exact addresses of each CA are in its “Trust this root” action.
+          It is the same for every Private CA, and whoever runs the platform sets it. If the Private CAs page shows a warning about it, talk to them before you issue anything.
+          Each CA's exact addresses are under its “Trust this root” action.
         </p>
       </GuideSection>
 
@@ -80,32 +80,26 @@ export function PrivateCaGuidePage() {
             </li>
           ))}
         </ul>
-        <p>From a machine on a relying party's network, fetch one of the CRL addresses (copy it from “Trust this root”):</p>
-        <pre className="overflow-x-auto rounded-md border bg-muted p-3 font-mono text-xs leading-relaxed">{`curl -sI ${example}\n# Expect: HTTP 200, and no Location header`}</pre>
-        <p className="text-muted-foreground">If it fails, tell whoever runs the platform what you saw and from where: the address is theirs to make reachable.</p>
+        <p>To test it, run this on a machine on that network, with a CRL address copied from “Trust this root”:</p>
+        <pre className="overflow-x-auto rounded-md border bg-muted p-3 font-mono text-xs leading-relaxed">{`curl -sI ${example}\n# You want: HTTP 200, and no Location line`}</pre>
+        <p className="text-muted-foreground">If it doesn't work, tell whoever runs the platform what you saw and where you ran it from.</p>
       </GuideSection>
 
       <GuideSection guide="private-cas" id="crl">
         <ul className="grid gap-2 sm:grid-cols-2">
           <li className="rounded-md border p-3">
-            <strong>On every revocation.</strong> The Issuing CA's CRL is reissued in the same change.
+            <strong>The list updates at once.</strong> Revoking a Certificate updates its CA's list straight away.
           </li>
           <li className="rounded-md border p-3">
-            <strong>Valid for 7 days.</strong> Each CRL's next update is 7 days after it was issued.
-          </li>
-          <li className="rounded-md border p-3">
-            <strong>Reissued early.</strong> At least 3 days before that, so a relying party is never left with an expired one.
-          </li>
-          <li className="rounded-md border p-3">
-            <strong>Cached elsewhere.</strong> A relying party may keep a CRL until its next update, so a revocation can take up to 7 days to reach it.
+            <strong>Apps may wait.</strong> An app can keep a downloaded list for up to 7 days, so a revocation can take that long to reach it.
           </li>
         </ul>
       </GuideSection>
 
       <GuideSection guide="private-cas" id="trust">
         <p>
-          Install the root once on everything that must trust the Private CA's Certificates; it covers every Issuing CA under it, now and later. Use the Private CA's “Trust this
-          root” action to download it, and compare the SHA-256 fingerprint shown there after installing.
+          Install the root certificate once on every device and app that needs to trust your Certificates. It covers every Issuing CA under it, including ones you add later.
+          Download it with the Private CA's “Trust this root” action, and after installing, check its fingerprint matches the one shown there.
         </p>
         <div className="rounded-md border">
           <Table>
@@ -132,8 +126,8 @@ export function PrivateCaGuidePage() {
 
       <GuideSection guide="private-cas" id="rollover">
         <p>
-          When an Issuing CA nears its end (the list marks it “Roll over”), add another under the same root, repoint its Managed Certificates, then retire it. Nothing that trusts
-          the root needs anything new, and the retired one keeps publishing its CRL until the last Certificate it issued expires.
+          When an Issuing CA is near its end, the list marks it “Roll over”. Add a new Issuing CA under the same root, move its Managed Certificates to the new one, then
+          retire the old one. Devices that trust the root need no changes.
         </p>
       </GuideSection>
     </GuidePage>

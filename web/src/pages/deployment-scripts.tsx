@@ -425,7 +425,7 @@ function ContentWithDeclaration({
         <div className="flex items-baseline justify-between gap-2">
           <Label id={`${id}-label`}>Script</Label>
           <GuideLink orgId={orgId} guide="deployment-scripts" section="declare" className="text-xs font-medium text-primary underline-offset-4 hover:underline">
-            Parameter section format
+            How to ask for parameters
           </GuideLink>
         </div>
         <Suspense fallback={<div className="h-96 rounded-md border bg-muted/30" aria-busy="true" />}>
@@ -554,10 +554,10 @@ function ParametersBanner({ orgId }: { orgId: string }) {
       <InfoIcon />
       <AlertTitle>One script, many targets</AlertTitle>
       <AlertDescription>
-        <p>A script can declare Deployment Parameters, such as a site name or a port, and each Deployment gives its own values.</p>
+        <p>A script can ask for values, called Deployment Parameters, such as a site name or a port. Each Deployment fills in its own.</p>
         <span className="flex flex-wrap gap-4">
           <GuideLink orgId={orgId} guide="deployment-scripts" section="declare">
-            Declaring Deployment Parameters
+            How to ask for parameters
           </GuideLink>
           <GuideLink orgId={orgId} guide="deployment-scripts" section="example">
             See an example script

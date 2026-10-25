@@ -6,11 +6,11 @@ import { Sheet, SheetContent, SheetDescription, SheetHeader, SheetTitle, SheetTr
 import type { ScriptParameter } from "@/lib/api";
 
 const RULES: [string, string][] = [
-  ["Blank", "Takes the default; with none, the variable is left out."],
-  ["Limits", "One line, at most 1 KiB."],
-  ["Renewals", "Every Renewal and “Run again” reuses these values."],
-  ["Changing", "Edit them later from the Deployment: the next delivery to the Agent has the new ones."],
-  ["Secrets", "Not here: they are kept in plain text. Set them in the Agent's own environment on its host."],
+  ["Blank", "Uses the default. With no default, the variable isn't set."],
+  ["Limits", "One line, up to 1 KiB."],
+  ["Renewals", "Every renewal and “Run again” uses these same values."],
+  ["Changing", "You can edit them later on the Deployment. The next run uses the new ones."],
+  ["Secrets", "Don't put them here: values are saved as plain text. Keep secrets in the Agent's own environment on its server."],
 ];
 
 /**
@@ -23,13 +23,13 @@ export function ParameterHelpSheet({ orgId, script, declared, values }: { orgId:
       <SheetTrigger asChild>
         <Button type="button" variant="outline" size="sm">
           <CircleHelpIcon />
-          How these reach the script
+          What the script will get
         </Button>
       </SheetTrigger>
       <SheetContent className="flex flex-col gap-0 overflow-y-auto sm:max-w-md">
         <SheetHeader>
-          <SheetTitle>How these reach the script</SheetTitle>
-          <SheetDescription>The Agent gives each value to {script} as an environment variable. With what is entered now, the script will see:</SheetDescription>
+          <SheetTitle>What the script will get</SheetTitle>
+          <SheetDescription>The Agent gives each value to {script} as an environment variable. With what you have entered, the script gets:</SheetDescription>
         </SheetHeader>
         <div className="flex flex-col gap-5 px-4 pb-4 text-sm">
           <ScriptEnvironment declared={declared} values={values} />
@@ -43,7 +43,7 @@ export function ParameterHelpSheet({ orgId, script, declared, values }: { orgId:
           </dl>
           <div className="flex flex-col gap-2 border-t pt-4">
             <GuideLink orgId={orgId} guide="deployment-scripts" section="values">
-              How values reach the script
+              What the script sees
             </GuideLink>
             <GuideLink orgId={orgId} guide="deployment-scripts" section="example">
               An example script that reads them

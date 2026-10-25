@@ -29,7 +29,7 @@ export interface ExampleScript {
 const nginx: ExampleScript = {
   id: "nginx",
   title: "nginx site",
-  summary: "Installs the Certificate and its key for one nginx site, then reloads nginx. It takes a required, a defaulted and an optional parameter.",
+  summary: "Puts the Certificate and key where one nginx site reads them, then reloads nginx. It shows a required parameter, one with a default, and an optional one.",
   interpreter: "bash",
   name: "nginx-site",
   steps: [
@@ -47,15 +47,15 @@ const nginx: ExampleScript = {
 set -euo pipefail`,
     },
     {
-      title: "Guard the required ones",
-      note: "The platform refuses a Deployment without them, but an Agent that predates Deployment Parameters runs the script without any.",
+      title: "Stop if a required one is missing",
+      note: "Older Agents run scripts without parameters, so stop if a required one is missing.",
       code: `# An Agent that predates Deployment Parameters runs this without them: stop rather than install to the wrong place.
 : "\${DEPLOY_PARAM_SITE:?is not set, so this Agent may predate Deployment Parameters}"
 dir="/etc/nginx/certs/$DEPLOY_PARAM_SITE"`,
     },
     {
       title: "Your deployment: put the files where nginx reads them",
-      note: "This is where the Certificate is put to use; change these lines for your server. $CERT_FULLCHAIN_FILE and $CERT_KEY_FILE are the files to place, and an optional parameter is read with :- so that set -u allows it unset.",
+      note: "Change these lines to suit your server. $CERT_FULLCHAIN_FILE and $CERT_KEY_FILE are the files to copy. The optional parameter is read with :- so the script doesn't stop when it isn't set.",
       yours: true,
       code: `install -d -m 0755 "$dir"
 install -m 0644 "$CERT_FULLCHAIN_FILE" "$dir/fullchain.pem"
@@ -66,7 +66,7 @@ fi`,
     },
     {
       title: "Reload, and say what was installed",
-      note: "The default is used here too, for an Agent that predates Deployment Parameters. The output is stored with the run: never print parameter values or secrets.",
+      note: "The default is repeated here for older Agents. What the script prints is saved, so never print parameter values or secrets.",
       code: `systemctl reload "\${DEPLOY_PARAM_SERVICE:-nginx}"
 echo "installed $CERT_FINGERPRINT"`,
     },
@@ -76,7 +76,7 @@ echo "installed $CERT_FINGERPRINT"`,
 const appFiles: ExampleScript = {
   id: "app-files",
   title: "Application files",
-  summary: "Copies the Certificate and its key into an application's directory, then restarts its Windows service when one is named. It takes a required and an optional parameter.",
+  summary: "Copies the Certificate and key into an application's folder, then restarts its Windows service if you name one. It shows a required parameter and an optional one.",
   interpreter: "powershell",
   name: "app-files",
   steps: [
@@ -92,14 +92,14 @@ const appFiles: ExampleScript = {
 $ErrorActionPreference = 'Stop'`,
     },
     {
-      title: "Guard the required ones",
-      note: "The platform refuses a Deployment without them, but an Agent that predates Deployment Parameters runs the script without any.",
+      title: "Stop if a required one is missing",
+      note: "Older Agents run scripts without parameters, so stop if a required one is missing.",
       code: `# An Agent that predates Deployment Parameters runs this without them: stop rather than write to the wrong place.
 if (-not $env:DEPLOY_PARAM_TARGET_DIR) { throw 'TARGET_DIR is not set, so this Agent may predate Deployment Parameters' }`,
     },
     {
       title: "Your deployment: copy the files where the application reads them",
-      note: "This is where the Certificate is put to use; change these lines for your application. $env:CERT_FULLCHAIN_FILE and $env:CERT_KEY_FILE are the files to place.",
+      note: "Change these lines to suit your application. $env:CERT_FULLCHAIN_FILE and $env:CERT_KEY_FILE are the files to copy.",
       yours: true,
       code: `New-Item -ItemType Directory -Force -Path $env:DEPLOY_PARAM_TARGET_DIR | Out-Null
 Copy-Item $env:CERT_FULLCHAIN_FILE (Join-Path $env:DEPLOY_PARAM_TARGET_DIR 'certificate.pem') -Force
@@ -107,7 +107,7 @@ Copy-Item $env:CERT_KEY_FILE (Join-Path $env:DEPLOY_PARAM_TARGET_DIR 'key.pem') 
     },
     {
       title: "Restart, and say what was installed",
-      note: "An optional parameter left blank is absent, so a plain test tells unset from set. The output is stored with the run: never print parameter values or secrets.",
+      note: "An optional parameter left blank isn't set at all, so a simple check is enough. What the script prints is saved, so never print parameter values or secrets.",
       code: `if ($env:DEPLOY_PARAM_SERVICE) { Restart-Service -Name $env:DEPLOY_PARAM_SERVICE }
 Write-Output "installed $env:CERT_FINGERPRINT"`,
     },
@@ -117,7 +117,7 @@ Write-Output "installed $env:CERT_FINGERPRINT"`,
 const iis: ExampleScript = {
   id: "iis",
   title: "IIS site",
-  summary: "Binds the Certificate to an IIS site. It takes a required, a defaulted and an optional parameter, and leaves the binding itself for you to write.",
+  summary: "Adds the Certificate to an IIS site. It shows a required parameter, one with a default, and an optional one, and leaves the IIS steps for you to write.",
   interpreter: "powershell",
   name: "iis-binding",
   steps: [
@@ -137,15 +137,15 @@ const iis: ExampleScript = {
 $ErrorActionPreference = 'Stop'`,
     },
     {
-      title: "Guard the required ones",
-      note: "The platform refuses a Deployment without them, but an Agent that predates script parameters runs the script without any.",
+      title: "Stop if a required one is missing",
+      note: "Older Agents run scripts without parameters, so stop if a required one is missing.",
       code: `# An Agent that predates Deployment Parameters runs scripts without them.
 if ([string]::IsNullOrEmpty($env:DEPLOY_PARAM_SITE_NAME)) {
   throw 'SITE_NAME is required: update the Agent'
 }`,
     },
     {
-      title: "Read the rest, with a fallback for each",
+      title: "Read the other parameters, with defaults",
       code: `$site       = $env:DEPLOY_PARAM_SITE_NAME
 $port       = if ($env:DEPLOY_PARAM_PORT) { $env:DEPLOY_PARAM_PORT } else { '443' }
 $hostHeader = if ($env:DEPLOY_PARAM_HOST_HEADER) { $env:DEPLOY_PARAM_HOST_HEADER } else { '' }`,
@@ -158,7 +158,7 @@ Write-Output "Deploying $env:CERT_FINGERPRINT for $env:CERT_NAMES"`,
     },
     {
       title: "Your deployment goes here",
-      note: "Turn the PEM files into what IIS imports, put it in the machine store and bind it. On Windows the Agent runs powershell.exe (5.1), which cannot read PEM keys itself.",
+      note: "Convert the files into a form IIS can import, add it to the computer's certificate store, and bind it to the site. The Agent uses Windows PowerShell 5.1, which can't read these key files by itself.",
       yours: true,
       code: `# --- your deployment ---------------------------------------------------
 # 1. Make a PFX from $fullchainFile and $keyFile
@@ -169,7 +169,7 @@ Write-Output "Deploying $env:CERT_FINGERPRINT for $env:CERT_NAMES"`,
 # ------------------------------------------------------------------------`,
     },
     {
-      title: "Exit with the outcome",
+      title: "Report whether it worked",
       code: `Write-Output "Deployed $env:CERT_FINGERPRINT"  # output is stored: never print values or secrets
 exit 0                                         # a throw or any other code fails the run`,
     },
@@ -185,13 +185,13 @@ export const exampleContent = (example: ExampleScript) => `${example.steps.map((
 
 /** The variables the Agent sets for every run, whatever the script declares. */
 export const CERT_VARIABLES: { name: string; meaning: string }[] = [
-  { name: "CERT_KEY_FILE", meaning: "Path to the private key, made on this host and readable only by the Agent's service account" },
-  { name: "CERT_LEAF_FILE", meaning: "Path to the Certificate alone" },
-  { name: "CERT_CHAIN_FILE", meaning: "Path to the intermediates" },
-  { name: "CERT_FULLCHAIN_FILE", meaning: "Path to the leaf followed by the intermediates" },
-  { name: "CERT_NAMES", meaning: "The Certificate's names, comma-separated" },
-  { name: "CERT_NOT_AFTER", meaning: "When the Certificate ends" },
-  { name: "CERT_FINGERPRINT", meaning: "The Certificate's SHA-256 fingerprint" },
+  { name: "CERT_KEY_FILE", meaning: "Where the private key is. It was made on this server, and only the Agent can read it" },
+  { name: "CERT_LEAF_FILE", meaning: "Where the Certificate is, on its own" },
+  { name: "CERT_CHAIN_FILE", meaning: "Where the intermediate certificates are" },
+  { name: "CERT_FULLCHAIN_FILE", meaning: "Where the Certificate and its intermediates are, in one file. Most servers want this one" },
+  { name: "CERT_NAMES", meaning: "The names on the Certificate, separated by commas" },
+  { name: "CERT_NOT_AFTER", meaning: "When the Certificate expires" },
+  { name: "CERT_FINGERPRINT", meaning: "The Certificate's fingerprint, a unique ID for it" },
   { name: "CERT_MANAGED_CERTIFICATE_ID", meaning: "Which Managed Certificate the run is for" },
   { name: "CERT_DEPLOYMENT_ID", meaning: "Which Deployment the run is for" },
 ];

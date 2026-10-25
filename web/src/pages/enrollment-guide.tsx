@@ -5,29 +5,29 @@ import { can } from "@/lib/api";
 import { useOrg } from "@/lib/use-org";
 
 const FLOW = [
-  { title: "Profiles pushed", body: "Your device management platform sends the device a trusted certificate profile and a SCEP profile." },
-  { title: "Request", body: "The device makes a key and sends a CSR to the profile's SCEP URL, with a challenge." },
-  { title: "Validator decides", body: "Intune checks its own challenge; a Shared Challenge is compared with the profile's." },
-  { title: "Issued", body: "The Issuing CA signs a Device Certificate with the profile's usages and validity, and nothing else the CSR asks for." },
+  { title: "The device is set up", body: "Your device management tool sends it two profiles: one to trust your CA, and one saying where to ask for a certificate (SCEP)." },
+  { title: "The device asks", body: "It makes its own key and asks for a certificate, giving a password called a challenge." },
+  { title: "The challenge is checked", body: "Intune checks its own challenges. A Shared Challenge is checked by the platform." },
+  { title: "The certificate is issued", body: "The device gets a Device Certificate, made with the Enrollment Profile's settings." },
 ];
 
 const COMPARISON: [string, string, string][] = [
-  ["For", "Devices Intune manages", "Iru (formerly Kandji) and network gear, which can give no per-device challenge"],
-  ["Challenge", "One per device, made and checked by Intune", "One for every device, made by the platform and shown once"],
-  ["Names", "Intune vouches for them", "Bounded by the Issuing CA's permitted names and the profile's Name Rules"],
-  ["Default validity", "365 days", "90 days"],
-  ["Renewal", "The device enrolls again", "Renewal requests signed by the device's current Device Certificate"],
-  ["Revocation", "Automatic when Intune retires, wipes or unenrolls a device", "By an Organization Administrator"],
+  ["Best for", "Devices that Intune manages", "Other tools, such as Iru (formerly Kandji), and network gear"],
+  ["Challenge", "A different one for each device, handled by Intune", "One for all devices, shown to you once"],
+  ["Names on the certificate", "Intune confirms them", "Limited by the Issuing CA's and the profile's name rules"],
+  ["Lasts (by default)", "365 days", "90 days"],
+  ["Renewing", "The device enrolls again", "The device renews using its current certificate"],
+  ["Revoking", "Automatic when Intune retires, wipes or unenrolls the device", "An Organization Administrator revokes it"],
 ];
 
 const REFUSALS: [string, string][] = [
-  ["A key type or size the profile does not allow", "Match the SCEP profile's key size to the profile's allowed device keys."],
-  ["A DNS name outside the Issuing CA's permitted names", "Change the SCEP profile's subject alternative names, or the Issuing CA's permitted names."],
-  ["A name the profile's Name Rules do not allow", "Change the SCEP profile's names, or the profile's Name Rules."],
-  ["The Issuing CA no longer issues", "Point the profile at an active Issuing CA."],
-  ["Intune refused the request", "Check admin consent and scep_challenge_provider on the Entra app, and that the device is managed by Intune."],
-  ["Missing or wrong Shared Challenge", "Put the current one in the SCEP profile; check the previous one has not ended."],
-  ["The profile is disabled", "A disabled profile refuses every request for good: create another."],
+  ["The key type or size isn't allowed", "Set the SCEP profile's key size to one the Enrollment Profile allows."],
+  ["A name isn't allowed by the Issuing CA", "Change the names in the SCEP profile, or the Issuing CA's permitted names."],
+  ["A name isn't allowed by the profile's name rules", "Change the names in the SCEP profile, or the profile's name rules."],
+  ["The Issuing CA no longer issues", "Choose an active Issuing CA for the profile."],
+  ["Intune refused the request", "In Entra, check the app has admin consent for scep_challenge_provider. Check Intune manages the device."],
+  ["The Shared Challenge is missing or wrong", "Put the current challenge in the SCEP profile. Check the previous one hasn't stopped working."],
+  ["The profile is disabled", "A disabled profile refuses every device, for good. Create a new one."],
 ];
 
 /**
@@ -44,7 +44,7 @@ export function EnrollmentGuidePage() {
       guide="enrollment-profiles"
       title="Setting up device enrollment"
       back={{ to: "/organizations/$orgId/enrollment-profiles", label: "Enrollment Profiles", orgId }}
-      lede="An Enrollment Profile lets devices get client Certificates from one of your Issuing CAs over SCEP, in bulk, without Approval. You set it up here and in your device management platform; this guide covers both sides."
+      lede="An Enrollment Profile lets your managed devices, such as laptops, phones and network gear, get their own certificates from one of your Issuing CAs automatically. Devices ask using SCEP, which most device management tools support. You set it up here and in your device management tool."
     >
       <GuideSection guide="enrollment-profiles" id="flow">
         <ol className="grid gap-3 sm:grid-cols-2 lg:grid-cols-4">
@@ -65,7 +65,7 @@ export function EnrollmentGuidePage() {
             <TableHeader>
               <TableRow>
                 <TableHead>
-                  <span className="sr-only">Aspect</span>
+                  <span className="sr-only">Compared</span>
                 </TableHead>
                 <TableHead>Microsoft Intune</TableHead>
                 <TableHead>Shared Challenge</TableHead>
@@ -89,25 +89,26 @@ export function EnrollmentGuidePage() {
         <Steps>
           {[
             <>
-              Register an app. Note its <strong>Application (client) ID</strong> and your <strong>Directory (tenant) ID</strong>.
+              Register an app. Write down its <strong>Application (client) ID</strong> and your <strong>Directory (tenant) ID</strong>.
             </>,
             <>
-              Add two <strong>application</strong> permissions: Intune <code>scep_challenge_provider</code> and Microsoft Graph <code>Application.Read.All</code>.
+              Under API permissions, add two <strong>Application</strong> permissions: Intune <code>scep_challenge_provider</code> and Microsoft Graph{" "}
+              <code>Application.Read.All</code>.
             </>,
             <>
-              <strong>Grant admin consent</strong> for both. Without it, every enrollment is refused.
+              Choose <strong>Grant admin consent</strong>. Without it, every device is refused.
             </>,
             <>
-              Make a <strong>client secret</strong> and copy its value. The platform keeps it as a Secret and never shows it again.
+              Create a <strong>client secret</strong> and copy its value. You paste it here once, and it is never shown again.
             </>,
           ]}
         </Steps>
         <span className="font-medium">Here</span>
         <Steps start={5}>
           {[
-            <>Create the profile with the tenant ID, app ID and secret, on an active Issuing CA. The platform then shows the values for Intune; they stay in the profile's menu under “Intune setup values”.</>,
+            <>Create the Enrollment Profile with the tenant ID, app ID and secret. The platform then shows the values to enter in Intune. You can find them again under “Intune setup values” in the profile's menu.</>,
             <>
-              Use <strong>Test</strong>. It proves the platform can sign in and find Intune's services. It cannot prove <code>scep_challenge_provider</code>: only the first enrollment does.
+              Choose <strong>Test</strong> to check the platform can connect to Intune. The first device to enroll shows whether the permissions are right.
             </>,
           ]}
         </Steps>
@@ -115,53 +116,52 @@ export function EnrollmentGuidePage() {
         <Steps start={7}>
           {[
             <>
-              A <strong>trusted certificate profile</strong> with the CA certificate the profile offers to download: the root, or the Issuing CA.
+              Create a <strong>Trusted certificate</strong> profile with the CA certificate you download from the Enrollment Profile.
             </>,
             <>
-              A <strong>SCEP certificate profile</strong> with the profile's SCEP URL, a key size the profile allows, and the URI subject alternative name{" "}
-              <code>{"IntuneDeviceId://{{DeviceId}}"}</code>, by which revocation finds the device's certificates.
+              Create a <strong>SCEP certificate</strong> profile with the SCEP URL, a key size the Enrollment Profile allows, and this URI subject alternative name:{" "}
+              <code>{"IntuneDeviceId://{{DeviceId}}"}</code>. The platform uses it to find a device's certificates when revoking them.
             </>,
           ]}
         </Steps>
         <div className="rounded-md border p-3">
-          Devices must be able to reach the profile's SCEP URL from wherever they enroll. When Intune retires, wipes or unenrolls a device, it queues the certificate for
-          revocation; the platform collects that queue at most hourly, Intune's limit, and revokes what it finds. If Test says Microsoft cannot be reached, ask whoever runs
-          the platform.
+          Devices must be able to reach the SCEP URL from wherever they enroll. When Intune retires, wipes or unenrolls a device, the platform revokes its certificates within
+          about an hour. If Test says it can't reach Microsoft, contact whoever runs the platform.
         </div>
       </GuideSection>
 
       <GuideSection guide="enrollment-profiles" id="shared">
         <p>
-          Creating the profile makes its Shared Challenge and shows it <strong>once</strong>. Put it in your device management platform's SCEP profile as the challenge before
-          closing the dialog: the platform keeps only its hash.
+          When you create the profile, its Shared Challenge is shown <strong>once</strong>. Copy it into the SCEP profile in your device management tool before you close the
+          window. It can't be shown again.
         </p>
-        <span className="font-medium">Rotating it</span>
+        <span className="font-medium">Changing it</span>
         <ol className="grid overflow-hidden rounded-lg border sm:grid-cols-3">
           <li className="flex flex-col gap-1 border-b p-3 sm:border-r sm:border-b-0">
             <strong>Rotate</strong>
-            <span>Choose until when the current one keeps working. The new one is shown once.</span>
+            <span>Choose how long the current one keeps working. The new one is shown once.</span>
           </li>
           <li className="flex flex-col gap-1 border-b bg-muted/50 p-3 sm:border-r sm:border-b-0">
             <strong>Both work</strong>
-            <span>Devices your platform has not yet reached keep enrolling with the previous one. Put the new one in the SCEP profile now.</span>
+            <span>Put the new one in your SCEP profile now. Devices that haven't picked it up yet keep using the old one.</span>
           </li>
           <li className="flex flex-col gap-1 p-3">
-            <strong>Previous ends</strong>
-            <span>On the day you chose, or at once with “Retire previous challenge”. Another rotation is refused until then.</span>
+            <strong>The old one stops</strong>
+            <span>On the day you chose, or straight away with “Retire previous challenge”. You can't change it again until then.</span>
           </li>
         </ol>
-        <p className="text-muted-foreground">Each Device Certificate records which Shared Challenge it was issued under, so its list shows when the previous one stops being used.</p>
+        <p className="text-muted-foreground">Each Device Certificate shows which challenge it used, so you can see when the old one is no longer needed.</p>
       </GuideSection>
 
       <GuideSection guide="enrollment-profiles" id="refused">
         <p>
-          A refused device is told only “badRequest”. The reason is in the Audit log, as an <code>enrollment.refused</code> event on the profile.
+          A refused device only gets a general error. To see why, look in the Audit log for an <code>enrollment.refused</code> event on the profile.
         </p>
         <div className="rounded-md border">
           <Table>
             <TableHeader>
               <TableRow>
-                <TableHead>Cause</TableHead>
+                <TableHead>Reason</TableHead>
                 <TableHead>Fix</TableHead>
               </TableRow>
             </TableHeader>

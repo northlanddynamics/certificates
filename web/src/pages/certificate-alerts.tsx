@@ -242,7 +242,7 @@ export function AlertStrip({ org, m, userId, onChanged }: { org: Me["organizatio
                   </Link>
                 )}
                 <GuideLink orgId={org.id} guide="dcv" section="fails">
-                  When DCV fails
+                  When validation fails
                 </GuideLink>
               </p>
             )}

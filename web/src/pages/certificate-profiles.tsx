@@ -124,7 +124,7 @@ export function CertificateProfilesPage() {
 function ProfileGuide() {
   return (
     <>
-      <p>Members request against a profile instead of choosing these themselves. Each Managed Certificate keeps the settings it was made with, so editing a profile changes only what is requested after.</p>
+      <p>A profile sets how one kind of certificate is issued, so members don't have to choose. Changing a profile only affects new requests.</p>
       {CERTIFICATE_PROFILE_GUIDE.map((section) => (
         <section key={section.title} className="flex flex-col gap-2 pt-2">
           <h2 className="text-sm font-medium text-foreground">{section.title}</h2>

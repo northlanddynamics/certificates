@@ -18,18 +18,18 @@ import { UploadDialog } from "./deployment-scripts";
 
 
 const RUN_STEPS: { title: string; body: ReactNode }[] = [
-  { title: "Upload", body: "Each upload is a version, named by the SHA-256 of its content. Its parameter section is read now." },
-  { title: "Deployment", body: "Pins one version for life and stores its parameter values." },
-  { title: "Agent checks", body: "The hash, that the Certificate is the one named, and that its key is on the host." },
+  { title: "You upload it", body: "Each upload is saved as a new version. Earlier versions stay as they were." },
+  { title: "You set up a Deployment", body: "It picks a version of the script and fills in its parameters." },
+  { title: "The Agent checks", body: "That the script is unchanged, and that the Certificate and key are the right ones." },
   {
-    title: "Script runs",
+    title: "The script runs",
     body: (
       <>
-        With <code>CERT_*</code> and <code>{ENV_PREFIX}*</code> set. Stopped after ten minutes.
+        With the files and parameters in <code>CERT_*</code> and <code>{ENV_PREFIX}*</code> variables. It is stopped after 10 minutes.
       </>
     ),
   },
-  { title: "Run recorded", body: "The exit code and up to 32 KiB of output, kept on the platform." },
+  { title: "The result is saved", body: "Whether it worked, and the first 32 KiB of what it printed." },
 ];
 
 const REFUSALS: { says: string; fix: ReactNode }[] = [
@@ -37,7 +37,7 @@ const REFUSALS: { says: string; fix: ReactNode }[] = [
     says: 'line 12 is inside the parameter section but is not a comment: start it with "# "',
     fix: (
       <>
-        Start every line between the markers with <code># </code>.
+        Start every line between the begin and end lines with <code># </code>.
       </>
     ),
   },
@@ -45,27 +45,27 @@ const REFUSALS: { says: string; fix: ReactNode }[] = [
     says: "the parameter section is not JSON: …",
     fix: (
       <>
-        Look for a trailing comma or an unquoted name. The whole block is one array, <code>[ … ]</code>.
+        Look for a comma after the last item, or a missing quote. The whole block is one list: <code>[ … ]</code>.
       </>
     ),
   },
   {
     says: "the parameter section must be a JSON array of parameters: …",
-    fix: "Each entry is an object with a string name, and only the five fields below.",
+    fix: "Give each entry a name, and use only the five fields above.",
   },
   {
     says: 'the parameter name "site-id" must be upper-case letters, digits and _, starting with a letter',
     fix: (
       <>
-        Rename it, as <code>SITE_ID</code>.
+        Rename it, for example to <code>SITE_ID</code>.
       </>
     ),
   },
-  { says: `the parameter name "${ENV_PREFIX}SITE" must not start with ${ENV_PREFIX}`, fix: "Drop the prefix: the Agent adds it." },
+  { says: `the parameter name "${ENV_PREFIX}SITE" must not start with ${ENV_PREFIX}`, fix: `Remove ${ENV_PREFIX} from the name. The Agent adds it for you.` },
   { says: 'the parameter "PORT" is declared more than once', fix: "Keep one entry for each name." },
-  { says: `a script declares at most ${MAX_PARAMETERS} parameters`, fix: "Split the script, or work values out inside it." },
-  { says: 'the default of the parameter "PORT" contains a newline', fix: "A default obeys the rules for values: one line, at most 1 KiB, no NUL." },
-  { says: 'the parameter section needs exactly one "# deploy-params:end" line after its "# deploy-params:begin" line', fix: "One begin line, then one end line after it." },
+  { says: `a script declares at most ${MAX_PARAMETERS} parameters`, fix: "Use fewer parameters, or work some values out in the script." },
+  { says: 'the default of the parameter "PORT" contains a newline', fix: "Keep the default to one line, up to 1 KiB." },
+  { says: 'the parameter section needs exactly one "# deploy-params:end" line after its "# deploy-params:begin" line', fix: "Have one begin line, then one end line after it." },
 ];
 
 const DECLARATION = `# deploy-params:begin
@@ -92,7 +92,7 @@ export function DeploymentScriptGuidePage() {
       guide="deployment-scripts"
       title="Writing Deployment Scripts"
       back={{ to: "/organizations/$orgId/deployment-scripts", label: "Deployment Scripts", orgId }}
-      lede="A Deployment Script is the Bash or PowerShell an Agent runs, on its own host and with its own rights, to put a new key and Certificate where they are needed. One script can serve many targets: it declares its Deployment Parameters, and each Deployment gives its own values."
+      lede="A Deployment Script is a Bash or PowerShell script that an Agent runs on its server whenever a Certificate is issued or renewed. Its job is to put the new Certificate and key where your software uses them. One script can serve many servers: it asks for a few values, called Deployment Parameters, and each Deployment fills them in."
     >
 
         <GuideSection guide="deployment-scripts" id="how">
@@ -107,13 +107,13 @@ export function DeploymentScriptGuidePage() {
             ))}
           </ol>
           <p className="text-muted-foreground">
-            The same happens on every Renewal and every “Run again”, with the values stored on the Deployment. Exit 0 for success; any other exit code marks the Deployment Run
-            failed and tells the Managed Certificate's Subscribers.
+            This happens again on every renewal, and whenever you choose “Run again”. Exit with 0 when it worked. Any other exit code marks the run as failed and tells the
+            Managed Certificate's Subscribers.
           </p>
         </GuideSection>
 
         <GuideSection guide="deployment-scripts" id="receives">
-          <p className="text-muted-foreground">Set by the Agent for every run, whether or not the script declares parameters.</p>
+          <p className="text-muted-foreground">The Agent sets these environment variables for every run.</p>
           <div className="rounded-md border">
             <Table>
               <TableHeader>
@@ -132,7 +132,7 @@ export function DeploymentScriptGuidePage() {
                 <TableRow>
                   <TableCell className="font-mono text-xs">{ENV_PREFIX}&lt;NAME&gt;</TableCell>
                   <TableCell className="whitespace-normal">
-                    One for each parameter that has a value (<GuideLink guide="deployment-scripts" section="values">below</GuideLink>)
+                    One for each parameter that has a value (see <GuideLink guide="deployment-scripts" section="values">below</GuideLink>)
                   </TableCell>
                 </TableRow>
               </TableBody>
@@ -142,8 +142,8 @@ export function DeploymentScriptGuidePage() {
 
         <GuideSection guide="deployment-scripts" id="declare">
           <p>
-            Put one comment block anywhere in the script. Between the two marker lines every line is a comment; with each line's leading <code># </code> removed, the block is a
-            JSON array. <code>#</code> starts a comment in Bash and PowerShell alike, so the format is the same for both.
+            To ask for values, add a comment block like this anywhere in your script. Between the begin and end lines, each line starts with <code># </code> and the rest is a
+            list in JSON. It is the same in Bash and PowerShell.
           </p>
           <Code text={DECLARATION} label="Copy the example section" />
           <div className="rounded-md border">
@@ -152,41 +152,41 @@ export function DeploymentScriptGuidePage() {
                 <TableRow>
                   <TableHead>Field</TableHead>
                   <TableHead>Needed</TableHead>
-                  <TableHead>Meaning</TableHead>
+                  <TableHead>What it does</TableHead>
                 </TableRow>
               </TableHeader>
               <TableBody>
                 <FieldRow field="name" needed>
-                  Upper-case letters, digits and <code>_</code>, starting with a letter. The script reads it as <code>{ENV_PREFIX}</code> and the name.
+                  Capital letters, digits and <code>_</code>, starting with a letter. Your script reads it as <code>{ENV_PREFIX}</code> plus the name.
                 </FieldRow>
-                <FieldRow field="label">What the Deployment form shows. The name when left out.</FieldRow>
-                <FieldRow field="description">Help shown under the input.</FieldRow>
+                <FieldRow field="label">The name shown on the Deployment form. Uses the name if left out.</FieldRow>
+                <FieldRow field="description">Help text shown under the field.</FieldRow>
                 <FieldRow field="required">
-                  <code>true</code> or <code>false</code> (the default). A Deployment cannot be set up or saved without a value.
+                  <code>true</code> if every Deployment must give a value. Leave it out otherwise.
                 </FieldRow>
-                <FieldRow field="default">Filled in on the form, and used when the value is left blank.</FieldRow>
+                <FieldRow field="default">Used when the field is left blank.</FieldRow>
               </TableBody>
             </Table>
           </div>
           <ul className="grid gap-2 sm:grid-cols-2">
-            <li className="rounded-md border p-3">At most {MAX_PARAMETERS} parameters, each name once.</li>
+            <li className="rounded-md border p-3">Up to {MAX_PARAMETERS} parameters, each with its own name.</li>
             <li className="rounded-md border p-3">
-              A name does not itself start with <code>{ENV_PREFIX}</code>.
+              Don't start a name with <code>{ENV_PREFIX}</code>. The Agent adds it.
             </li>
-            <li className="rounded-md border p-3">Only the five fields above: any other refuses the upload.</li>
-            <li className="rounded-md border p-3">The section is part of the content, so it is inside the hash: to change it, upload a new version.</li>
+            <li className="rounded-md border p-3">Use only the five fields above.</li>
+            <li className="rounded-md border p-3">To change the block, upload a new version of the script.</li>
           </ul>
         </GuideSection>
 
         <GuideSection guide="deployment-scripts" id="values">
-          <p className="text-muted-foreground">For the section above, a Deployment set up with these entries gives the script this environment:</p>
+          <p className="text-muted-foreground">With the block above, a Deployment filled in like this gives your script these variables:</p>
           <div className="rounded-md border">
             <Table>
               <TableHeader>
                 <TableRow>
                   <TableHead>Parameter</TableHead>
-                  <TableHead>Entered</TableHead>
-                  <TableHead>The script sees</TableHead>
+                  <TableHead>You entered</TableHead>
+                  <TableHead>Your script gets</TableHead>
                 </TableRow>
               </TableHeader>
               <TableBody>
@@ -203,22 +203,22 @@ export function DeploymentScriptGuidePage() {
                 <TableRow>
                   <TableCell>POOL</TableCell>
                   <TableCell className="text-muted-foreground">blank</TableCell>
-                  <TableCell className="text-muted-foreground">nothing: the variable is absent</TableCell>
+                  <TableCell className="text-muted-foreground">nothing: the variable is not set</TableCell>
                 </TableRow>
               </TableBody>
             </Table>
           </div>
           <ul className="flex list-disc flex-col gap-1.5 pl-5">
-            <li>A value is text of at most 1 KiB, with no newline and no NUL character.</li>
-            <li>A blank value counts as not given: the default applies, and with none the variable is left out, so test for “unset”, not for an empty string.</li>
-            <li>A value the Deployment gives wins over a variable of the same name in the Agent's own environment.</li>
-            <li>Editing a Deployment's values takes effect from the next delivery to the Agent; a run already delivered keeps what it was given.</li>
+            <li>A value is one line of text, up to 1 KiB.</li>
+            <li>A blank value means “not given”: the default is used, and if there is none the variable is not set at all. So check whether it is set, not whether it is empty.</li>
+            <li>If the Agent's own environment has a variable with the same name, the Deployment's value wins.</li>
+            <li>When you change a Deployment's values, its next run uses them.</li>
           </ul>
         </GuideSection>
 
         <GuideSection guide="deployment-scripts" id="example">
           <p className="text-muted-foreground">
-            Three scripts to start from, each picking up the Certificate and key, reading its Deployment Parameters and marking the step that is your own deployment.
+            Three scripts to start from. Each one picks up the Certificate and key, reads its parameters, and marks the part you change for your own server.
           </p>
           <Tabs defaultValue={EXAMPLE_SCRIPTS[0]!.id} className="min-w-0">
             <TabsList className="h-auto flex-wrap">
@@ -240,41 +240,41 @@ export function DeploymentScriptGuidePage() {
           <div className="grid gap-3 md:grid-cols-2">
             <Alert variant="destructive">
               <ShieldAlertIcon />
-              <AlertTitle>Parameters are not for secrets</AlertTitle>
+              <AlertTitle>Don't put secrets in parameters</AlertTitle>
               <AlertDescription>
-                Values are stored as plain text on the Deployment, and every Organization Administrator can read them. Set passwords and keys in the Agent service's environment
-                on its host instead, under a name that does not start with <code>{ENV_PREFIX}</code>: the Agent drops those, so that a parameter left unset stays unset.
+                Parameters are saved as plain text, and every Organization Administrator can read them. Keep passwords and keys in the Agent's own environment on its server,
+                under a name that doesn't start with <code>{ENV_PREFIX}</code>.
               </AlertDescription>
             </Alert>
             <Alert>
               <TriangleAlertIcon />
-              <AlertTitle>Output is kept on the platform</AlertTitle>
+              <AlertTitle>What your script prints is saved</AlertTitle>
               <AlertDescription>
-                Up to 32 KiB of what the script prints is stored with each Deployment Run. Never print parameter values, secrets or the key, and leave <code>set -x</code> off.
+                The first 32 KiB of output is kept with each run. Never print parameter values, secrets or the key, and leave <code>set -x</code> off.
               </AlertDescription>
             </Alert>
             <Alert>
-              <AlertTitle>Guard required parameters</AlertTitle>
+              <AlertTitle>Check required parameters</AlertTitle>
               <AlertDescription>
-                The platform refuses a Deployment without them, but an Agent that predates script parameters ignores them altogether. Step 2 of the example makes that fail
-                rather than half-deploy; the Agents page shows which Agents are outdated.
+                Older Agents run scripts without any parameters. Step 2 of each example stops the script when a required one is missing, so nothing is half-installed. The
+                Agents page shows which Agents need updating.
               </AlertDescription>
             </Alert>
             <Alert>
-              <AlertTitle>It runs as the Agent</AlertTitle>
-              <AlertDescription>With the Agent's rights, on the Agent's host. Review a script as you would code you deploy, and quote every variable you use.</AlertDescription>
+              <AlertTitle>It runs with the Agent's access</AlertTitle>
+              <AlertDescription>Review a script as you would any code you put on a server, and put quotes around every variable you use.</AlertDescription>
             </Alert>
           </div>
         </GuideSection>
 
         <GuideSection guide="deployment-scripts" id="refused">
-          <p className="text-muted-foreground">The platform reads the parameter section at upload and refuses a version it cannot use, saying why.</p>
+          <p className="text-muted-foreground">When you upload a script, the platform checks its parameter block. If something is wrong, it refuses the upload and tells you why.</p>
           <div className="rounded-md border">
             <Table>
               <TableHeader>
                 <TableRow>
-                  <TableHead>The message says</TableHead>
-                  <TableHead>What to do</TableHead>
+                  <TableHead>If the message says</TableHead>
+                  <TableHead>Do this</TableHead>
                 </TableRow>
               </TableHeader>
               <TableBody>

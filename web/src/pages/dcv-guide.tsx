@@ -12,19 +12,19 @@ const EXAMPLE_RULES: [string, string, string][] = [
 ];
 const EXAMPLE_NAMES: [string, string, string][] = [
   ["www.example.com", "Zone example.com · Direct", "The only zone that contains it"],
-  ["app.corp.example.com", "Zone corp.example.com · Delegated", "corp.example.com is longer than example.com"],
+  ["app.corp.example.com", "Zone corp.example.com · Delegated", "corp.example.com is closer to the name than example.com"],
   ["legacy.corp.example.com", "Name legacy.corp.example.com · Direct", "A name's own rule beats any zone"],
-  ["*.legacy.corp.example.com", "Name legacy.corp.example.com · Direct", "A name's rule covers its wildcard"],
-  ["api.legacy.corp.example.com", "Zone corp.example.com · Delegated", "A name's rule does not cover names beneath it"],
-  ["shop.example.org", "No rule · Direct", "Whichever DNS Provider publishes example.org, if any"],
+  ["*.legacy.corp.example.com", "Name legacy.corp.example.com · Direct", "A name's rule also covers its wildcard"],
+  ["api.legacy.corp.example.com", "Zone corp.example.com · Delegated", "A name's rule doesn't cover names under it"],
+  ["shop.example.org", "No rule · Direct", "Uses the DNS Provider that has example.org, if there is one"],
 ];
 
 const FAILURES: [string, string][] = [
-  ["No DNS Provider can publish the name", "No rule applies and none of your DNS Providers holds its zone, or the rule names one that does not. Add a DNS Provider, or a rule."],
-  ["The CNAME is missing, or points elsewhere (Delegated)", "Create the CNAME exactly as the platform shows it, in the DNS of the name's own domain. The Managed Certificate's overview shows each name's record and whether DNS has it."],
-  ["The record was published but did not show in DNS", "The DNS Provider writes to a zone the internet does not see, such as internal DNS, or DNS was slow to answer. Relay the provider through an Agent, or delegate the names."],
-  ["The DNS Provider refused the update, or could not be reached", "Test the DNS Provider under DNS Providers: its credentials, and whether the platform (or its relay Agent) can reach it."],
-  ["A rule cannot be saved", "Its domain is a wildcard (give the base name instead), or there is a rule for that name or zone already."],
+  ["No DNS Provider can add the record", "None of your DNS Providers has the name's domain, or the rule points to one that doesn't. Add a DNS Provider, or a rule."],
+  ["The CNAME is missing or wrong (Delegated)", "Add the CNAME exactly as the platform shows it, in your domain's DNS. The Managed Certificate's overview shows each name's record and whether it is in place."],
+  ["The record was added but couldn't be seen", "The DNS Provider may be internal DNS that the internet can't see, or DNS was slow. Relay the DNS Provider through an Agent, or use Delegated."],
+  ["The DNS Provider refused the change, or couldn't be reached", "Use Test on the DNS Providers page to check its login details and that it can be reached."],
+  ["A rule can't be saved", "Rules can't use a wildcard: use the base name instead. Or there is already a rule for that name or zone."],
 ];
 
 /** How names are validated for an ACME CA: Direct or Delegated, which rule applies to a name, setting up delegation, and failures. */
@@ -38,32 +38,32 @@ export function DcvGuidePage() {
       guide="dcv"
       title="Choosing how names are validated"
       back={{ to: "/organizations/$orgId/dcv", label: "Domain Control Validation", orgId }}
-      lede="Before an ACME CA issues a Certificate, it asks for proof that you control each name: a TXT record at _acme-challenge.<name>. The platform publishes that record for you, in one of two ways, and DCV Rules choose which for each name. Private CAs need none of this."
+      lede="Before an ACME CA, such as Let's Encrypt, issues a Certificate, it checks that you control each name on it. The platform proves this for you by adding a short-lived DNS record. There are two ways it can do that, and DCV Rules choose which one each name uses. Private CAs don't need any of this."
     >
       <GuideSection guide="dcv" id="methods">
         <div className="grid gap-3 md:grid-cols-2">
           <div className="flex flex-col gap-2 rounded-lg border p-4">
             <span className="text-base font-semibold">Direct</span>
-            <span className="rounded-md border bg-muted/50 p-2">Platform, through a DNS Provider</span>
-            <span aria-hidden="true" className="text-center text-muted-foreground">↓ writes TXT</span>
+            <span className="rounded-md border bg-muted/50 p-2">The platform, through your DNS Provider</span>
+            <span aria-hidden="true" className="text-center text-muted-foreground">↓ adds a TXT record</span>
             <span className="rounded-md border bg-muted/50 p-2">
-              <code>_acme-challenge.www.example.com</code> in the domain's own zone
+              <code>_acme-challenge.www.example.com</code> in your domain's DNS
             </span>
             <span>
-              <strong>Use when</strong> the platform may write to the domain's zone. Nothing to set up per name.
+              <strong>Use it when</strong> the platform is allowed to change your domain's DNS. There is nothing else to set up.
             </span>
           </div>
           <div className="flex flex-col gap-2 rounded-lg border p-4">
             <span className="text-base font-semibold">Delegated</span>
             <span className="rounded-md border bg-muted/50 p-2">
-              <code>_acme-challenge.app.corp.example.com</code> CNAME, made once by you
+              <code>_acme-challenge.app.corp.example.com</code>, a CNAME you add once
             </span>
             <span aria-hidden="true" className="text-center text-muted-foreground">↓ points to</span>
             <span className="rounded-md border bg-muted/50 p-2">
-              <code>app.corp.example.com.acme.example.net</code> in a Validation Zone, where the platform writes the TXT
+              <code>app.corp.example.com.acme.example.net</code> in a Validation Zone, where the platform adds the TXT record
             </span>
             <span>
-              <strong>Use when</strong> the platform must not write to the domain's zone. One CNAME per name, then nothing more.
+              <strong>Use it when</strong> the platform must not change your domain's DNS. You add one CNAME record per name, once.
             </span>
           </div>
         </div>
@@ -71,39 +71,39 @@ export function DcvGuidePage() {
 
       <GuideSection guide="dcv" id="rules">
         <p>
-          A rule is for one <strong>name</strong> (and its wildcard) or for a <strong>zone</strong> (the name and everything beneath it). For each name, the platform takes:
+          A rule is for one <strong>name</strong> (and its wildcard), or for a <strong>zone</strong>: a domain and everything under it. For each name, the platform uses:
         </p>
         <Steps>
           {[
             <>the name's own rule, if it has one;</>,
             <>
-              else the rule of the <strong>longest</strong> zone that contains it;
+              otherwise, the rule for the zone <strong>closest</strong> to the name;
             </>,
-            <>else no rule: Direct, through whichever DNS Provider publishes the name. If none does, DCV fails.</>,
+            <>otherwise, Direct, through whichever DNS Provider has the name. If none does, validation fails.</>,
           ]}
         </Steps>
         <span className="font-medium">With these rules</span>
         <ExampleTable head={["Rule", "Method", "Through"]} rows={EXAMPLE_RULES} />
         <span className="font-medium">These names get</span>
         <ExampleTable head={["Name", "Decided by", "Why"]} rows={EXAMPLE_NAMES} mono />
-        <p className="text-muted-foreground">Not sure? Type any name into “Which rule applies?” on the Domain Control Validation page.</p>
+        <p className="text-muted-foreground">Not sure? Type a name into “Which rule applies?” on the Domain Control Validation page.</p>
       </GuideSection>
 
       <GuideSection guide="dcv" id="delegate">
         <Steps>
           {[
             <>
-              <strong>Add a Validation Zone</strong>: a zone the platform may write to, on one of your DNS Providers, such as <code>acme.example.net</code>. It belongs to this
-              Organization alone.
+              <strong>Add a Validation Zone</strong>: a zone on one of your DNS Providers that the platform may change, such as <code>acme.example.net</code>. Only this
+              Organization uses it.
             </>,
             <>
-              <strong>Add a rule</strong> for the names or zone to delegate, choosing that Validation Zone.
+              <strong>Add a rule</strong> for the names or zone you want to delegate, and choose that Validation Zone.
             </>,
             <>
-              <strong>Create each CNAME</strong> in the name's own DNS, exactly as the platform shows it. A wildcard uses its base name's record.
+              <strong>Add each CNAME</strong> to your domain's DNS, exactly as the platform shows it. A wildcard uses the same record as its base name.
             </>,
             <>
-              <strong>Check it</strong>: the Managed Certificate's overview says whether DNS has each CNAME, or from anywhere on the internet:
+              <strong>Check it</strong>: the Managed Certificate's overview shows whether each CNAME is in place. Or check it yourself:
             </>,
           ]}
         </Steps>
