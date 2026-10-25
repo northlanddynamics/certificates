@@ -2,10 +2,10 @@
 // here: how its value is read, and the condition it adds. Filters combine (all must hold), and apply within what the
 // caller may see.
 import { z } from "@hono/zod-openapi";
-import { and, eq, inArray, isNotNull, isNull, sql, type SQL } from "drizzle-orm";
-import { ACME_ENVIRONMENTS, type AcmeEnvironment } from "../issuance/acme/certificate-authority";
+import { and, eq, inArray, isNotNull, isNull, or, sql, type SQL } from "drizzle-orm";
+import { ACME_CA_TAGS, BUILT_IN_ACME_CAS, type AcmeCaTag } from "../issuance/acme/acme-cas";
 import { KEY_ALGORITHMS, KEY_CUSTODIES, type KeyAlgorithm } from "../pki/csr";
-import { agent, certificate, deployment, issuance, managedCertificate } from "../platform/db/schema";
+import { acmeCa, agent, certificate, deployment, issuance, managedCertificate } from "../platform/db/schema";
 import { agentOffline } from "../agents/agents";
 import { anyOf } from "../platform/http";
 import { hasNoOwners } from "./owners";
@@ -40,7 +40,14 @@ const currentCertificateEnds = sql`(select ${certificate.notAfter} from ${certif
 /** Has a Certificate, and an Issuance has failed since the last that succeeded, which is then a Renewal: what `renewal.failing` on the Managed Certificate says. */
 const renewalFailing = sql`exists (select 1 from ${certificate} where ${certificate.managedCertificateId} = ${managedCertificate.id}) and exists (select 1 from ${issuance} where ${issuance.managedCertificateId} = ${managedCertificate.id} and ${issuance.status} = 'failed' and ${issuance.createdAt} > coalesce((select max(s.created_at) from ${issuance} as s where s.managed_certificate_id = ${managedCertificate.id} and s.status = 'succeeded'), '-infinity'::timestamptz))`;
 
+/** `text` as a LIKE pattern that matches it anywhere, its wildcards taken literally. */
+const containing = (text: string) => `%${text.replace(/[\\%_]/g, (c) => `\\${c}`)}%`;
+
 export const INVENTORY_FILTERS = {
+  q: filter(
+    z.string().trim().min(1).max(200).meta({ description: "Matches part of any of its names (the common name is one of them), ignoring case." }),
+    (value) => sql`exists (select 1 from unnest(${managedCertificate.names}) as name where name ilike ${containing(value)})`,
+  ),
   expiringSoon: filter(on.meta({ description: `Whose current Certificate ends within ${EXPIRING_SOON_DAYS} days, or has ended.` }), (_, { now }) => {
     const threshold = new Date(now.getTime() + EXPIRING_SOON_DAYS * 86_400_000);
     return sql`${currentCertificateEnds} <= ${threshold}`;
@@ -54,7 +61,13 @@ export const INVENTORY_FILTERS = {
   pendingApproval: filter(on.meta({ description: "Proposals waiting for Approval." }), () => eq(managedCertificate.approvalStatus, "pending")),
   noOwners: filter(on.meta({ description: "Managed Certificates with no Owners." }), () => hasNoOwners()),
   keyCustody: filter(z.enum(KEY_CUSTODIES).meta({ description: "Whose private key is held this way." }), (value) => eq(managedCertificate.keyCustody, value)),
-  environment: filter(anyOf(ACME_ENVIRONMENTS).meta({ description: "Issued through one of these ACME environments, comma-separated." }), (value) => inArray(managedCertificate.environment, value.split(",") as unknown as AcmeEnvironment[])),
+  tag: filter(anyOf(ACME_CA_TAGS).meta({ description: "Issued from an ACME CA tagged with one of these, comma-separated." }), (value) => {
+    const tags = value.split(",") as AcmeCaTag[];
+    // A built-in ACME CA's tag is in code; a custom one's is on its row, which is the Managed Certificate's Organization's.
+    const builtIn = BUILT_IN_ACME_CAS.filter((ca) => tags.includes(ca.tag)).map((ca) => ca.id);
+    const custom = sql`exists (select 1 from ${acmeCa} where ${acmeCa.id}::text = ${managedCertificate.acmeCaId} and ${acmeCa.organizationId} = ${managedCertificate.organizationId} and ${inArray(acmeCa.tag, tags)})`;
+    return or(inArray(managedCertificate.acmeCaId, builtIn), custom)!;
+  }),
   keyAlgorithm: filter(anyOf(KEY_ALGORITHMS).meta({ description: "Whose key is of one of these algorithms, comma-separated." }), (value) => inArray(managedCertificate.keyAlgorithm, value.split(",") as unknown as KeyAlgorithm[])),
   archived: filter(
     on.meta({ description: "Only archived Managed Certificates, which are otherwise left out." }),

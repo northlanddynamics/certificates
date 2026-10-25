@@ -1,24 +1,32 @@
 import { useMutation, useQuery } from "@tanstack/react-query";
-import { ClipboardCheckIcon, GlobeIcon, KeyRoundIcon, LandmarkIcon, PlusIcon, ShieldCheckIcon, UsersIcon, type LucideIcon } from "lucide-react";
+import { ClipboardCheckIcon, FileBadgeIcon, GlobeIcon, KeyRoundIcon, LandmarkIcon, PlusIcon, ShieldCheckIcon, TriangleAlertIcon, UsersIcon, type LucideIcon } from "lucide-react";
 import { useEffect, useState, type ReactNode } from "react";
 import { ConfirmDialog } from "@/components/confirm-dialog";
-import { KeySource, SaveKey, csrOf, emptyKeySource, keyAtRisk, useKeySourceReady, type KeySourceState } from "@/components/csr-key-source";
+import { KeySource, SaveKey, csrOf, emptyKeySource, keyAtRisk, useKeySourceReady, withNewKey, type KeySourceState } from "@/components/csr-key-source";
 import { IssuerChoiceFields, useIssuerChoice } from "@/components/issuer-choice";
-import { SteppedForm, STEPPED_DIALOG } from "@/components/stepped-form";
+import { SteppedForm, STEPPED_DIALOG, type Missing } from "@/components/stepped-form";
 import { SummaryRows } from "@/components/summary-rows";
+import { Alert, AlertDescription, AlertTitle } from "@/components/ui/alert";
 import { Button } from "@/components/ui/button";
 import { Checkbox } from "@/components/ui/checkbox";
 import { Dialog, DialogContent, DialogDescription, DialogTitle, DialogTrigger } from "@/components/ui/dialog";
-import { Field, FieldDescription, FieldError, FieldGroup, FieldLabel, FieldLegend, FieldSet } from "@/components/ui/field";
+import { Field, FieldContent, FieldDescription, FieldError, FieldGroup, FieldLabel, FieldLegend, FieldSet, FieldTitle } from "@/components/ui/field";
+import { RadioGroup, RadioGroupItem } from "@/components/ui/radio-group";
 import { Textarea } from "@/components/ui/textarea";
-import { api, can, ownerFromKey, ownerKey, type ManagedCertificate, type Me } from "@/lib/api";
+import { ActionLabel } from "@/components/page-header";
+import { acmeCaName } from "@/lib/acme-cas";
+import { api, can, ownerFromKey, ownerKey, type CertificateProfile, type ManagedCertificate, type Me } from "@/lib/api";
 import { KEY_ALGORITHM_LABELS, type KeyAlgorithm } from "@/lib/csr-generator";
 import { nameProblems, splitNames } from "@/lib/csr-names";
-import { permitsOnlyLabel } from "@/lib/private-ca";
+import { chosenValidityLabel, findIssuingCa, permitsOnlyLabel } from "@/lib/private-ca";
+import { CUSTOM, keyStepFor, nameRulesLabel, profileOptions, stepsFor } from "@/lib/profile-choice";
 
 type Org = Me["organizations"][number];
 
 const ALL_STEPS = [
+  // Only when the Organization has a Certificate Profile to offer, or the caller may request only through one.
+  { id: "profile", title: "Choose a profile", icon: FileBadgeIcon },
+  // Not on a profile, which fixes the issuer, nor for a caller who may request only through one.
   { id: "authority", title: "Certificate Authority", icon: LandmarkIcon },
   { id: "names", title: "Domain names", icon: GlobeIcon },
   { id: "key", title: "Key and CSR", icon: KeyRoundIcon },
@@ -60,7 +68,7 @@ export function NewManagedCertificateDialog({ org, onCreated }: { org: Org; onCr
       <DialogTrigger asChild>
         <Button>
           <PlusIcon />
-          New Managed Certificate
+          <ActionLabel>New Managed Certificate</ActionLabel>
         </Button>
       </DialogTrigger>
       <DialogContent className={STEPPED_DIALOG}>
@@ -96,12 +104,22 @@ function NewManagedCertificateForm({
   onAtRisk: (atRisk: boolean) => void;
   onCreated: (created: ManagedCertificate) => void;
 }) {
-  const [step, setStep] = useState<StepId>("authority");
-  const choice = useIssuerChoice(org.id, { canReadAccounts: can(org, "acmeAccount", "read"), canReadPrivateCas: can(org, "privateCa", "read") });
-  const { chosenCa, validityOk, keyAlgorithms } = choice;
+  const [step, setStep] = useState<StepId>("profile");
+  const choice = useIssuerChoice(org.id, { canReadPrivateCas: can(org, "privateCa", "read"), canRegisterAcmeAccounts: can(org, "acmeAccount", "create") });
+  const { chosenCa, validityOk } = choice;
+  const profiles = useQuery({ queryKey: ["certificate-profiles", org.id], queryFn: () => api.certificateProfiles(org.id), enabled: can(org, "certificateProfile", "read") });
+  // Custom only for those who may request without a profile: the Organization may require one of those who may not create outright.
+  const customOpen = org.requestsWithoutProfile;
+  const profileChoices = profileOptions(profiles.data?.items ?? [], customOpen);
+  // The profile step's choice: a profile's id, Custom, or none yet.
+  const [profileValue, setProfileValue] = useState<string | null>(null);
+  const profile = profiles.data?.items.find((p) => p.enabled && p.id === profileValue);
+  const keyStep = keyStepFor(profile, choice.keyAlgorithms);
+  const profileRules = profileRulesText(profile, direct);
+  const { keyAlgorithms } = keyStep;
   const [names, setNames] = useState("");
   const [keyAlgorithm, setKeyAlgorithm] = useState<KeyAlgorithm>("ecdsa-p256");
-  // Only what the chosen CA takes is offered: choosing a CA that does not take the key algorithm chosen moves to its first.
+  // Only what the chosen profile allows, or else what the chosen CA takes, is offered: choosing a CA that does not take the key algorithm chosen moves to its first.
   useEffect(() => {
     if (keyAlgorithms.length > 0 && !keyAlgorithms.includes(keyAlgorithm)) setKeyAlgorithm(keyAlgorithms[0]!);
   }, [keyAlgorithms, keyAlgorithm]);
@@ -110,7 +128,9 @@ function NewManagedCertificateForm({
     setKeySourceState(next);
     onAtRisk(keyAtRisk(next));
   };
-  const [owners, setOwners] = useState<string[]>([]);
+  // The creator to begin with, who may untick themselves: otherwise it starts with nobody to hold its key or hear about it.
+  const userId = useQuery({ queryKey: ["me"], queryFn: api.me }).data?.user.id;
+  const [owners, setOwners] = useState<string[]>(() => (userId ? [ownerKey({ type: "user", id: userId })] : []));
   const people = useQuery({ queryKey: ["members", org.id], queryFn: () => api.members(org.id) });
   const teams = useQuery({ queryKey: ["teams", org.id], queryFn: () => api.teams(org.id) });
   const create = useMutation({
@@ -119,7 +139,7 @@ function NewManagedCertificateForm({
         names: splitNames(names),
         keyAlgorithm,
         csr: csrOf(keySource, splitNames(names), keyAlgorithm),
-        ...choice.request,
+        ...(profile ? { profileId: profile.id } : choice.request),
         owners: owners.map(ownerFromKey),
       }),
     onSuccess: onCreated,
@@ -128,49 +148,114 @@ function NewManagedCertificateForm({
     ...(teams.data?.items.map((t) => ({ key: ownerKey({ type: "team", id: t.id }), label: `${t.name} (Team)` })) ?? []),
     ...(people.data?.items.map((p) => ({ key: ownerKey({ type: "user", id: p.userId }), label: p.email })) ?? []),
   ];
+  // A profile makes the creator an Owner, and its default Team, whatever is ticked.
+  const fixedOwners = profile ? [...(userId ? [ownerKey({ type: "user", id: userId })] : []), ...(profile.defaultTeam ? [ownerKey({ type: "team", id: profile.defaultTeam.id })] : [])] : [];
+  const ownedBy = (key: string) => owners.includes(key) || fixedOwners.includes(key);
 
   const parsedNames = splitNames(names);
   const problems = nameProblems(parsedNames);
   const generating = keySource.mode === "generate";
   const keyReady = useKeySourceReady(keySource, parsedNames, keyAlgorithm);
-  const steps = ALL_STEPS.filter((s) => s.id !== "save" || generating);
-  // Whether each step holds what it needs. The Authority step does unless its validity is out of range (one CA is always chosen). The Key step does once a key is
-  // generated for these names, or a CSR that matches them is pasted; the Save step once that key is saved and the user says so. The Ownership and Review steps
-  // always do: Owners are optional, and Review only shows what was entered.
-  const complete: Record<StepId, boolean> = {
-    authority: validityOk,
-    names: problems.length === 0,
-    key: generating ? csrOf(keySource, parsedNames, keyAlgorithm) !== "" : keyReady,
-    save: keyReady && keySource.confirmed,
-    ownership: true,
-    review: true,
+  const steps = stepsFor(
+    ALL_STEPS.filter((s) => s.id !== "save" || generating),
+    { profilesOffered: profileChoices.some((c) => c.value !== CUSTOM), customOpen, profile },
+  );
+  // The step that is open: the first, when the one chosen is not among them (no profiles to offer after all).
+  const shown = steps.some((s) => s.id === step) ? step : steps[0]!.id;
+  // What each step still needs. The Authority step needs nothing unless its validity is out of range (one CA is always chosen). The Key step needs a key
+  // generated for these names, or a pasted CSR that matches them; the Save step that key saved and the user saying so. The Ownership and Review steps need
+  // nothing: Owners are optional, and Review only shows what was entered.
+  const missing: Partial<Record<StepId, Missing>> = {
+    profile: (customOpen && profileValue === CUSTOM) || profile !== undefined ? undefined : { reason: "Choose a profile." },
+    authority: !choice.issuer
+      ? { reason: "Choose where it is issued from." }
+      : validityOk
+        ? undefined
+        : { reason: "Give a validity the Issuing CA allows.", field: "new-mc-validity" },
+    names: problems.length === 0 ? undefined : { reason: problems[0]!, field: "new-mc-names" },
+    key: generating
+      ? csrOf(keySource, parsedNames, keyAlgorithm) !== ""
+        ? undefined
+        : { reason: keySource.generated ? "Generate a new key for these names first." : "The key could not be made here.", field: "new-mc-key-generate" }
+      : keyReady
+        ? undefined
+        : { reason: "Paste a CSR for these names and key type.", field: "new-mc-key-pasted" },
+    save: !keySource.keySaved ? { reason: "Download or copy the key first." } : !keySource.confirmed ? { reason: "Tick that you've stored the key.", field: "save-key-confirm" } : undefined,
   };
 
   return (
     <SteppedForm
       title={direct ? "New Managed Certificate" : "Propose a Managed Certificate"}
       steps={steps}
-      step={step}
+      step={shown}
       onStep={setStep}
-      complete={complete}
+      missing={missing}
+      // Next makes the first key; a new one, for changed names, is asked for on the step itself.
+      resolve={{
+        key: async () => {
+          if (!generating || keySource.generated) return false;
+          try {
+            setKeySource(await withNewKey(keySource, parsedNames, keyAlgorithm));
+            return true;
+          } catch {
+            return false;
+          }
+        },
+      }}
       submitLabel={direct ? "Create and issue" : "Propose"}
       pending={create.isPending}
       onSubmit={() => create.mutate()}
       tall
     >
-      {step === "authority" && (
+      {shown === "profile" && (
+        <FieldSet>
+          <FieldLegend>Choose a profile</FieldLegend>
+          <FieldDescription>
+            A Certificate Profile sets where it is issued from and the key it takes, so you enter only the names and the CSR.{" "}
+            {direct ? "Issuance starts as soon as it is created." : "An Approver must approve it before any Certificate is issued."}
+          </FieldDescription>
+          {!customOpen && (
+            <FieldDescription>
+              {profiles.isLoading
+                ? "Loading…"
+                : profileChoices.length === 0
+                  ? "The Organization requires a Certificate Profile, and none is available to you. Ask an Organization Administrator for one."
+                  : "The Organization requires a Certificate Profile: choose one."}
+            </FieldDescription>
+          )}
+          <RadioGroup value={profileValue ?? ""} onValueChange={setProfileValue}>
+            {profileChoices.map(({ value, title, description }) => {
+              const rules = profileRulesText(profiles.data?.items.find((p) => p.id === value), direct);
+              return (
+                <FieldLabel key={value} htmlFor={`new-mc-profile-${value}`}>
+                  <Field orientation="horizontal">
+                    <FieldContent>
+                      <FieldTitle>{title}</FieldTitle>
+                      {description && <FieldDescription>{description}</FieldDescription>}
+                      {rules && <FieldDescription>Names: {rules}</FieldDescription>}
+                    </FieldContent>
+                    <RadioGroupItem value={value} id={`new-mc-profile-${value}`} />
+                  </Field>
+                </FieldLabel>
+              );
+            })}
+          </RadioGroup>
+        </FieldSet>
+      )}
+
+      {shown === "authority" && (
         <FieldSet>
           <FieldLegend>Where should it be issued from?</FieldLegend>
           <FieldDescription>
             {direct ? "Issuance starts as soon as it is created." : "An Approver must approve it before any Certificate is issued."} An ACME CA issues it under the
-            Organization's account for the environment you choose, after checking control of the names (DCV); an Issuing CA of one of the Organization's Private CAs issues it
+            Organization's account with the ACME CA you choose, after checking control of the names (DCV); an Issuing CA of one of the Organization's Private CAs issues it
             with no DCV.
           </FieldDescription>
           <IssuerChoiceFields choice={choice} idPrefix="new-mc" trying="an Issuance" />
         </FieldSet>
       )}
 
-      {step === "names" && (
+      {shown === "names" && (
         <FieldGroup>
           <Field data-invalid={names.trim() !== "" && problems.length > 0}>
             <FieldLabel htmlFor="new-mc-names">Domain names</FieldLabel>
@@ -183,7 +268,12 @@ function NewManagedCertificateForm({
               onChange={(e) => setNames(e.target.value)}
             />
             <FieldDescription>One per line; wildcards as *.example.com. The certificate is issued for exactly these names.</FieldDescription>
-            {chosenCa && <FieldDescription>{permitsOnlyLabel(chosenCa)}</FieldDescription>}
+            {!profile && chosenCa && <FieldDescription>{permitsOnlyLabel(chosenCa)}</FieldDescription>}
+            {profile && profileRules && (
+              <FieldDescription>
+                Names through {profile.name}: {profileRules}
+              </FieldDescription>
+            )}
             {names.trim() !== "" && problems.map((problem) => <FieldError key={problem}>{problem}</FieldError>)}
           </Field>
           {parsedNames.length > 0 && problems.length === 0 && (
@@ -194,24 +284,25 @@ function NewManagedCertificateForm({
         </FieldGroup>
       )}
 
-      {step === "key" && (
+      {shown === "key" && (
         <FieldSet>
           <FieldLegend>How will you provide the CSR?</FieldLegend>
           <KeySource
             names={parsedNames}
             keyAlgorithm={keyAlgorithm}
             keyAlgorithms={keyAlgorithms}
-            onKeyAlgorithmChange={setKeyAlgorithm}
+            onKeyAlgorithmChange={keyStep.chosen ? setKeyAlgorithm : undefined}
             onNamesChange={(asked) => setNames(asked.join("\n"))}
             state={keySource}
             onChange={setKeySource}
             saveInline={false}
+            generateOnNext
             idPrefix="new-mc-key"
           />
         </FieldSet>
       )}
 
-      {step === "save" && (
+      {shown === "save" && (
         <FieldSet>
           <FieldLegend>Save your private key</FieldLegend>
           <FieldDescription>Next stays off until you have downloaded or copied it. Closing this dialog before then asks first.</FieldDescription>
@@ -219,18 +310,22 @@ function NewManagedCertificateForm({
         </FieldSet>
       )}
 
-      {step === "ownership" && (
+      {shown === "ownership" && (
         <FieldGroup>
           <FieldSet>
             <FieldLegend>Owners</FieldLegend>
-            <FieldDescription>Optional: the users and Teams accountable for it.</FieldDescription>
+            <FieldDescription>
+              Optional: the users and Teams accountable for it.
+              {profile && ` Through ${profile.name}, you${profile.defaultTeam ? ` and the Team ${profile.defaultTeam.name}` : ""} become Owners as well.`}
+            </FieldDescription>
             <div className="flex max-h-72 flex-col gap-3 overflow-y-auto rounded-md border p-3">
               {ownerChoices.length === 0 && !people.isPending && !teams.isPending && <span className="text-sm text-muted-foreground">No one to choose from yet.</span>}
               {ownerChoices.map(({ key, label }) => (
                 <Field key={key} orientation="horizontal">
                   <Checkbox
                     id={`new-mc-owner-${key}`}
-                    checked={owners.includes(key)}
+                    checked={ownedBy(key)}
+                    disabled={fixedOwners.includes(key)}
                     onCheckedChange={(checked) => setOwners(checked === true ? [...owners, key] : owners.filter((o) => o !== key))}
                   />
                   <FieldLabel htmlFor={`new-mc-owner-${key}`} className="font-normal">
@@ -243,7 +338,7 @@ function NewManagedCertificateForm({
         </FieldGroup>
       )}
 
-      {step === "review" && (
+      {shown === "review" && (
         <FieldGroup>
           <FieldSet>
             <FieldLegend>Review</FieldLegend>
@@ -251,8 +346,9 @@ function NewManagedCertificateForm({
               {direct ? "Issuance starts as soon as it is created." : "An Approver must approve it before any Certificate is issued."} Use Back to change anything.
             </FieldDescription>
             <Summary
-              issuer={choice.title ?? ""}
-              validity={choice.validityText}
+              profile={profile?.name ?? null}
+              issuer={profile ? profileIssuerTitle(profile, choice) : (choice.title ?? "")}
+              validity={profile ? profileValidityText(profile) : choice.validityText}
               names={parsedNames}
               keyAlgorithm={keyAlgorithm}
               csr={
@@ -262,9 +358,16 @@ function NewManagedCertificateForm({
                     ? "Made with openssl"
                     : "Pasted"
               }
-              owners={ownerChoices.filter((c) => owners.includes(c.key)).map((c) => c.label)}
+              owners={ownerChoices.filter((c) => ownedBy(c.key)).map((c) => c.label)}
             />
           </FieldSet>
+          {owners.length + fixedOwners.length === 0 && (
+            <Alert className="border-warning/50 bg-warning/5">
+              <TriangleAlertIcon className="text-warning" />
+              <AlertTitle>Nobody will own it</AlertTitle>
+              <AlertDescription>Its key is held by its Owners, and they are who hear when it needs attention. Go back to Ownership to add one.</AlertDescription>
+            </Alert>
+          )}
           {create.error && <FieldError>{create.error.message}</FieldError>}
         </FieldGroup>
       )}
@@ -272,8 +375,41 @@ function NewManagedCertificateForm({
   );
 }
 
-function Summary({ issuer, validity, names, keyAlgorithm, csr, owners }: { issuer: string; validity: string | null; names: string[]; keyAlgorithm: KeyAlgorithm; csr: string; owners: string[] }) {
+/** Where a profile issues from, in words: the ACME CA by name, the Issuing CA by name where the caller may read the Private CAs. */
+function profileIssuerTitle(profile: CertificateProfile, choice: ReturnType<typeof useIssuerChoice>) {
+  const { issuer } = profile;
+  return issuer.kind === "acme" ? acmeCaName(choice.acmeCas, issuer.acmeCaId) : (findIssuingCa(choice.activeCas, issuer.issuingCaId)?.name ?? "A Private CA of the Organization");
+}
+
+/** A profile's name rules in words, saying when the caller is not held to them; none for no profile, or one without rules. */
+function profileRulesText(profile: CertificateProfile | undefined, direct: boolean) {
+  const rules = profile && nameRulesLabel(profile.nameRules);
+  if (!rules) return null;
+  return direct ? `${rules} As an Organization Administrator, you are held only to the CA's limits.` : rules;
+}
+
+/** The validity a profile fixes, in words; none for an ACME CA, which decides its own. */
+const profileValidityText = (profile: CertificateProfile) => (profile.issuer.kind === "acme" ? null : chosenValidityLabel(profile.validityDays));
+
+function Summary({
+  profile,
+  issuer,
+  validity,
+  names,
+  keyAlgorithm,
+  csr,
+  owners,
+}: {
+  profile: string | null;
+  issuer: string;
+  validity: string | null;
+  names: string[];
+  keyAlgorithm: KeyAlgorithm;
+  csr: string;
+  owners: string[];
+}) {
   const rows: { label: string; value: ReactNode }[] = [
+    ...(profile ? [{ label: "Certificate Profile", value: profile }] : []),
     { label: "Issued from", value: issuer },
     ...(validity ? [{ label: "Validity", value: validity }] : []),
     { label: "Domain names", value: <ul className="flex flex-col gap-0.5 font-mono text-xs">{names.map((name) => <li key={name}>{name}</li>)}</ul> },

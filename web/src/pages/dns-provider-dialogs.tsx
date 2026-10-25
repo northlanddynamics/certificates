@@ -1,6 +1,6 @@
 import { ClipboardCheckIcon, KeyRoundIcon, NetworkIcon, PlugIcon, PlusIcon, ServerIcon, type LucideIcon } from "lucide-react";
 import { useState, type FormEvent, type ReactNode } from "react";
-import { SteppedForm, STEPPED_DIALOG } from "@/components/stepped-form";
+import { SteppedForm, STEPPED_DIALOG, type Missing } from "@/components/stepped-form";
 import { SummaryRows } from "@/components/summary-rows";
 import { useCertificateText } from "@/components/use-certificate-text";
 import { Button } from "@/components/ui/button";
@@ -11,6 +11,7 @@ import { Input } from "@/components/ui/input";
 import { RadioGroup, RadioGroupItem } from "@/components/ui/radio-group";
 import { Select, SelectContent, SelectItem, SelectTrigger, SelectValue } from "@/components/ui/select";
 import { Textarea } from "@/components/ui/textarea";
+import { ActionLabel } from "@/components/page-header";
 import { TSIG_ALGORITHMS, api, type Agent, type DnsProvider, type DnsProviderSettings, type DnsProviderType } from "@/lib/api";
 import { useAction } from "@/lib/use-action";
 
@@ -80,6 +81,14 @@ const STEPS = {
 type StepId = keyof typeof STEPS;
 const STEP_ORDER: StepId[] = ["type", "connection", "authentication", "relay", "review"];
 
+/** A field a step needs: its value, what to do when it is empty, and its id. */
+type Need = [value: string, reason: string, field: string];
+/** What the first empty one of `needs` asks for, if any is. */
+const firstEmpty = (needs: Need[]): Missing | undefined => {
+  const empty = needs.find(([value]) => value.trim() === "");
+  return empty && { reason: empty[1], field: empty[2] };
+};
+
 /** The secret of a provider as one string: a TSIG key's secret, or the WAPI's `user:password`. */
 const secretOf = (type: DnsProviderType, user: string, secret: string) => (type === "infoblox" ? `${user.trim()}:${secret}` : secret.trim());
 
@@ -110,7 +119,7 @@ export function AddDnsProviderDialog({ orgId, relay }: { orgId: string; relay: R
       <DialogTrigger asChild>
         <Button>
           <PlusIcon />
-          Add a DNS Provider
+          <ActionLabel>Add a DNS Provider</ActionLabel>
         </Button>
       </DialogTrigger>
       <WizardDialogContent title="Add a DNS Provider" description="The secret is stored encrypted and is never shown again.">
@@ -164,14 +173,18 @@ function ProviderWizard({ orgId, provider, relay, onDone }: { orgId: string; pro
   ).map((id) => ({ id, ...STEPS[id] }));
   const [step, setStep] = useState<StepId>(steps[0]!.id);
 
-  const secretGiven = secret !== "" && (fields.type !== "infoblox" || user.trim() !== "");
-  const complete: Record<StepId, boolean> = {
-    type: true,
-    connection: fields.name.trim() !== "" && fields.zone.trim() !== "" && (fields.type === "rfc2136" ? fields.server.trim() !== "" && fields.port !== "" : fields.url.trim() !== "" && fields.view.trim() !== ""),
-    authentication: (fields.type !== "rfc2136" || fields.keyName.trim() !== "") && (editing || secretGiven),
-    relay: true,
-    review: true,
-  };
+  const connection: Need[] = [
+    [fields.name, "Give the DNS Provider a name.", "dns-name"],
+    [fields.zone, "Give the zone it updates.", "dns-zone"],
+  ];
+  if (fields.type === "rfc2136") connection.push([fields.server, "Give the DNS server.", "dns-server"], [fields.port, "Give the server's port.", "dns-port"]);
+  else connection.push([fields.url, "Give the WAPI URL.", "dns-url"], [fields.view, "Give the DNS view.", "dns-view"]);
+  const authentication: Need[] = [];
+  if (fields.type === "rfc2136") authentication.push([fields.keyName, "Give the TSIG key's name.", "dns-key-name"]);
+  // The stored secret is kept when editing.
+  if (!editing && fields.type === "infoblox") authentication.push([user, "Give the WAPI user.", "dns-user"]);
+  if (!editing) authentication.push([secret, `Give the ${SECRET_LABEL[fields.type]}.`, "dns-secret"]);
+  const missing: Partial<Record<StepId, Missing>> = { connection: firstEmpty(connection), authentication: firstEmpty(authentication) };
 
   const relayChanged = editing && relay !== null && (fields.relayAgentIds.length !== provider.relayAgentIds.length || fields.relayAgentIds.some((id) => !provider.relayAgentIds.includes(id)));
   const save = useAction(
@@ -194,7 +207,7 @@ function ProviderWizard({ orgId, provider, relay, onDone }: { orgId: string; pro
       steps={steps}
       step={step}
       onStep={setStep}
-      complete={complete}
+      missing={missing}
       submitLabel={editing ? "Save" : "Add"}
       pending={save.isPending}
       onSubmit={() => save.mutate(undefined)}
@@ -228,14 +241,14 @@ function ProviderWizard({ orgId, provider, relay, onDone }: { orgId: string; pro
           </Field>
           <Field>
             <FieldLabel htmlFor="dns-zone">Zone</FieldLabel>
-            <Input id="dns-zone" value={fields.zone} placeholder="example.com" onChange={(e) => set({ zone: e.target.value })} required />
+            <Input id="dns-zone" value={fields.zone} placeholder="e.g. example.com" onChange={(e) => set({ zone: e.target.value })} required />
             <FieldDescription>The zone the records are published in, and only there.</FieldDescription>
           </Field>
           {fields.type === "rfc2136" ? (
             <div className="grid grid-cols-[1fr_6rem] gap-4">
               <Field>
                 <FieldLabel htmlFor="dns-server">Server</FieldLabel>
-                <Input id="dns-server" value={fields.server} placeholder="ns1.example.com" onChange={(e) => set({ server: e.target.value })} required />
+                <Input id="dns-server" value={fields.server} placeholder="e.g. ns1.example.com" onChange={(e) => set({ server: e.target.value })} required />
               </Field>
               <Field>
                 <FieldLabel htmlFor="dns-port">Port</FieldLabel>
@@ -246,7 +259,7 @@ function ProviderWizard({ orgId, provider, relay, onDone }: { orgId: string; pro
             <>
               <Field>
                 <FieldLabel htmlFor="dns-url">WAPI URL</FieldLabel>
-                <Input id="dns-url" value={fields.url} placeholder="https://gm.example.com/wapi/v2.12" onChange={(e) => set({ url: e.target.value })} required />
+                <Input id="dns-url" value={fields.url} placeholder="e.g. https://gm.example.com/wapi/v2.12" onChange={(e) => set({ url: e.target.value })} required />
                 <FieldDescription>With the WAPI version in it.</FieldDescription>
               </Field>
               <Field>

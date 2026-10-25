@@ -54,6 +54,7 @@ describe("walking skeleton", () => {
         slug: "acme",
         role: "organization-administrator",
         permissions: expect.objectContaining({ invitation: ["create", "cancel"] }),
+        requestsWithoutProfile: true,
       },
     ]);
     const inventory = await h.api(`/api/organizations/${orgId}/managed-certificates`, { cookie });
@@ -97,7 +98,7 @@ describe("walking skeleton", () => {
       names: ["b.test"],
       keyAlgorithm: "ecdsa-p256",
       keyCustody: "owner",
-      environment: "staging",
+      acmeCaId: "letsencrypt-staging",
       csr: "",
     });
     const inv = await h.api(`/api/organizations/${a.orgId}/managed-certificates`, { cookie: a.cookie });

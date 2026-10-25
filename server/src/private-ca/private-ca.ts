@@ -12,7 +12,8 @@ import { and, asc, eq, inArray } from "drizzle-orm";
 import { randomUUID } from "node:crypto";
 import type { Authorizer } from "../tenancy/authorization";
 import { makeCaCsr, makeDeviceCertificate, makeIssuingCa, makeRaCertificate, makeRoot, makeTlsServer, nameConstraintsOf, parseSubject, rootSubjectOf, signedCertificateRefusal, subjectAltNamesOf, type CaKey, type Signer } from "../pki/ca-certificates";
-import { ACME_ENVIRONMENTS, CertificateAuthorityError, type AcmeEnvironment } from "../issuance/acme/certificate-authority";
+import { CertificateAuthorityError } from "../issuance/acme/certificate-authority";
+import { AcmeCaId, DEFAULT_ACME_CA_ID, type AcmeCas } from "../issuance/acme/acme-cas";
 import { publicationOf, type Crls } from "./crl";
 import { KEY_ALGORITHMS, certificateKeyAlgorithmsOn, isMlDsa, mixedChainReason, type KeyAlgorithm, type SigningKeyAlgorithm } from "../pki/csr";
 import type { Db, Tx } from "../platform/db/client";
@@ -196,7 +197,7 @@ export async function findIssuingCa(db: Db | Tx, organizationId: string, issuing
 }
 
 /** The Issuing CA in words, by its common name and its Private CA's name. */
-const issuingCaLabel = ({ issuing, ca }: IssuingCaOf) => `the Issuing CA ${new x509.Name(issuing.subject).getField("CN")[0] ?? issuing.subject} of the Private CA ${ca.name}`;
+export const issuingCaLabel = ({ issuing, ca }: IssuingCaOf) => `the Issuing CA ${new x509.Name(issuing.subject).getField("CN")[0] ?? issuing.subject} of the Private CA ${ca.name}`;
 
 /** Why the Issuing CA issues nothing now: its root is revoked, or it is not active. None when it issues. */
 export function issuingRefusal(of: IssuingCaOf) {
@@ -256,24 +257,26 @@ export async function issuerRefusal(db: Db | Tx, organizationId: string, issuer:
 /** The issuer a Managed Certificate is created or proposed with, or a Deployment set up with. */
 export const IssuerField = z
   .discriminatedUnion("kind", [
-    z.object({ kind: z.literal("acme"), environment: z.enum(ACME_ENVIRONMENTS).default("staging") }),
+    z.object({ kind: z.literal("acme"), acmeCaId: AcmeCaId.default(DEFAULT_ACME_CA_ID) }),
     z.object({ kind: z.literal("private_ca"), issuingCaId: z.string() }),
   ])
-  .openapi({ description: "`acme`: through the Organization's ACME account in `environment`. `private_ca`: from an active Issuing CA of one of the Organization's Private CAs, with no DCV." });
+  .openapi({ description: "`acme`: through the Organization's ACME account with the ACME CA `acmeCaId`, Let's Encrypt Staging unless given. `private_ca`: from an active Issuing CA of one of the Organization's Private CAs, with no DCV." });
 
 /**
- * The issuer asked for: `issuer`, or the ACME kind in `environment`. An Issuing CA must be one of the Organization's,
- * active under an active root, permit the names (normalised), and allow the validity chosen, which only a Private CA
- * lets be chosen.
+ * The issuer asked for: `issuer`, or the ACME kind with the ACME CA `acmeCaId` (Let's Encrypt Staging unless given), which
+ * must be one the Organization can use. An Issuing CA must be one of the Organization's, active under an active root,
+ * permit the names (normalised), and allow the validity chosen, which only a Private CA lets be chosen.
  */
 export async function issuerAsked(
   db: Db,
+  acmeCas: AcmeCas,
   orgId: string,
-  body: { environment?: AcmeEnvironment; issuer?: z.infer<typeof IssuerField>; validityDays?: number; keyAlgorithm: KeyAlgorithm },
+  body: { acmeCaId?: string; issuer?: z.infer<typeof IssuerField>; validityDays?: number; keyAlgorithm: KeyAlgorithm },
   names: string[],
 ): Promise<Issuer> {
-  if (body.issuer && body.environment) throw new HttpError(400, "give either `issuer` or `environment`, not both");
-  const issuer = body.issuer ?? { kind: "acme", environment: body.environment ?? "staging" };
+  if (body.issuer && body.acmeCaId) throw new HttpError(400, "give either `issuer` or `acmeCaId`, not both");
+  const issuer = body.issuer ?? { kind: "acme", acmeCaId: body.acmeCaId ?? DEFAULT_ACME_CA_ID };
+  if (issuer.kind === "acme" && !(await acmeCas.find(orgId, issuer.acmeCaId))) throw new HttpError(422, "the Organization has no such ACME CA");
   const validityDays = body.validityDays ?? null;
   const refusal = await issuerRefusal(db, orgId, issuer, { names, validityDays, keyAlgorithm: body.keyAlgorithm });
   if (refusal) throw new HttpError(refusal.status, refusal.message);

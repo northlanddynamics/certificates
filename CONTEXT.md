@@ -15,7 +15,7 @@ A named group of users within an Organization.
 _Avoid_: group, department
 
 **Owner**:
-An optional user or Team accountable for a Managed Certificate, who can renew it, change who its Owners are, propose a Name Change, and, if a Member, see it: a Member sees only the Managed Certificates they own (directly or through a Team) or proposed, while Approvers and Organization Administrators see them all. A Managed Certificate may have none. Whoever leaves the Organization, or the Team that is deleted, stops being one.
+An optional user or Team accountable for a Managed Certificate, who can renew it, change who its Owners are, propose a Name Change, and, if a Member, see it: a Member sees only the Managed Certificates they own (directly or through a Team) or proposed, while Approvers and Organization Administrators see them all. A Managed Certificate may have none. Whoever requests a Managed Certificate through a Certificate Profile becomes one, an Organization Administrator included. Whoever leaves the Organization, or the Team that is deleted, stops being one.
 _Avoid_: contact, assignee, requester (when meaning the ongoing responsible party)
 
 **Platform Operator**:
@@ -65,12 +65,16 @@ An Approver's authorization of a Managed Certificate's names; required when a no
 _Avoid_: sign-off, authorization
 
 **Proposal**:
-A Managed Certificate that someone who may not create one outright has asked for: it waits for Approval with no Certificates and no Issuance, and is either approved, which starts its Issuance, or rejected with a reason, which ends it. Whoever proposed it cannot decide it.
+A Managed Certificate that someone who may not create one outright has asked for: it waits for Approval with no Certificates and no Issuance, and is either approved, which starts its Issuance, or rejected with a reason, which ends it. Whoever proposed it cannot decide it. One made through a Certificate Profile cannot be approved while that profile is disabled.
 _Avoid_: request, draft, pending certificate
 
 **Name Change**:
-A Managed Certificate's names replaced by others, together with a CSR for the new names. An Owner proposes one and it waits for Approval, with Renewal continuing on the last approved names and CSR until then; an Organization Administrator's applies at once. Applying one, by approval or by an Organization Administrator, has an Issuance of the new names begin, so it is refused while another Issuance runs. At most one is pending at a time, and a rejected one is discarded, leaving the Managed Certificate as it was.
+A Managed Certificate's names replaced by others, together with a CSR for the new names. An Owner proposes one and it waits for Approval, with Renewal continuing on the last approved names and CSR until then; an Organization Administrator's applies at once. Applying one, by approval or by an Organization Administrator, has an Issuance of the new names begin, so it is refused while another Issuance runs. At most one is pending at a time, and a rejected one is discarded, leaving the Managed Certificate as it was. On a Managed Certificate made through a Certificate Profile, a non-administrator's new names must keep to that profile's name rules as they are now, and none is proposed or approved while it is disabled.
 _Avoid_: rename, reissue (when meaning the change of names rather than the Issuance that follows)
+
+**Certificate Profile**:
+An Organization Administrator's template for Managed Certificates that any member of the Organization may propose against. It fixes the issuer (one ACME CA or one Issuing CA), the key algorithms allowed and, for a Private CA, the validity; it gives the starting Renewal Policy and may name a Team as co-Owner; it is always Key Custody: Owner, and names no Subscribers. It may carry name rules (exact names and zones, how many names, whether wildcards) that a non-administrator's names must keep to; an Organization Administrator is held only to the issuer's own limits, and what they request through it is created outright. Its issuer, key algorithm, validity and Renewal Policy are copied onto the Managed Certificate, which records the profile it came from; its name rules and whether it is enabled are not, so they bear on later Name Changes, and while it is disabled nothing is issued under it: no Proposal is made or approved, no Name Change, no Renewal, until it is enabled again or an Organization Administrator detaches the Managed Certificate from it, which leaves an ordinary Managed Certificate. An Organization may require its non-administrators to propose only through one. Unlike an Enrollment Profile, it makes Managed Certificates, which need Approval and have Owners, and disabling it is not for good.
+_Avoid_: template, certificate template, request profile
 
 **Archive**:
 Soft deletion of a Managed Certificate by an Organization Administrator, not even its Owners: it stops issuing, renewing and deploying, and discards a name change waiting for Approval, but it and its Certificates and history are retained. Archiving never revokes.
@@ -81,7 +85,7 @@ Telling the Certificate Authority to distrust one Certificate, with an RFC 5280 
 _Avoid_: cancel, kill, invalidate
 
 **Renewal**:
-Issuing a new Certificate for a Managed Certificate that already has one, under names that are already approved; whether an Issuance is a Renewal follows from the Managed Certificate having a Certificate, not from who asked.
+Issuing a new Certificate for a Managed Certificate that already has one, under names that are already approved; whether an Issuance is a Renewal follows from the Managed Certificate having a Certificate, not from who asked. None happens, automatic or asked for, while its Certificate Profile is disabled.
 _Avoid_: reissue, re-key (unless the key is specifically being replaced)
 
 **Subscriber**:
@@ -122,8 +126,16 @@ _Avoid_: intermediate, sub-CA
 An Issuing CA's list of the Certificates it signed that are revoked and not yet expired (a platform-made root's, of its Issuing CAs), signed by that CA's key and served to anyone, without credentials and over plain HTTP, from the URL each of its certificates names. It is reissued whenever one is revoked, and at least 3 days before it stops being current, 7 days after it was issued.
 _Avoid_: revocation list, blacklist
 
+**ACME CA**:
+A Certificate Authority the platform obtains Certificates from over ACME: a directory URL and what is needed to register an account there. Let's Encrypt Staging and Let's Encrypt Production are built in, the same for every Organization, defined in code by stable ids (`letsencrypt-staging`, `letsencrypt-production`) and never changed. An Organization Administrator may add custom ones of the Organization's own, under names unique within it, at an https directory URL that is not a loopback or link-local address; adding one registers the Organization's ACME Account with it in the same step, and nothing is saved if the CA refuses. Its name, tag and contact email may be changed later, but not its directory URL or External Account Binding: for those it is deleted and added again, which only a custom ACME CA no Managed Certificate or Certificate refers to may be. A Managed Certificate whose issuer is an ACME CA names it by id.
+_Avoid_: ACME provider, ACME server, environment (for the CA itself)
+
+**Environment Tag**:
+A label on an ACME CA, `staging` or `production`, or none, recording what it is for. It changes nothing about how the CA issues: it is shown as a badge and can be filtered on. The built-in ACME CAs carry fixed tags; a past Certificate shows its ACME CA's current tag.
+_Avoid_: environment (as a setting that changes behaviour)
+
 **ACME Account**:
-An Organization's own account with a Certificate Authority, in its staging or production environment. Its key is a Secret.
+An Organization's own account with one ACME CA, at most one per ACME CA. A Managed Certificate on that ACME CA is issued through it. Its key is a Secret.
 _Avoid_: CA account, registration
 
 **Domain Control Validation (DCV)**:
@@ -199,7 +211,7 @@ _Avoid_: audit entry, audit record, log line
 ### Device enrollment
 
 **Enrollment Profile**:
-A protocol-neutral template under which devices obtain client Certificates in bulk from a Private CA's Issuing CA, without per-certificate Approval or Owners. It fixes the Issuing CA, the validity, key usage, EKU and allowed key types of what it issues, and the Enrollment Validator that decides each request; anything a device asks for beyond it is ignored. Devices enroll at its SCEP URL, under an opaque id. Its Issuing CA changes only when an Organization Administrator points it at another, as when the old one is retired, which refuses enrollment until then. A disabled profile refuses every request for good and keeps what it issued; its Device Certificates are pruned a retention period after they end.
+A protocol-neutral template under which devices obtain client Certificates in bulk from a Private CA's Issuing CA, without per-certificate Approval or Owners. It fixes the Issuing CA, the validity, key usage, EKU and allowed key types of what it issues, and the Enrollment Validator that decides each request; anything a device asks for beyond it is ignored. Devices enroll at its SCEP URL, under an opaque id. Its Issuing CA changes only when an Organization Administrator points it at another, as when the old one is retired, which refuses enrollment until then. A disabled profile refuses every request for good and keeps what it issued; its Device Certificates are pruned a retention period after they end. Not to be confused with a Certificate Profile, which makes Managed Certificates.
 _Avoid_: SCEP profile, template
 
 **Enrollment Validator**:

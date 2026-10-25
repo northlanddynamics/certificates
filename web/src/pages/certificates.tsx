@@ -4,6 +4,7 @@ import { ClockIcon } from "lucide-react";
 import { useState } from "react";
 import { Alert, AlertAction, AlertDescription, AlertTitle } from "@/components/ui/alert";
 import { Button } from "@/components/ui/button";
+import { PageHeader } from "@/components/page-header";
 import { type ManagedCertificate } from "@/lib/api";
 import { useOrg } from "@/lib/use-org";
 import { ManagedCertificates } from "./managed-certificates";
@@ -26,10 +27,7 @@ export function CertificatesPage() {
   };
   return (
     <div className="flex flex-col gap-6">
-      <div className="flex items-center justify-between gap-4">
-        <h1 className="text-xl font-semibold">Managed Certificates</h1>
-        <NewManagedCertificateDialog org={org} onCreated={created} />
-      </div>
+      <PageHeader title="Managed Certificates" action={<NewManagedCertificateDialog org={org} onCreated={created} />} />
       {proposed && (
         <Alert>
           <ClockIcon />

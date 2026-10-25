@@ -16,6 +16,7 @@ import { Input } from "@/components/ui/input";
 import { Select, SelectContent, SelectItem, SelectTrigger, SelectValue } from "@/components/ui/select";
 import { Tabs, TabsContent, TabsList, TabsTrigger } from "@/components/ui/tabs";
 import { Table, TableBody, TableCell, TableHead, TableHeader, TableRow } from "@/components/ui/table";
+import { ActionLabel, PageHeader } from "@/components/page-header";
 import { api, roleLabel, type OrgMember, type PendingInvitation } from "@/lib/api";
 import { useAction } from "@/lib/use-action";
 
@@ -62,10 +63,7 @@ export function MembersPage() {
 
   return (
     <div className="flex flex-col gap-6">
-      <div className="flex items-center justify-between gap-4">
-        <h1 className="text-xl font-semibold">Members</h1>
-        <InviteDialog orgId={orgId} roles={roles} />
-      </div>
+      <PageHeader title="Members" action={<InviteDialog orgId={orgId} roles={roles} />} />
       <Tabs defaultValue="members" className="gap-4">
         <TabsList>
           <TabsTrigger value="members">Members</TabsTrigger>
@@ -123,7 +121,7 @@ function RoleSelect({ member }: { member: OrgMember }) {
   const changeRole = useAction((role: string) => api.changeRole(orgId, member.id, role), ["members"]);
   return (
     <div className="flex flex-col gap-1">
-      <Select value={member.role} onValueChange={(role) => changeRole.mutate(role)}>
+      <Select value={member.role} onValueChange={(role) => changeRole.mutate(role, { onError: (error) => toast.error(`${member.email}'s role was not changed`, { description: error.message }) })}>
         <SelectTrigger size="sm" aria-label={`Role of ${member.email}`}>
           <SelectValue />
         </SelectTrigger>
@@ -135,7 +133,6 @@ function RoleSelect({ member }: { member: OrgMember }) {
           ))}
         </SelectContent>
       </Select>
-      {changeRole.error && <span className="text-xs text-destructive">{changeRole.error.message}</span>}
     </div>
   );
 }
@@ -172,6 +169,7 @@ function InviteDialog({ orgId, roles }: { orgId: string; roles: string[] }) {
   const [role, setRole] = useState("member");
   const invite = useAction(() => api.invite(orgId, email, role), ["invitations"], () => {
     setOpen(false);
+    toast.success(`Invitation sent to ${email}`);
     setEmail("");
   });
   return (
@@ -185,7 +183,7 @@ function InviteDialog({ orgId, roles }: { orgId: string; roles: string[] }) {
       <DialogTrigger asChild>
         <Button>
           <PlusIcon />
-          Invite member
+          <ActionLabel>Invite member</ActionLabel>
         </Button>
       </DialogTrigger>
       <DialogContent>

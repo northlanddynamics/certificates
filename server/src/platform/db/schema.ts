@@ -1,7 +1,6 @@
 import { bigint, boolean, check, customType, integer, foreignKey, index, jsonb, pgTable, primaryKey, text, timestamp, unique, uniqueIndex, uuid } from "drizzle-orm/pg-core";
 import { sql } from "drizzle-orm";
 import type { AuditForwarderKind } from "../../audit/audit-forwarder-kinds";
-import type { AcmeEnvironment } from "../../issuance/acme/certificate-authority";
 import type { RevocationReason } from "../../pki/revocation-reasons";
 import type { DcvMethod, DcvScope } from "../../issuance/dcv/dcv-plan";
 import type { ScriptInterpreter } from "../../deployment/deployment-script-kinds";
@@ -10,6 +9,7 @@ import type { DnsProviderType } from "../../issuance/dcv/dns-provider-kinds";
 import type { IssuanceFailureCode } from "../../issuance/issuance-failure";
 import type { IssuanceKind } from "../../issuance/issuance-kinds";
 import type { IssuerKind } from "../../issuance/issuer-kinds";
+import type { AcmeCaTag } from "../../issuance/acme/acme-cas";
 import type { KeyAlgorithm, KeyCustody, SigningKeyAlgorithm } from "../../pki/csr";
 import type { IssuingCaStatus, PrivateCaKind, PrivateCaStatus } from "../../private-ca/private-ca-kinds";
 import type { DeviceExtendedKeyUsage, DeviceKeyType, DeviceKeyUsage } from "../../enrollment/enrollment-profile-kinds";
@@ -141,8 +141,8 @@ export const managedCertificate = pgTable(
     keyCustody: text("key_custody").$type<KeyCustody>().notNull(),
     /** Its issuer (issuer.ts): the kind of CA its Certificates come from, and that kind's reference in the columns below. */
     issuerKind: text("issuer_kind").$type<IssuerKind>().notNull().default("acme"),
-    /** The ACME kind's reference: which of the Organization's ACME accounts, by environment, Certificates are obtained through. */
-    environment: text("environment").$type<AcmeEnvironment>(),
+    /** The ACME kind's reference: the ACME CA (acme-cas.ts), by id, whose ACME Account of the Organization Certificates are obtained through. */
+    acmeCaId: text("acme_ca_id"),
     /** The Private CA kind's reference: the Issuing CA, of one of the Organization's Private CAs, its Certificates are issued from. */
     issuingCaId: uuid("issuing_ca_id"),
     /**
@@ -170,13 +170,18 @@ export const managedCertificate = pgTable(
     renewalDaysBeforeExpiry: integer("renewal_days_before_expiry").notNull().default(30),
     /** When it was archived: it is hidden from the inventory unless archived ones are asked for. Null while it is live. */
     archivedAt: timestamp("archived_at", { withTimezone: true }),
+    /** The Certificate Profile it was requested through, whose settings it was made with; null for one made without, or detached from it. */
+    certificateProfileId: uuid("certificate_profile_id"),
+    /** When the scheduler found it due for Renewal while its Certificate Profile was disabled, and so did not renew it (it then told its Subscribers); null since an Issuance last began, which clears it. */
+    renewalBlockedAt: timestamp("renewal_blocked_at", { withTimezone: true }),
     createdAt: timestamp("created_at", { withTimezone: true }).notNull().defaultNow(),
   },
   (t) => [
     index("managed_certificate_org_idx").on(t.organizationId),
+    foreignKey({ columns: [t.certificateProfileId, t.organizationId], foreignColumns: [certificateProfile.id, certificateProfile.organizationId] }),
     check(
       "managed_certificate_issuer_kind",
-      sql`(${t.issuerKind} = 'acme' and ${t.environment} is not null and ${t.issuingCaId} is null) or (${t.issuerKind} = 'private_ca' and ${t.issuingCaId} is not null and ${t.environment} is null)`,
+      sql`(${t.issuerKind} = 'acme' and ${t.acmeCaId} is not null and ${t.issuingCaId} is null) or (${t.issuerKind} = 'private_ca' and ${t.issuingCaId} is not null and ${t.acmeCaId} is null)`,
     ),
     check("managed_certificate_validity", sql`${t.validityDays} is null or (${t.issuerKind} = 'private_ca' and ${t.validityDays} >= 1)`),
     foreignKey({ columns: [t.issuingCaId, t.organizationId], foreignColumns: [issuingCa.id, issuingCa.organizationId] }),
@@ -314,7 +319,34 @@ export const secret = pgTable(
   (t) => [unique("secret_id_organization_unique").on(t.id, t.organizationId)],
 );
 
-/** An Organization's account with a CA, in one of its environments. Its key is a secret and is never returned. */
+/**
+ * A custom ACME CA of an Organization's own (acme-cas.ts): its directory and what it is tagged for. The built-in ones
+ * are defined in code and have no row. It is created together with the Organization's ACME Account with it.
+ */
+export const acmeCa = pgTable(
+  "acme_ca",
+  {
+    id: uuid("id").primaryKey().defaultRandom(),
+    organizationId: text("organization_id")
+      .notNull()
+      .references(() => organization.id),
+    name: text("name").notNull(),
+    directoryUrl: text("directory_url").notNull(),
+    tag: text("tag").$type<AcmeCaTag>(),
+    /** The External Account Binding its account was registered with, if the CA required one: the key id, shown to administrators, and the HMAC key, a secret. */
+    externalAccountKeyId: text("external_account_key_id"),
+    externalAccountSecretId: uuid("external_account_secret_id"),
+    createdAt: timestamp("created_at", { withTimezone: true }).notNull().defaultNow(),
+  },
+  (t) => [
+    unique("acme_ca_organization_name_unique").on(t.organizationId, t.name),
+    check("acme_ca_tag", sql`${t.tag} in ('staging', 'production')`),
+    check("acme_ca_external_account_binding", sql`(${t.externalAccountKeyId} is null) = (${t.externalAccountSecretId} is null)`),
+    foreignKey({ name: "acme_ca_external_account_secret_fk", columns: [t.externalAccountSecretId, t.organizationId], foreignColumns: [secret.id, secret.organizationId] }),
+  ],
+);
+
+/** An Organization's account with an ACME CA (acme-cas.ts), at most one per ACME CA. Its key is a secret and is never returned. */
 export const acmeAccount = pgTable(
   "acme_account",
   {
@@ -322,14 +354,15 @@ export const acmeAccount = pgTable(
     organizationId: text("organization_id")
       .notNull()
       .references(() => organization.id),
-    environment: text("environment").$type<AcmeEnvironment>().notNull(),
+    /** The ACME CA, by id: a built-in one's, as it has no row. */
+    acmeCaId: text("acme_ca_id").notNull(),
     accountUrl: text("account_url").notNull(),
     contactEmail: text("contact_email"),
     secretId: uuid("secret_id").notNull(),
     createdAt: timestamp("created_at", { withTimezone: true }).notNull().defaultNow(),
   },
   (t) => [
-    unique("acme_account_organization_environment_unique").on(t.organizationId, t.environment),
+    unique("acme_account_organization_acme_ca_unique").on(t.organizationId, t.acmeCaId),
     foreignKey({ columns: [t.secretId, t.organizationId], foreignColumns: [secret.id, secret.organizationId] }),
   ],
 );
@@ -471,13 +504,15 @@ export const certificate = pgTable(
     names: text("names").array().notNull(),
     /** The leaf followed by the intermediates the CA served, PEM. */
     chainPem: text("chain_pem").notNull(),
+    /** The CSR it was issued from; none for one issued before the platform kept it. */
+    csr: text("csr"),
     /**
      * The CA it came from (what that CA calls itself), and the issuer (issuer.ts) it came from: its kind, and for ACME the
-     * environment and account used there, for a Private CA the Issuing CA that signed it.
+     * ACME CA and the account used there, for a Private CA the Issuing CA that signed it.
      */
     ca: text("ca").notNull(),
     issuerKind: text("issuer_kind").$type<IssuerKind>().notNull().default("acme"),
-    environment: text("environment").$type<AcmeEnvironment>(),
+    acmeCaId: text("acme_ca_id"),
     acmeAccountId: uuid("acme_account_id").references(() => acmeAccount.id),
     issuingCaId: uuid("issuing_ca_id"),
     issuedAt: timestamp("issued_at", { withTimezone: true }).notNull(),
@@ -487,7 +522,7 @@ export const certificate = pgTable(
     unique("certificate_organization_fingerprint_unique").on(t.organizationId, t.fingerprint),
     check(
       "certificate_issuer_kind",
-      sql`(${t.issuerKind} = 'acme' and ${t.environment} is not null and ${t.acmeAccountId} is not null and ${t.issuingCaId} is null) or (${t.issuerKind} = 'private_ca' and ${t.issuingCaId} is not null and ${t.environment} is null and ${t.acmeAccountId} is null)`,
+      sql`(${t.issuerKind} = 'acme' and ${t.acmeCaId} is not null and ${t.acmeAccountId} is not null and ${t.issuingCaId} is null) or (${t.issuerKind} = 'private_ca' and ${t.issuingCaId} is not null and ${t.acmeCaId} is null and ${t.acmeAccountId} is null)`,
     ),
     foreignKey({ columns: [t.issuingCaId, t.organizationId], foreignColumns: [issuingCa.id, issuingCa.organizationId] }),
     index("certificate_managed_certificate_idx").on(t.managedCertificateId, t.createdAt),
@@ -608,6 +643,73 @@ export const enrollmentProfile = pgTable(
     ),
   ],
 );
+
+/**
+ * A Certificate Profile (certificate-profiles.ts): how the Organization issues one kind of Managed Certificate, which
+ * members request against. Its issuer, key algorithms, validity and Renewal Policy are copied onto each Managed
+ * Certificate made from it; editing it changes none of those already made.
+ */
+export const certificateProfile = pgTable(
+  "certificate_profile",
+  {
+    id: uuid("id").primaryKey().defaultRandom(),
+    organizationId: text("organization_id")
+      .notNull()
+      .references(() => organization.id),
+    name: text("name").notNull(),
+    description: text("description").notNull().default(""),
+    /** Its issuer (issuer.ts), stored the way a Managed Certificate stores one. */
+    issuerKind: text("issuer_kind").$type<IssuerKind>().notNull(),
+    acmeCaId: text("acme_ca_id"),
+    issuingCaId: uuid("issuing_ca_id"),
+    /** The key algorithms a requester's key may have: some of those its issuer takes. */
+    allowedKeyAlgorithms: text("allowed_key_algorithms").array().$type<KeyAlgorithm[]>().notNull(),
+    /** For a Private CA only: how many days its Managed Certificates' Certificates are valid for; null for the Issuing CA's default. */
+    validityDays: integer("validity_days"),
+    /** The Renewal Policy each Managed Certificate made from it starts with. */
+    renewalMode: text("renewal_mode").$type<RenewalMode>().notNull().default("automatic"),
+    renewalDaysBeforeExpiry: integer("renewal_days_before_expiry").notNull().default(30),
+    /** The Team made co-Owner of each Managed Certificate made from it; none when the Team is deleted. */
+    defaultTeamId: text("default_team_id").references(() => team.id, { onDelete: "set null" }),
+    /**
+     * Its name rules (profile-name-rules.ts), which a non-administrator's names must keep to, checked as they are now:
+     * exact names and zones (none of either for any name), the most names a request may carry, and whether wildcards are allowed.
+     */
+    allowedExactNames: text("allowed_exact_names").array().notNull().default(sql`'{}'`),
+    allowedZones: text("allowed_zones").array().notNull().default(sql`'{}'`),
+    maxNames: integer("max_names"),
+    wildcardsAllowed: boolean("wildcards_allowed").notNull().default(true),
+    /** Whether members may request through it; a disabled profile issues nothing. */
+    enabled: boolean("enabled").notNull().default(true),
+    createdAt: timestamp("created_at", { withTimezone: true }).notNull().defaultNow(),
+  },
+  (t) => [
+    unique("certificate_profile_organization_name_unique").on(t.organizationId, t.name),
+    unique("certificate_profile_id_organization_unique").on(t.id, t.organizationId),
+    check(
+      "certificate_profile_issuer_kind",
+      sql`(${t.issuerKind} = 'acme' and ${t.acmeCaId} is not null and ${t.issuingCaId} is null) or (${t.issuerKind} = 'private_ca' and ${t.issuingCaId} is not null and ${t.acmeCaId} is null)`,
+    ),
+    check("certificate_profile_validity", sql`${t.validityDays} is null or (${t.issuerKind} = 'private_ca' and ${t.validityDays} >= 1)`),
+    check("certificate_profile_key_algorithms", sql`cardinality(${t.allowedKeyAlgorithms}) >= 1`),
+    check("certificate_profile_renewal_mode", sql`${t.renewalMode} in ('automatic', 'manual')`),
+    check("certificate_profile_renewal_days", sql`${t.renewalDaysBeforeExpiry} between 1 and 365`),
+    check("certificate_profile_max_names", sql`${t.maxNames} is null or ${t.maxNames} >= 1`),
+    foreignKey({ columns: [t.issuingCaId, t.organizationId], foreignColumns: [issuingCa.id, issuingCa.organizationId] }),
+  ],
+);
+
+/**
+ * An Organization's settings for Certificate Profiles. No row is the defaults. Requiring a profile has whoever may not
+ * create a Managed Certificate outright propose one only through a profile (certificate-profile-settings.ts).
+ */
+export const certificateProfileSettings = pgTable("certificate_profile_settings", {
+  organizationId: text("organization_id")
+    .primaryKey()
+    .references(() => organization.id),
+  requireProfile: boolean("require_profile").notNull().default(false),
+  updatedAt: timestamp("updated_at", { withTimezone: true }).notNull(),
+});
 
 /**
  * A Device Certificate: one a device obtained under an Enrollment Profile. It belongs to the profile, not to a Managed

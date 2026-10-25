@@ -6,17 +6,26 @@ import { Input } from "@/components/ui/input";
 import { Label } from "@/components/ui/label";
 import { api } from "@/lib/api";
 
+/** A name as a slug: lower case, with a hyphen for each run of anything but letters and digits, and none at the ends. */
+const slugOf = (name: string) =>
+  name
+    .toLowerCase()
+    .replace(/[^a-z0-9]+/g, "-")
+    .replace(/^-|-$/g, "");
+
 export function PlatformOrganizationsPage() {
   const queryClient = useQueryClient();
   const orgs = useQuery({ queryKey: ["platform-orgs"], queryFn: api.platformOrganizations });
   const [name, setName] = useState("");
-  const [slug, setSlug] = useState("");
+  // Follows the name until it is edited.
+  const [typedSlug, setSlug] = useState<string | null>(null);
+  const slug = typedSlug ?? slugOf(name);
   const [adminEmail, setAdminEmail] = useState("");
   const create = useMutation({
     mutationFn: () => api.createOrganization({ name, slug, adminEmail }),
     onSuccess: async () => {
       setName("");
-      setSlug("");
+      setSlug(null);
       setAdminEmail("");
       await queryClient.invalidateQueries({ queryKey: ["platform-orgs"] });
     },

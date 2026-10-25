@@ -11,7 +11,8 @@ import { CertificateAuthorityError } from "./acme/certificate-authority";
 import { parseCsr } from "../pki/csr";
 import type { Dcv } from "./dcv/dcv";
 import type { Db, Tx } from "../platform/db/client";
-import { certificate, issuance, managedCertificate } from "../platform/db/schema";
+import { certificate, certificateProfile, issuance, managedCertificate } from "../platform/db/schema";
+import { HttpError } from "../platform/http";
 import { sameNames } from "../pki/names";
 import { IssuanceFailure, type IssuanceFailureCode } from "./issuance-failure";
 import { certificateIssuerColumns, issuerDetail, issuerOf, type Issued, type Issuer, type Issuers } from "./issuer";
@@ -25,10 +26,16 @@ import { fingerprintOf } from "../pki/fingerprint";
  */
 export type IssuanceIntent = "issue" | "renewNow" | "scheduled";
 
-/** Why a Managed Certificate may not have an Issuance begin now. */
-export type Refusal = "awaiting_approval" | "rejected" | "archived" | "already_running" | "no_certificate" | "not_automatic" | "awaiting_key" | "agent_revoked";
+/**
+ * Why a Managed Certificate may not have an Issuance begin now. `profile_disabled`: the Certificate Profile it was made
+ * from is disabled, and nothing is issued under a disabled profile, however the Issuance is asked for.
+ */
+export type Refusal = "awaiting_approval" | "rejected" | "archived" | "already_running" | "no_certificate" | "not_automatic" | "awaiting_key" | "agent_revoked" | "profile_disabled";
 
-export type Begun = { issuanceId: string } | { refused: Refusal };
+/** An Issuance refused; `profile` names the disabled Certificate Profile, for `profile_disabled`. */
+export type Refused = { refused: Refusal; profile?: string };
+
+export type Begun = { issuanceId: string } | Refused;
 
 /**
  * The Managed Certificates whose Certificates are renewed by the platform on its own: automatic, not archived and
@@ -42,7 +49,7 @@ export const renewsAutomatically = and(
 )!;
 
 /** What to tell whoever asked for an Issuance that was refused. */
-export function refusalMessage(refusal: Refusal, intent: IssuanceIntent): string {
+export function refusalMessage(refusal: Refusal, intent: IssuanceIntent, profile?: string): string {
   const verb = intent === "issue" ? "issued" : "renewed";
   switch (refusal) {
     case "awaiting_approval":
@@ -61,8 +68,13 @@ export function refusalMessage(refusal: Refusal, intent: IssuanceIntent): string
       return "the Agent has not yet made the key for this Managed Certificate, which has to be done first";
     case "agent_revoked":
       return `the Agent that holds the key of this Managed Certificate is revoked, so it cannot make the new key a Renewal needs; it cannot be ${verb}`;
+    case "profile_disabled":
+      return `the Certificate Profile ${profile} is disabled, so nothing is issued under it; the Managed Certificate cannot be ${verb} until it is enabled again`;
   }
 }
+
+/** A refused Issuance as the HTTP error its asker is answered with: a 422 for a disabled Certificate Profile, which the request cannot change, and a 409 for the rest, which are the Managed Certificate's state. */
+export const refusalError = (refused: Refused, intent: IssuanceIntent) => new HttpError(refused.refused === "profile_disabled" ? 422 : 409, refusalMessage(refused.refused, intent, refused.profile));
 
 /** An Issuance that waits for the Agent holding its Managed Certificate's key to make a new one, as whoever asks the Agent is told. */
 export interface AwaitingKey {
@@ -282,6 +294,7 @@ export function createIssuances({ db, unitOfWork, issuers, dcv }: IssuancesDeps)
           managedCertificateId: mc.id,
           ...stored,
           chainPem: issued.chainPem,
+          csr: mc.csr,
           ca: issued.ca,
           ...certificateIssuerColumns(issued.issuedBy),
           issuedAt: change.occurredAt,
@@ -347,6 +360,15 @@ export function createIssuances({ db, unitOfWork, issuers, dcv }: IssuancesDeps)
       if (mc.approvalStatus === "pending") return { refused: "awaiting_approval" };
       if (mc.approvalStatus === "rejected") return { refused: "rejected" };
       if (intent === "scheduled" && mc.renewalMode !== "automatic") return { refused: "not_automatic" };
+      if (mc.certificateProfileId !== null) {
+        // A share lock, so that disabling the profile waits for this change, or this one sees it disabled.
+        const [profile] = await tx
+          .select({ name: certificateProfile.name, enabled: certificateProfile.enabled })
+          .from(certificateProfile)
+          .where(eq(certificateProfile.id, mc.certificateProfileId))
+          .for("share");
+        if (!profile!.enabled) return { refused: "profile_disabled", profile: profile!.name };
+      }
       if (intent !== "issue" && !hasCertificate) return { refused: "no_certificate" };
       // The lock on the Managed Certificate makes this the only Issuance that can begin now; the index that allows one running is a backstop.
       const [runningOne] = await tx
@@ -385,6 +407,8 @@ export function createIssuances({ db, unitOfWork, issuers, dcv }: IssuancesDeps)
         target: { type: "managed_certificate", id },
         detail: { issuanceId: row!.id, ...(renewal && { renewal }), ...issuerDetail(issuerOf(mc)) },
       });
+      // Whatever blocked its Renewal no longer does; one blocked again later is told of again.
+      if (mc.renewalBlockedAt) await tx.update(managedCertificate).set({ renewalBlockedAt: null }).where(eq(managedCertificate.id, id));
       if (!awaitingKey) change.afterCommit(() => start(row!.id));
       return { issuanceId: row!.id };
     },

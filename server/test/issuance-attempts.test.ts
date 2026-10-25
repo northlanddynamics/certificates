@@ -48,10 +48,10 @@ async function adminCreates(at: Date, names = ["a.example.test"]) {
 /** The Certificate an Issuance against a CA would have stored for the Managed Certificate. */
 async function issuedFor(managedCertificateId: string, names: string[], at: Date) {
   const [secretRow] = await h.db.insert(secret).values({ organizationId: org.orgId, ciphertext: Buffer.from("not-a-secret") }).returning();
-  // For production, so the Managed Certificate's staging Issuances still find no ACME account and fail.
+  // With Let's Encrypt Production, so the Managed Certificate's Issuances from Let's Encrypt Staging still find no ACME account and fail.
   const [account] = await h.db
     .insert(acmeAccount)
-    .values({ organizationId: org.orgId, environment: "production", accountUrl: "https://acme.test/acct/1", secretId: secretRow!.id })
+    .values({ organizationId: org.orgId, acmeCaId: "letsencrypt-production", accountUrl: "https://acme.test/acct/1", secretId: secretRow!.id })
     .returning();
   await h.db.insert(certificate).values({
     organizationId: org.orgId,
@@ -63,7 +63,7 @@ async function issuedFor(managedCertificateId: string, names: string[], at: Date
     names,
     chainPem: "not-a-chain",
     ca: "pebble",
-    environment: "staging",
+    acmeCaId: "letsencrypt-staging",
     acmeAccountId: account!.id,
     issuedAt: at,
   });
@@ -76,7 +76,7 @@ async function join(email: string, role: string) {
   return h.signIn(email, PASSWORD);
 }
 
-const NO_ACME_ACCOUNT = { code: "no_acme_account", message: expect.stringContaining("no staging ACME account") };
+const NO_ACME_ACCOUNT = { code: "no_acme_account", message: expect.stringContaining("no ACME account with Let's Encrypt Staging") };
 
 describe("Issuance attempts", () => {
   test("each attempt with its time, kind, status and failure, newest first: a first issue tried again, a Renewal and a Name Change", async () => {

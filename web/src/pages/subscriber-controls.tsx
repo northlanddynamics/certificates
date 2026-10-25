@@ -1,6 +1,7 @@
 import { useMutation, useQuery, useQueryClient } from "@tanstack/react-query";
 import { useParams } from "@tanstack/react-router";
 import { useState, type FormEvent } from "react";
+import { toast } from "sonner";
 import { Button } from "@/components/ui/button";
 import { Card, CardContent, CardDescription, CardHeader, CardTitle } from "@/components/ui/card";
 import { Select, SelectContent, SelectItem, SelectTrigger, SelectValue } from "@/components/ui/select";
@@ -33,7 +34,7 @@ export function NotificationsTab() {
 
   const items = subscribers.data?.items ?? [];
   const taken = new Set(items.map(subscriberKey));
-  const error = subscribers.error ?? add.error ?? remove.error;
+  const failed = (what: string) => (error: Error) => toast.error(what, { description: error.message });
   return (
     <Card>
       <CardHeader>
@@ -54,7 +55,7 @@ export function NotificationsTab() {
               <li key={subscriberKey(s)} className="flex items-center justify-between gap-2">
                 <span className="font-medium">{subscriberLabel(s)}</span>
                 {mayChange && (
-                  <Button variant="ghost" size="sm" aria-label={`Remove ${subscriberLabel(s)} as a Subscriber`} disabled={remove.isPending} onClick={() => remove.mutate(s)}>
+                  <Button variant="ghost" size="sm" aria-label={`Remove ${subscriberLabel(s)} as a Subscriber`} disabled={remove.isPending} onClick={() => remove.mutate(s, { onError: failed(`${subscriberLabel(s)} was not removed as a Subscriber`) })}>
                     Remove
                   </Button>
                 )}
@@ -67,7 +68,7 @@ export function NotificationsTab() {
             className="flex items-center gap-2"
             onSubmit={(e: FormEvent) => {
               e.preventDefault();
-              if (choice) add.mutate(subscriberFromKey(choice), { onSuccess: () => setChoice("") });
+              if (choice) add.mutate(subscriberFromKey(choice), { onSuccess: () => setChoice(""), onError: failed("The Subscriber was not added") });
             }}
           >
             <Select value={choice} onValueChange={setChoice}>
@@ -97,7 +98,7 @@ export function NotificationsTab() {
             </Button>
           </form>
         )}
-        {error && <p className="text-destructive">{error.message}</p>}
+        {subscribers.error && <p className="text-destructive">{subscribers.error.message}</p>}
       </CardContent>
     </Card>
   );

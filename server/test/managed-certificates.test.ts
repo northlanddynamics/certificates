@@ -53,11 +53,11 @@ const KEYS = {
 } as const;
 
 /** What an Owner submits: a CSR for names under a fresh key of the algorithm; the key itself stays here. */
-async function request(names: string[], keyAlgorithm: keyof typeof KEYS = "ecdsa-p256", over: { csrNames?: string[]; environment?: string } = {}) {
+async function request(names: string[], keyAlgorithm: keyof typeof KEYS = "ecdsa-p256", over: { csrNames?: string[]; acmeCaId?: string } = {}) {
   const key = await KEYS[keyAlgorithm]();
   const csrNames = over.csrNames ?? names;
   const [, csr] = await acme.crypto.createCsr({ commonName: csrNames[0], altNames: csrNames }, key);
-  return { names, keyAlgorithm, csr: csr.toString(), ...(over.environment && { environment: over.environment }) };
+  return { names, keyAlgorithm, csr: csr.toString(), ...(over.acmeCaId && { acmeCaId: over.acmeCaId }) };
 }
 
 /** The Organization's ACME account in staging and a DNS Provider for the BIND zone, which issuing needs. */
@@ -104,7 +104,7 @@ describe("issuing the first Certificate", () => {
       names: [name],
       keyAlgorithm: "ecdsa-p256",
       keyCustody: "owner",
-      environment: "staging",
+      acmeCaId: "letsencrypt-staging",
       issuance: { status: "running", failure: null, certificateId: null },
       currentCertificate: null,
     });
@@ -131,10 +131,11 @@ describe("issuing the first Certificate", () => {
       notAfter: new Date(leaf.validTo).toISOString(),
       names: [name],
       ca: "lets-encrypt",
-      environment: "staging",
+      acmeCaId: "letsencrypt-staging",
       acmeAccountId: account.id,
       issuingCaId: null,
       issuedAt: expect.any(String),
+      hasCsr: true,
       revocation: null,
     });
     expect(leaf.subjectAltName).toBe(`DNS:${name}`);
@@ -182,7 +183,7 @@ describe("key algorithms and names", () => {
     const name = host();
     // What the dialog sends: the names as typed, the form's key algorithm, and the generator's CSR for those names (CN: the first).
     const made = await generateCsr({ keyAlgorithm: "ecdsa-p384", names: [`*.${name}`, name], commonName: `*.${name}` });
-    const created = await admin().create({ names: [`*.${name}`, name], keyAlgorithm: "ecdsa-p384", csr: made.csrPem, environment: "staging", owners: [] });
+    const created = await admin().create({ names: [`*.${name}`, name], keyAlgorithm: "ecdsa-p384", csr: made.csrPem, acmeCaId: "letsencrypt-staging", owners: [] });
     expect(created.status).toBe(201);
     const issued = await ended(created.body.id);
     expect(issued.issuance).toMatchObject({ status: "succeeded", failure: null });
@@ -199,22 +200,29 @@ describe("key algorithms and names", () => {
     expect((await ended(created.body.id)).issuance.status).toBe("succeeded");
   });
 
-  test("production is a choice of the request; with no production account there is nothing to issue through", async () => {
+  test("Let's Encrypt Production is a choice of the request; with no account there, there is nothing to issue through", async () => {
     await readyToIssue();
-    const created = await admin().create(await request([host()], "ecdsa-p256", { environment: "production" }));
+    const created = await admin().create(await request([host()], "ecdsa-p256", { acmeCaId: "letsencrypt-production" }));
     expect(created.status).toBe(201);
-    expect(created.body.environment).toBe("production");
-    expect((await ended(created.body.id)).issuance.failure).toMatchObject({ code: "no_acme_account", message: expect.stringContaining("production") });
+    expect(created.body.acmeCaId).toBe("letsencrypt-production");
+    expect((await ended(created.body.id)).issuance.failure).toMatchObject({ code: "no_acme_account", message: expect.stringContaining("Let's Encrypt Production") });
   });
 
-  test("a Managed Certificate's issuer is the ACME CA in the environment it was created for", async () => {
+  test("a Managed Certificate's issuer is the ACME CA it was created for", async () => {
     await readyToIssue();
     const staging = await admin().create(await request([host()]));
-    const production = await admin().create(await request([host()], "ecdsa-p256", { environment: "production" }));
-    expect(staging.body.issuer).toEqual({ kind: "acme", environment: "staging" });
-    expect((await admin().get(production.body.id)).body.issuer).toEqual({ kind: "acme", environment: "production" });
-    expect((await admin().list()).body.items.map((item: any) => item.issuer)).toContainEqual({ kind: "acme", environment: "staging" });
+    const production = await admin().create(await request([host()], "ecdsa-p256", { acmeCaId: "letsencrypt-production" }));
+    expect(staging.body.issuer).toEqual({ kind: "acme", acmeCaId: "letsencrypt-staging" });
+    expect((await admin().get(production.body.id)).body.issuer).toEqual({ kind: "acme", acmeCaId: "letsencrypt-production" });
+    expect((await admin().list()).body.items.map((item: any) => item.issuer)).toContainEqual({ kind: "acme", acmeCaId: "letsencrypt-staging" });
     await h.settleIssuances();
+  });
+
+  test("not from an ACME CA the Organization cannot use", async () => {
+    await readyToIssue();
+    expect((await admin().create(await request([host()], "ecdsa-p256", { acmeCaId: "letsencrypt-elsewhere" }))).status).toBe(422);
+    expect((await admin().create({ ...(await request([host()])), issuer: { kind: "acme", acmeCaId: "letsencrypt-elsewhere" } })).status).toBe(422);
+    expect((await admin().list()).body.items).toEqual([]);
   });
 });
 
@@ -392,7 +400,7 @@ describe("Approval", () => {
     await readyToIssue();
     const name = `*.${host()}`;
     const made = await generateCsr({ keyAlgorithm: "rsa-2048", names: [name], commonName: null });
-    const proposed = await certs(member, acmeOrg.orgId).create({ names: [name], keyAlgorithm: "rsa-2048", csr: made.csrPem, environment: "staging", owners: [] });
+    const proposed = await certs(member, acmeOrg.orgId).create({ names: [name], keyAlgorithm: "rsa-2048", csr: made.csrPem, acmeCaId: "letsencrypt-staging", owners: [] });
     expect(proposed.status).toBe(201);
     expect(proposed.body).toMatchObject({ names: [name], keyAlgorithm: "rsa-2048", approval: { status: "pending" }, issuance: null });
   });
@@ -554,8 +562,8 @@ describe("Approval", () => {
 
   test("what each role may do is reported by /api/me", async () => {
     const me = async (cookie: string) => (await h.api("/api/me", { cookie })).body.organizations[0].permissions;
-    expect(await me(member)).toEqual({ managedCertificate: ["propose", "download"], notificationChannel: ["read"], privateCa: ["read"] });
-    expect(await me(approver)).toEqual({ managedCertificate: ["read", "propose", "download"], approval: ["read", "decide"], notificationChannel: ["read"], privateCa: ["read"] });
+    expect(await me(member)).toEqual({ managedCertificate: ["propose", "download"], notificationChannel: ["read"], privateCa: ["read"], certificateProfile: ["read"] });
+    expect(await me(approver)).toEqual({ managedCertificate: ["read", "propose", "download"], approval: ["read", "decide"], notificationChannel: ["read"], privateCa: ["read"], certificateProfile: ["read"] });
     expect((await me(acmeOrg.cookie)).approval).toEqual(["read", "decide"]);
   });
 });
@@ -568,10 +576,10 @@ describe("failures say what went wrong", () => {
     return ended(created.body.id);
   };
 
-  test("with no ACME account in the environment", async () => {
+  test("with no ACME account with its ACME CA", async () => {
     await addBind();
     const failed = await issueAndEnd([host()]);
-    expect(failed.issuance).toMatchObject({ status: "failed", certificateId: null, failure: { code: "no_acme_account", message: expect.stringContaining("staging") } });
+    expect(failed.issuance).toMatchObject({ status: "failed", certificateId: null, failure: { code: "no_acme_account", message: expect.stringContaining("Let's Encrypt Staging") } });
     expect(failed.currentCertificate).toBeNull();
   });
 
@@ -618,7 +626,7 @@ describe("failures say what went wrong", () => {
 
   test("when the CA cannot be reached", async () => {
     await readyToIssue();
-    h.caDirectories.staging = "https://localhost:1/dir";
+    h.caDirectories["letsencrypt-staging"] = "https://localhost:1/dir";
     const failed = await issueAndEnd([host()]);
     expect(failed.issuance.failure).toMatchObject({ code: "ca_unreachable" });
   });
@@ -757,7 +765,7 @@ describe("audit", () => {
     expect(events[0]).toMatchObject({
       actor,
       target: { type: "managed_certificate" },
-      detail: { names: [name], keyAlgorithm: "ecdsa-p256", keyCustody: "owner", environment: "staging", csrFingerprint: expect.stringMatching(/^[0-9a-f]{64}$/) },
+      detail: { names: [name], keyAlgorithm: "ecdsa-p256", keyCustody: "owner", acmeCaId: "letsencrypt-staging", csrFingerprint: expect.stringMatching(/^[0-9a-f]{64}$/) },
     });
     expect(events[1]!.detail).toEqual({ issuanceId: issued.issuance.id });
     expect(events[2]).toMatchObject({

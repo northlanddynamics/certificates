@@ -1,5 +1,5 @@
 import { useMutation, useQueryClient } from "@tanstack/react-query";
-import { useNavigate } from "@tanstack/react-router";
+import { useNavigate, useSearch } from "@tanstack/react-router";
 import { KeyRoundIcon, LogInIcon } from "lucide-react";
 import { useState, type FormEvent } from "react";
 import { Button } from "@/components/ui/button";
@@ -9,6 +9,7 @@ import { Label } from "@/components/ui/label";
 import { Separator } from "@/components/ui/separator";
 import { ApiError } from "@/lib/api";
 import { authClient, unwrap } from "@/lib/auth-client";
+import { safeRedirect } from "@/lib/sign-in-redirect";
 
 /** Whether an SSO sign-in came back here with an error. Its text is in the URL, where anyone can write one, so it is not shown. */
 const ssoFailed = () => new URLSearchParams(window.location.search).has("error");
@@ -20,13 +21,16 @@ const ssoFailed = () => new URLSearchParams(window.location.search).has("error")
 export function SignInPage() {
   const navigate = useNavigate();
   const queryClient = useQueryClient();
+  // The page they asked for while signed out, if it is one of the platform's.
+  const { redirect } = useSearch({ from: "/public/sign-in" });
+  const back = safeRedirect(redirect, window.location.origin);
   const [email, setEmail] = useState("");
   const [password, setPassword] = useState("");
   // Set once the password is right and a second factor is asked for.
   const [secondFactor, setSecondFactor] = useState(false);
   const done = async () => {
     await queryClient.invalidateQueries({ queryKey: ["me"] });
-    await navigate({ to: "/" });
+    await navigate({ href: back, replace: true });
   };
   const signIn = useMutation({
     mutationFn: () => unwrap(authClient.signIn.email({ email, password })),
@@ -36,10 +40,10 @@ export function SignInPage() {
     },
   });
   const withPasskey = useMutation({ mutationFn: () => unwrap(authClient.signIn.passkey()), onSuccess: done });
-  // The browser leaves for the identity provider, which sends it back to the platform and then home, or here with an error.
+  // The browser leaves for the identity provider, which sends it back to the platform and then to `back`, or here with an error.
   const withSso = useMutation({
     mutationFn: () =>
-      unwrap(authClient.signIn.sso({ email, callbackURL: `${window.location.origin}/`, errorCallbackURL: `${window.location.origin}/sign-in` })),
+      unwrap(authClient.signIn.sso({ email, callbackURL: `${window.location.origin}${back}`, errorCallbackURL: `${window.location.origin}/sign-in?${new URLSearchParams({ redirect: back })}` })),
   });
   const [returnedFailed] = useState(ssoFailed);
   const ssoRequired = [signIn.error, withPasskey.error].some((e) => e instanceof ApiError && e.code === "SSO_REQUIRED");

@@ -3,6 +3,7 @@ import { Link, useParams } from "@tanstack/react-router";
 import { createColumnHelper, rowPaginationFeature, tableFeatures, useTable, type PaginationState } from "@tanstack/react-table";
 import { CircleHelpIcon, XIcon } from "lucide-react";
 import { useMemo, useState, type FormEvent } from "react";
+import { toast } from "sonner";
 import { DataTable } from "@/components/data-table/data-table";
 import { DataTableFacetedFilter } from "@/components/data-table/data-table-faceted-filter";
 import { DataTablePagination } from "@/components/data-table/data-table-pagination";
@@ -15,6 +16,7 @@ import { Badge } from "@/components/ui/badge";
 import { Button } from "@/components/ui/button";
 import { Dialog, DialogContent, DialogDescription, DialogHeader, DialogTitle, DialogTrigger } from "@/components/ui/dialog";
 import { FieldError } from "@/components/ui/field";
+import { PageHeader } from "@/components/page-header";
 import { ApiError, api, can, type Deployment, type DeploymentRun, type DeploymentState, type Me, type ScriptParameter } from "@/lib/api";
 import { useOrg } from "@/lib/use-org";
 import { useAction } from "@/lib/use-action";
@@ -22,13 +24,13 @@ import { NewDeploymentDialog } from "./new-deployment-dialog";
 
 const ROUTE = "/app/organizations/$orgId/deployments";
 
-const STATE: Record<DeploymentState, { label: string; hint: string; variant: "default" | "secondary" | "destructive" | "outline" }> = {
-  awaiting_key: { label: "Awaiting key", hint: "Waiting for the Agent to make the key and send a CSR", variant: "outline" },
+const STATE: Record<DeploymentState, { label: string; hint: string; variant: "success" | "warning" | "destructive" }> = {
+  awaiting_key: { label: "Awaiting key", hint: "Waiting for the Agent to make the key and send a CSR", variant: "warning" },
   key_failed: { label: "Key failed", hint: "The Agent could not make the key, or its CSR was refused", variant: "destructive" },
-  issuing: { label: "Issuing…", hint: "The Certificate is being issued", variant: "secondary" },
+  issuing: { label: "Issuing…", hint: "The Certificate is being issued", variant: "warning" },
   issuance_failed: { label: "Issuance failed", hint: "See the Managed Certificate for why, and try issuing it again", variant: "destructive" },
-  awaiting_deployment: { label: "Awaiting deployment", hint: "Waiting for the Agent to run the script for the Certificate", variant: "outline" },
-  deployed: { label: "Deployed", hint: "The script succeeded for the current Certificate", variant: "default" },
+  awaiting_deployment: { label: "Awaiting deployment", hint: "Waiting for the Agent to run the script for the Certificate", variant: "warning" },
+  deployed: { label: "Deployed", hint: "The script succeeded for the current Certificate", variant: "success" },
   deployment_failed: { label: "Deployment failed", hint: "The script did not succeed for the current Certificate", variant: "destructive" },
 };
 /** The states that move on without anyone: worth looking at again soon. */
@@ -45,7 +47,7 @@ const noRows: Deployment[] = [];
 /** How a run ended, in a word: its exit code, or that the script was not started. */
 function RunResult({ run }: { run: DeploymentRun }) {
   return (
-    <Badge variant={run.status === "succeeded" ? "default" : "destructive"}>
+    <Badge variant={run.status === "succeeded" ? "success" : "destructive"}>
       {run.exitCode === null ? "Not run" : run.status === "succeeded" ? "Succeeded" : `Exit ${run.exitCode}`}
     </Badge>
   );
@@ -154,14 +156,17 @@ export function DeploymentsPage() {
 
   return (
     <div className="flex flex-col gap-6">
-      <div className="flex items-center justify-between gap-4">
-        <h1 className="text-xl font-semibold">Deployments</h1>
-        {org && can(org, "deployment", "create") && <NewDeploymentDialog org={org} />}
-      </div>
-      <p className="text-sm text-muted-foreground">
-        A Deployment has one Agent make the private key for a Managed Certificate on its own host, so the key never reaches the platform, and run a Deployment Script with the
-        Certificate and the key's location each time a Certificate is issued for it. The Agent does its part when it next polls.
-      </p>
+      <PageHeader
+        title="Deployments"
+        action={org && can(org, "deployment", "create") && <NewDeploymentDialog org={org} />}
+        description="A Deployment has one Agent make a Managed Certificate's private key on its own host, so the key never reaches the platform."
+        howItWorks={
+          <p>
+            The Agent runs a Deployment Script with the Certificate and the key's location each time a Certificate is issued for it. The Agent does its part when it next
+            polls.
+          </p>
+        }
+      />
       {org && !allowed ? (
         <p className="text-sm text-muted-foreground">Only Organization Administrators see the Deployments.</p>
       ) : (
@@ -220,13 +225,12 @@ function DeploymentActions({ deployment }: { deployment: Deployment }) {
             size="sm"
             aria-label={`${keyFailed ? "Ask for the key of" : "Run"} ${deployment.names[0]} again`}
             disabled={!(hasCertificate || keyFailed) || deployment.runPending || runAgain.isPending}
-            onClick={() => runAgain.mutate(undefined)}
+            onClick={() => runAgain.mutate(undefined, { onError: (error) => toast.error(`${deployment.names[0]} was not run again`, { description: error.message }) })}
           >
             {keyFailed ? "Ask for the key again" : "Run again"}
           </Button>
         )}
       </div>
-      {runAgain.error && <span className="text-xs text-destructive">{runAgain.error.message}</span>}
     </div>
   );
 }

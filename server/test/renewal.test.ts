@@ -339,7 +339,7 @@ describe("manual Renewal", () => {
 
   test("there is nothing to renew until a first Certificate exists", async () => {
     await readyToIssue();
-    h.caDirectories.staging = "https://localhost:1/dir";
+    h.caDirectories["letsencrypt-staging"] = "https://localhost:1/dir";
     const created = await h.api(base(), { cookie: org.cookie, body: await request() });
     await h.settleIssuances();
     const refused = await renewNow(created.body.id);
@@ -433,7 +433,7 @@ describe("failed Renewals", () => {
     const { id } = await issued();
     const dueAt = await due(id);
     h.setNow(dueAt);
-    h.caDirectories.staging = "https://localhost:1/dir";
+    h.caDirectories["letsencrypt-staging"] = "https://localhost:1/dir";
 
     expect(await schedule()).toBe(1);
     let mc = await get(id);
@@ -459,7 +459,7 @@ describe("failed Renewals", () => {
     expect(secondRetry - firstRetry).toBeGreaterThan(firstRetry - dueAt.getTime());
 
     // The cause goes away: the next attempt renews, and the failure state clears.
-    h.caDirectories.staging = h.caDirectories.production;
+    h.caDirectories["letsencrypt-staging"] = h.caDirectories["letsencrypt-production"];
     h.setNow(new Date(secondRetry));
     expect(await schedule()).toBe(1);
     mc = await get(id);
@@ -475,7 +475,7 @@ describe("failed Renewals", () => {
     await readyToIssue();
     const { id } = await issued();
     h.setNow(await due(id));
-    h.caDirectories.staging = "https://localhost:1/dir";
+    h.caDirectories["letsencrypt-staging"] = "https://localhost:1/dir";
     let waits: number[] = [];
     for (let i = 0; i < 12; i++) {
       await schedule();
@@ -494,7 +494,7 @@ describe("failed Renewals", () => {
     await readyToIssue();
     const { id } = await issued();
     await setPolicy(id, { mode: "manual", daysBeforeExpiry: 30 });
-    h.caDirectories.staging = "https://localhost:1/dir";
+    h.caDirectories["letsencrypt-staging"] = "https://localhost:1/dir";
     expect((await renewNow(id)).status).toBe(202);
     await h.settleIssuances();
     const mc = await get(id);
@@ -508,9 +508,9 @@ describe("failed Renewals", () => {
     await readyToIssue();
     const { id } = await issued();
     h.setNow(await due(id));
-    h.caDirectories.staging = "https://localhost:1/dir";
+    h.caDirectories["letsencrypt-staging"] = "https://localhost:1/dir";
     await schedule();
-    h.caDirectories.staging = h.caDirectories.production;
+    h.caDirectories["letsencrypt-staging"] = h.caDirectories["letsencrypt-production"];
     expect((await renewNow(id)).status).toBe(202);
     expect((await get(id)).issuance.status).toBe("running");
     expect(await renewalFailing()).toEqual([id]);
@@ -520,7 +520,7 @@ describe("failed Renewals", () => {
 
   test("a failed first Issuance is not a failing Renewal", async () => {
     await readyToIssue();
-    h.caDirectories.staging = "https://localhost:1/dir";
+    h.caDirectories["letsencrypt-staging"] = "https://localhost:1/dir";
     const created = await h.api(base(), { cookie: org.cookie, body: await request() });
     await h.settleIssuances();
     expect((await get(created.body.id)).issuance.status).toBe("failed");
@@ -538,7 +538,7 @@ describe("failed Renewals", () => {
     const other = await issued({ target: globex });
     await setPolicy(other.id, { mode: "manual", daysBeforeExpiry: 30 }, globex.cookie, globex.orgId);
     h.setNow(await due(id));
-    h.caDirectories.staging = "https://localhost:1/dir";
+    h.caDirectories["letsencrypt-staging"] = "https://localhost:1/dir";
     await schedule();
     expect(await renewalFailing()).toEqual([id]);
     expect(await renewalFailing(globex.cookie, globex.orgId)).toEqual([]);

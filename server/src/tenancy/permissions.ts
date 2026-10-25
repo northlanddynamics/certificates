@@ -13,14 +13,16 @@ export const APPROVER_ROLE = "approver";
 export const MEMBER_ROLE = "member";
 
 // Every permission there is. The organization, member, invitation and team resources are the ones Better Auth's
-// organization plugin checks itself; `audit`, `acmeAccount`, `dnsProvider`, `validationZone`, `dcvRule`, `managedCertificate`, `approval`, `agent`, `deploymentScript`, `deployment`, `notificationChannel`, `auditForwarder`, `loginPolicy`, `ssoConnection`, `privateCa`, `enrollmentProfile`, `deviceCertificate` and `apiKey` are ours (the last is the plugin's too).
+// organization plugin checks itself; `audit`, `acmeAccount`, `dnsProvider`, `validationZone`, `dcvRule`, `managedCertificate`, `approval`, `agent`, `deploymentScript`, `deployment`, `notificationChannel`, `auditForwarder`, `loginPolicy`, `ssoConnection`, `privateCa`, `enrollmentProfile`, `deviceCertificate`, `certificateProfile` and `apiKey` are ours (the last is the plugin's too).
 const statements = {
   organization: ["update", "delete"],
   member: ["create", "update", "delete"],
   invitation: ["create", "cancel"],
   team: ["create", "update", "delete"],
   audit: ["read"],
-  acmeAccount: ["read", "create", "update", "test"],
+  // ACME CAs and the Organization's account with each. `update` replaces an account's key and changes a custom ACME CA's
+  // name, tag and contact email; `delete` removes a custom one nothing refers to.
+  acmeAccount: ["read", "create", "update", "delete", "test"],
   dnsProvider: ["read", "create", "update", "test"],
   // Delegated DCV: where `_acme-challenge` names are delegated to, and how each name or zone is validated. `dcvRule.read`
   // also shows the CNAME record a name needs.
@@ -32,8 +34,9 @@ const statements = {
   // `proposeNameChange`); `changeNames` changes its names outright, where a proposed name change waits for Approval;
   // `download` exports a Certificate it may see, and is what an API key must carry to do the same; `revoke` tells the CA
   // to distrust a Certificate (its Owners may, whatever their role) and `archive` retires the Managed Certificate (only
-  // those who hold it may, so not its Owners); `changeIssuer` repoints it to another Issuing CA, with no Approval.
-  managedCertificate: ["read", "create", "propose", "issue", "changeOwners", "renew", "setRenewalPolicy", "replaceCsr", "proposeNameChange", "changeNames", "download", "revoke", "archive", "changeSubscribers", "changeIssuer"],
+  // those who hold it may, so not its Owners); `changeIssuer` repoints it to another Issuing CA, with no Approval;
+  // `detachProfile` unlinks it from the Certificate Profile it was made from, making it an ordinary Managed Certificate.
+  managedCertificate: ["read", "create", "propose", "issue", "changeOwners", "renew", "setRenewalPolicy", "replaceCsr", "proposeNameChange", "changeNames", "download", "revoke", "archive", "changeSubscribers", "changeIssuer", "detachProfile"],
   approval: ["read", "decide"],
   // Agents: `register` makes the single-use token by which one registers into the Organization, `read` lists them, `revoke` ends one's credential.
   agent: ["read", "register", "revoke"],
@@ -68,6 +71,10 @@ const statements = {
   // Organization Administrators hold any of this; `read` lists and searches a profile's and downloads one, `revoke`
   // puts one on its Issuing CA's CRL.
   deviceCertificate: ["read", "revoke"],
+  // Certificate Profiles: how the Organization issues each kind of Managed Certificate, which members request against.
+  // Everyone may `read` them, which lists the enabled ones (those who may `update` them see disabled ones too); only
+  // Organization Administrators `create`, `update` or `disable` one.
+  certificateProfile: ["read", "create", "update", "disable"],
 } as const;
 
 export type Permissions = { [R in keyof typeof statements]?: (typeof statements)[R][number][] };
@@ -80,8 +87,8 @@ export const ac = createAccessControl(statements);
 // to decide knowingly while a Member sees only their own.
 export const orgRoles = {
   [ORG_ADMIN_ROLE]: ac.newRole(statements),
-  [APPROVER_ROLE]: ac.newRole({ managedCertificate: ["read", "propose", "download"], approval: ["read", "decide"], notificationChannel: ["read"], privateCa: ["read"] }),
-  [MEMBER_ROLE]: ac.newRole({ managedCertificate: ["propose", "download"], notificationChannel: ["read"], privateCa: ["read"] }),
+  [APPROVER_ROLE]: ac.newRole({ managedCertificate: ["read", "propose", "download"], approval: ["read", "decide"], notificationChannel: ["read"], privateCa: ["read"], certificateProfile: ["read"] }),
+  [MEMBER_ROLE]: ac.newRole({ managedCertificate: ["propose", "download"], notificationChannel: ["read"], privateCa: ["read"], certificateProfile: ["read"] }),
 };
 
 const roleOf = (name: string) => (Object.hasOwn(orgRoles, name) ? orgRoles[name as keyof typeof orgRoles] : undefined);

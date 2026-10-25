@@ -190,6 +190,20 @@ describe("Export", () => {
     expect((await download(asAdmin, org.orgId, mc.id, "", "not-a-uuid")).status).toBe(404);
   });
 
+  test("a Certificate's CSR can be downloaded, and only for a Certificate of this Managed Certificate", async () => {
+    await readyToIssue();
+    const mc = await issued();
+    const other = await issued();
+    const csrOf = (certificateId: string, orgId = org.orgId, id = mc.id) =>
+      h.app.request(`http://localhost${base(orgId)}/${id}/certificates/${certificateId}/csr`, { headers: { cookie: org.cookie } });
+    const id = mc.certificates[0]!.id;
+    const res = await csrOf(id);
+    expect(res.status).toBe(200);
+    expect(await res.text()).toContain("BEGIN CERTIFICATE REQUEST");
+    expect((await csrOf(other.certificates[0]!.id)).status).toBe(404);
+    expect((await csrOf(crypto.randomUUID())).status).toBe(404);
+  });
+
   test("nothing to download before a Certificate is issued", async () => {
     const mc = (await h.api(base(), { cookie: org.cookie, body: await request() })).body; // no ACME account: Issuance fails
     await h.settleIssuances();
@@ -275,6 +289,16 @@ describe("API keys", () => {
     expect((await download({ apiKey: key }, org.orgId, mc.id, "?format=der", mc.certificates[1]!.id)).status).toBe(200);
   });
 
+  test("a key fetches a Certificate's CSR, and it is audited as the Certificate's download is", async () => {
+    await readyToIssue();
+    const mc = await issued();
+    const id = mc.certificates[0]!.id;
+    const key = (await createKey(org.cookie)).body.key as string;
+    const res = await h.app.request(`http://localhost${base()}/${mc.id}/certificates/${id}/csr`, { headers: { "x-api-key": key } });
+    expect(res.status).toBe(200);
+    expect((await auditOf()).some((e) => e.action === "api_key.used" && e.detail.certificateId === id && e.detail.format === "csr")).toBe(true);
+  });
+
   test("a key reaches only its own Organization, and carries only what its user may see", async () => {
     await readyToIssue();
     await readyToIssue(globex);
@@ -291,7 +315,7 @@ describe("API keys", () => {
     expect((await download({ apiKey: key }, globex.orgId, elsewhere.id)).status).toBe(404);
   });
 
-  test("a key opens nothing but downloads, and a key cannot make or revoke keys", async () => {
+  test("a key opens nothing but downloads and requesting a Managed Certificate, and a key cannot make or revoke keys", async () => {
     const key = (await createKey(org.cookie)).body.key as string;
     const asKey = { "x-api-key": key };
     const call = (path: string, init: RequestInit = {}) => h.app.request(`http://localhost${path}`, { ...init, headers: { ...asKey, "content-type": "application/json", origin: "http://localhost" } });

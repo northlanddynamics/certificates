@@ -25,7 +25,7 @@ import {
 import { ConfirmDialog } from "@/components/confirm-dialog";
 import { CopyButton } from "@/components/copy-button";
 import { GuideLink } from "@/components/guide";
-import { SteppedForm, STEPPED_DIALOG } from "@/components/stepped-form";
+import { SteppedForm, STEPPED_DIALOG, type Missing } from "@/components/stepped-form";
 import { SummaryRows } from "@/components/summary-rows";
 import { Alert, AlertDescription, AlertTitle } from "@/components/ui/alert";
 import { DataTable } from "@/components/data-table/data-table";
@@ -38,6 +38,7 @@ import { Field, FieldContent, FieldDescription, FieldError, FieldGroup, FieldLab
 import { RadioGroup, RadioGroupItem } from "@/components/ui/radio-group";
 import { Input } from "@/components/ui/input";
 import { Select, SelectContent, SelectItem, SelectTrigger, SelectValue } from "@/components/ui/select";
+import { ActionLabel, PageHeader } from "@/components/page-header";
 import { api, can, type CreatedEnrollmentProfile, type EnrollmentProfile } from "@/lib/api";
 import { useOrg } from "@/lib/use-org";
 import { daysLabel, findIssuingCa, issuingCaTitle, isValidityDays } from "@/lib/private-ca";
@@ -91,7 +92,7 @@ const columns = columnHelper.columns([
     cell: ({ row }) => (
       <span className="flex items-center gap-2">
         <DeviceCertificatesLink profile={row.original} />
-        {!row.original.enabled && <Badge variant="secondary">Disabled</Badge>}
+        {!row.original.enabled && <Badge variant="neutral">Disabled</Badge>}
       </span>
     ),
   }),
@@ -132,23 +133,27 @@ export function EnrollmentProfilesPage() {
 
   return (
     <div className="flex flex-col gap-6">
-      <div className="flex items-center justify-between gap-4">
-        <h1 className="text-xl font-semibold">Enrollment Profiles</h1>
-        <div className="flex flex-wrap items-center gap-2">
-          <Button variant="outline" asChild>
-            <GuideLink orgId={orgId} guide="enrollment-profiles" className="">
-              <BookOpenIcon />
-              Enrollment guide
-            </GuideLink>
-          </Button>
-          {org && can(org, "enrollmentProfile", "create") && <NewProfileDialog orgId={orgId} />}
-        </div>
-      </div>
-      <p className="text-sm text-muted-foreground">
-        Devices enroll at a profile's SCEP URL and get a Device Certificate from its Issuing CA, with the profile's key usage, extended key usages and validity, and the
-        subject and names of their own request. Paste the SCEP URL into your device management platform's SCEP profile, and give its trusted certificate profile the
-        root.
-      </p>
+      <PageHeader
+        title="Enrollment Profiles"
+        action={
+          <>
+            <Button variant="outline" asChild>
+              <GuideLink orgId={orgId} guide="enrollment-profiles" className="">
+                <BookOpenIcon />
+                <ActionLabel>Enrollment guide</ActionLabel>
+              </GuideLink>
+            </Button>
+            {org && can(org, "enrollmentProfile", "create") && <NewProfileDialog orgId={orgId} />}
+          </>
+        }
+        description="Devices enroll at a profile's SCEP URL and get a Device Certificate from its Issuing CA."
+        howItWorks={
+          <p>
+            A Device Certificate has the profile's key usage, extended key usages and validity, and the subject and names of the device's own request. Paste the SCEP URL into
+            your device management platform's SCEP profile, and give its trusted certificate profile the root.
+          </p>
+        }
+      />
       {org && !allowed ? (
         <p className="text-sm text-muted-foreground">Only Organization Administrators see the Enrollment Profiles.</p>
       ) : (
@@ -725,7 +730,7 @@ function NewProfileDialog({ orgId }: { orgId: string }) {
       <DialogTrigger asChild>
         <Button>
           <PlusIcon />
-          New profile
+          <ActionLabel>New profile</ActionLabel>
         </Button>
       </DialogTrigger>
       {created?.sharedChallenge ? (
@@ -957,7 +962,6 @@ function NewProfileForm({ orgId, onDone }: { orgId: string; onDone: (created: Cr
   const takesNameRules = kindTakesNameRules(kinds.data?.items, kind);
   const [nameRulesDraft, setNameRulesDraft] = useState(EMPTY_NAME_RULES);
   const nameRules = takesNameRules ? rulesOf(nameRulesDraft) : { rules: null };
-  const intuneOk = TENANT.test(tenantId.trim()) && GUID.test(appId.trim()) && appSecret !== "";
   const validator = intune ? { kind, settings: { tenantId: tenantId.trim(), appId: appId.trim() }, secret: appSecret } : { kind };
   const create = useAction(
     () => api.createEnrollmentProfile(orgId, { name: name.trim(), issuingCaId, validityDays: Number(validityDays), retentionDays: Number(retentionDays), keyUsage, extendedKeyUsage, allowedKeyTypes, validator, ...("rules" in nameRules && nameRules.rules && { nameRules: nameRules.rules }) }),
@@ -967,13 +971,31 @@ function NewProfileForm({ orgId, onDone }: { orgId: string; onDone: (created: Cr
   const validityOk = isValidityDays(validityDays, MAX_DEVICE_VALIDITY_DAYS);
   const retentionOk = isRetentionDays(retentionDays);
 
-  // Whether each step holds what it needs; Review only shows what was entered.
-  const complete: Record<StepId, boolean> = {
-    issuer: name.trim() !== "" && issuingCaId !== "",
-    certificate: validityOk && retentionOk && extendedKeyUsage.length > 0 && keyUsage.length > 0,
-    keys: allowedKeyTypes.length > 0,
-    validator: kind !== "" && (!intune || intuneOk) && "rules" in nameRules,
-    review: true,
+  // What each step still needs; Review only shows what was entered.
+  const missing: Partial<Record<StepId, Missing>> = {
+    issuer: name.trim() === "" ? { reason: "Give the profile a name.", field: "profile-name" } : issuingCaId === "" ? { reason: "Choose the Issuing CA.", field: "profile-issuing-ca" } : undefined,
+    certificate: !validityOk
+      ? { reason: `Give a validity of 1 to ${MAX_DEVICE_VALIDITY_DAYS} days.`, field: "profile-validity" }
+      : !retentionOk
+        ? { reason: `Give a retention of 0 to ${MAX_DEVICE_RETENTION_DAYS} days.`, field: "profile-retention" }
+        : keyUsage.length === 0
+          ? { reason: "Choose at least one key usage.", field: `profile-ku-${DEVICE_KEY_USAGES[0]}` }
+          : extendedKeyUsage.length === 0
+            ? { reason: "Choose at least one extended key usage.", field: `profile-eku-${DEVICE_EXTENDED_KEY_USAGE_NAMES[0]}` }
+            : undefined,
+    keys: allowedKeyTypes.length > 0 ? undefined : { reason: "Allow at least one kind of device key.", field: `profile-keys-${DEVICE_KEY_TYPES[0]}` },
+    validator:
+      kind === ""
+        ? { reason: "Choose how devices are checked.", field: "profile-validator" }
+        : intune && !TENANT.test(tenantId.trim())
+          ? { reason: "Give the tenant as its ID or its domain.", field: "intune-tenant" }
+          : intune && !GUID.test(appId.trim())
+            ? { reason: "Give the app (client) ID, a GUID.", field: "intune-app" }
+            : intune && appSecret === ""
+              ? { reason: "Give the app's client secret.", field: "intune-secret" }
+              : "error" in nameRules
+                ? { reason: nameRules.error, field: "profile-name-rules-subject" }
+                : undefined,
   };
 
   return (
@@ -982,7 +1004,7 @@ function NewProfileForm({ orgId, onDone }: { orgId: string; onDone: (created: Cr
       steps={STEPS}
       step={step}
       onStep={setStep}
-      complete={complete}
+      missing={missing}
       submitLabel="Create"
       pending={create.isPending}
       onSubmit={() => create.mutate(undefined)}
@@ -994,7 +1016,7 @@ function NewProfileForm({ orgId, onDone }: { orgId: string; onDone: (created: Cr
           <FieldGroup>
             <Field>
               <FieldLabel htmlFor="profile-name">Name</FieldLabel>
-              <Input id="profile-name" autoFocus value={name} onChange={(e) => setName(e.target.value)} placeholder="Wi-Fi" />
+              <Input id="profile-name" autoFocus value={name} onChange={(e) => setName(e.target.value)} placeholder="e.g. Wi-Fi" />
             </Field>
             <Field>
               <FieldLabel htmlFor="profile-issuing-ca">Issuing CA</FieldLabel>

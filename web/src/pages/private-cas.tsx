@@ -3,6 +3,7 @@ import { useParams } from "@tanstack/react-router";
 import { createColumnHelper, tableFeatures, useTable } from "@tanstack/react-table";
 import { BookOpenIcon, CalendarClockIcon, ClipboardCheckIcon, FingerprintIcon, GlobeIcon, KeyRoundIcon, MoreHorizontalIcon, NetworkIcon, PlusIcon } from "lucide-react";
 import { useMemo, useState, type FormEvent } from "react";
+import { toast } from "sonner";
 import { DataTable } from "@/components/data-table/data-table";
 import { GuideLink } from "@/components/guide";
 import { PublicationCheck, PublicationSummary } from "@/components/pki-publication";
@@ -17,7 +18,7 @@ import { RadioGroup, RadioGroupItem } from "@/components/ui/radio-group";
 import { Textarea } from "@/components/ui/textarea";
 import { Tooltip, TooltipContent, TooltipTrigger } from "@/components/ui/tooltip";
 import { ConfirmDialog } from "@/components/confirm-dialog";
-import { SteppedForm, STEPPED_DIALOG, type Step } from "@/components/stepped-form";
+import { SteppedForm, STEPPED_DIALOG, type Missing, type Step } from "@/components/stepped-form";
 import { SummaryRows } from "@/components/summary-rows";
 import { useCertificateText } from "@/components/use-certificate-text";
 import { Field, FieldDescription, FieldError, FieldGroup, FieldLabel, FieldLegend, FieldSet } from "@/components/ui/field";
@@ -26,6 +27,7 @@ import { api, can, issuingCaRevocationReasons, type IssuingCa, type PermittedNam
 import { useOrg } from "@/lib/use-org";
 import { KEY_ALGORITHM_LABELS, isMlDsa, type KeyAlgorithm } from "@/lib/csr-generator";
 import { useKeyAlgorithms } from "@/components/issuer-choice";
+import { ActionLabel, PageHeader } from "@/components/page-header";
 import { splitNames } from "@/lib/csr-names";
 import { keyAlgorithmLabel } from "@/lib/managed-certificate";
 import { DEFAULT_VALIDITY_DAYS, MAX_LIFETIME_YEARS, MAX_VALIDITY_DAYS, commonNameOf, daysLabel, isValidityDays, rootSubjectOf, validityLabel } from "@/lib/private-ca";
@@ -44,7 +46,7 @@ const rowsOf = (ca: PrivateCa): CaRow[] => [
   ...ca.issuingCas.map((issuing): CaRow => ({ id: issuing.id, ca, level: "issuing", issuing, subject: issuing.subject, notAfter: issuing.notAfter ?? undefined })),
 ];
 
-const StatusBadge = ({ status }: { status: IssuingCa["status"] }) => <Badge variant={status === "active" ? "default" : status === "revoked" ? "destructive" : "secondary"}>{STATUS_LABEL[status]}</Badge>;
+const StatusBadge = ({ status }: { status: IssuingCa["status"] }) => <Badge variant={status === "active" ? "success" : status === "revoked" ? "destructive" : status === "awaiting_signature" ? "warning" : "neutral"}>{STATUS_LABEL[status]}</Badge>;
 
 // The server lists every Private CA, and an Organization has few, so there is nothing to page.
 const features = tableFeatures({});
@@ -127,23 +129,28 @@ export function PrivateCasPage() {
 
   return (
     <div className="flex flex-col gap-6">
-      <div className="flex items-center justify-between gap-4">
-        <h1 className="text-xl font-semibold">Private CAs</h1>
-        <div className="flex flex-wrap items-center gap-2">
-          <Button variant="outline" asChild>
-            <GuideLink orgId={orgId} guide="private-cas" className="">
-              <BookOpenIcon />
-              Publishing guide
-            </GuideLink>
-          </Button>
-          {org && can(org, "privateCa", "create") && <CreatePrivateCaDialog orgId={orgId} />}
-        </div>
-      </div>
-      <p className="text-sm text-muted-foreground">
-        The Organization's own CAs, for internal names a public CA will not validate. Each is a root and one or more Issuing CAs under it, each with its own key in the KMS,
-        which never leaves it. A Managed Certificate is issued from one Issuing CA and needs no DCV; download the root to install it wherever its Certificates must be trusted.
-        Add an Issuing CA under the same root, for other names or to roll over, and nothing that trusts the root needs anything new.
-      </p>
+      <PageHeader
+        title="Private CAs"
+        action={
+          <>
+            <Button variant="outline" asChild>
+              <GuideLink orgId={orgId} guide="private-cas" className="">
+                <BookOpenIcon />
+                <ActionLabel>Publishing guide</ActionLabel>
+              </GuideLink>
+            </Button>
+            {org && can(org, "privateCa", "create") && <CreatePrivateCaDialog orgId={orgId} />}
+          </>
+        }
+        description="The Organization's own CAs, for internal names a public CA will not validate."
+        howItWorks={
+          <>
+            <p>Each is a root and one or more Issuing CAs under it, each with its own key in the KMS, which never leaves it.</p>
+            <p>A Managed Certificate is issued from one Issuing CA and needs no DCV; download the root to install it wherever its Certificates must be trusted.</p>
+            <p>Add an Issuing CA under the same root, for other names or to roll over, and nothing that trusts the root needs anything new.</p>
+          </>
+        }
+      />
       {org && !allowed ? (
         <p className="text-sm text-muted-foreground">You may not see the Private CAs.</p>
       ) : (
@@ -341,7 +348,10 @@ function IssuingCaActions({ ca, issuing }: { ca: PrivateCa; issuing: IssuingCa }
 }
 
 function RetireDialog({ orgId, ca, issuing, open, onOpenChange }: EditDialogProps) {
-  const retire = useAction(() => api.retireIssuingCa(orgId, ca.id, issuing.id), ["private-cas"], () => onOpenChange(false));
+  const retire = useAction(() => api.retireIssuingCa(orgId, ca.id, issuing.id), ["private-cas"], () => {
+    onOpenChange(false);
+    toast.success(`${commonNameOf(issuing.subject)} was retired`);
+  });
   return (
     <ConfirmDialog
       open={open}
@@ -361,7 +371,10 @@ function RetireDialog({ orgId, ca, issuing, open, onOpenChange }: EditDialogProp
 
 function RevokeIssuingCaDialog({ orgId, ca, issuing, open, onOpenChange }: EditDialogProps) {
   const [reason, setReason] = useState("");
-  const revoke = useAction(() => api.revokeIssuingCa(orgId, ca.id, issuing.id, reason), ["private-cas"], () => onOpenChange(false));
+  const revoke = useAction(() => api.revokeIssuingCa(orgId, ca.id, issuing.id, reason), ["private-cas"], () => {
+    onOpenChange(false);
+    toast.success(`${commonNameOf(issuing.subject)} was revoked`);
+  });
   const selectId = `issuing-ca-${issuing.id}-revocation-reason`;
   return (
     <Dialog
@@ -424,12 +437,12 @@ function PermittedNamesFields({ id, value, onChange }: { id: string; value: Rule
     <>
       <div className="flex flex-col gap-2">
         <Label htmlFor={`${id}-zones`}>Permitted zones</Label>
-        <Textarea id={`${id}-zones`} rows={3} value={value.zones} onChange={(e) => onChange({ ...value, zones: e.target.value })} placeholder="internal.example" />
+        <Textarea id={`${id}-zones`} rows={3} value={value.zones} onChange={(e) => onChange({ ...value, zones: e.target.value })} placeholder="e.g. internal.example" />
         <p className="text-xs text-muted-foreground">Each zone permits its name and every name beneath it, wildcards included. One to a line.</p>
       </div>
       <div className="flex flex-col gap-2">
         <Label htmlFor={`${id}-exact`}>Permitted names</Label>
-        <Textarea id={`${id}-exact`} rows={3} value={value.exact} onChange={(e) => onChange({ ...value, exact: e.target.value })} placeholder="app.example.com" />
+        <Textarea id={`${id}-exact`} rows={3} value={value.exact} onChange={(e) => onChange({ ...value, exact: e.target.value })} placeholder="e.g. app.example.com" />
         <p className="text-xs text-muted-foreground">Each permits that name alone; a wildcard such as *.svc.example.com permits that wildcard alone. No IP addresses.</p>
       </div>
     </>
@@ -727,11 +740,16 @@ function AddIssuingCaForm({ orgId, ca, onDone }: { orgId: string; ca: PrivateCa;
   const platformRoot = ca.kind === "platform_root";
   const lifetimeOk = !platformRoot || lifetimeYears.trim() === "" || (/^\d+$/.test(lifetimeYears.trim()) && Number(lifetimeYears) >= 1 && Number(lifetimeYears) <= MAX_LIFETIME_YEARS);
   const untilRootEnds = `Until the root ends${ca.root ? `, ${date(ca.root.notAfter)}` : ""}`;
-  const complete: Record<AddStepId, boolean> = {
-    issuing: subject.trim() !== "" && lifetimeOk,
-    names: hasRules(rules),
-    validity: validityProblem(validity) === undefined,
-    review: true,
+  const validityMissing = validityProblem(validity);
+  const missing: Partial<Record<AddStepId, Missing>> = {
+    issuing:
+      subject.trim() === ""
+        ? { reason: "Give the Issuing CA a subject, such as CN=Acme Internal TLS.", field: `add-issuing-${ca.id}-subject` }
+        : !lifetimeOk
+          ? { reason: `Give a lifetime of 1 to ${MAX_LIFETIME_YEARS} years, or leave it empty.`, field: `add-issuing-${ca.id}-lifetime` }
+          : undefined,
+    names: hasRules(rules) ? undefined : { reason: "Give at least one zone or exact name it may issue for.", field: `add-issuing-${ca.id}-zones` },
+    validity: validityMissing ? { reason: validityMissing, field: `add-issuing-${ca.id}-validity-default` } : undefined,
   };
   return (
     <SteppedForm
@@ -739,7 +757,7 @@ function AddIssuingCaForm({ orgId, ca, onDone }: { orgId: string; ca: PrivateCa;
       steps={ADD_STEPS}
       step={step}
       onStep={setStep}
-      complete={complete}
+      missing={missing}
       submitLabel="Add"
       pending={add.isPending}
       onSubmit={() => add.mutate(undefined)}
@@ -757,7 +775,7 @@ function AddIssuingCaForm({ orgId, ca, onDone }: { orgId: string; ca: PrivateCa;
                 autoFocus
                 value={subject}
                 onChange={(e) => setSubject(e.target.value)}
-                placeholder="CN=Acme Devices, O=Acme"
+                placeholder="e.g. CN=Acme Devices, O=Acme"
               />
               <FieldDescription>A distinguished name, with a common name, that no other Issuing CA of {ca.name} has.</FieldDescription>
             </Field>
@@ -845,7 +863,7 @@ function CreatePrivateCaDialog({ orgId }: { orgId: string }) {
       <DialogTrigger asChild>
         <Button>
           <PlusIcon />
-          New Private CA
+          <ActionLabel>New Private CA</ActionLabel>
         </Button>
       </DialogTrigger>
       <DialogContent className={STEPPED_DIALOG}>
@@ -879,7 +897,9 @@ function CreatePrivateCaForm({ orgId, onDone }: { orgId: string; onDone: () => v
   const [kind, setKind] = useState<PrivateCa["kind"]>("platform_root");
   const platformRoot = kind === "platform_root";
   const [name, setName] = useState("");
-  const [subject, setSubject] = useState("");
+  // CN=<name> until the subject is edited.
+  const [typedSubject, setSubject] = useState<string | null>(null);
+  const subject = typedSubject ?? (name.trim() ? `CN=${name.trim()}` : "");
   const [keyAlgorithm, setKeyAlgorithm] = useState<KeyAlgorithm>("ecdsa-p256");
   // What the server says its keys may be under the kind of root chosen.
   const underRoots = useKeyAlgorithms().data?.privateCaKeyAlgorithms;
@@ -902,13 +922,18 @@ function CreatePrivateCaForm({ orgId, onDone }: { orgId: string; onDone: () => v
     onDone,
   );
   const lifetimeOk = !platformRoot || (Number.isInteger(Number(lifetimeYears)) && Number(lifetimeYears) >= 1 && Number(lifetimeYears) <= MAX_LIFETIME_YEARS);
-  const complete: Record<CreateStepId, boolean> = {
-    hierarchy: name.trim() !== "" && (!first || acknowledged),
-    issuing: subject.trim() !== "",
-    key: lifetimeOk,
-    names: hasRules(rules),
-    validity: validityProblem(validity) === undefined,
-    review: true,
+  const validityMissing = validityProblem(validity);
+  const missing: Partial<Record<CreateStepId, Missing>> = {
+    hierarchy:
+      name.trim() === ""
+        ? { reason: "Give the Private CA a name.", field: "private-ca-name" }
+        : first && !acknowledged
+          ? { reason: "Confirm that relying parties can fetch the addresses its Certificates will carry.", field: "publication-acknowledged" }
+          : undefined,
+    issuing: subject.trim() === "" ? { reason: "Give the Issuing CA a subject, such as CN=Acme Internal TLS.", field: "private-ca-subject" } : undefined,
+    key: lifetimeOk ? undefined : { reason: `Give a lifetime of 1 to ${MAX_LIFETIME_YEARS} years.`, field: "private-ca-lifetime" },
+    names: hasRules(rules) ? undefined : { reason: "Give at least one zone or exact name it may issue for.", field: "private-ca-new-zones" },
+    validity: validityMissing ? { reason: validityMissing, field: "private-ca-new-validity-default" } : undefined,
   };
   const hierarchy = HIERARCHIES.find((h) => h.value === kind);
   return (
@@ -917,7 +942,7 @@ function CreatePrivateCaForm({ orgId, onDone }: { orgId: string; onDone: () => v
       steps={CREATE_STEPS}
       step={step}
       onStep={setStep}
-      complete={complete}
+      missing={missing}
       submitLabel="Create"
       pending={create.isPending}
       onSubmit={() => create.mutate(undefined)}
@@ -932,7 +957,7 @@ function CreatePrivateCaForm({ orgId, onDone }: { orgId: string; onDone: () => v
           <FieldGroup>
             <Field>
               <FieldLabel htmlFor="private-ca-name">Name</FieldLabel>
-              <Input id="private-ca-name" autoFocus value={name} onChange={(e) => setName(e.target.value)} placeholder="Internal TLS" />
+              <Input id="private-ca-name" autoFocus value={name} onChange={(e) => setName(e.target.value)} placeholder="e.g. Internal TLS" />
             </Field>
             <Field>
               <FieldLabel>Hierarchy</FieldLabel>
@@ -966,7 +991,7 @@ function CreatePrivateCaForm({ orgId, onDone }: { orgId: string; onDone: () => v
           <FieldGroup>
             <Field>
               <FieldLabel htmlFor="private-ca-subject">Subject</FieldLabel>
-              <Input id="private-ca-subject" className="font-mono text-xs" autoFocus value={subject} onChange={(e) => setSubject(e.target.value)} placeholder="CN=Acme Internal TLS, O=Acme" />
+              <Input id="private-ca-subject" className="font-mono text-xs" autoFocus value={subject} onChange={(e) => setSubject(e.target.value)} placeholder="e.g. CN=Acme Internal TLS, O=Acme" />
               <FieldDescription>A distinguished name, with a common name.</FieldDescription>
             </Field>
             <Field>

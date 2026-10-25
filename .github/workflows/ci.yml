@@ -33,13 +33,13 @@ jobs:
           bun run db:generate
           git diff --exit-code -- server/src/platform/db server/drizzle
           test -z "$(git status --porcelain server/drizzle)"
-      # The tests' other servers: Pebble (the CA) and BIND (an RFC 2136 DNS server), from docker-compose.yml.
-      # Postgres is the service container above, so only these two are started.
+      # The tests' other servers: Pebble (the CA, and a second one requiring External Account Binding) and BIND (an RFC 2136 DNS server), from docker-compose.yml.
+      # Postgres is the service container above, so only these are started.
       - name: Start Pebble and BIND
         run: |
-          docker compose up -d --build pebble bind
+          docker compose up -d --build pebble pebble-eab bind
           for i in $(seq 1 60); do
-            curl -ksf https://localhost:14000/dir >/dev/null && (echo > /dev/tcp/127.0.0.1/5354) 2>/dev/null && exit 0
+            curl -ksf https://localhost:14000/dir >/dev/null && curl -ksf https://localhost:14001/dir >/dev/null && (echo > /dev/tcp/127.0.0.1/5354) 2>/dev/null && exit 0
             sleep 1
           done
           docker compose logs

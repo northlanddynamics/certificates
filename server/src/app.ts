@@ -11,6 +11,7 @@ import { registerApiKeys } from "./tenancy/api-keys";
 import { PLATFORM_OPERATOR_ROLE, createAuth } from "./tenancy/auth";
 import { registerCertificateExport } from "./certificates/certificate-export";
 import type { AcmeCertificateAuthority } from "./issuance/acme/certificate-authority";
+import { createAcmeCas, type BuiltInAcmeCaId } from "./issuance/acme/acme-cas";
 import { registerDeploymentScripts } from "./deployment/deployment-scripts";
 import { registerDeployments } from "./deployment/deployments";
 import { registerDcvConfiguration } from "./issuance/dcv/dcv-configuration";
@@ -32,7 +33,7 @@ import { ENROLLMENT_VALIDATOR_KINDS } from "./enrollment/enrollment-validator-ki
 import { createEnrollmentValidatorRuns } from "./enrollment/enrollment-validators";
 import { DEFAULT_DNS_RELAY, createDnsRelay, type DnsRelayConfig } from "./issuance/dcv/dns-relay";
 import { createDnsProviders, registerDnsProviders } from "./issuance/dcv/dns-providers";
-import { member, organization } from "./platform/db/schema";
+import { certificateProfileSettings, member, organization } from "./platform/db/schema";
 import { createAuthorizer } from "./tenancy/authorization";
 import { HttpError, errors, json } from "./platform/http";
 import { createIssuances } from "./issuance/issuance";
@@ -44,6 +45,9 @@ import { registerHistory } from "./certificates/history";
 import { registerIssuerRoutes } from "./issuance/issuer-routes";
 import { createManagedCertificateReader } from "./certificates/managed-certificate-reader";
 import { registerManagedCertificates } from "./certificates/managed-certificates";
+import { registerCertificateProfiles } from "./certificates/certificate-profiles";
+import { registerCertificateProfileSettings, requestsWithoutProfile } from "./certificates/certificate-profile-settings";
+import { registerProfileDetachRoutes } from "./certificates/profile-detach-routes";
 import { discardNameChangesOfRemoved } from "./certificates/name-change";
 import { registerNameChangeRoutes } from "./certificates/name-change-routes";
 import { registerOwnerRoutes } from "./certificates/owner-routes";
@@ -61,7 +65,7 @@ import { registerSubscriberRoutes } from "./certificates/subscriber-routes";
 import { removeTeamFromSubscribers, removeUserFromSubscribers } from "./certificates/subscribers";
 import { createOrganizations } from "./tenancy/organizations";
 import { createPrivateCas, registerPrivateCas } from "./private-ca/private-ca";
-import { ROLE_NAMES, permissionsOf } from "./tenancy/permissions";
+import { ROLE_NAMES, permissionsOf, roleCan } from "./tenancy/permissions";
 import { registerScep, type ScepConfig } from "./enrollment/scep";
 import { createScepTransactions } from "./enrollment/scep-transactions";
 import { createSecrets } from "./platform/crypto/secrets";
@@ -90,8 +94,10 @@ export interface AppDeps {
   secret: string;
   /** Wraps each Organization's data key; see secrets.ts. */
   kms: Kms;
-  /** The ACME CA: the CA of a Managed Certificate whose issuer is of the ACME kind (issuer.ts). */
+  /** How the platform talks to an ACME CA: the CA of a Managed Certificate whose issuer is of the ACME kind (issuer.ts). */
   certificateAuthority: AcmeCertificateAuthority;
+  /** Where the built-in ACME CAs' directories are served, by id; Let's Encrypt's own unless given (tests point them at Pebble). Read each time it is needed. */
+  builtInAcmeDirectories?: Partial<Record<BuiltInAcmeCaId, string>>;
   /** How DCV checks that a challenge record is visible; the host's DNS resolvers, waiting up to two minutes, unless given. */
   dcv?: Partial<DcvConfig>;
   /** How the Agent protocol is run: see `AgentGatewayConfig` for what each setting is and its default. */
@@ -245,6 +251,8 @@ export function createApp(deps: AppDeps) {
                 role: z.string(),
                 // What the caller may do there, so clients ask "may I?" instead of comparing role names.
                 permissions: z.record(z.string(), z.array(z.string())),
+                // Whether they may request a Managed Certificate without a Certificate Profile: not while one is required of those who may not create one outright.
+                requestsWithoutProfile: z.boolean(),
               }),
             ),
             // The roles the platform accepts when assigning one.
@@ -257,9 +265,10 @@ export function createApp(deps: AppDeps) {
     async (c) => {
       const user = await requireSession(c);
       const organizations = await db
-        .select({ id: organization.id, name: organization.name, slug: organization.slug, role: member.role })
+        .select({ id: organization.id, name: organization.name, slug: organization.slug, role: member.role, requireProfile: certificateProfileSettings.requireProfile })
         .from(member)
         .innerJoin(organization, eq(organization.id, member.organizationId))
+        .leftJoin(certificateProfileSettings, eq(certificateProfileSettings.organizationId, member.organizationId))
         .where(eq(member.userId, user.id))
         .orderBy(asc(organization.createdAt), asc(organization.id));
       return c.json(
@@ -271,7 +280,11 @@ export function createApp(deps: AppDeps) {
             isPlatformOperator: user.role === PLATFORM_OPERATOR_ROLE,
             mfa: await loginPolicies.mfaOf(user),
           },
-          organizations: organizations.map((o) => ({ ...o, permissions: permissionsOf(o.role) })),
+          organizations: organizations.map(({ requireProfile, ...o }) => ({
+            ...o,
+            permissions: permissionsOf(o.role),
+            requestsWithoutProfile: requestsWithoutProfile({ requireProfile: requireProfile ?? false }, roleCan(o.role, { managedCertificate: ["create"] })),
+          })),
           roles: ROLE_NAMES,
         },
         200,
@@ -296,7 +309,8 @@ export function createApp(deps: AppDeps) {
   });
   registerTeamsOverview({ app, db, requireUser, authorize });
   const secrets = createSecrets(deps.kms);
-  registerAcmeAccounts({ app, db, requireUser, authorize, unitOfWork, secrets, certificateAuthority: deps.certificateAuthority });
+  const acmeCas = createAcmeCas({ db, directoryUrls: deps.builtInAcmeDirectories });
+  registerAcmeAccounts({ app, db, requireUser, authorize, unitOfWork, secrets, certificateAuthority: deps.certificateAuthority, acmeCas });
   const agentGateway = { ...DEFAULT_AGENT_GATEWAY, ...deps.agentGateway };
   const dnsRelayConfig = { ...DEFAULT_DNS_RELAY, ...deps.dnsRelay };
   const workItems = createWorkItems({ db, unitOfWork, pollMs: dnsRelayConfig.pollMs, maxWaitMs: dnsRelayConfig.maxWaitMs, clock });
@@ -321,7 +335,7 @@ export function createApp(deps: AppDeps) {
   const deviceCertificatePruning = createDeviceCertificatePruning({ db, unitOfWork, clock });
   const deviceEnrollment = createDeviceEnrollment({ db, unitOfWork, privateCas, revocations, sharedChallenges, kinds: validatorKinds, validators: enrollmentValidators, transactions: createScepTransactions({ db, clock }), clock });
   const scep = registerScep({ app, db, secrets, enrollment: deviceEnrollment, kinds: validatorKinds, clock, config: deps.scep });
-  const issuers = createIssuers({ acme: deps.certificateAuthority, secrets, privateCas });
+  const issuers = createIssuers({ acme: deps.certificateAuthority, acmeCas, secrets, privateCas });
   const issuances = createIssuances({ db, unitOfWork, issuers, dcv });
   const notifications = createNotifications({
     db,
@@ -351,21 +365,24 @@ export function createApp(deps: AppDeps) {
     );
   });
   const reader = createManagedCertificateReader({ db, authorize, clock, agentOfflineAfterSeconds: agentGateway.offlineAfterSeconds });
-  registerManagedCertificates({ app, db, requireUser, authorize, unitOfWork, issuances, reader, clock, agentOfflineAfterSeconds: agentGateway.offlineAfterSeconds });
   const apiKeys = registerApiKeys({ app, db, auth, authConfig, requireUser, authorize, admit: loginPolicies.admit, unitOfWork });
+  registerManagedCertificates({ app, db, requireUser, authorize, apiKeys, unitOfWork, issuances, reader, acmeCas, clock, agentOfflineAfterSeconds: agentGateway.offlineAfterSeconds });
+  registerCertificateProfiles({ app, db, requireUser, authorize, unitOfWork, acmeCas });
+  registerCertificateProfileSettings({ app, db, requireUser, authorize, unitOfWork });
   registerCertificateExport({ app, db, apiKeys, unitOfWork, reader, issuers });
   registerOwnerRoutes({ app, requireUser, unitOfWork, reader });
   registerSubscriberRoutes({ app, db, requireUser, unitOfWork, reader });
   registerRenewalRoutes({ app, db, requireUser, unitOfWork, issuances, reader });
-  const renewals = createRenewalScheduler({ db, unitOfWork, issuances, issuers, clock });
+  const renewals = createRenewalScheduler({ db, unitOfWork, issuances, issuers, notifications, clock });
   registerNameChangeRoutes({ app, requireUser, authorize, unitOfWork, issuances, reader, notifications });
   registerApprovals({ app, db, requireUser, authorize, unitOfWork, issuances, reader, notifications });
   registerArchiveRoutes({ app, requireUser, authorize, unitOfWork, issuances, reader });
   registerIssuerRoutes({ app, requireUser, authorize, unitOfWork, reader });
+  registerProfileDetachRoutes({ app, requireUser, authorize, unitOfWork, reader });
   registerRevocationRoutes({ app, db, requireUser, unitOfWork, reader, issuers });
   registerHistory({ app, db, requireUser, reader });
   registerDeploymentScripts({ app, db, requireUser, authorize, unitOfWork });
-  registerDeployments({ app, db, requireUser, authorize, unitOfWork, workItems, issuances, notifications });
+  registerDeployments({ app, db, requireUser, authorize, unitOfWork, workItems, issuances, notifications, acmeCas });
   registerAgents({ app, db, requireUser, authorize, unitOfWork, clock, config: agentGateway, issuances });
   registerAgentGateway({ app, db, unitOfWork, workItems, clock, config: agentGateway });
 

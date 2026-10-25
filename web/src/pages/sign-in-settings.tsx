@@ -16,6 +16,7 @@ import { Input } from "@/components/ui/input";
 import { Label } from "@/components/ui/label";
 import { Select, SelectContent, SelectItem, SelectTrigger, SelectValue } from "@/components/ui/select";
 import { Textarea } from "@/components/ui/textarea";
+import { PageHeader } from "@/components/page-header";
 import { api, can, type LoginPolicy, type Me, type SsoConnection, type SsoConnectionChange } from "@/lib/api";
 import { useOrg } from "@/lib/use-org";
 import { useAction } from "@/lib/use-action";
@@ -40,7 +41,7 @@ export function SignInSettingsPage() {
 
   return (
     <div className="flex flex-col gap-6">
-      <h1 className="text-xl font-semibold">Sign-in settings</h1>
+      <PageHeader title="Sign-in settings" />
       <div className="grid items-start gap-6 lg:grid-cols-2">
         {org && can(org, "loginPolicy", "read") && <LoginPolicyCard orgId={orgId} mayChange={can(org, "loginPolicy", "update")} />}
         {org && can(org, "ssoConnection", "read") && <SsoConnectionsCard org={org} />}
@@ -58,6 +59,11 @@ export function SignInSettingsPage() {
 function LoginPolicyCard({ orgId, mayChange }: { orgId: string; mayChange: boolean }) {
   const policy = useQuery({ queryKey: ["login-policy", orgId], queryFn: () => api.loginPolicy(orgId) });
   const change = useAction((policy: Partial<LoginPolicy>) => api.setLoginPolicy(orgId, policy), ["login-policy", "me", "audit-events"]);
+  // Who may sign in, and how, has changed: a toast says so, and a refusal is a toast, too.
+  const told = (what: string) => ({
+    onSuccess: () => toast.success(what),
+    onError: (error: Error) => toast.error("The login policy was not changed", { description: error.message }),
+  });
 
   return (
     <Card>
@@ -71,7 +77,7 @@ function LoginPolicyCard({ orgId, mayChange }: { orgId: string; mayChange: boole
               id="require-mfa"
               checked={policy.data.requireMfa}
               disabled={!mayChange || change.isPending}
-              onCheckedChange={(checked) => change.mutate({ requireMfa: checked === true })}
+              onCheckedChange={(checked) => change.mutate({ requireMfa: checked === true }, told(checked === true ? "Multi-factor authentication is now required" : "Multi-factor authentication is no longer required"))}
             />
             <div className="flex flex-col gap-1">
               <Label htmlFor="require-mfa">Require multi-factor authentication</Label>
@@ -88,7 +94,7 @@ function LoginPolicyCard({ orgId, mayChange }: { orgId: string; mayChange: boole
               id="require-sso"
               checked={policy.data.requireSso}
               disabled={!mayChange || change.isPending}
-              onCheckedChange={(checked) => change.mutate({ requireSso: checked === true })}
+              onCheckedChange={(checked) => change.mutate({ requireSso: checked === true }, told(checked === true ? "SSO is now required" : "SSO is no longer required"))}
             />
             <div className="flex flex-col gap-1">
               <Label htmlFor="require-sso">Require SSO</Label>
@@ -100,7 +106,7 @@ function LoginPolicyCard({ orgId, mayChange }: { orgId: string; mayChange: boole
           </div>
         )}
         {policy.isPending && <p className="text-sm text-muted-foreground">Loading…</p>}
-        {(policy.error ?? change.error) && <p className="text-sm text-destructive">{(policy.error ?? change.error)!.message}</p>}
+        {policy.error && <p className="text-sm text-destructive">{policy.error.message}</p>}
       </CardContent>
     </Card>
   );

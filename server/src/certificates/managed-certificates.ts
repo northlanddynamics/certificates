@@ -3,12 +3,15 @@
 // (certificate-export.ts). The platform never sees the private key (ADR 0002): the CSR proves the Owner holds it.
 // Anyone else proposes one instead; it waits in the Approval queue (approval.ts) and its Issuance starts when an
 // Approver approves it. It may have Owners (owners.ts), who with Approvers and Organization Administrators are the
-// ones who see it (see managed-certificate-reader.ts). This module serves the inventory and the Managed Certificate itself.
+// ones who see it (see managed-certificate-reader.ts). An Organization may require a Certificate Profile of those who
+// propose (certificate-profile-settings.ts). A user's API key may create or propose one as its person may. This module
+// serves the inventory and the Managed Certificate itself.
 import { OpenAPIHono, createRoute, z } from "@hono/zod-openapi";
 import { and, asc, desc, eq } from "drizzle-orm";
 import { silentSince } from "../agents/agents";
+import type { ApiKeys } from "../tenancy/api-keys";
 import type { Authorizer } from "../tenancy/authorization";
-import { ACME_ENVIRONMENTS } from "../issuance/acme/certificate-authority";
+import { AcmeCaId, type AcmeCas } from "../issuance/acme/acme-cas";
 import { certificateFacts } from "../pki/certificate-facts";
 import { KEY_ALGORITHMS } from "../pki/csr";
 import type { Db } from "../platform/db/client";
@@ -16,12 +19,15 @@ import { issuance, managedCertificate } from "../platform/db/schema";
 import { HttpError, OrgParam, PageQuery, errors, json, pageOf } from "../platform/http";
 import { issuerAuditDetail, issuerColumns } from "../issuance/issuer";
 import { InventoryQuery, inventoryCondition } from "./inventory-filters";
-import { refusalMessage, type Issuances } from "../issuance/issuance";
-import { Certificate, CertificateFacts, Issuance, ManagedCertificate, ManagedCertificateParams, toCertificate, toIssuance, type ManagedCertificateReader } from "./managed-certificate-reader";
+import { refusalError, type Issuances } from "../issuance/issuance";
+import { Certificate, CertificateFacts, Issuance, ManagedCertificate, ManagedCertificateParams, RenewalPolicy, toCertificate, toIssuance, type ManagedCertificateReader } from "./managed-certificate-reader";
+import { requestedThrough } from "./certificate-profiles";
+import { certificateProfileSettingsOf, profileRequiredRefusal, requestsWithoutProfile } from "./certificate-profile-settings";
+import { profileNamesRefusal } from "./profile-name-rules";
 import { checkNamesAndCsr, csrField, namesField } from "./names-and-csr";
 import { OwnerRef, addOwner } from "./owners";
-import { roleCan } from "../tenancy/permissions";
-import { IssuerField, issuerAsked, validityDaysField } from "../private-ca/private-ca";
+import { carries, roleCan, type Permissions } from "../tenancy/permissions";
+import { IssuerField, issuerAsked, issuerRefusal, validityDaysField } from "../private-ca/private-ca";
 import { revocationsOf } from "../issuance/revocation";
 import type { Actor, UnitOfWork } from "../platform/unit-of-work";
 
@@ -32,14 +38,17 @@ export function registerManagedCertificates(ctx: {
   db: Db;
   requireUser(c: any): Promise<Actor>;
   authorize: Authorizer["authorize"];
+  /** Who is asking when a Managed Certificate is created: a person, or an API key (api-keys.ts). */
+  apiKeys: ApiKeys;
   unitOfWork: UnitOfWork;
   issuances: Issuances;
   reader: ManagedCertificateReader;
+  acmeCas: AcmeCas;
   clock: () => Date;
   /** How long an Agent may be silent before it counts as offline, for the inventory's `agentOffline` filter. */
   agentOfflineAfterSeconds: number;
 }) {
-  const { app, db, requireUser, authorize, unitOfWork, issuances, reader, clock, agentOfflineAfterSeconds } = ctx;
+  const { app, db, requireUser, authorize, apiKeys, unitOfWork, issuances, reader, acmeCas, clock, agentOfflineAfterSeconds } = ctx;
   const { findManagedCertificate, findReadable, visibleTo, certificatesOf, withState } = reader;
 
   app.openapi(
@@ -86,8 +95,16 @@ export function registerManagedCertificates(ctx: {
         "The Owner keeps the private key and submits a CSR for it. The CSR must be for the key algorithm given and ask for exactly the names given. " +
         "An Organization Administrator creates it outright and Issuance starts at once; anyone else proposes it, and it waits for an Approver to approve it, which starts Issuance. " +
         "Issuance runs in the background: the response shows it running, and the Managed Certificate shows the Certificate or the cause of the failure when it ends. " +
-        "Its issuer is an ACME CA (staging unless `environment` says otherwise) or, given `issuer`, an active Issuing CA of one of the Organization's Private CAs, which issues with no DCV. " +
-          "Names outside the Issuing CA's permitted name rules are refused with 422, which names them, as is a `validityDays` above its maximum; `validityDays` with an ACME CA is refused with 400.",
+        "Its issuer is an ACME CA (Let's Encrypt Staging unless `acmeCaId` says otherwise; 422 for one the Organization cannot use) or, given `issuer`, an active Issuing CA of one of the Organization's Private CAs, which issues with no DCV. " +
+          "Names outside the Issuing CA's permitted name rules are refused with 422, which names them, as is a `validityDays` above its maximum; `validityDays` with an ACME CA is refused with 400. " +
+        "Given `profileId`, a Certificate Profile of the Organization fixes its issuer, validity and Renewal Policy, which are copied onto it, so giving `issuer`, `acmeCaId`, `validityDays` or `renewalPolicy` too is refused with 400. " +
+        "The key algorithm must be one the profile allows, and the profile must be enabled and its issuer still usable (an ACME CA the Organization has an ACME Account with, or an active Issuing CA), or it is refused with 422; the issuer's own checks then apply as above. " +
+        "A non-administrator's names must keep to the profile's name rules as they are now (422, naming the names that do not); an Organization Administrator is held only to the issuer's limits. " +
+        "The requester and the profile's default Team become Owners, with any Owners named. " +
+        "What is copied stays as it is when the profile is edited later, but its name rules, as they are then, bind a non-administrator's Name Change of it, and while the profile is disabled nothing is issued under it: " +
+        "it is not approved, its names are not changed and it does not renew, automatically or asked for, until the profile is enabled again or an Organization Administrator detaches it (ADR 0012). " +
+        "While the Organization requires a Certificate Profile, a request without `profileId` from whoever may not create one outright is refused with 403. " +
+        "As a person signed in, or with a user's API key in the `x-api-key` header, which may do what both its person may now and it carries; an Organization's key may not.",
       request: {
         params: OrgParam,
         body: {
@@ -99,12 +116,14 @@ export function registerManagedCertificates(ctx: {
                   description: "The algorithm of the Owner's key, which the CSR is for. ML-DSA ones only on an ML-DSA Private CA, and only those there (422 otherwise): a chain is all ML-DSA or none of it. A Private CA's `certificateKeyAlgorithms` lists what it takes.",
                 }),
                 csr: csrField,
-                environment: z.enum(ACME_ENVIRONMENTS).optional().openapi({ description: "Which of the Organization's ACME accounts to issue through, when `issuer` is not given; staging unless given." }),
+                acmeCaId: AcmeCaId.optional().openapi({ description: "Which ACME CA to issue from, through the Organization's ACME account with it, when `issuer` is not given; Let's Encrypt Staging unless given." }),
                 issuer: IssuerField.optional(),
                 validityDays: validityDaysField
                   .optional()
                   .openapi({ description: "For a Private CA issuer only: how many days its Certificates are valid for, at most the Issuing CA's maximum; its default when not given." }),
                 owners: z.array(OwnerRef).max(MAX_OWNERS).default([]).openapi({ description: "Users and Teams of the Organization accountable for it; none is allowed." }),
+                renewalPolicy: RenewalPolicy.optional().openapi({ description: "The Renewal Policy it starts with: automatic, 30 days before expiry, unless given." }),
+                profileId: z.string().optional().openapi({ description: "The Certificate Profile it is requested through, whose issuer, validity and Renewal Policy are copied onto it; its name rules and whether it is enabled are checked live." }),
               }),
             },
           },
@@ -115,14 +134,40 @@ export function registerManagedCertificates(ctx: {
     async (c) => {
       const { orgId } = c.req.valid("param");
       const body = c.req.valid("json");
-      const actor = await requireUser(c);
+      const caller = await apiKeys.callerOf(c);
+      const create: Permissions = { managedCertificate: ["create"] };
+      // An Organization's key acts as no one, so nobody would propose or own what it made: it is refused, as one carrying no
+      // `create` (or, made for another Organization, as one that does not know this one).
+      if (!caller.user) {
+        await apiKeys.authorizeCaller(caller, orgId, create);
+        throw new HttpError(403, "not permitted");
+      }
+      const actor = caller.user;
       const { role } = await authorize(actor, orgId);
-      // Who may create outright needs no Approval; everyone else must be allowed to propose.
-      const needsApproval = !roleCan(role, { managedCertificate: ["create"] });
-      if (needsApproval) await authorize(actor, orgId, { managedCertificate: ["propose"] });
+      // Who may create outright needs no Approval; everyone else must be allowed to propose. A key may only what its person may and it carries.
+      const needsApproval = !roleCan(role, create) || (caller.apiKey !== null && !carries(caller.apiKey.permissions, create));
+      await apiKeys.authorizeCaller(caller, orgId, needsApproval ? { managedCertificate: ["propose"] } : create);
+      if (body.profileId === undefined && !requestsWithoutProfile(await certificateProfileSettingsOf(db, orgId), !needsApproval)) throw profileRequiredRefusal();
+
+      // A profile fixes what it is issued with, so a request through one may not choose any of it too.
+      const chosen = (["issuer", "acmeCaId", "validityDays", "renewalPolicy"] as const).filter((field) => body[field] !== undefined);
+      if (body.profileId !== undefined && chosen.length > 0) throw new HttpError(400, `a Certificate Profile fixes ${chosen.map((field) => `\`${field}\``).join(", ")}; give none with \`profileId\``);
+      const through = body.profileId === undefined ? undefined : await requestedThrough(db, acmeCas, orgId, body.profileId, body.keyAlgorithm);
 
       const { names, csr } = await checkNamesAndCsr(body);
-      const issuer = await issuerAsked(db, orgId, body, names);
+      let issuer;
+      if (through) {
+        // A non-administrator keeps to the profile's name rules as they are now; everyone to the issuer's limits after them.
+        const outside = needsApproval ? profileNamesRefusal(through.profile.name, through.nameRules, names) : undefined;
+        if (outside) throw new HttpError(422, outside);
+        const refusal = await issuerRefusal(db, orgId, through.issuer, { names, validityDays: through.validityDays, keyAlgorithm: body.keyAlgorithm });
+        if (refusal) throw new HttpError(refusal.status, refusal.message);
+        issuer = through.issuer;
+      } else {
+        issuer = await issuerAsked(db, acmeCas, orgId, body, names);
+      }
+      const validityDays = through ? through.validityDays : (body.validityDays ?? null);
+      const renewalPolicy = through?.renewalPolicy ?? body.renewalPolicy;
 
       const created = await unitOfWork.run(actor, async (tx, change) => {
         const [row] = await tx
@@ -133,8 +178,10 @@ export function registerManagedCertificates(ctx: {
             keyAlgorithm: body.keyAlgorithm,
             keyCustody: "owner",
             ...issuerColumns(issuer),
-            validityDays: body.validityDays ?? null,
+            validityDays,
             csr: body.csr,
+            ...(renewalPolicy && { renewalMode: renewalPolicy.mode, renewalDaysBeforeExpiry: renewalPolicy.daysBeforeExpiry }),
+            certificateProfileId: through?.profile.id ?? null,
             ...(needsApproval && { approvalStatus: "pending", proposedById: actor.id, proposedByEmail: actor.email }),
           })
           .returning();
@@ -146,16 +193,34 @@ export function registerManagedCertificates(ctx: {
             names,
             keyAlgorithm: body.keyAlgorithm,
             keyCustody: "owner",
-            ...issuerAuditDetail(issuer, body.validityDays),
+            ...issuerAuditDetail(issuer, validityDays ?? undefined),
             csrFingerprint: csr.fingerprint,
+            ...(renewalPolicy && { renewalPolicy }),
+            ...(through && { certificateProfile: through.profile }),
           },
         });
+        // A key leaves a trace of what it was used for.
+        if (caller.apiKey) {
+          await change.audit({
+            organizationId: orgId,
+            action: "api_key.used",
+            target: { type: "managed_certificate", id: row!.id },
+            detail: { apiKeyId: caller.apiKey.id, apiKeyName: caller.apiKey.name, apiKeyType: caller.apiKey.type, managedCertificate: needsApproval ? "proposed" : "created" },
+          });
+        }
+        // Whoever requests through a profile owns what they asked for, with the profile's default Team.
+        const owners: OwnerRef[] = [
+          ...(through ? [{ type: "user" as const, id: actor.id }] : []),
+          ...(through?.defaultTeamId ? [{ type: "team" as const, id: through.defaultTeamId }] : []),
+          ...body.owners,
+        ];
         // Whoever creates or proposes may name the Owners at the same time; each is audited as added (naming one twice adds it once).
-        for (const ref of body.owners) await addOwner(tx, change, orgId, row!.id, ref);
+        for (const ref of owners) await addOwner(tx, change, orgId, row!.id, ref);
         // A proposal is issued only once approved.
         if (!needsApproval) {
           const begun = await issuances.begin(tx, change, actor, row!, "issue");
-          if ("refused" in begun) throw new Error(`the Issuance of a Managed Certificate just created was refused: ${begun.refused}`);
+          // Its Certificate Profile may have been disabled since it was checked.
+          if ("refused" in begun) throw begun.refused === "profile_disabled" ? refusalError(begun, "issue") : new Error(`the Issuance of a Managed Certificate just created was refused: ${begun.refused}`);
         }
         return row!;
       });
@@ -205,9 +270,9 @@ export function registerManagedCertificates(ctx: {
       path: "/api/organizations/{orgId}/managed-certificates/{id}/issuances",
       tags: ["Managed Certificates"],
       summary: "Try issuing a Certificate again",
-      description: "For when the last Issuance failed. It reuses the Managed Certificate's CSR. Only one runs at a time.",
+      description: "For when the last Issuance failed. It reuses the Managed Certificate's CSR. Only one runs at a time. Refused (422) while the Certificate Profile it was made from is disabled.",
       request: { params: ManagedCertificateParams },
-      responses: { 202: json(Issuance, "Started"), ...errors(401, 403, 404, 409) },
+      responses: { 202: json(Issuance, "Started"), ...errors(401, 403, 404, 409, 422) },
     }),
     async (c) => {
       const { orgId, id } = c.req.valid("param");
@@ -215,7 +280,7 @@ export function registerManagedCertificates(ctx: {
       await authorize(actor, orgId, { managedCertificate: ["issue"] });
       const mc = await findManagedCertificate(orgId, id);
       const begun = await unitOfWork.run(actor, (tx, change) => issuances.begin(tx, change, actor, mc, "issue"));
-      if ("refused" in begun) throw new HttpError(409, refusalMessage(begun.refused, "issue"));
+      if ("refused" in begun) throw refusalError(begun, "issue");
       const [row] = await db.select().from(issuance).where(eq(issuance.id, begun.issuanceId));
       return c.json(toIssuance(row!), 202);
     },
@@ -257,7 +322,7 @@ export function registerManagedCertificates(ctx: {
       const row = (await certificatesOf(orgId, mc.id)).find((r) => r.id === certificateId);
       if (!row) throw new HttpError(404, "Certificate not found");
       const revocations = await revocationsOf(db, [row.id]);
-      return c.json({ ...toCertificate(row, revocations.get(row.id)), ...certificateFacts(row.chainPem), acmeAccount: row.acmeAccountId && row.environment ? { id: row.acmeAccountId, environment: row.environment } : null }, 200);
+      return c.json({ ...toCertificate(row, revocations.get(row.id)), ...certificateFacts(row.chainPem), acmeAccount: row.acmeAccountId && row.acmeCaId ? { id: row.acmeAccountId, acmeCaId: row.acmeCaId } : null }, 200);
     },
   );
 }

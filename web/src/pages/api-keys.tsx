@@ -3,6 +3,7 @@ import { useParams } from "@tanstack/react-router";
 import { createColumnHelper, rowPaginationFeature, tableFeatures, useTable, type PaginationState } from "@tanstack/react-table";
 import { PlusIcon } from "lucide-react";
 import { useState, type FormEvent } from "react";
+import { toast } from "sonner";
 import { ConfirmDialog } from "@/components/confirm-dialog";
 import { DataTable } from "@/components/data-table/data-table";
 import { DataTablePagination } from "@/components/data-table/data-table-pagination";
@@ -12,6 +13,7 @@ import { Dialog, DialogClose, DialogContent, DialogDescription, DialogFooter, Di
 import { Input } from "@/components/ui/input";
 import { Label } from "@/components/ui/label";
 import { Select, SelectContent, SelectItem, SelectTrigger, SelectValue } from "@/components/ui/select";
+import { ActionLabel, PageHeader } from "@/components/page-header";
 import { api, can, type ApiKey } from "@/lib/api";
 import { useOrg } from "@/lib/use-org";
 import { useAction } from "@/lib/use-action";
@@ -26,7 +28,7 @@ const columnHelper = createColumnHelper<typeof features, ApiKey>();
 const columns = columnHelper.columns([
   columnHelper.accessor("name", { header: "Name", cell: ({ cell }) => <span className="font-medium">{cell.getValue()}</span> }),
   columnHelper.accessor("start", { header: "Key", cell: ({ cell }) => <span className="font-mono text-xs text-muted-foreground">{cell.getValue()}…</span> }),
-  columnHelper.accessor("type", { header: "Whose", cell: ({ cell }) => <Badge variant={cell.getValue() === "organization" ? "default" : "secondary"}>{TYPE_LABEL[cell.getValue()]}</Badge> }),
+  columnHelper.accessor("type", { header: "Whose", cell: ({ cell }) => <Badge variant={cell.getValue() === "organization" ? "outline" : "secondary"}>{TYPE_LABEL[cell.getValue()]}</Badge> }),
   columnHelper.accessor((k) => k.createdBy?.email, { id: "createdBy", header: "Made by", cell: ({ cell }) => cell.getValue() ?? <span className="text-muted-foreground">You</span> }),
   columnHelper.accessor("createdAt", { header: "Made", cell: ({ cell }) => date(cell.getValue()) }),
   columnHelper.accessor("expiresAt", { header: "Expires", cell: ({ cell }) => (cell.getValue() ? date(cell.getValue()!) : <span className="text-muted-foreground">Never</span>) }),
@@ -60,15 +62,21 @@ export function ApiKeysPage() {
 
   return (
     <div className="flex flex-col gap-6">
-      <div className="flex items-center justify-between gap-4">
-        <h1 className="text-xl font-semibold">API keys</h1>
-        <MakeKeyDialog orgId={orgId} mayMakeOrganizationKeys={org ? can(org, "apiKey", "create") : false} />
-      </div>
-      <p className="text-sm text-muted-foreground">
-        A key is sent in the <code>x-api-key</code> header and, so far, downloads Certificates. Your own key acts as you in this Organization, for what you may see and do, and
-        every use is recorded under your name. An Organization's key belongs to the Organization: it downloads every Managed Certificate in it, keeps working when whoever made it
-        leaves, and each use is recorded with the key and who made it.
-      </p>
+      <PageHeader
+        title="API keys"
+        action={<MakeKeyDialog orgId={orgId} mayMakeOrganizationKeys={org ? can(org, "apiKey", "create") : false} />}
+        description={
+          <>
+            A key is sent in the <code>x-api-key</code> header and, so far, downloads Certificates.
+          </>
+        }
+        howItWorks={
+          <p>
+            Your own key acts as you in this Organization, for what you may see and do, and every use is recorded under your name. An Organization's key belongs to the
+            Organization: it downloads every Managed Certificate in it, keeps working when whoever made it leaves, and each use is recorded with the key and who made it.
+          </p>
+        }
+      />
       <div className="flex flex-col gap-4">
         <DataTable table={table} empty={keys.isPending ? "Loading…" : "You have no API keys here."} />
         <DataTablePagination
@@ -87,7 +95,10 @@ export function ApiKeysPage() {
 function RevokeKey({ apiKey }: { apiKey: ApiKey }) {
   const { orgId } = useParams({ from: ROUTE });
   const [open, setOpen] = useState(false);
-  const revoke = useAction(() => api.revokeApiKey(orgId, apiKey.id), ["api-keys"], () => setOpen(false));
+  const revoke = useAction(() => api.revokeApiKey(orgId, apiKey.id), ["api-keys"], () => {
+    setOpen(false);
+    toast.success(`${apiKey.name} was revoked`);
+  });
   return (
     <div className="flex justify-end">
       <Button variant="outline" size="sm" aria-label={`Revoke ${apiKey.name}`} onClick={() => setOpen(true)}>
@@ -117,7 +128,7 @@ function MakeKeyDialog({ orgId, mayMakeOrganizationKeys }: { orgId: string; mayM
       <DialogTrigger asChild>
         <Button>
           <PlusIcon />
-          Make an API key
+          <ActionLabel>Make an API key</ActionLabel>
         </Button>
       </DialogTrigger>
       <DialogContent className="sm:max-w-lg">

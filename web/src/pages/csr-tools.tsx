@@ -1,6 +1,7 @@
-import { ChevronDownIcon, CopyIcon, DownloadIcon, KeyRoundIcon, LoaderIcon } from "lucide-react";
+import { ChevronDownIcon, CircleAlertIcon, CopyIcon, DownloadIcon, KeyRoundIcon, LoaderIcon } from "lucide-react";
 import { useState, type FormEvent } from "react";
 import { KeyAlgorithmChoice, SaveKey, downloadPem, emptyKeySource, type KeySourceState } from "@/components/csr-key-source";
+import type { Missing } from "@/components/stepped-form";
 import { Button } from "@/components/ui/button";
 import { Card, CardContent, CardDescription, CardHeader, CardTitle } from "@/components/ui/card";
 import { Collapsible, CollapsibleContent, CollapsibleTrigger } from "@/components/ui/collapsible";
@@ -8,6 +9,7 @@ import { Field, FieldDescription, FieldError, FieldGroup, FieldLabel } from "@/c
 import { Input } from "@/components/ui/input";
 import { Select, SelectContent, SelectItem, SelectTrigger, SelectValue } from "@/components/ui/select";
 import { Textarea } from "@/components/ui/textarea";
+import { PageHeader } from "@/components/page-header";
 import {
   DEFAULT_KEY_ALGORITHM,
   KEY_ALGORITHMS,
@@ -79,8 +81,19 @@ export function CsrToolsPage() {
     ...(commonName ? [`CN=${commonName}`] : []),
   ].join(", ");
 
+  // What generating still needs, said beside the button once it is pressed, rather than the button being greyed out with no reason.
+  const needs: Missing | undefined =
+    problems.length > 0 ? { reason: problems[0]!, field: "csr-names" } : countryProblem ? { reason: countryProblem, field: "csr-c" } : undefined;
+  const [told, setTold] = useState(false);
+
   async function generate(e: FormEvent) {
     e.preventDefault();
+    if (needs) {
+      setTold(true);
+      if (needs.field) document.getElementById(needs.field)?.focus();
+      return;
+    }
+    setTold(false);
     setError(null);
     setWorking(true);
     try {
@@ -98,12 +111,11 @@ export function CsrToolsPage() {
 
   return (
     <form className="flex flex-col gap-6" onSubmit={generate}>
-      <div>
-        <h1 className="text-xl font-semibold">CSR Generator</h1>
-        <p className="text-sm text-muted-foreground">
-          A key and a CSR made in your browser. The key is never sent to the platform, which cannot recover it for you: keep it, and give the CSR to whoever signs it.
-        </p>
-      </div>
+      <PageHeader
+        title="CSR Generator"
+        description="A key and a CSR made in your browser."
+        howItWorks={<p>The key is never sent to the platform, which cannot recover it for you: keep it, and give the CSR to whoever signs it.</p>}
+      />
       <div className="grid items-start gap-6 lg:grid-cols-2">
         <Card>
           <CardHeader>
@@ -211,7 +223,7 @@ export function CsrToolsPage() {
             <CardContent className="flex flex-col gap-4 text-sm">
               <dl className="grid grid-cols-[7rem_1fr] gap-x-4 gap-y-2">
                 <dt className="text-muted-foreground">Subject</dt>
-                <dd className="font-mono text-xs break-all">{subjectLine || <span className="font-sans text-muted-foreground">Empty</span>}</dd>
+                <dd className="break-all">{subjectLine ? <span className="font-mono text-xs">{subjectLine}</span> : <span className="text-muted-foreground">None yet</span>}</dd>
                 <dt className="text-muted-foreground">Names</dt>
                 <dd>
                   {distinct.length > 0 ? (
@@ -241,11 +253,19 @@ export function CsrToolsPage() {
                 </Collapsible>
               )}
               {error && <FieldError>{error}</FieldError>}
-              <div>
-                <Button type="submit" disabled={working || problems.length > 0 || !!countryProblem}>
+              <div className="flex flex-wrap items-center gap-3">
+                <Button type="submit" disabled={working}>
                   {working ? <LoaderIcon className="animate-spin" /> : <KeyRoundIcon />}
                   {working ? "Generating…" : generated ? "Generate a new key and CSR" : "Generate key and CSR"}
                 </Button>
+                <p role="status" className="flex items-center gap-1.5 text-sm text-destructive">
+                  {told && needs && (
+                    <>
+                      <CircleAlertIcon className="size-4 shrink-0" aria-hidden />
+                      {needs.reason}
+                    </>
+                  )}
+                </p>
               </div>
             </CardContent>
           </Card>
@@ -253,7 +273,7 @@ export function CsrToolsPage() {
           {generated && (
             <Card aria-live="polite">
               <CardContent className="flex flex-col gap-5">
-                {stale && <p className="text-sm text-amber-700 dark:text-amber-400">You have changed what to ask for since these were made; generate again for a CSR that holds it.</p>}
+                {stale && <p className="text-sm text-warning">You have changed what to ask for since these were made; generate again for a CSR that holds it.</p>}
                 <section className="flex flex-col gap-2" aria-label="Private key">
                   <h2 className="text-sm font-medium">1. Private key (PKCS#8 PEM)</h2>
                   <SaveKey state={keySource} onChange={setKeySource} showCsr={false} />

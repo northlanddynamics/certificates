@@ -3,6 +3,7 @@ import { useParams } from "@tanstack/react-router";
 import { createColumnHelper, rowExpandingFeature, rowPaginationFeature, tableFeatures, useTable, type PaginationState } from "@tanstack/react-table";
 import { MoreHorizontalIcon, PlusIcon, XIcon } from "lucide-react";
 import { useState, type FormEvent } from "react";
+import { toast } from "sonner";
 import { ConfirmDialog } from "@/components/confirm-dialog";
 import { DataTable } from "@/components/data-table/data-table";
 import { DataTableFacetedFilter } from "@/components/data-table/data-table-faceted-filter";
@@ -14,6 +15,7 @@ import { DropdownMenu, DropdownMenuContent, DropdownMenuItem, DropdownMenuTrigge
 import { Field, FieldError, FieldGroup, FieldLabel } from "@/components/ui/field";
 import { Input } from "@/components/ui/input";
 import { Select, SelectContent, SelectItem, SelectTrigger, SelectValue } from "@/components/ui/select";
+import { ActionLabel, PageHeader } from "@/components/page-header";
 import { api, type Team } from "@/lib/api";
 import { useAction } from "@/lib/use-action";
 
@@ -69,10 +71,7 @@ export function TeamsPage() {
 
   return (
     <div className="flex flex-col gap-6">
-      <div className="flex items-center justify-between gap-4">
-        <h1 className="text-xl font-semibold">Teams</h1>
-        <NewTeamDialog orgId={orgId} />
-      </div>
+      <PageHeader title="Teams" action={<NewTeamDialog orgId={orgId} />} />
       <div className="flex flex-col gap-4">
         <div className="flex flex-wrap items-center gap-2">
           <DataTableFacetedFilter title="Members" options={MEMBERSHIP_FACETS} value={membership} onChange={narrow} />
@@ -199,7 +198,7 @@ function NewTeamDialog({ orgId }: { orgId: string }) {
       trigger={
         <Button>
           <PlusIcon />
-          New Team
+          <ActionLabel>New Team</ActionLabel>
         </Button>
       }
     />
@@ -264,7 +263,7 @@ function TeamMembers({ orgId, team, candidates }: { orgId: string; team: Team; c
   const remove = useAction((userId: string) => api.removeTeamMember(orgId, team.id, userId), ["teams"]);
   const inTeam = new Set(team.members.map((m) => m.userId));
   const addable = candidates.filter((c) => !inTeam.has(c.userId));
-  const error = add.error ?? remove.error;
+  const failed = (what: string) => ({ onError: (error: Error) => toast.error(what, { description: error.message }) });
   return (
     <div className="flex flex-col gap-2 text-sm">
       {team.members.length === 0 && <span className="text-muted-foreground">No one is on this Team yet.</span>}
@@ -272,14 +271,14 @@ function TeamMembers({ orgId, team, candidates }: { orgId: string; team: Team; c
         {team.members.map((m) => (
           <li key={m.userId} className="flex items-center justify-between gap-2">
             {m.email}
-            <Button variant="ghost" size="sm" aria-label={`Remove ${m.email} from ${team.name}`} disabled={remove.isPending} onClick={() => remove.mutate(m.userId)}>
+            <Button variant="ghost" size="sm" aria-label={`Remove ${m.email} from ${team.name}`} disabled={remove.isPending} onClick={() => remove.mutate(m.userId, failed(`${m.email} was not removed from ${team.name}`))}>
               Remove
             </Button>
           </li>
         ))}
       </ul>
       {addable.length > 0 && (
-        <Select value="" onValueChange={(userId) => add.mutate(userId)}>
+        <Select value="" onValueChange={(userId) => add.mutate(userId, failed(`${candidates.find((c) => c.userId === userId)?.email ?? "The user"} was not added to ${team.name}`))}>
           <SelectTrigger size="sm" className="w-64" aria-label={`Add a user to ${team.name}`}>
             <SelectValue placeholder="Add a user…" />
           </SelectTrigger>
@@ -292,7 +291,6 @@ function TeamMembers({ orgId, team, candidates }: { orgId: string; team: Team; c
           </SelectContent>
         </Select>
       )}
-      {error && <span className="text-destructive">{error.message}</span>}
     </div>
   );
 }

@@ -1,4 +1,4 @@
-import { and, asc, desc, eq, gt, gte, like, lt, or, sql, type SQL } from "drizzle-orm";
+import { and, asc, desc, eq, gt, gte, ilike, inArray, like, lt, or, sql, type SQL } from "drizzle-orm";
 import type { Db, Tx } from "../platform/db/client";
 import { auditDelivery, auditEvent, auditForwarder } from "../platform/db/schema";
 
@@ -17,6 +17,9 @@ export const AUDIT_ACTIONS = [
   "team.deleted",
   "team.member_added",
   "team.member_removed",
+  "acme_ca.created",
+  "acme_ca.updated",
+  "acme_ca.deleted",
   "acme_account.created",
   "acme_account.key_replaced",
   "dns_provider.created",
@@ -42,6 +45,7 @@ export const AUDIT_ACTIONS = [
   "managed_certificate.names_changed",
   "managed_certificate.archived",
   "managed_certificate.issuer_changed",
+  "managed_certificate.profile_detached",
   "certificate.revoked",
   "private_ca.created",
   "private_ca.issuing_ca_added",
@@ -50,6 +54,11 @@ export const AUDIT_ACTIONS = [
   "private_ca.crl_published",
   "private_ca.retired",
   "private_ca.revoked",
+  "certificate_profile.created",
+  "certificate_profile.updated",
+  "certificate_profile.disabled",
+  "certificate_profile.enabled",
+  "certificate_profile_settings.changed",
   "enrollment_profile.created",
   "enrollment_profile.updated",
   "enrollment_profile.disabled",
@@ -141,11 +150,14 @@ export async function recordAudit(db: Db | Tx, e: AuditInput) {
 
 /** How an Audit Event is searched: every filter given must match. */
 export interface AuditQuery {
+  /** Part of the actor's email or of the action, in any case. */
+  q?: string;
   /** Who made the change: a user's id, or their email in any case. */
   actor?: string;
   /** An action (`team.created`), or every action under a prefix (`team.*`). */
   action?: string;
-  targetType?: string;
+  /** Any of these types of target. */
+  targetType?: string[];
   targetId?: string;
   /** From this time, inclusive. */
   from?: Date;
@@ -174,9 +186,13 @@ export const toItem = (r: typeof auditEvent.$inferSelect) => ({
 export async function searchAudit(db: Db, organizationId: string, q: AuditQuery) {
   const newestFirst = q.order === "desc";
   const where: (SQL | undefined)[] = [eq(auditEvent.organizationId, organizationId)];
+  if (q.q) {
+    const pattern = `%${q.q.replace(/[\\%_]/g, "\\$&")}%`;
+    where.push(or(ilike(auditEvent.actorEmail, pattern), ilike(auditEvent.action, pattern)));
+  }
   if (q.actor) where.push(or(eq(auditEvent.actorId, q.actor), sql`lower(${auditEvent.actorEmail}) = lower(${q.actor})`));
   if (q.action) where.push(q.action.endsWith(".*") ? like(auditEvent.action, `${q.action.slice(0, -1).replace(/[\\%_]/g, "\\$&")}%`) : eq(auditEvent.action, q.action));
-  if (q.targetType) where.push(eq(auditEvent.targetType, q.targetType));
+  if (q.targetType?.length) where.push(inArray(auditEvent.targetType, q.targetType));
   if (q.targetId) where.push(eq(auditEvent.targetId, q.targetId));
   if (q.from) where.push(gte(auditEvent.occurredAt, q.from));
   if (q.to) where.push(lt(auditEvent.occurredAt, q.to));
@@ -195,4 +211,10 @@ export async function searchAudit(db: Db, organizationId: string, q: AuditQuery)
 export async function listAudit(db: Db, organizationId: string) {
   const rows = await db.select().from(auditEvent).where(eq(auditEvent.organizationId, organizationId)).orderBy(asc(auditEvent.id));
   return rows.map(toItem);
+}
+
+/** The types of target the Organization's Audit Events have, by name: what its audit log can be narrowed to. */
+export async function auditTargetTypes(db: Db, organizationId: string): Promise<string[]> {
+  const rows = await db.selectDistinct({ type: auditEvent.targetType }).from(auditEvent).where(eq(auditEvent.organizationId, organizationId)).orderBy(asc(auditEvent.targetType));
+  return rows.map((r) => r.type);
 }

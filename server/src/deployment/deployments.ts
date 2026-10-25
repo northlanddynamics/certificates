@@ -16,7 +16,7 @@
 import { OpenAPIHono, createRoute, z } from "@hono/zod-openapi";
 import { and, desc, eq, inArray, sql } from "drizzle-orm";
 import type { Authorizer } from "../tenancy/authorization";
-import { ACME_ENVIRONMENTS } from "../issuance/acme/certificate-authority";
+import { AcmeCaId, type AcmeCas } from "../issuance/acme/acme-cas";
 import { KEY_ALGORITHMS } from "../pki/csr";
 import type { Db, Tx } from "../platform/db/client";
 import { agent, certificate, deployment, deploymentRun, deploymentScript, deploymentScriptVersion, issuance, managedCertificate, workItem } from "../platform/db/schema";
@@ -141,8 +141,9 @@ export function registerDeployments(ctx: {
   workItems: WorkItems;
   issuances: Issuances;
   notifications: Notifications;
+  acmeCas: AcmeCas;
 }) {
-  const { app, db, requireUser, authorize, unitOfWork, workItems, issuances, notifications } = ctx;
+  const { app, db, requireUser, authorize, unitOfWork, workItems, issuances, notifications, acmeCas } = ctx;
 
   async function findDeployment(orgId: string, id: string) {
     // Not a UUID can't be a Deployment; asking Postgres would only raise a type error.
@@ -271,7 +272,7 @@ export function registerDeployments(ctx: {
           return;
         }
         await tx.update(deployment).set({ keyFailure: null }).where(eq(deployment.id, row.id));
-        // The first Issuance, as of whoever set the Deployment up. It is refused only if the Managed Certificate was archived meanwhile.
+        // The first Issuance, as of whoever set the Deployment up. It is refused only if the Managed Certificate was archived meanwhile (an Agent never holds the key of one made from a Certificate Profile).
         await issuances.begin(tx, change, { id: row.createdById, email: row.createdByEmail }, mc, "issue");
       },
     },
@@ -401,8 +402,8 @@ export function registerDeployments(ctx: {
         "and asks the Agent to make the key and send a CSR for it: the private key never reaches the platform. Once the Agent has, Issuance begins; when the Certificate is stored the Agent is given it and the script, " +
         "and its report of running it is the first Deployment Run. One Agent can serve many Deployments. The script version is pinned: the latest unless `scriptVersion` says. " +
         "An Agent that is offline does the work when it next polls. " +
-        "Its issuer is an ACME CA (staging unless `environment` says otherwise) or, given `issuer`, an active Issuing CA of one of the Organization's Private CAs, which issues with no DCV; " +
-        "names outside the Issuing CA's permitted name rules are refused with 422, as is a `validityDays` above its maximum; `validityDays` with an ACME CA, or both `issuer` and `environment`, is refused with 400. " +
+        "Its issuer is an ACME CA (Let's Encrypt Staging unless `acmeCaId` says otherwise; 422 for one the Organization cannot use) or, given `issuer`, an active Issuing CA of one of the Organization's Private CAs, which issues with no DCV; " +
+        "names outside the Issuing CA's permitted name rules are refused with 422, as is a `validityDays` above its maximum; `validityDays` with an ACME CA, or both `issuer` and `acmeCaId`, is refused with 400. " +
         "`parameters` are checked against the parameters the script version declares: a value for one it does not declare, one that is too long or holds a NUL or newline, or a required one with no value is refused with 400, `parameters` in the error saying what is wrong with each.",
       request: {
         params: OrgParam,
@@ -418,7 +419,7 @@ export function registerDeployments(ctx: {
                   description:
                     "What key the Agent makes. The ML-DSA ones (`ml-dsa-44`, `ml-dsa-65`, `ml-dsa-87`) only for an `issuer` that is an Issuing CA of an ML-DSA Private CA, and only they there; the others (ECDSA and RSA) for an ACME CA or a Private CA of those. Refused with 422, with the reason, when the issuer does not take it. Whatever the Deployment Script installs the key and Certificate into must itself support ML-DSA.",
                 }),
-                environment: z.enum(ACME_ENVIRONMENTS).optional().openapi({ description: "Which of the Organization's ACME accounts to issue through, when `issuer` is not given; staging unless given." }),
+                acmeCaId: AcmeCaId.optional().openapi({ description: "Which ACME CA to issue from, through the Organization's ACME account with it, when `issuer` is not given; Let's Encrypt Staging unless given." }),
                 issuer: IssuerField.optional(),
                 validityDays: validityDaysField
                   .optional()
@@ -442,7 +443,7 @@ export function registerDeployments(ctx: {
       if (normalized.names.length > MAX_NAMES) throw new HttpError(400, `at most ${MAX_NAMES} names`);
       if (!UUID.test(body.agentId)) throw new HttpError(400, "the Agent must be the id of one of the Organization's Agents");
       if (!UUID.test(body.scriptId)) throw new HttpError(400, "the script must be the id of one of the Organization's Deployment Scripts");
-      const issuer = await issuerAsked(db, orgId, body, normalized.names);
+      const issuer = await issuerAsked(db, acmeCas, orgId, body, normalized.names);
 
       const created = await unitOfWork.run(actor, async (tx, change) => {
         // Shared, so that the Agent being revoked finishes first, or is seen revoked.

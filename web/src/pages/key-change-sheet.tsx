@@ -1,10 +1,8 @@
 import { useMutation, useQuery } from "@tanstack/react-query";
-import { PencilIcon, RefreshCwIcon } from "lucide-react";
-import { useState, type ReactNode } from "react";
+import { useState } from "react";
 import { ConfirmDialog } from "@/components/confirm-dialog";
 import { KeySource, csrOf, emptyKeySource, keyAtRisk, useKeySourceReady, type KeySourceState } from "@/components/csr-key-source";
 import { Button } from "@/components/ui/button";
-import { Card, CardAction, CardContent, CardDescription, CardHeader, CardTitle } from "@/components/ui/card";
 import { Checkbox } from "@/components/ui/checkbox";
 import { Field, FieldDescription, FieldError, FieldLabel, FieldLegend, FieldSet } from "@/components/ui/field";
 import { Input } from "@/components/ui/input";
@@ -17,63 +15,40 @@ import { isOwner } from "@/lib/managed-certificate";
 import { daysLabel, findIssuingCa, isValidityDays, permitsOnlyLabel } from "@/lib/private-ca";
 
 type Org = Me["organizations"][number];
-type Change = "replace" | "names";
+export type KeyChange = "replace" | "names";
 
 /**
- * The key of a Managed Certificate whose Owners hold it: what it is, that Renewal reuses it, and for those who may, the
- * means to replace it or to change the names, each with a CSR made the same ways as at creation.
+ * What may be changed of a Managed Certificate whose Owners hold its key: replacing the key, and changing its names
+ * (`direct`ly, or by proposing a Name Change). Each needs a CSR, so one an Agent holds the key of is offered neither.
  */
-export function KeyAndCsrCard({ org, m, userId, onChanged }: { org: Org; m: ManagedCertificate; userId?: string; onChanged: () => void }) {
-  const [change, setChange] = useState<Change | null>(null);
+export function keyChanges(org: Org, m: ManagedCertificate, userId?: string) {
+  // The server decides; this only keeps the actions from those who surely may not (a Team's members may, too).
+  const owns = isOwner(m, userId);
+  const open = !m.archivedAt && m.keyCustody === "owner" && m.approval.status !== "pending" && m.approval.status !== "rejected";
+  const direct = can(org, "managedCertificate", "changeNames");
+  return {
+    mayReplace: open && (can(org, "managedCertificate", "replaceCsr") || owns),
+    mayChangeNames: open && !m.pendingNameChange && (direct || can(org, "managedCertificate", "proposeNameChange") || owns),
+    direct,
+  };
+}
+
+/**
+ * The sheet that replaces the key (`replace`) or changes the names (`names`), each with a CSR made the same ways as at
+ * creation; open while `change` is set. Closing it with a generated key nobody has saved asks first.
+ */
+export function KeyChangeSheet({ org, m, userId, change, onClose, onChanged }: { org: Org; m: ManagedCertificate; userId?: string; change: KeyChange | null; onClose: () => void; onChanged: () => void }) {
   // Whether closing the sheet would lose a generated key nobody has saved, and whether we are asking about that.
   const [atRisk, setAtRisk] = useState(false);
   const [confirmingClose, setConfirmingClose] = useState(false);
-
-  // The server decides; this only keeps the actions from those who surely may not (a Team's members may, too).
-  const owns = isOwner(m, userId);
-  const settled = m.approval.status !== "pending" && m.approval.status !== "rejected";
-  const mayReplace = settled && (can(org, "managedCertificate", "replaceCsr") || owns);
-  const direct = can(org, "managedCertificate", "changeNames");
-  const mayChangeNames = settled && !m.pendingNameChange && (direct || can(org, "managedCertificate", "proposeNameChange") || owns);
-  if (m.archivedAt || m.keyCustody !== "owner") return null;
-
+  const { direct } = keyChanges(org, m, userId);
   const close = () => {
     setAtRisk(false);
     setConfirmingClose(false);
-    setChange(null);
+    onClose();
   };
-  const keyType = KEY_ALGORITHM_LABELS[m.keyAlgorithm as KeyAlgorithm] ?? m.keyAlgorithm;
   return (
-    <Card className="lg:col-span-2">
-      <CardHeader>
-        <CardTitle>Key and CSR</CardTitle>
-        <CardDescription>Its Owners hold the private key; the platform has only the CSR, and every Renewal reuses it until it is replaced.</CardDescription>
-        {(mayReplace || mayChangeNames) && (
-          <CardAction className="flex flex-wrap gap-2">
-            {mayReplace && (
-              <Button variant="outline" size="sm" onClick={() => setChange("replace")}>
-                <RefreshCwIcon />
-                Replace key
-              </Button>
-            )}
-            {mayChangeNames && (
-              <Button variant="outline" size="sm" onClick={() => setChange("names")}>
-                <PencilIcon />
-                {direct ? "Change names" : "Propose a name change"}
-              </Button>
-            )}
-          </CardAction>
-        )}
-      </CardHeader>
-      <CardContent>
-        <dl className="grid gap-x-8 gap-y-3 text-sm sm:grid-cols-3">
-          <Fact label="Key type">{keyType}</Fact>
-          <Fact label="Held by">The Owners, outside the platform</Fact>
-          <Fact label="Next Renewal">
-            {settled && m.renewal.dueAt ? `Reuses this key, from ${new Date(m.renewal.dueAt).toLocaleDateString()}` : "Reuses this key"}
-          </Fact>
-        </dl>
-      </CardContent>
+    <>
       <ConfirmDialog
         open={confirmingClose}
         onOpenChange={setConfirmingClose}
@@ -94,7 +69,7 @@ export function KeyAndCsrCard({ org, m, userId, onChanged }: { org: Org; m: Mana
               m={m}
               change={change}
               direct={direct}
-              mayRenew={!!m.currentCertificate && (can(org, "managedCertificate", "renew") || owns)}
+              mayRenew={!!m.currentCertificate && (can(org, "managedCertificate", "renew") || isOwner(m, userId))}
               onAtRisk={setAtRisk}
               onDone={() => {
                 close();
@@ -104,16 +79,7 @@ export function KeyAndCsrCard({ org, m, userId, onChanged }: { org: Org; m: Mana
           )}
         </SheetContent>
       </Sheet>
-    </Card>
-  );
-}
-
-function Fact({ label, children }: { label: string; children: ReactNode }) {
-  return (
-    <div className="flex flex-col gap-1">
-      <dt className="text-muted-foreground">{label}</dt>
-      <dd className="min-w-0 break-words">{children}</dd>
-    </div>
+    </>
   );
 }
 
@@ -129,7 +95,7 @@ function ChangeKey({
 }: {
   org: Org;
   m: ManagedCertificate;
-  change: Change;
+  change: KeyChange;
   direct: boolean;
   mayRenew: boolean;
   onAtRisk: (atRisk: boolean) => void;
@@ -256,14 +222,14 @@ function ChangeKey({
 }
 
 /** The names added, removed and kept, so a name change says what it changes. */
-function NamesDiff({ before, after }: { before: string[]; after: string[] }) {
+export function NamesDiff({ before, after }: { before: string[]; after: string[] }) {
   const added = after.filter((name) => !before.includes(name));
   const removed = before.filter((name) => !after.includes(name));
   if (added.length === 0 && removed.length === 0) return <p className="text-sm text-muted-foreground">No change to the names yet.</p>;
   return (
     <ul className="flex flex-col gap-0.5 rounded-md border p-3 font-mono text-xs">
       {added.map((name) => (
-        <li key={`+${name}`} className="text-emerald-700 dark:text-emerald-400">
+        <li key={`+${name}`} className="text-success">
           + {name}
         </li>
       ))}

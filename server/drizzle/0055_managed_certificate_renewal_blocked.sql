@@ -1,0 +1,1 @@
+ALTER TABLE "managed_certificate" ADD COLUMN "renewal_blocked_at" timestamp with time zone;

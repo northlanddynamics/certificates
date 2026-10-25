@@ -8,19 +8,21 @@ import { Button } from "@/components/ui/button";
 import { Sheet, SheetContent, SheetDescription, SheetHeader, SheetTitle } from "@/components/ui/sheet";
 import { Skeleton } from "@/components/ui/skeleton";
 import { Table, TableBody, TableCell, TableHead, TableHeader, TableRow } from "@/components/ui/table";
-import { can, type Certificate, type ManagedCertificate, type Me } from "@/lib/api";
-import { caLabel } from "@/lib/managed-certificate";
+import { api, can, type Certificate, type ManagedCertificate, type Me } from "@/lib/api";
+import { acmeCaName, useAcmeCas } from "@/lib/acme-cas";
+import { caLabel, type StatusVariant } from "@/lib/managed-certificate";
 import { useCertificateFacts, useCertificates, useManagedCertificatePage } from "@/lib/use-managed-certificate";
 import { date } from "@/lib/utils";
 import { RevokeDialog, revokedLine } from "./revocation-controls";
 
-type CertificateState = { label: "Current" | "Superseded" | "Expired" | "Revoked"; variant: "default" | "secondary" | "destructive" | "outline" };
+type CertificateState = { label: "Current" | "Superseded" | "Expired" | "Revoked"; variant: StatusVariant };
 
 /** Where a Certificate stands: revoked or ended whatever else, otherwise the Managed Certificate's current one or superseded. */
 function stateOf(c: Certificate, isCurrent: boolean): CertificateState {
   if (c.revocation) return { label: "Revoked", variant: "destructive" };
-  if (Date.parse(c.notAfter) <= Date.now()) return { label: "Expired", variant: "outline" };
-  return isCurrent ? { label: "Current", variant: "default" } : { label: "Superseded", variant: "secondary" };
+  // An old one that has ended is history; only the current one ending is at fault.
+  if (Date.parse(c.notAfter) <= Date.now()) return { label: "Expired", variant: isCurrent ? "destructive" : "neutral" };
+  return isCurrent ? { label: "Current", variant: "success" } : { label: "Superseded", variant: "neutral" };
 }
 
 /** Every Certificate the Managed Certificate has had, newest first; one opens in a side sheet with its full facts. */
@@ -56,7 +58,7 @@ export function IssuedCertificatesTab() {
   const mayDownload = can(org, "managedCertificate", "download");
   return (
     <>
-      <div className="rounded-lg border">
+      <div className="rounded-lg border bg-card">
         <Table>
           <TableHeader>
             <TableRow>
@@ -96,6 +98,14 @@ export function IssuedCertificatesTab() {
                   <TableCell>
                     {/* Actions open their own dialogs, not the side sheet. */}
                     <div className="flex justify-end gap-2" onClick={(e) => e.stopPropagation()}>
+                      {mayDownload && c.hasCsr && (
+                        <Button asChild variant="outline" size="sm">
+                          <a href={api.certificateCsrUrl(org.id, m.id, c.id)} download>
+                            <DownloadIcon />
+                            CSR
+                          </a>
+                        </Button>
+                      )}
                       {mayDownload && <DownloadDialog orgId={org.id} id={m.id} certificateId={c.id} trigger={downloadButton} />}
                       <RevokeDialog org={org} m={m} certificate={c} userId={userId} onChanged={refresh} />
                     </div>
@@ -131,6 +141,7 @@ function Fact({ label, children }: { label: string; children: ReactNode }) {
 /** One Certificate's full facts: what it is, who issued it and how, its chain, and its revocation if any. */
 function CertificateSheet({ org, m, certificateId, isCurrent, onClose }: { org: Me["organizations"][number]; m: ManagedCertificate; certificateId?: string; isCurrent: boolean; onClose: () => void }) {
   const facts = useCertificateFacts(org.id, m.id, certificateId);
+  const acmeCas = useAcmeCas(org.id).data?.items;
   const c = facts.data;
   return (
     <Sheet open={Boolean(certificateId)} onOpenChange={(open) => !open && onClose()}>
@@ -181,7 +192,7 @@ function CertificateSheet({ org, m, certificateId, isCurrent, onClose }: { org: 
               <Fact label="CA">{caLabel(c.ca)}</Fact>
               {c.acmeAccount && (
                 <Fact label="ACME Account">
-                  <span className="capitalize">{c.acmeAccount.environment}</span> <span className="font-mono text-xs text-muted-foreground">{c.acmeAccount.id}</span>
+                  {acmeCaName(acmeCas, c.acmeAccount.acmeCaId)} <span className="font-mono text-xs text-muted-foreground">{c.acmeAccount.id}</span>
                 </Fact>
               )}
               <Fact label="Chain">

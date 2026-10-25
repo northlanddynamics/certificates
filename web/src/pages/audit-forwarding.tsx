@@ -10,6 +10,7 @@ import { Button } from "@/components/ui/button";
 import { Dialog, DialogClose, DialogContent, DialogDescription, DialogFooter, DialogHeader, DialogTitle, DialogTrigger } from "@/components/ui/dialog";
 import { Input } from "@/components/ui/input";
 import { Label } from "@/components/ui/label";
+import { ActionLabel, PageHeader } from "@/components/page-header";
 import { api, can, type AuditForwarder } from "@/lib/api";
 import { useOrg } from "@/lib/use-org";
 import { useAction } from "@/lib/use-action";
@@ -72,14 +73,12 @@ export function AuditForwardingPage() {
 
   return (
     <div className="flex flex-col gap-6">
-      <div className="flex items-center justify-between gap-4">
-        <h1 className="text-xl font-semibold">Audit forwarding</h1>
-        {mayConfigure && <AddForwarderDialog orgId={orgId} />}
-      </div>
-      <p className="text-sm text-muted-foreground">
-        Send every Audit Event to your SIEM as JSON, by webhook or by syslog over TLS. Each event recorded after a forwarder is added is delivered at least once; a receiver that cannot
-        be reached is tried again until it can.
-      </p>
+      <PageHeader
+        title="Audit forwarding"
+        action={mayConfigure && <AddForwarderDialog orgId={orgId} />}
+        description="Send every Audit Event to your SIEM as JSON, by webhook or by syslog over TLS."
+        howItWorks={<p>Each event recorded after a forwarder is added is delivered at least once; a receiver that cannot be reached is tried again until it can.</p>}
+      />
       <DataTable table={table} empty={forwarders.isPending && allowed ? "Loading…" : "Audit Events are not forwarded anywhere yet."} />
       {forwarders.error && <p className="text-sm text-destructive">{forwarders.error.message}</p>}
     </div>
@@ -121,7 +120,7 @@ function AddForwarderDialog({ orgId }: { orgId: string }) {
       <DialogTrigger asChild>
         <Button>
           <PlusIcon />
-          Add a forwarder
+          <ActionLabel>Add a forwarder</ActionLabel>
         </Button>
       </DialogTrigger>
       <DialogContent>
@@ -178,7 +177,7 @@ function AddForwarderForm({ orgId, onDone }: { orgId: string; onDone: () => void
         <>
           <div className="flex flex-col gap-2">
             <Label htmlFor="forwarder-url">Webhook URL</Label>
-            <Input id="forwarder-url" type="url" autoComplete="off" placeholder="https://siem.example.com/services/collector" value={url} onChange={(e) => setUrl(e.target.value)} />
+            <Input id="forwarder-url" type="url" autoComplete="off" placeholder="e.g. https://siem.example.com/services/collector" value={url} onChange={(e) => setUrl(e.target.value)} />
           </div>
           <div className="flex flex-col gap-2">
             <Label htmlFor="forwarder-authorization">Authorization header (optional)</Label>
@@ -189,7 +188,7 @@ function AddForwarderForm({ orgId, onDone }: { orgId: string; onDone: () => void
         <div className="grid grid-cols-[1fr_7rem] gap-4">
           <div className="flex flex-col gap-2">
             <Label htmlFor="forwarder-host">Host</Label>
-            <Input id="forwarder-host" autoComplete="off" placeholder="collector.example.com" value={host} onChange={(e) => setHost(e.target.value)} />
+            <Input id="forwarder-host" autoComplete="off" placeholder="e.g. collector.example.com" value={host} onChange={(e) => setHost(e.target.value)} />
           </div>
           <div className="flex flex-col gap-2">
             <Label htmlFor="forwarder-port">Port</Label>

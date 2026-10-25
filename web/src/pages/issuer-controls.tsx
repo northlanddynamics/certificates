@@ -1,7 +1,7 @@
 import { useQuery } from "@tanstack/react-query";
 import { useState } from "react";
 import { Button } from "@/components/ui/button";
-import { Dialog, DialogClose, DialogContent, DialogDescription, DialogFooter, DialogHeader, DialogTitle, DialogTrigger } from "@/components/ui/dialog";
+import { Dialog, DialogClose, DialogContent, DialogDescription, DialogFooter, DialogHeader, DialogTitle } from "@/components/ui/dialog";
 import { Field, FieldContent, FieldDescription, FieldLabel, FieldTitle } from "@/components/ui/field";
 import { RadioGroup, RadioGroupItem } from "@/components/ui/radio-group";
 import { api, can, type ManagedCertificate, type Me } from "@/lib/api";
@@ -9,38 +9,32 @@ import { commonNameOf, findIssuingCa, permittedNamesLabel, validityLabel } from 
 import { useAction } from "@/lib/use-action";
 
 /**
- * Where a Managed Certificate issued from a Private CA stands with its Issuing CA, and for Organization Administrators,
- * repointing it to another Issuing CA, under the same root or another: how an Issuing CA is rolled over. It needs no
- * Approval and issues nothing; its next Issuance, by Renewal or asked for, comes from the new one.
+ * Whether the caller may repoint a Managed Certificate issued from a Private CA to another Issuing CA, under the same root
+ * or another: how an Issuing CA is rolled over. Only Organization Administrators may; it needs no Approval and issues
+ * nothing, and its next Issuance, by Renewal or asked for, comes from the new one.
  */
-export function IssuerControls({ org, m, onChanged }: { org: Me["organizations"][number]; m: ManagedCertificate; onChanged: () => void }) {
-  const mayRepoint = can(org, "managedCertificate", "changeIssuer") && !m.archivedAt && m.approval.status !== "rejected";
+export const mayRepoint = (org: Me["organizations"][number], m: ManagedCertificate) =>
+  m.issuer.kind === "private_ca" && can(org, "managedCertificate", "changeIssuer") && !m.archivedAt && m.approval.status !== "rejected";
+
+/** That a Managed Certificate's Issuing CA no longer issues, when it does not, and who can do something about it; nothing otherwise. */
+export function IssuingCaStopped({ org, m }: { org: Me["organizations"][number]; m: ManagedCertificate }) {
   const privateCas = useQuery({ queryKey: ["private-cas", org.id], queryFn: () => api.privateCas(org.id), enabled: m.issuer.kind === "private_ca" && can(org, "privateCa", "read") });
   if (m.issuer.kind !== "private_ca") return null;
   const current = findIssuingCa(privateCas.data?.items ?? [], m.issuer.issuingCa.id);
   const stopped = current && current.status !== "active" ? current.status : undefined;
-  if (!stopped && !mayRepoint) return null;
+  if (!stopped) return null;
   return (
-    <div className="flex flex-col gap-2">
-      {stopped && (
-        <p className="text-sm text-destructive">
-          Its Issuing CA is {stopped}, so it can no longer be issued or renewed{mayRepoint ? "; repoint it to another Issuing CA" : " until an Organization Administrator repoints it"}.
-        </p>
-      )}
-      {mayRepoint && <RepointDialog org={org} m={m} currentId={m.issuer.issuingCa.id} onChanged={onChanged} />}
-    </div>
+    <p className="text-sm text-destructive">
+      Its Issuing CA is {stopped}, so it can no longer be issued or renewed{mayRepoint(org, m) ? "; change its Issuing CA" : " until an Organization Administrator repoints it"}.
+    </p>
   );
 }
 
-function RepointDialog({ org, m, currentId, onChanged }: { org: Me["organizations"][number]; m: ManagedCertificate; currentId: string; onChanged: () => void }) {
-  const [open, setOpen] = useState(false);
+/** Repointing a Managed Certificate issued from a Private CA to another Issuing CA, for those `mayRepoint` lets. */
+export function RepointDialog({ org, m, open, onOpenChange, onChanged }: { org: Me["organizations"][number]; m: ManagedCertificate; open: boolean; onOpenChange: (open: boolean) => void; onChanged: () => void }) {
+  if (m.issuer.kind !== "private_ca") return null;
   return (
-    <Dialog open={open} onOpenChange={setOpen}>
-      <DialogTrigger asChild>
-        <Button variant="outline" size="sm" className="self-start">
-          Change Issuing CA…
-        </Button>
-      </DialogTrigger>
+    <Dialog open={open} onOpenChange={onOpenChange}>
       <DialogContent className="max-h-[90vh] overflow-y-auto sm:max-w-lg">
         <DialogHeader>
           <DialogTitle>Change Issuing CA</DialogTitle>
@@ -54,9 +48,9 @@ function RepointDialog({ org, m, currentId, onChanged }: { org: Me["organization
           <RepointForm
             org={org}
             m={m}
-            currentId={currentId}
+            currentId={m.issuer.issuingCa.id}
             onDone={() => {
-              setOpen(false);
+              onOpenChange(false);
               onChanged();
             }}
           />

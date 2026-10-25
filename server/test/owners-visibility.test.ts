@@ -5,7 +5,7 @@
 import { afterAll, beforeAll, beforeEach, describe, expect, setDefaultTimeout, test } from "bun:test";
 import acme from "acme-client";
 import { randomBytes } from "node:crypto";
-import { BIND, PASSWORD, createHarness, type Harness } from "./support/harness";
+import { BIND, PASSWORD, PEBBLE_DIRECTORY, createHarness, type Harness } from "./support/harness";
 
 setDefaultTimeout(60_000);
 
@@ -356,6 +356,23 @@ describe("filters", () => {
     expect(await filtered("?keyCustody=owner&noOwners=true")).toEqual([unowned.id, pending]);
   });
 
+  test("a search matches part of any name, ignoring case, and combines with the filters", async () => {
+    const apps = `apps-${randomBytes(3).toString("hex")}`;
+    const both = (await admin().create(await request([`www.${apps}.${BIND.zone}`, `API.${apps}.${BIND.zone}`]))).body.id as string;
+    const other = await adminCreates();
+    await h.settleIssuances();
+
+    expect(await filtered(`?q=${apps}`)).toEqual([both]);
+    expect(await filtered(`?q=api.${apps.toUpperCase()}`)).toEqual([both]);
+    expect(await filtered(`?q=${apps}&noOwners=true`)).toEqual([both]);
+    expect(await filtered(`?q=${apps}&pendingApproval=true`)).toEqual([]);
+    expect(await filtered(`?q=nothing-is-called-this`)).toEqual([]);
+    // LIKE's wildcards are matched as themselves, and no name has either.
+    expect(await filtered(`?q=t_`)).toEqual([]);
+    expect(await filtered(`?q=%25`)).toEqual([]);
+    expect(await filtered("")).toEqual([both, other.id]);
+  });
+
   test("archived Managed Certificates are shown only when asked for", async () => {
     const [kept, retired] = [await adminCreates(), await adminCreates()];
     await archive(retired.id);
@@ -405,17 +422,31 @@ describe("filters", () => {
     expect(await filtered("?archived=true", alice)).toEqual([one.id]);
   });
 
-  test("environment and key algorithm each take one or more values, any of which matches", async () => {
+  test("the ACME CA's tag and key algorithm each take one or more values, any of which matches", async () => {
     const staging = await adminCreates();
-    const production = (await admin().create({ ...(await request()), environment: "production" })).body.id as string;
+    const production = (await admin().create({ ...(await request()), acmeCaId: "letsencrypt-production" })).body.id as string;
     await h.settleIssuances();
 
-    expect(await filtered("?environment=staging")).toEqual([staging.id]);
-    expect(await filtered("?environment=production")).toEqual([production]);
-    expect(await filtered("?environment=staging,production")).toEqual([staging.id, production]);
+    expect(await filtered("?tag=staging")).toEqual([staging.id]);
+    expect(await filtered("?tag=production")).toEqual([production]);
+    expect(await filtered("?tag=staging,production")).toEqual([staging.id, production]);
     expect(await filtered("?keyAlgorithm=ecdsa-p256")).toEqual([staging.id, production]);
     expect(await filtered("?keyAlgorithm=rsa-2048,rsa-4096")).toEqual([]);
-    expect(await filtered("?keyAlgorithm=rsa-2048,ecdsa-p256&environment=production")).toEqual([production]);
+    expect(await filtered("?keyAlgorithm=rsa-2048,ecdsa-p256&tag=production")).toEqual([production]);
+  });
+
+  test("a custom ACME CA's tag matches as a built-in one's does", async () => {
+    const addCa = async (name: string, tag: string | null) =>
+      (await h.api(`/api/organizations/${org.orgId}/acme-cas`, { cookie: org.cookie, body: { name, directoryUrl: PEBBLE_DIRECTORY, tag, termsOfServiceAgreed: true } })).body.acmeCa.id as string;
+    const [internalProduction, untagged] = [await addCa("Internal production", "production"), await addCa("Untagged", null)];
+    const onCa = async (acmeCaId: string) => (await admin().create({ ...(await request()), acmeCaId })).body.id as string;
+    const staging = (await adminCreates()).id;
+    const [custom, none] = [await onCa(internalProduction), await onCa(untagged)];
+    await h.settleIssuances();
+
+    expect(await filtered("?tag=production")).toEqual([custom]);
+    expect(await filtered("?tag=staging,production")).toEqual([staging, custom]);
+    expect(await filtered("")).toContain(none);
   });
 
   test("the inventory is listed a page at a time, with how many match in all", async () => {
@@ -432,7 +463,7 @@ describe("filters", () => {
   });
 
   test("a filter value that means nothing is refused", async () => {
-    for (const query of ["?keyCustody=nobody", "?noOwners=maybe", "?expiringSoon=1", "?archived=yes", "?pendingApproval=", "?environment=dev", "?environment=staging,", "?keyAlgorithm=des", "?page=0", "?pageSize=0", "?pageSize=101", "?page=x"]) {
+    for (const query of ["?keyCustody=nobody", "?noOwners=maybe", "?expiringSoon=1", "?archived=yes", "?pendingApproval=", "?tag=dev", "?tag=staging,", "?keyAlgorithm=des", "?page=0", "?pageSize=0", "?pageSize=101", "?page=x"]) {
       expect((await certs(org.cookie).list(query)).status).toBe(400);
     }
   });

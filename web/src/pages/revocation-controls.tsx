@@ -1,10 +1,10 @@
 import { useMutation } from "@tanstack/react-query";
-import { ArchiveIcon, BanIcon, EllipsisIcon } from "lucide-react";
+import { BanIcon } from "lucide-react";
 import { useState } from "react";
+import { toast } from "sonner";
 import { ConfirmDialog } from "@/components/confirm-dialog";
 import { Button } from "@/components/ui/button";
 import { Dialog, DialogContent, DialogDescription, DialogFooter, DialogHeader, DialogTitle, DialogTrigger } from "@/components/ui/dialog";
-import { DropdownMenu, DropdownMenuContent, DropdownMenuItem, DropdownMenuTrigger } from "@/components/ui/dropdown-menu";
 import { Field, FieldLabel } from "@/components/ui/field";
 import { Select, SelectContent, SelectItem, SelectTrigger, SelectValue } from "@/components/ui/select";
 import { api, can, revocationReasonLabel, revocationReasonsFor, type Certificate, type ManagedCertificate, type Me, type Revocation } from "@/lib/api";
@@ -12,49 +12,33 @@ import { isOwner } from "@/lib/managed-certificate";
 
 const when = (iso: string) => new Date(iso).toLocaleString();
 
-/** The "⋯" menu of a Managed Certificate's page, holding Archive for those who may (Organization Administrators, not its Owners), which asks again first. */
-export function ArchiveMenu({ org, m, onChanged }: { org: Me["organizations"][number]; m: ManagedCertificate; onChanged: () => void }) {
-  const [confirming, setConfirming] = useState(false);
+/** Whether the caller may Archive a Managed Certificate: Organization Administrators may, not its Owners. */
+export const mayArchive = (org: Me["organizations"][number], m: ManagedCertificate) => !m.archivedAt && can(org, "managedCertificate", "archive");
+
+/** Archiving a Managed Certificate, which asks again first. */
+export function ArchiveDialog({ org, m, open, onOpenChange, onChanged }: { org: Me["organizations"][number]; m: ManagedCertificate; open: boolean; onOpenChange: (open: boolean) => void; onChanged: () => void }) {
   const archive = useMutation({
     mutationFn: () => api.archive(org.id, m.id),
     onSuccess: () => {
-      setConfirming(false);
+      onOpenChange(false);
+      toast.success(`${m.names.join(", ")} archived`);
       onChanged();
     },
   });
-
-  if (m.archivedAt || !can(org, "managedCertificate", "archive")) return null;
   return (
-    <>
-      <DropdownMenu>
-        <DropdownMenuTrigger asChild>
-          <Button variant="outline" size="icon" aria-label="More actions">
-            <EllipsisIcon />
-          </Button>
-        </DropdownMenuTrigger>
-        <DropdownMenuContent align="end">
-          <DropdownMenuItem
-            onSelect={() => {
-              archive.reset();
-              setConfirming(true);
-            }}
-          >
-            <ArchiveIcon />
-            Archive
-          </DropdownMenuItem>
-        </DropdownMenuContent>
-      </DropdownMenu>
-      <ConfirmDialog
-        open={confirming}
-        onOpenChange={setConfirming}
-        title={`Archive ${m.names.join(", ")}?`}
-        description="It stops issuing, renewing and deploying, and is kept with its Certificates and history. Nothing is revoked."
-        confirmLabel="Archive"
-        pending={archive.isPending}
-        error={archive.error}
-        onConfirm={() => archive.mutate()}
-      />
-    </>
+    <ConfirmDialog
+      open={open}
+      onOpenChange={(next) => {
+        onOpenChange(next);
+        archive.reset();
+      }}
+      title={`Archive ${m.names.join(", ")}?`}
+      description="It stops issuing, renewing and deploying, and is kept with its Certificates and history. Nothing is revoked."
+      confirmLabel="Archive"
+      pending={archive.isPending}
+      error={archive.error}
+      onConfirm={() => archive.mutate()}
+    />
   );
 }
 
@@ -71,6 +55,7 @@ export function RevokeDialog({ org, m, certificate, userId, onChanged }: { org: 
     mutationFn: () => api.revokeCertificate(org.id, m.id, certificate.id, reason),
     onSuccess: () => {
       setOpen(false);
+      toast.success(`The Certificate with serial ${certificate.serial} was revoked`);
       onChanged();
     },
   });

@@ -5,6 +5,7 @@ import { toast } from "sonner";
 import { DataTable } from "@/components/data-table/data-table";
 import { Badge } from "@/components/ui/badge";
 import { Button } from "@/components/ui/button";
+import { PageHeader } from "@/components/page-header";
 import { api, can, type Agent, type DnsProvider } from "@/lib/api";
 import { useOrg } from "@/lib/use-org";
 import { AddDnsProviderDialog, EditDnsProviderDialog, ReplaceSecretDialog, TYPE_LABEL } from "./dns-provider-dialogs";
@@ -66,14 +67,12 @@ export function DnsProvidersPage() {
 
   return (
     <div className="flex flex-col gap-6">
-      <div className="flex items-center justify-between gap-4">
-        <h1 className="text-xl font-semibold">DNS Providers</h1>
-        {org && can(org, "dnsProvider", "create") && <AddDnsProviderDialog orgId={orgId} relay={relay} />}
-      </div>
-      <p className="text-sm text-muted-foreground">
-        A DNS Provider is the Organization's way into its own DNS: the platform publishes the records that prove control of a domain through it, and removes them again. Each
-        provider's secret is stored encrypted and never shown; it can be replaced or tested.
-      </p>
+      <PageHeader
+        title="DNS Providers"
+        action={org && can(org, "dnsProvider", "create") && <AddDnsProviderDialog orgId={orgId} relay={relay} />}
+        description="The Organization's way into its own DNS, through which the platform publishes the records that prove control of a domain."
+        howItWorks={<p>The platform removes the records again once they are checked. Each provider's secret is stored encrypted and never shown; it can be replaced or tested.</p>}
+      />
       {org && !allowed ? (
         <p className="text-sm text-muted-foreground">Only Organization Administrators see the DNS Providers.</p>
       ) : (

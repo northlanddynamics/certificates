@@ -49,12 +49,15 @@ Each resource's verbs, as of this writing. New ones may be added within version 
 | `invitation` | `created`, `accepted`, `rejected`, `canceled` |
 | `member` | `role_changed`, `removed`, `provisioned` |
 | `team` | `created`, `renamed`, `deleted`, `member_added`, `member_removed` |
+| `acme_ca` | `created`, `updated`, `deleted` |
 | `acme_account` | `created`, `key_replaced` |
 | `dns_provider` | `created`, `changed`, `secret_replaced`, `tested`, `relay_changed` |
 | `validation_zone` | `created`, `deleted` |
 | `dcv_rule` | `created`, `changed`, `deleted` |
-| `managed_certificate` | `created`, `proposed`, `approved`, `rejected`, `owner_added`, `owner_removed`, `subscriber_added`, `subscriber_removed`, `renewal_policy_changed`, `csr_uploaded`, `names_changed`, `archived`, `issuer_changed` |
+| `managed_certificate` | `created`, `proposed`, `approved`, `rejected`, `owner_added`, `owner_removed`, `subscriber_added`, `subscriber_removed`, `renewal_policy_changed`, `csr_uploaded`, `names_changed`, `archived`, `issuer_changed`, `profile_detached` |
 | `certificate` | `revoked` |
+| `certificate_profile` | `created`, `updated`, `disabled`, `enabled` |
+| `certificate_profile_settings` | `changed` |
 | `private_ca` | `created`, `issuing_ca_added`, `csr_signed`, `updated`, `retired`, `revoked`, `crl_published` |
 | `enrollment_profile` | `created`, `updated`, `disabled`, `ra_rotated`, `shared_challenge_rotated`, `shared_challenge_retired` |
 | `enrollment_validator` | `tested` |
@@ -91,9 +94,31 @@ Each resource's verbs, as of this writing. New ones may be added within version 
 
 `private_ca.crl_published` targets the Private CA when one of its CRLs is published again after its scheduled reissue had failed (the KMS did not sign it): by the platform (no actor) on a later pass, or with a change that publishes it, such as a revocation. A routine reissue is no event. Its `detail` has which `crl` (`issuing`, an Issuing CA's, with its `issuingCaId`, or `root`, the platform-made root's), its CRL `number`, and `failingSince`, when the reissue first failed.
 
-A Managed Certificate issued from a Private CA is audited with the same actions as one from an ACME CA. Its `managed_certificate.created` (also when a Deployment creates it) or `managed_certificate.proposed`, `issuance.started`, `issuance.succeeded` and `issuance.failed` (once the Managed Certificate was read) have `detail.issuer`, `{ "kind": "private_ca", "issuingCaId": "..." }`, the Issuing CA it is issued from, and no `environment`. Its `managed_certificate.created` or `managed_certificate.proposed` also has `validityDays` when it chose a validity, and none when it gets the Issuing CA's default. A name change that gives it another validity says so in its `managed_certificate.names_changed`, `name_change.proposed` and `name_change.approved`, as `validityDays: { "from": ..., "to": ... }` (null for the Issuing CA's default); one that keeps its validity has no `validityDays`. Its `certificate.revoked` has `detail.issuer` too, and its `reason` may also be `affiliationChanged` or `privilegeWithdrawn`.
+A Managed Certificate issued from a Private CA is audited with the same actions as one from an ACME CA. Its `managed_certificate.created` (also when a Deployment creates it) or `managed_certificate.proposed`, `issuance.started`, `issuance.succeeded` and `issuance.failed` (once the Managed Certificate was read) have `detail.issuer`, `{ "kind": "private_ca", "issuingCaId": "..." }`, the Issuing CA it is issued from, and no `acmeCaId`; one from an ACME CA has `acmeCaId`, the ACME CA's id, in its `managed_certificate.created` or `managed_certificate.proposed`, as `acme_account.created` and `acme_account.key_replaced` have the ACME CA of the account. Its `managed_certificate.created` or `managed_certificate.proposed` also has `validityDays` when it chose a validity, and none when it gets the Issuing CA's default. A name change that gives it another validity says so in its `managed_certificate.names_changed`, `name_change.proposed` and `name_change.approved`, as `validityDays: { "from": ..., "to": ... }` (null for the Issuing CA's default); one that keeps its validity has no `validityDays`. Its `certificate.revoked` has `detail.issuer` too, and its `reason` may also be `affiliationChanged` or `privilegeWithdrawn`.
+
+Adding a custom ACME CA records `acme_ca.created`, with its `name`, `directoryUrl` and `tag`, and the `acme_account.created` of its account, in the same change.
+
+`acme_ca.updated` targets a custom ACME CA when an Organization Administrator changes it. Its `detail` has its `name` (the one it has now), and in `changes` a `from` and `to` for each of `name`, `tag` and `contactEmail` (its account's, which the CA is told) that changed. A change that changes nothing is not an event.
+
+`acme_ca.deleted` targets a custom ACME CA an Organization Administrator deleted, with its account and the secrets of both. Its `detail` has its `name`, `directoryUrl` and `tag`, and its `account`'s `id` and `accountUrl`. The account is left as it is at the CA.
 
 `managed_certificate.issuer_changed` targets the Managed Certificate when an Organization Administrator repoints it from one Issuing CA to another, as in rolling an Issuing CA over. Its `detail` has its `names`, and `from` and `to`, each `{ "kind": "private_ca", "issuingCaId": "..." }`. Repointing it to the Issuing CA it is on already is not an event.
+
+### Certificate Profiles
+
+`certificate_profile.created` targets the Certificate Profile (`certificate_profile`, its id) an Organization Administrator created. Its `detail` has the `name`, the `description`, the `issuer` (`{ "kind": "acme", "acmeCaId": ... }` or `{ "kind": "private_ca", "issuingCaId": ... }`), the `allowedKeyAlgorithms` (such as `ecdsa-p256`), the `validityDays` it fixes for a Private CA (null for the Issuing CA's default, and always for an ACME CA), the starting `renewalPolicy` (`{ "mode": ..., "daysBeforeExpiry": ... }`), the `defaultTeam` made co-Owner (`{ "id": ..., "name": ... }`, or null), and its `nameRules` (`{ "exact": [...], "zones": [...], "maxNames": ..., "wildcards": ... }`, with no names, no zones, a null `maxNames` and `wildcards` true for none).
+
+`certificate_profile.updated` targets the Certificate Profile an Organization Administrator edited. Its `detail` has the profile's `name` (its new one, when renamed) and the `changes`, each `{ "from": ..., "to": ... }`, of whichever of `name`, `description`, `issuer`, `allowedKeyAlgorithms`, `validityDays`, `renewalPolicy`, `defaultTeam` and `nameRules` changed, in the shapes `certificate_profile.created` gives them. Managed Certificates already made from it are not changed, and new `nameRules` do not re-check pending Proposals. A change that changes nothing is not audited.
+
+`certificate_profile.disabled` targets the Certificate Profile an Organization Administrator disabled, and `certificate_profile.enabled` the one they enabled again. Each `detail` has the profile's `name`. While it is disabled nothing is issued under it: requests through it are refused, and its pending Proposals and Name Changes stay pending, rejectable but not approvable.
+
+`certificate_profile_settings.changed` targets the Organization (`organization`, its id) whose settings for Certificate Profiles an Organization Administrator changed. Its `detail` has `requireProfile`, `{ "from": ..., "to": ... }`: while it is true, whoever may not create a Managed Certificate outright, and their API keys, may propose one only through a Certificate Profile. Setting it to what it is already is not an event.
+
+A Managed Certificate created or proposed with a user's API key is also an `api_key.used`, targeting the Managed Certificate, whose `detail` names the key (`apiKeyId`, `apiKeyName`, `apiKeyType`) and has `managedCertificate`, `created` or `proposed`.
+
+`managed_certificate.profile_detached` targets the Managed Certificate an Organization Administrator detached from the Certificate Profile it was made from. Its `detail` has its `names` and the `certificateProfile`, `{ "id": ..., "name": ... }`. Nothing else about it changes: it keeps the settings copied from the profile and its Owners, and is no longer held to the profile's name rules or stopped by it being disabled.
+
+A Managed Certificate requested through a Certificate Profile has `certificateProfile`, `{ "id": ..., "name": ... }` (the profile's name then), in the `detail` of its `managed_certificate.created` or `managed_certificate.proposed`, with the issuer, the `validityDays` (when the profile fixes one) and the `renewalPolicy` copied from the profile. One made without a profile has `renewalPolicy` only when its request gave one. The requester and the profile's default Team, as well as any Owners named, are each audited as `managed_certificate.owner_added`.
 
 ### Device enrollment
 

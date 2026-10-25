@@ -4,6 +4,8 @@ import type { KeyAlgorithm } from "./csr-generator";
 import type { PkiPublication } from "./pki-publication";
 
 export type { PkiPublication };
+import type { ProfileNameRules } from "./profile-choice";
+import type { ProfileDisableCounts } from "./profile-disable";
 import type { DeviceExtendedKeyUsage, DeviceKeyType, DeviceKeyUsage } from "../../../server/src/enrollment/enrollment-profile-kinds";
 
 // The web UI talks only to the platform's HTTP API (described by /api/openapi.json).
@@ -42,7 +44,15 @@ export interface Me {
     /** Whether they have an authenticator app, and whether an Organization of theirs holds them up until they set one up. */
     mfa: { enabled: boolean; setupRequired: boolean };
   };
-  organizations: { id: string; name: string; slug: string; role: string; permissions: Record<string, string[]> }[];
+  organizations: {
+    id: string;
+    name: string;
+    slug: string;
+    role: string;
+    permissions: Record<string, string[]>;
+    /** Whether they may request a Managed Certificate without a Certificate Profile: not while the Organization requires one of those who may not create one outright. */
+    requestsWithoutProfile: boolean;
+  }[];
   /** The roles the server accepts when assigning one. */
   roles: string[];
 }
@@ -99,6 +109,8 @@ export const ownerFromKey = (key: string): OwnerRef => ({ type: key.startsWith("
 export const ownerLabel = (o: Owner) => (o.type === "user" ? o.email : `${o.name} (Team)`);
 /** The inventory's filters; each narrows what is listed, and they combine. */
 export interface InventoryFilters {
+  /** Part of any of its names, ignoring case. */
+  q?: string;
   expiringSoon?: boolean;
   renewalFailing?: boolean;
   agentOffline?: boolean;
@@ -106,8 +118,8 @@ export interface InventoryFilters {
   noOwners?: boolean;
   archived?: boolean;
   keyCustody?: ManagedCertificate["keyCustody"];
-  /** Any of these. */
-  environment?: ManagedCertificate["environment"][];
+  /** Issued from an ACME CA with any of these tags. */
+  tag?: AcmeCaTag[];
   /** Any of these. */
   keyAlgorithm?: string[];
 }
@@ -186,6 +198,8 @@ export interface Renewal {
   ari: { window: { start: string; end: string } | null; checkedAt: string | null; nextCheckAt: string } | null;
   /** Set while the latest Renewal has failed. */
   failing: { failures: number; lastFailure: { code: string; message: string; at: string }; nextAttemptAt: string | null } | null;
+  /** Set while it is not renewed because the Certificate Profile it was made from is disabled: since when the scheduler found it due. */
+  blocked: { since: string; profile: { id: string; name: string } } | null;
 }
 export interface ManagedCertificate {
   id: string;
@@ -195,15 +209,17 @@ export interface ManagedCertificate {
   keyAlgorithm: string;
   /** Who holds the private key: the Owner, who submitted a CSR, or one Agent, through its one Deployment. */
   keyCustody: "owner" | "agent";
-  /** The ACME environment, as in `issuer`; none for one issued from a Private CA. */
-  environment: "staging" | "production" | null;
-  /** Where its Certificates come from: an ACME CA through the Organization's account in an environment, or one of its Private CAs. */
+  /** The ACME CA, as in `issuer`; none for one issued from a Private CA. */
+  acmeCaId: string | null;
+  /** Where its Certificates come from: an ACME CA through the Organization's account with it, or one of its Private CAs. */
   issuer: Issuer;
   /** For one issued from a Private CA, how many days its Certificates are valid for; none for the Private CA's default (and always for an ACME CA). */
   validityDays: number | null;
   /** When it was archived: it then neither issues, renews nor deploys. */
   archivedAt: string | null;
   owners: Owner[];
+  /** The Certificate Profile it was requested through, as the profile is now; none for one made without a profile. */
+  profile: { id: string; name: string; enabled: boolean } | null;
   approval: Approval;
   /** Until it is approved, Renewal uses `names`. */
   pendingNameChange: PendingNameChange | null;
@@ -218,6 +234,7 @@ export interface QueuedNameChange extends PendingNameChange {
   managedCertificateId: string;
   currentNames: string[];
   currentValidityDays: number | null;
+  profile: ManagedCertificate["profile"];
 }
 export const EXPORT_FORMATS: [string, string][] = [
   ["pem", "PEM"],
@@ -238,12 +255,14 @@ export interface Certificate {
   notAfter: string;
   names: string[];
   ca: string;
-  /** The ACME environment and account it was issued through; none for a Certificate from a Private CA. */
-  environment: "staging" | "production" | null;
+  /** The ACME CA and account it was issued through; none for a Certificate from a Private CA. */
+  acmeCaId: string | null;
   acmeAccountId: string | null;
   /** The Issuing CA, of a Private CA, that signed it; none for a Certificate from an ACME CA. */
   issuingCaId: string | null;
   issuedAt: string;
+  /** Whether the CSR it was issued from is kept and can be downloaded. */
+  hasCsr: boolean;
   revocation: Revocation | null;
 }
 /** One certificate of a Certificate's chain, as it says of itself. */
@@ -265,10 +284,10 @@ export interface CertificateFacts extends Certificate {
   signatureAlgorithm: string;
   /** The leaf and the intermediates the CA served, leaf first. */
   chain: ChainCertificate[];
-  acmeAccount: { id: string; environment: AcmeAccount["environment"] } | null;
+  acmeAccount: { id: string; acmeCaId: string } | null;
 }
 export type Issuer =
-  | { kind: "acme"; environment: "staging" | "production" }
+  | { kind: "acme"; acmeCaId: string }
   | { kind: "private_ca"; issuingCa: { id: string; subject: string }; privateCa: { id: string; name: string } };
 /** An Organization's own CA, whose keys are in the KMS: a root and the Issuing CAs under it. */
 export interface PrivateCa {
@@ -405,10 +424,25 @@ export interface NameRules {
   allowedSanTypes: ("dns" | "email" | "ip" | "url" | "upn")[];
   sanPatterns: Partial<Record<"dns" | "email" | "ip" | "url" | "upn", string[]>>;
 }
-/** An Organization's account with a CA; its key is never returned. */
+export type AcmeCaTag = "staging" | "production";
+/** An ACME CA the Organization can use: built in (Let's Encrypt Staging and Production, read-only) or its own. */
+export interface AcmeCa {
+  id: string;
+  name: string;
+  /** Its configuration: shown only to those who may read the ACME accounts. */
+  directoryUrl: string | null;
+  /** What it is for, as a label that changes nothing about how it issues. */
+  tag: AcmeCaTag | null;
+  builtIn: boolean;
+  /** Whether the Organization has an account with it, without which nothing can be issued from it. */
+  hasAccount: boolean;
+  /** The key id of the External Account Binding its account was registered with (configuration, like the directory); its HMAC key is never returned. */
+  externalAccountBinding: { keyId: string } | null;
+}
+/** An Organization's account with an ACME CA, at most one per ACME CA; its key is never returned. */
 export interface AcmeAccount {
   id: string;
-  environment: "staging" | "production";
+  acmeCaId: string;
   accountUrl: string;
   contactEmail: string | null;
 }
@@ -532,8 +566,8 @@ export interface NewDeployment {
   parameters?: Record<string, string>;
   names: string[];
   keyAlgorithm: string;
-  /** An ACME CA in an environment, or an Issuing CA of one of the Organization's Private CAs. */
-  issuer: NewManagedCertificate["issuer"];
+  /** An ACME CA, or an Issuing CA of one of the Organization's Private CAs. */
+  issuer: IssuerRef;
   /** For an Issuing CA only: how many days its Certificates are valid for; its default when not given. */
   validityDays?: number;
   renewalPolicy: RenewalPolicy;
@@ -564,14 +598,53 @@ export interface ApiKey {
   expiresAt: string | null;
   createdAt: string;
 }
+/** An issuer as a request names it: an ACME CA by id, or an Issuing CA of one of the Organization's Private CAs by id. */
+export type IssuerRef = { kind: "acme"; acmeCaId: string } | { kind: "private_ca"; issuingCaId: string };
 export interface NewManagedCertificate {
   names: string[];
   keyAlgorithm: string;
   csr: string;
-  issuer: { kind: "acme"; environment: "staging" | "production" } | { kind: "private_ca"; issuingCaId: string };
+  /** Not with `profileId`, whose profile fixes it. */
+  issuer?: IssuerRef;
   /** For a Private CA issuer only; its Issuing CA's default when not given. */
   validityDays?: number;
   owners?: OwnerRef[];
+  /** The Certificate Profile it is requested through, which fixes its issuer, validity and Renewal Policy. */
+  profileId?: string;
+}
+/** How the Organization issues one kind of Managed Certificate, which members request against. */
+export interface CertificateProfile {
+  id: string;
+  name: string;
+  description: string;
+  issuer: IssuerRef;
+  allowedKeyAlgorithms: KeyAlgorithm[];
+  /** For a Private CA issuer: the validity it fixes; none for the Issuing CA's default, and always none for an ACME CA. */
+  validityDays: number | null;
+  /** What each Managed Certificate made from it starts with. */
+  renewalPolicy: RenewalPolicy;
+  /** The Team made co-Owner of each Managed Certificate made from it. */
+  defaultTeam: { id: string; name: string } | null;
+  /** What a non-administrator's names must keep to, as they are now: within `exact` or `zones` (any name when both are empty), at most `maxNames`, and no wildcard unless `wildcards`. */
+  nameRules: ProfileNameRules;
+  enabled: boolean;
+  createdAt: string;
+}
+/** The Organization's settings for Certificate Profiles. */
+export interface CertificateProfileSettings {
+  /** Whether those who may not create a Managed Certificate outright may propose one only through a profile. */
+  requireProfile: boolean;
+}
+/** A Certificate Profile as it is created, or edited: an edit gives only what changes, null removing the validity or default Team. */
+export interface CertificateProfileChanges {
+  name: string;
+  description: string;
+  issuer: CertificateProfile["issuer"];
+  allowedKeyAlgorithms: KeyAlgorithm[];
+  validityDays: number | null;
+  renewalPolicy: RenewalPolicy;
+  defaultTeamId: string | null;
+  nameRules: ProfileNameRules;
 }
 export interface NotificationChannel {
   id: string;
@@ -606,8 +679,11 @@ export interface AuditEvent {
 }
 /** What the audit log is searched by; every filter given must match. `action` may be a prefix, such as `team.*`. */
 export interface AuditFilters {
+  /** Part of the actor's email or of the action, in any case. */
+  q?: string;
   actor?: string;
   action?: string;
+  /** Any of these, comma-separated. */
   targetType?: string;
   targetId?: string;
   /** ISO times: from inclusive, to exclusive. */
@@ -702,6 +778,7 @@ export const api = {
     if (cursor) query.set("cursor", cursor);
     return call<{ items: AuditEvent[]; nextCursor: string | null }>(`/api/organizations/${orgId}/audit-events?${query}`);
   },
+  auditTargetTypes: (orgId: string) => call<{ items: string[] }>(`/api/organizations/${orgId}/audit-events/target-types`),
   loginPolicy: (orgId: string) => call<LoginPolicy>(`/api/organizations/${orgId}/login-policy`),
   setLoginPolicy: (orgId: string, policy: Partial<LoginPolicy>) => call<LoginPolicy>(`/api/organizations/${orgId}/login-policy`, { method: "PUT", body: policy }),
   auditForwarders: (orgId: string) => call<{ items: AuditForwarder[] }>(`/api/organizations/${orgId}/audit-forwarders`),
@@ -750,6 +827,7 @@ export const api = {
   /** Where a Certificate downloads from: the current one, or the one with `certificateId`. */
   certificateDownloadUrl: (orgId: string, id: string, form: { format: string; chain: string }, certificateId?: string) =>
     `/api/organizations/${orgId}/managed-certificates/${id}/${certificateId ? `certificates/${certificateId}/download` : "certificate"}?${new URLSearchParams(form)}`,
+  certificateCsrUrl: (orgId: string, id: string, certificateId: string) => `/api/organizations/${orgId}/managed-certificates/${id}/certificates/${certificateId}/csr`,
   /** One page of the API keys the caller may see, oldest first; `page` is from 1. */
   apiKeys: (orgId: string, paging: { page: number; pageSize: number }) =>
     call<Page<ApiKey>>(`/api/organizations/${orgId}/api-keys?${new URLSearchParams({ page: String(paging.page), pageSize: String(paging.pageSize) })}`),
@@ -809,6 +887,20 @@ export const api = {
     call<Deployment>(`/api/organizations/${orgId}/deployments/${id}/parameters`, { method: "PUT", body: parameters }),
   runDeploymentAgain: (orgId: string, id: string) => call<Deployment>(`/api/organizations/${orgId}/deployments/${id}/runs`, { method: "POST", body: {} }),
   privateCas: (orgId: string) => call<{ items: PrivateCa[]; publication: PkiPublication }>(`/api/organizations/${orgId}/private-cas`),
+  certificateProfiles: (orgId: string) => call<{ items: CertificateProfile[] }>(`/api/organizations/${orgId}/certificate-profiles`),
+  certificateProfileSettings: (orgId: string) => call<CertificateProfileSettings>(`/api/organizations/${orgId}/certificate-profile-settings`),
+  setCertificateProfileSettings: (orgId: string, settings: Partial<CertificateProfileSettings>) =>
+    call<CertificateProfileSettings>(`/api/organizations/${orgId}/certificate-profile-settings`, { method: "PUT", body: settings }),
+  createCertificateProfile: (orgId: string, { validityDays, defaultTeamId, ...body }: CertificateProfileChanges) =>
+    call<CertificateProfile>(`/api/organizations/${orgId}/certificate-profiles`, {
+      body: { ...body, ...(validityDays !== null && { validityDays }), ...(defaultTeamId !== null && { defaultTeamId }) },
+    }),
+  updateCertificateProfile: (orgId: string, id: string, body: Partial<CertificateProfileChanges>) =>
+    call<CertificateProfile>(`/api/organizations/${orgId}/certificate-profiles/${id}`, { method: "PATCH", body }),
+  /** The profile, with how many live Managed Certificates are linked to it and what awaits Approval under it. */
+  certificateProfile: (orgId: string, id: string) => call<CertificateProfile & ProfileDisableCounts>(`/api/organizations/${orgId}/certificate-profiles/${id}`),
+  disableCertificateProfile: (orgId: string, id: string) => call<CertificateProfile>(`/api/organizations/${orgId}/certificate-profiles/${id}/disable`, { method: "POST", body: {} }),
+  enableCertificateProfile: (orgId: string, id: string) => call<CertificateProfile>(`/api/organizations/${orgId}/certificate-profiles/${id}/enable`, { method: "POST", body: {} }),
   createPrivateCa: (orgId: string, body: NewPrivateCa) => call<PrivateCa>(`/api/organizations/${orgId}/private-cas`, { body }),
   addIssuingCa: (orgId: string, id: string, body: NewIssuingCa) => call<IssuingCa>(`/api/organizations/${orgId}/private-cas/${id}/issuing-cas`, { body }),
   updateIssuingCa: (orgId: string, id: string, issuingCaId: string, body: { permittedNames?: PermittedNames; validity?: PrivateCaValidity }) =>
@@ -830,6 +922,8 @@ export const api = {
   /** Repoints a Managed Certificate issued from a Private CA to another Issuing CA; its next Issuance comes from there. */
   changeIssuer: (orgId: string, id: string, issuingCaId: string) =>
     call<ManagedCertificate>(`/api/organizations/${orgId}/managed-certificates/${id}/issuer`, { method: "PUT", body: { issuer: { kind: "private_ca", issuingCaId } } }),
+  /** Detaches a Managed Certificate from its Certificate Profile: it keeps its settings and Owners, and the profile's name rules and disabled state no longer apply. */
+  detachProfile: (orgId: string, id: string) => call<ManagedCertificate>(`/api/organizations/${orgId}/managed-certificates/${id}/profile`, { method: "DELETE" }),
   enrollmentProfiles: (orgId: string) => call<{ items: EnrollmentProfile[] }>(`/api/organizations/${orgId}/enrollment-profiles`),
   enrollmentProfile: (orgId: string, id: string) => call<EnrollmentProfile>(`/api/organizations/${orgId}/enrollment-profiles/${id}`),
   /** A page of the Device Certificates a profile issued, newest first: `q` searches subject, names, serial and device ID. */
@@ -869,9 +963,17 @@ export const api = {
   /** Every key algorithm, and which ones a Private CA's keys (under each kind of root) and a Managed Certificate on an ACME CA may have. */
   keyAlgorithms: () =>
     call<{ keyAlgorithms: KeyAlgorithm[]; privateCaKeyAlgorithms: Record<PrivateCa["kind"], KeyAlgorithm[]>; acmeKeyAlgorithms: KeyAlgorithm[] }>("/api/key-algorithms"),
+  /** The ACME CAs the Organization can use, the built-in ones first, Let's Encrypt Staging before Production, then its custom ones; anyone in it may list them. */
+  acmeCas: (orgId: string) => call<{ items: AcmeCa[] }>(`/api/organizations/${orgId}/acme-cas`),
   acmeAccounts: (orgId: string) => call<{ items: AcmeAccount[] }>(`/api/organizations/${orgId}/acme-accounts`),
-  registerAcmeAccount: (orgId: string, body: { environment: AcmeAccount["environment"]; contactEmail?: string }) =>
+  registerAcmeAccount: (orgId: string, body: { acmeCaId: string; contactEmail?: string }) =>
     call<AcmeAccount>(`/api/organizations/${orgId}/acme-accounts`, { body: { ...body, termsOfServiceAgreed: true } }),
+  /** Adds a custom ACME CA and registers the Organization's account with it, in one step: nothing is saved if the CA refuses. */
+  createAcmeCa: (orgId: string, body: { name: string; directoryUrl: string; tag: AcmeCaTag | null; externalAccountBinding?: { keyId: string; hmacKey: string }; contactEmail?: string }) =>
+    call<{ acmeCa: AcmeCa; account: AcmeAccount }>(`/api/organizations/${orgId}/acme-cas`, { body: { ...body, termsOfServiceAgreed: true } }),
+  updateAcmeCa: (orgId: string, acmeCaId: string, body: { name?: string; tag?: AcmeCaTag | null; contactEmail?: string | null }) =>
+    call<{ acmeCa: AcmeCa; account: AcmeAccount }>(`/api/organizations/${orgId}/acme-cas/${acmeCaId}`, { method: "PATCH", body }),
+  deleteAcmeCa: (orgId: string, acmeCaId: string) => call(`/api/organizations/${orgId}/acme-cas/${acmeCaId}`, { method: "DELETE" }),
   testAcmeAccount: (orgId: string, accountId: string) =>
     call<{ ok: boolean; error?: string }>(`/api/organizations/${orgId}/acme-accounts/${accountId}/test`, { method: "POST", body: {} }),
   dnsProviders: (orgId: string) => call<{ items: DnsProvider[] }>(`/api/organizations/${orgId}/dns-providers`),

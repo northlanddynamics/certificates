@@ -10,6 +10,7 @@ import { Card, CardAction, CardContent, CardDescription, CardHeader, CardTitle }
 import { Dialog, DialogClose, DialogContent, DialogDescription, DialogFooter, DialogHeader, DialogTitle, DialogTrigger } from "@/components/ui/dialog";
 import { Input } from "@/components/ui/input";
 import { Label } from "@/components/ui/label";
+import { PageHeader } from "@/components/page-header";
 import { api } from "@/lib/api";
 import { authClient, unwrap } from "@/lib/auth-client";
 import { useAction } from "@/lib/use-action";
@@ -28,7 +29,7 @@ export function AccountSecurityPage() {
 
   return (
     <div className="flex max-w-3xl flex-col gap-6">
-      <h1 className="text-xl font-semibold">Account security</h1>
+      <PageHeader title="Account security" />
       {mfa?.setupRequired && (
         <Alert variant="destructive">
           <ShieldAlertIcon />
@@ -47,7 +48,7 @@ function AuthenticatorApp({ enabled }: { enabled: boolean }) {
     <Card>
       <CardHeader>
         <CardTitle className="flex items-center gap-2">
-          Authenticator app {enabled ? <Badge>On</Badge> : <Badge variant="secondary">Off</Badge>}
+          Authenticator app {enabled ? <Badge variant="success">On</Badge> : <Badge variant="neutral">Off</Badge>}
         </CardTitle>
         <CardDescription>When it is on, signing in with your password also asks for a code from an app such as 1Password, Google Authenticator or Microsoft Authenticator.</CardDescription>
         <CardAction>{enabled ? null : <SetUpAuthenticator />}</CardAction>
@@ -315,7 +316,7 @@ function AddPasskey() {
           }}
         >
           <Label htmlFor="passkey-name">Name</Label>
-          <Input id="passkey-name" placeholder="Work laptop" value={name} onChange={(e) => setName(e.target.value)} maxLength={100} />
+          <Input id="passkey-name" placeholder="e.g. Work laptop" value={name} onChange={(e) => setName(e.target.value)} maxLength={100} />
           {add.error && <p className="text-sm text-destructive">{add.error.message || "The passkey was not added."}</p>}
         </form>
         <DialogFooter>

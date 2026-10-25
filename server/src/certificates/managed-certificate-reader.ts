@@ -6,11 +6,10 @@ import { and, desc, eq, inArray, or, type SQL } from "drizzle-orm";
 import { APPROVAL_STATUSES } from "./approval";
 import { AGENT_STATUSES, agentStatus } from "../agents/agents";
 import type { Authorizer } from "../tenancy/authorization";
-import { ACME_ENVIRONMENTS } from "../issuance/acme/certificate-authority";
 import { commonNameOf } from "../pki/certificate-facts";
 import { KEY_ALGORITHMS, KEY_CUSTODIES } from "../pki/csr";
 import type { Db } from "../platform/db/client";
-import { agent, certificate, deployment, issuance, issuingCa, managedCertificate, privateCa } from "../platform/db/schema";
+import { agent, certificate, certificateProfile, deployment, issuance, issuingCa, managedCertificate, privateCa } from "../platform/db/schema";
 import { HttpError, OrgParam } from "../platform/http";
 import { issuerOf, type Issuer as IssuerOfRow } from "../issuance/issuer";
 import { ISSUANCE_FAILURE_CODES } from "../issuance/issuance-failure";
@@ -50,10 +49,11 @@ export const Certificate = z.object({
   notAfter: z.string(),
   names: z.array(z.string()),
   ca: z.string(),
-  environment: z.enum(ACME_ENVIRONMENTS).nullable().openapi({ description: "The ACME environment it was issued through; none for a Certificate from a Private CA." }),
+  acmeCaId: z.string().nullable().openapi({ description: "The ACME CA it was issued from; none for a Certificate from a Private CA." }),
   acmeAccountId: z.string().nullable().openapi({ description: "The ACME account it was issued through; none for a Certificate from a Private CA." }),
   issuingCaId: z.string().nullable().openapi({ description: "The Issuing CA, of a Private CA, that signed it; none for a Certificate from an ACME CA." }),
   issuedAt: z.string(),
+  hasCsr: z.boolean().openapi({ description: "Whether the CSR it was issued from is kept, and so can be downloaded; not for one issued before the platform kept it." }),
   revocation: Revocation.nullable().openapi({ description: "Set once the CA has been told to revoke it, by whom and why." }),
 });
 
@@ -73,7 +73,7 @@ export const CertificateFacts = Certificate.extend({
   signatureAlgorithm: z.string().openapi({ description: "How the CA signed it, such as `ECDSA with SHA-256` or `ML-DSA-65`." }),
   chain: z.array(ChainCertificate).openapi({ description: "The leaf and the intermediates the CA served, leaf first." }),
   acmeAccount: z
-    .object({ id: z.string(), environment: z.enum(ACME_ENVIRONMENTS) })
+    .object({ id: z.string(), acmeCaId: z.string() })
     .nullable()
     .openapi({ description: "The Organization's ACME account it was issued through; none for a Certificate from a Private CA." }),
 });
@@ -103,14 +103,21 @@ export const Renewal = z.object({
     })
     .nullable()
     .openapi({ description: "Set while the latest Renewal of a Managed Certificate that has a Certificate has failed." }),
+  blocked: z
+    .object({
+      since: z.string().openapi({ description: "When the scheduler found it due and did not renew it." }),
+      profile: z.object({ id: z.string(), name: z.string() }).openapi({ description: "The disabled Certificate Profile it was made from." }),
+    })
+    .nullable()
+    .openapi({ description: "Set while it is due and not renewed because the Certificate Profile it was made from is disabled: \"Renewal blocked\". It renews on the scheduler's next pass once the profile is enabled, or it is detached from the profile." }),
 });
 
 const Issuer = z
   .discriminatedUnion("kind", [
-    z.object({ kind: z.literal("acme"), environment: z.enum(ACME_ENVIRONMENTS) }),
+    z.object({ kind: z.literal("acme"), acmeCaId: z.string() }),
     z.object({ kind: z.literal("private_ca"), issuingCa: z.object({ id: z.string(), subject: z.string() }), privateCa: z.object({ id: z.string(), name: z.string() }) }),
   ])
-  .openapi({ description: "Where its Certificates come from: `acme`, through the Organization's ACME account in `environment`; `private_ca`, from `issuingCa`, an Issuing CA of the Organization's Private CA `privateCa`, with no DCV." });
+  .openapi({ description: "Where its Certificates come from: `acme`, through the Organization's ACME account with the ACME CA `acmeCaId`; `private_ca`, from `issuingCa`, an Issuing CA of the Organization's Private CA `privateCa`, with no DCV." });
 
 export const Approval = z.object({
   status: z.enum(APPROVAL_STATUSES).openapi({ description: "`not_required` for one an Organization Administrator created." }),
@@ -131,7 +138,7 @@ export const ManagedCertificate = z.object({
   commonName: z.string().nullable().openapi({ description: "The common name in the subject of `currentCertificate`; none before one is issued, or when its subject has none. The names are its subject alternative names." }),
   keyAlgorithm: z.enum(KEY_ALGORITHMS),
   keyCustody: z.enum(KEY_CUSTODIES).openapi({ description: "`owner`: the Owner holds the private key and submitted a CSR. `agent`: one Agent made the key and holds it, through its one Deployment." }),
-  environment: z.enum(ACME_ENVIRONMENTS).nullable().openapi({ description: "The ACME environment, as in `issuer`; none for one issued from a Private CA." }),
+  acmeCaId: z.string().nullable().openapi({ description: "The ACME CA, as in `issuer`; none for one issued from a Private CA." }),
   issuer: Issuer,
   validityDays: z
     .number()
@@ -140,6 +147,10 @@ export const ManagedCertificate = z.object({
   createdAt: z.string(),
   archivedAt: z.string().nullable().openapi({ description: "When it was archived: it then neither issues, renews nor deploys, and is listed only when archived ones are asked for." }),
   owners: z.array(Owner).openapi({ description: "Users and Teams accountable for it, in the order they were added; none is allowed." }),
+  profile: z
+    .object({ id: z.string(), name: z.string(), enabled: z.boolean() })
+    .nullable()
+    .openapi({ description: "The Certificate Profile it was requested through, as the profile is now; none for one made without a profile." }),
   approval: Approval,
   pendingNameChange: PendingNameChange.nullable().openapi({ description: "A change of its names waiting for Approval; until it is approved, Renewal uses the names above." }),
   renewal: Renewal,
@@ -177,10 +188,11 @@ export const toCertificate = (row: typeof certificate.$inferSelect, revocation: 
   notAfter: row.notAfter.toISOString(),
   names: row.names,
   ca: row.ca,
-  environment: row.environment,
+  acmeCaId: row.acmeCaId,
   acmeAccountId: row.acmeAccountId,
   issuingCaId: row.issuingCaId,
   issuedAt: row.issuedAt.toISOString(),
+  hasCsr: row.csr !== null,
   revocation: revocation ? toRevocation(revocation) : null,
 });
 
@@ -266,6 +278,17 @@ export function createManagedCertificateReader({ db, authorize, clock, agentOffl
               .where(inArray(issuingCa.id, issuingCaIds))
           ).map((shown) => [shown.issuingCa.id, shown]),
     );
+    const profileIds = [...new Set(rows.flatMap((r) => (r.certificateProfileId ? [r.certificateProfileId] : [])))];
+    const profiles = new Map(
+      profileIds.length === 0
+        ? []
+        : (
+            await db
+              .select({ id: certificateProfile.id, name: certificateProfile.name, enabled: certificateProfile.enabled })
+              .from(certificateProfile)
+              .where(inArray(certificateProfile.id, profileIds))
+          ).map((profile) => [profile.id, profile]),
+    );
     const failures = await failuresOf(db, ids);
     const nameChanges = await pendingNameChanges(db, ids);
     const information = await informationOf(db, currentCertificates.map((c) => c.id));
@@ -290,18 +313,20 @@ export function createManagedCertificateReader({ db, authorize, clock, agentOffl
       const ari = current ? information.get(current.id) : undefined;
       const pending = nameChanges.get(row.id);
       const due = policy.mode === "automatic" && current ? renewalDue(current, policy.daysBeforeExpiry, ari?.window ?? null) : null;
+      const profile = (row.certificateProfileId && profiles.get(row.certificateProfileId)) || null;
       return {
         id: row.id,
         names: row.names,
         commonName: current ? commonNameOf(current.chainPem) : null,
         keyAlgorithm: row.keyAlgorithm,
         keyCustody: row.keyCustody,
-        environment: row.environment,
+        acmeCaId: row.acmeCaId,
         issuer: issuerShown(issuerOf(row), issuingCas),
         validityDays: row.validityDays,
         createdAt: row.createdAt.toISOString(),
         archivedAt: row.archivedAt?.toISOString() ?? null,
         owners: owners.get(row.id) ?? [],
+        profile,
         approval: {
           status: row.approvalStatus,
           proposedBy: row.proposedById && row.proposedByEmail ? { id: row.proposedById, email: row.proposedByEmail } : null,
@@ -329,6 +354,8 @@ export function createManagedCertificateReader({ db, authorize, clock, agentOffl
                 nextAttemptAt: nextAttemptAt(policy, current!, failed, ari?.window ?? null)?.toISOString() ?? null,
               }
             : null,
+          // Only while it is still held up: it would renew automatically, and its profile is still disabled.
+          blocked: row.renewalBlockedAt && policy.mode === "automatic" && !row.archivedAt && profile && !profile.enabled ? { since: row.renewalBlockedAt.toISOString(), profile: { id: profile.id, name: profile.name } } : null,
         },
         issuance: latest ? toIssuance(latest) : null,
         currentCertificate: current ? toCertificate(current, revocations.get(current.id)) : null,

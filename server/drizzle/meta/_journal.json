@@ -337,6 +337,69 @@
       "when": 1792518519634,
       "tag": "0047_deployment_parameters",
       "breakpoints": true
+    },
+    {
+      "idx": 48,
+      "version": "7",
+      "when": 1792612276110,
+      "tag": "0048_acme_cas",
+      "breakpoints": true
+    },
+    {
+      "idx": 49,
+      "version": "7",
+      "when": 1792615223698,
+      "tag": "0049_custom_acme_cas",
+      "breakpoints": true
+    },
+    {
+      "idx": 50,
+      "version": "7",
+      "when": 1792623004785,
+      "tag": "0050_acme_ca_external_account_binding",
+      "breakpoints": true
+    },
+    {
+      "idx": 51,
+      "version": "7",
+      "when": 1792676035185,
+      "tag": "0051_certificate_csr",
+      "breakpoints": true
+    },
+    {
+      "idx": 52,
+      "version": "7",
+      "when": 1792762938173,
+      "tag": "0052_certificate_profiles",
+      "breakpoints": true
+    },
+    {
+      "idx": 53,
+      "version": "7",
+      "when": 1792766910925,
+      "tag": "0053_managed_certificate_profile",
+      "breakpoints": true
+    },
+    {
+      "idx": 54,
+      "version": "7",
+      "when": 1792774310449,
+      "tag": "0054_certificate_profile_name_rules",
+      "breakpoints": true
+    },
+    {
+      "idx": 55,
+      "version": "7",
+      "when": 1792786206682,
+      "tag": "0055_managed_certificate_renewal_blocked",
+      "breakpoints": true
+    },
+    {
+      "idx": 56,
+      "version": "7",
+      "when": 1792790804715,
+      "tag": "0056_certificate_profile_settings",
+      "breakpoints": true
     }
   ]
 }
