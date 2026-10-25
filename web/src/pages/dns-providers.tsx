@@ -1,11 +1,13 @@
 import { useMutation, useQuery } from "@tanstack/react-query";
 import { useParams } from "@tanstack/react-router";
 import { createColumnHelper, tableFeatures, useTable } from "@tanstack/react-table";
+import { BookOpenIcon } from "lucide-react";
 import { toast } from "sonner";
 import { DataTable } from "@/components/data-table/data-table";
 import { Badge } from "@/components/ui/badge";
 import { Button } from "@/components/ui/button";
-import { PageHeader } from "@/components/page-header";
+import { ActionLabel, PageHeader } from "@/components/page-header";
+import { GuideLink } from "@/components/guide";
 import { api, can, type Agent, type DnsProvider } from "@/lib/api";
 import { useOrg } from "@/lib/use-org";
 import { AddDnsProviderDialog, EditDnsProviderDialog, ReplaceSecretDialog, TYPE_LABEL } from "./dns-provider-dialogs";
@@ -69,7 +71,20 @@ export function DnsProvidersPage() {
     <div className="flex flex-col gap-6">
       <PageHeader
         title="DNS Providers"
-        action={org && can(org, "dnsProvider", "create") && <AddDnsProviderDialog orgId={orgId} relay={relay} />}
+        guide="dns-providers"
+        action={
+          <>
+            {allowed && (
+              <Button variant="outline" asChild>
+                <GuideLink guide="dns-providers" className="">
+                  <BookOpenIcon />
+                  <ActionLabel>Setup guide</ActionLabel>
+                </GuideLink>
+              </Button>
+            )}
+            {org && can(org, "dnsProvider", "create") && <AddDnsProviderDialog orgId={orgId} relay={relay} />}
+          </>
+        }
         description="The Organization's way into its own DNS, through which the platform publishes the records that prove control of a domain."
         howItWorks={<p>The platform removes the records again once they are checked. Each provider's secret is stored encrypted and never shown; it can be replaced or tested.</p>}
       />

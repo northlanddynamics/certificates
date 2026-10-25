@@ -1,10 +1,11 @@
 import { useQueryClient } from "@tanstack/react-query";
 import { Link, useNavigate, useParams } from "@tanstack/react-router";
-import { ClockIcon } from "lucide-react";
+import { BookOpenIcon, ClockIcon } from "lucide-react";
 import { useState } from "react";
 import { Alert, AlertAction, AlertDescription, AlertTitle } from "@/components/ui/alert";
 import { Button } from "@/components/ui/button";
-import { PageHeader } from "@/components/page-header";
+import { ActionLabel, PageHeader } from "@/components/page-header";
+import { GuideLink } from "@/components/guide";
 import { type ManagedCertificate } from "@/lib/api";
 import { useOrg } from "@/lib/use-org";
 import { ManagedCertificates } from "./managed-certificates";
@@ -27,7 +28,20 @@ export function CertificatesPage() {
   };
   return (
     <div className="flex flex-col gap-6">
-      <PageHeader title="Managed Certificates" action={<NewManagedCertificateDialog org={org} onCreated={created} />} />
+      <PageHeader
+        title="Managed Certificates"
+        action={
+          <>
+            <Button variant="outline" asChild>
+              <GuideLink guide="managed-certificates" className="">
+                <BookOpenIcon />
+                <ActionLabel>How to request one</ActionLabel>
+              </GuideLink>
+            </Button>
+            <NewManagedCertificateDialog org={org} onCreated={created} />
+          </>
+        }
+      />
       {proposed && (
         <Alert>
           <ClockIcon />

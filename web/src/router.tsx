@@ -22,6 +22,9 @@ import { DeploymentScriptsPage } from "./pages/deployment-scripts";
 import { DeploymentsPage } from "./pages/deployments";
 import { DcvPage } from "./pages/dcv";
 import { DcvGuidePage } from "./pages/dcv-guide";
+import { AgentGuidePage } from "./pages/agent-guide";
+import { DnsProviderGuidePage } from "./pages/dns-provider-guide";
+import { ManagedCertificateGuidePage } from "./pages/managed-certificate-guide";
 import { DnsProvidersPage } from "./pages/dns-providers";
 import { HomePage } from "./pages/home";
 import { ManagedCertificateDetailsPage } from "./pages/managed-certificate-details";
@@ -200,6 +203,24 @@ const dcvRoute = createRoute({
   component: DcvPage,
 });
 
+const managedCertificateGuideRoute = createRoute({
+  getParentRoute: () => appRoute,
+  path: "/organizations/$orgId/certificates/guide",
+  component: ManagedCertificateGuidePage,
+});
+
+const agentGuideRoute = createRoute({
+  getParentRoute: () => appRoute,
+  path: "/organizations/$orgId/agents/guide",
+  component: AgentGuidePage,
+});
+
+const dnsProviderGuideRoute = createRoute({
+  getParentRoute: () => appRoute,
+  path: "/organizations/$orgId/dns-providers/guide",
+  component: DnsProviderGuidePage,
+});
+
 const dcvGuideRoute = createRoute({
   getParentRoute: () => appRoute,
   path: "/organizations/$orgId/dcv/guide",
@@ -278,6 +299,7 @@ const routeTree = rootRoute.addChildren([
   appRoute.addChildren([
     homeRoute,
     certificatesRoute,
+    managedCertificateGuideRoute,
     certificateRoute.addChildren([
       certificateOverviewRoute,
       certificateIssuedRoute,
@@ -285,7 +307,7 @@ const routeTree = rootRoute.addChildren([
       certificateNotificationsRoute,
       certificateUnknownTabRoute,
     ]),
-    membersRoute, teamsRoute, apiKeysRoute, agentsRoute, deploymentsRoute, deploymentScriptsRoute, deploymentScriptGuideRoute, acmeAccountsRoute, privateCasRoute, privateCaGuideRoute, certificateProfilesRoute, enrollmentProfilesRoute, enrollmentGuideRoute, deviceCertificatesRoute, dnsProvidersRoute, dcvRoute, dcvGuideRoute, notificationChannelsRoute, auditLogRoute, auditForwardingRoute, signInSettingsRoute,
+    membersRoute, teamsRoute, apiKeysRoute, agentsRoute, agentGuideRoute, deploymentsRoute, deploymentScriptsRoute, deploymentScriptGuideRoute, acmeAccountsRoute, privateCasRoute, privateCaGuideRoute, certificateProfilesRoute, enrollmentProfilesRoute, enrollmentGuideRoute, deviceCertificatesRoute, dnsProvidersRoute, dnsProviderGuideRoute, dcvRoute, dcvGuideRoute, notificationChannelsRoute, auditLogRoute, auditForwardingRoute, signInSettingsRoute,
     loginPolicyRedirectRoute, ssoConnectionsRedirectRoute, csrToolsRoute, viewerRoute,
     accountSecurityRoute,
     platformOrganizationsRoute,

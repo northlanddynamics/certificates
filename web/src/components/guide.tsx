@@ -7,6 +7,39 @@ import { WRAPPING_TABLE } from "@/lib/utils";
  * by anchor. A section's title is its heading in the guide and its entry in the guide's own menu.
  */
 export const GUIDES = {
+  "managed-certificates": {
+    title: "Requesting a certificate",
+    path: "/organizations/$orgId/certificates/guide",
+    sections: {
+      ways: "Two ways to get a certificate",
+      steps: "The steps, one by one",
+      key: "Choosing how to make the key",
+      after: "After you create it",
+      status: "What the status means",
+    },
+  },
+  agents: {
+    title: "Setting up an Agent",
+    path: "/organizations/$orgId/agents/guide",
+    sections: {
+      what: "What an Agent does",
+      before: "Before you start",
+      install: "Installing and registering",
+      status: "Online, offline and outdated",
+      trouble: "When something goes wrong",
+    },
+  },
+  "dns-providers": {
+    title: "Connecting a DNS Provider",
+    path: "/organizations/$orgId/dns-providers/guide",
+    sections: {
+      what: "What a DNS Provider is for",
+      rfc2136: "Setting up RFC 2136 (BIND and others)",
+      infoblox: "Setting up Infoblox",
+      relay: "DNS inside your network",
+      test: "Testing it",
+    },
+  },
   "deployment-scripts": {
     title: "Writing Deployment Scripts",
     path: "/organizations/$orgId/deployment-scripts/guide",

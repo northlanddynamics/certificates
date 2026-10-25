@@ -3,6 +3,7 @@ import { ClipboardCheckIcon, FileBadgeIcon, GlobeIcon, KeyRoundIcon, LandmarkIco
 import { useEffect, useState, type ReactNode } from "react";
 import { ConfirmDialog } from "@/components/confirm-dialog";
 import { KeySource, SaveKey, csrOf, emptyKeySource, keyAtRisk, useKeySourceReady, withNewKey, type KeySourceState } from "@/components/csr-key-source";
+import { GuideLink } from "@/components/guide";
 import { IssuerChoiceFields, useIssuerChoice } from "@/components/issuer-choice";
 import { SteppedForm, STEPPED_DIALOG, type Missing } from "@/components/stepped-form";
 import { SummaryRows } from "@/components/summary-rows";
@@ -287,6 +288,11 @@ function NewManagedCertificateForm({
       {shown === "key" && (
         <FieldSet>
           <FieldLegend>How will you provide the CSR?</FieldLegend>
+          <FieldDescription>
+            <GuideLink guide="managed-certificates" section="key">
+              Which should I choose?
+            </GuideLink>
+          </FieldDescription>
           <KeySource
             names={parsedNames}
             keyAlgorithm={keyAlgorithm}
