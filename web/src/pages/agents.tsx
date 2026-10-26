@@ -1,7 +1,7 @@
 import { keepPreviousData, useMutation, useQuery } from "@tanstack/react-query";
 import { useParams } from "@tanstack/react-router";
 import { createColumnHelper, rowPaginationFeature, tableFeatures, useTable, type PaginationState } from "@tanstack/react-table";
-import { PlusIcon, XIcon } from "lucide-react";
+import { BookOpenIcon, PlusIcon, XIcon } from "lucide-react";
 import { useState } from "react";
 import { toast } from "sonner";
 import { ConfirmDialog } from "@/components/confirm-dialog";
@@ -12,6 +12,7 @@ import { Badge } from "@/components/ui/badge";
 import { Button } from "@/components/ui/button";
 import { Dialog, DialogClose, DialogContent, DialogDescription, DialogFooter, DialogHeader, DialogTitle, DialogTrigger } from "@/components/ui/dialog";
 import { ActionLabel, PageHeader } from "@/components/page-header";
+import { GuideLink } from "@/components/guide";
 import { api, can, type Agent } from "@/lib/api";
 import { useOrg } from "@/lib/use-org";
 import { useAction } from "@/lib/use-action";
@@ -90,7 +91,20 @@ export function AgentsPage() {
     <div className="flex flex-col gap-6">
       <PageHeader
         title="Agents"
-        action={org && can(org, "agent", "register") && <RegisterAgentDialog orgId={orgId} />}
+        guide="agents"
+        action={
+          <>
+            {org && can(org, "agent", "read") && (
+              <Button variant="outline" asChild>
+                <GuideLink guide="agents" className="">
+                  <BookOpenIcon />
+                  <ActionLabel>Setup guide</ActionLabel>
+                </GuideLink>
+              </Button>
+            )}
+            {org && can(org, "agent", "register") && <RegisterAgentDialog orgId={orgId} />}
+          </>
+        }
         description={
           <>
             An Agent runs on a host inside your network and only ever connects out to the platform.
@@ -187,7 +201,10 @@ function RegisterAgentDialog({ orgId }: { orgId: string }) {
         <DialogHeader>
           <DialogTitle>Register an Agent</DialogTitle>
           <DialogDescription>
-            A token registers one Agent, once, into this Organization, and expires after seven days. Pass it to the Agent as <code>AGENT_REGISTRATION_TOKEN</code>.
+            A token registers one Agent, once, into this Organization, and expires after seven days. Pass it to the Agent as <code>AGENT_REGISTRATION_TOKEN</code>.{" "}
+            <GuideLink guide="agents" section="install">
+              How to install it
+            </GuideLink>
           </DialogDescription>
         </DialogHeader>
         <RegistrationToken orgId={orgId} />

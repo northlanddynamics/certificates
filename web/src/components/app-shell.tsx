@@ -2,6 +2,7 @@ import { useQuery } from "@tanstack/react-query";
 import { Fragment, useState } from "react";
 import { Link, Navigate, Outlet, useLocation, useParams } from "@tanstack/react-router";
 import { AppSidebar } from "@/components/app-sidebar";
+import { HelpPanel } from "@/components/help-panel";
 import { LoadError } from "@/components/load-error";
 import { PageCrumbsContext, type Crumb } from "@/components/page-crumbs";
 import { Breadcrumb, BreadcrumbItem, BreadcrumbLink, BreadcrumbList, BreadcrumbPage, BreadcrumbSeparator } from "@/components/ui/breadcrumb";
@@ -99,6 +100,7 @@ export function AppShell() {
           </main>
         </SidebarInset>
       </SidebarProvider>
+      <HelpPanel />
     </TooltipProvider>
   );
 }

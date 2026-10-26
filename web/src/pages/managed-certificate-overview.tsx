@@ -3,10 +3,11 @@ import { Link, useParams } from "@tanstack/react-router";
 import { PencilIcon } from "lucide-react";
 import { useState, type ReactNode } from "react";
 import { CopyButton } from "@/components/copy-button";
+import { DcvByName } from "@/components/dcv-plan";
 import { IssuerName } from "@/components/issuer-name";
 import { Button } from "@/components/ui/button";
 import { Card, CardAction, CardContent, CardHeader, CardTitle } from "@/components/ui/card";
-import { api, type AcmeCa, type Certificate, type ManagedCertificate, type Me } from "@/lib/api";
+import { api, can, type AcmeCa, type Certificate, type ManagedCertificate, type Me } from "@/lib/api";
 import { acmeCaName, useAcmeCas } from "@/lib/acme-cas";
 import { caLabel, keyAlgorithmLabel, profileLabel } from "@/lib/managed-certificate";
 import { chosenValidityLabel } from "@/lib/private-ca";
@@ -47,6 +48,17 @@ export function ManagedCertificateOverview() {
       <div className="flex min-w-0 flex-col gap-4 lg:col-span-2">
         <NamesCard org={org} m={m} userId={userId} onChange={setChange} />
         <CurrentCertificateCard org={org} m={m} userId={userId} onChanged={refresh} />
+        {/* An ACME CA asks for DCV of each name: shown to those who may see how it is done, so CNAMEs are made before they are needed. */}
+        {!m.archivedAt && m.issuer.kind === "acme" && can(org, "dcvRule", "read") && (
+          <Card id="dcv" className="scroll-mt-4">
+            <CardHeader>
+              <CardTitle>How each name is validated</CardTitle>
+            </CardHeader>
+            <CardContent className="text-sm">
+              <DcvByName orgId={orgId} names={[...new Set([...m.names, ...(m.pendingNameChange?.names ?? [])])]} />
+            </CardContent>
+          </Card>
+        )}
       </div>
       <Card className="gap-0 py-2">
         <CardContent className="flex flex-col divide-y text-sm [&>*]:py-4">

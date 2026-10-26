@@ -59,7 +59,11 @@ Two things to write into every script that has parameters:
 - **Guard the required ones.** An Agent older than Deployment Parameters ignores them and runs the script without them, and nothing tells the platform so. Check each required parameter at the top and fail if it is missing, as the examples do, so such a run fails loudly rather than putting the Certificate in the wrong place. For the same reason, fall back to the default in the script too.
 - **Do not print them.** The output is stored with the run and read by every Organization Administrator, so a script that echoes its parameters, its environment (`env`, `set -x`, `Get-ChildItem env:`) or a secret makes a second copy of them there.
 
-### Worked example: Bash
+### Worked examples
+
+The three examples below are also in the web app: the Deployment Scripts guide shows each a step at a time, with the step that is your own deployment marked, and the upload dialog can start from any of them. They are the same scripts in both places.
+
+#### Bash: an nginx site
 
 This script installs the Certificate for one nginx site and reloads nginx. Each Deployment of it names the site; the unit to reload and the key file's owner are optional.
 
@@ -92,7 +96,7 @@ echo "installed $CERT_FINGERPRINT"
 
 A Deployment created with `"parameters": { "SITE": "shop", "KEY_OWNER": "" }` keeps `{ "SITE": "shop", "SERVICE": "nginx" }`: the blank owner is left unset and the service takes its default. The script then sees `DEPLOY_PARAM_SITE=shop` and `DEPLOY_PARAM_SERVICE=nginx`, and no `DEPLOY_PARAM_KEY_OWNER`. `"parameters": {}` is refused, as `SITE` is required.
 
-### Worked example: PowerShell
+#### PowerShell: an application's files
 
 The same format in a PowerShell script, which copies the files into an application's directory and restarts its Windows service when one is named.
 
@@ -112,6 +116,50 @@ if (-not $env:DEPLOY_PARAM_TARGET_DIR) { throw 'TARGET_DIR is not set, so this A
 New-Item -ItemType Directory -Force -Path $env:DEPLOY_PARAM_TARGET_DIR | Out-Null
 Copy-Item $env:CERT_FULLCHAIN_FILE (Join-Path $env:DEPLOY_PARAM_TARGET_DIR 'certificate.pem') -Force
 Copy-Item $env:CERT_KEY_FILE (Join-Path $env:DEPLOY_PARAM_TARGET_DIR 'key.pem') -Force
+
 if ($env:DEPLOY_PARAM_SERVICE) { Restart-Service -Name $env:DEPLOY_PARAM_SERVICE }
 Write-Output "installed $env:CERT_FINGERPRINT"
+```
+
+#### PowerShell: an IIS site
+
+This one binds the Certificate to an IIS site, and leaves the binding itself for you to write: on Windows the Agent runs `powershell.exe` (5.1), which cannot read a PEM key, so the files are first made into a PFX. Each Deployment names the site; the port defaults to 443, and a blank host name binds every one.
+
+```powershell
+# Bind a Certificate to an IIS site on this Windows host.
+#
+# deploy-params:begin
+# [
+#   { "name": "SITE_NAME", "label": "IIS site", "required": true,
+#     "description": "The site's name in IIS Manager." },
+#   { "name": "PORT", "label": "HTTPS port", "default": "443" },
+#   { "name": "HOST_HEADER", "label": "Host name",
+#     "description": "For SNI. Leave blank to bind every host name." }
+# ]
+# deploy-params:end
+$ErrorActionPreference = 'Stop'
+
+# An Agent that predates Deployment Parameters runs scripts without them.
+if ([string]::IsNullOrEmpty($env:DEPLOY_PARAM_SITE_NAME)) {
+  throw 'SITE_NAME is required: update the Agent'
+}
+
+$site       = $env:DEPLOY_PARAM_SITE_NAME
+$port       = if ($env:DEPLOY_PARAM_PORT) { $env:DEPLOY_PARAM_PORT } else { '443' }
+$hostHeader = if ($env:DEPLOY_PARAM_HOST_HEADER) { $env:DEPLOY_PARAM_HOST_HEADER } else { '' }
+
+$keyFile       = $env:CERT_KEY_FILE        # the private key, made on this host
+$fullchainFile = $env:CERT_FULLCHAIN_FILE  # the leaf, then the intermediates
+Write-Output "Deploying $env:CERT_FINGERPRINT for $env:CERT_NAMES"
+
+# --- your deployment ---------------------------------------------------
+# 1. Make a PFX from $fullchainFile and $keyFile
+# 2. Import it: Import-PfxCertificate -CertStoreLocation Cert:\LocalMachine\My ...
+# 3. Bind it to $site on $port (and $hostHeader, with SNI):
+#      $binding = Get-WebBinding -Name $site -Protocol https -Port $port
+#      $binding.AddSslCertificate($thumbprint, 'My')
+# ------------------------------------------------------------------------
+
+Write-Output "Deployed $env:CERT_FINGERPRINT"  # output is stored: never print values or secrets
+exit 0                                         # a throw or any other code fails the run
 ```

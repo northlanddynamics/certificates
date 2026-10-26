@@ -6,8 +6,10 @@ import { Toaster } from "./components/ui/sonner";
 import { AcceptInvitationPage } from "./pages/accept-invitation";
 import { AccountSecurityPage } from "./pages/account-security";
 import { AcmeAccountsPage } from "./pages/acme-accounts";
+import { PrivateCaGuidePage } from "./pages/private-ca-guide";
 import { PrivateCasPage } from "./pages/private-cas";
 import { DeviceCertificatesPage } from "./pages/device-certificates";
+import { EnrollmentGuidePage } from "./pages/enrollment-guide";
 import { EnrollmentProfilesPage } from "./pages/enrollment-profiles";
 import { CertificateProfilesPage } from "./pages/certificate-profiles";
 import { AgentsPage } from "./pages/agents";
@@ -15,8 +17,15 @@ import { ApiKeysPage } from "./pages/api-keys";
 import { CertificatesPage } from "./pages/certificates";
 import { CsrToolsPage } from "./pages/csr-tools";
 import { ViewerPage } from "./pages/viewer";
+import { DeploymentScriptGuidePage } from "./pages/deployment-script-guide";
 import { DeploymentScriptsPage } from "./pages/deployment-scripts";
 import { DeploymentsPage } from "./pages/deployments";
+import { DcvPage } from "./pages/dcv";
+import { DcvGuidePage } from "./pages/dcv-guide";
+import { AcmeAccountGuidePage } from "./pages/acme-account-guide";
+import { AgentGuidePage } from "./pages/agent-guide";
+import { DnsProviderGuidePage } from "./pages/dns-provider-guide";
+import { ManagedCertificateGuidePage } from "./pages/managed-certificate-guide";
 import { DnsProvidersPage } from "./pages/dns-providers";
 import { HomePage } from "./pages/home";
 import { ManagedCertificateDetailsPage } from "./pages/managed-certificate-details";
@@ -128,6 +137,13 @@ const deploymentScriptsRoute = createRoute({
   component: DeploymentScriptsPage,
 });
 
+// How to write a script; the rest of the app links into its sections by anchor.
+const deploymentScriptGuideRoute = createRoute({
+  getParentRoute: () => appRoute,
+  path: "/organizations/$orgId/deployment-scripts/guide",
+  component: DeploymentScriptGuidePage,
+});
+
 const deploymentsRoute = createRoute({
   getParentRoute: () => appRoute,
   path: "/organizations/$orgId/deployments",
@@ -146,6 +162,12 @@ const privateCasRoute = createRoute({
   component: PrivateCasPage,
 });
 
+const privateCaGuideRoute = createRoute({
+  getParentRoute: () => appRoute,
+  path: "/organizations/$orgId/private-cas/guide",
+  component: PrivateCaGuidePage,
+});
+
 const certificateProfilesRoute = createRoute({
   getParentRoute: () => appRoute,
   path: "/organizations/$orgId/certificate-profiles",
@@ -158,6 +180,12 @@ const enrollmentProfilesRoute = createRoute({
   component: EnrollmentProfilesPage,
 });
 
+const enrollmentGuideRoute = createRoute({
+  getParentRoute: () => appRoute,
+  path: "/organizations/$orgId/enrollment-profiles/guide",
+  component: EnrollmentGuidePage,
+});
+
 const deviceCertificatesRoute = createRoute({
   getParentRoute: () => appRoute,
   path: "/organizations/$orgId/enrollment-profiles/$id/device-certificates",
@@ -168,6 +196,42 @@ const dnsProvidersRoute = createRoute({
   getParentRoute: () => appRoute,
   path: "/organizations/$orgId/dns-providers",
   component: DnsProvidersPage,
+});
+
+const dcvRoute = createRoute({
+  getParentRoute: () => appRoute,
+  path: "/organizations/$orgId/dcv",
+  component: DcvPage,
+});
+
+const managedCertificateGuideRoute = createRoute({
+  getParentRoute: () => appRoute,
+  path: "/organizations/$orgId/certificates/guide",
+  component: ManagedCertificateGuidePage,
+});
+
+const acmeAccountGuideRoute = createRoute({
+  getParentRoute: () => appRoute,
+  path: "/organizations/$orgId/acme-accounts/guide",
+  component: AcmeAccountGuidePage,
+});
+
+const agentGuideRoute = createRoute({
+  getParentRoute: () => appRoute,
+  path: "/organizations/$orgId/agents/guide",
+  component: AgentGuidePage,
+});
+
+const dnsProviderGuideRoute = createRoute({
+  getParentRoute: () => appRoute,
+  path: "/organizations/$orgId/dns-providers/guide",
+  component: DnsProviderGuidePage,
+});
+
+const dcvGuideRoute = createRoute({
+  getParentRoute: () => appRoute,
+  path: "/organizations/$orgId/dcv/guide",
+  component: DcvGuidePage,
 });
 
 const notificationChannelsRoute = createRoute({
@@ -242,6 +306,7 @@ const routeTree = rootRoute.addChildren([
   appRoute.addChildren([
     homeRoute,
     certificatesRoute,
+    managedCertificateGuideRoute,
     certificateRoute.addChildren([
       certificateOverviewRoute,
       certificateIssuedRoute,
@@ -249,7 +314,7 @@ const routeTree = rootRoute.addChildren([
       certificateNotificationsRoute,
       certificateUnknownTabRoute,
     ]),
-    membersRoute, teamsRoute, apiKeysRoute, agentsRoute, deploymentsRoute, deploymentScriptsRoute, acmeAccountsRoute, privateCasRoute, certificateProfilesRoute, enrollmentProfilesRoute, deviceCertificatesRoute, dnsProvidersRoute, notificationChannelsRoute, auditLogRoute, auditForwardingRoute, signInSettingsRoute,
+    membersRoute, teamsRoute, apiKeysRoute, agentsRoute, agentGuideRoute, deploymentsRoute, deploymentScriptsRoute, deploymentScriptGuideRoute, acmeAccountsRoute, acmeAccountGuideRoute, privateCasRoute, privateCaGuideRoute, certificateProfilesRoute, enrollmentProfilesRoute, enrollmentGuideRoute, deviceCertificatesRoute, dnsProvidersRoute, dnsProviderGuideRoute, dcvRoute, dcvGuideRoute, notificationChannelsRoute, auditLogRoute, auditForwardingRoute, signInSettingsRoute,
     loginPolicyRedirectRoute, ssoConnectionsRedirectRoute, csrToolsRoute, viewerRoute,
     accountSecurityRoute,
     platformOrganizationsRoute,

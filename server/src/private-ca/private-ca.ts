@@ -456,6 +456,12 @@ const fileNameOf = (name: string, fallback: string) => name.replace(/[^A-Za-z0-9
 
 const pemFile = (c: any, pem: string, fileName: string) => c.body(pem, 200, { "content-type": "application/x-pem-file", "content-disposition": `attachment; filename="${fileName}"` });
 
+/** Where relying parties fetch what the Private CAs publish, which every Certificate they sign names and which cannot change for those already signed. */
+const Publication = z.object({
+  baseUrl: z.string().openapi({ description: "The PKI base URL: CRLs and CA certificates are served under its `/pki`. It should be plain HTTP, reachable by every relying party." }),
+  configured: z.boolean().openapi({ description: "Whether the platform's operator set it (`PKI_BASE_URL`); when not, it is the address the API is served at." }),
+});
+
 const PemResponse = (description: string) => ({ 200: { description, content: { "application/x-pem-file": { schema: z.string() } } }, ...errors(401, 403, 404) });
 
 export function registerPrivateCas(ctx: {
@@ -469,8 +475,10 @@ export function registerPrivateCas(ctx: {
   crls: Crls;
   /** Where what Private CAs publish is served, which the certificates they sign name (crl.ts). */
   pkiBaseURL: string;
+  /** Whether `pkiBaseURL` was configured as such, rather than falling back to where the API is served. */
+  pkiBaseURLConfigured: boolean;
 }) {
-  const { app, db, requireUser, authorize, unitOfWork, kms, clock, crls, pkiBaseURL } = ctx;
+  const { app, db, requireUser, authorize, unitOfWork, kms, clock, crls, pkiBaseURL, pkiBaseURLConfigured } = ctx;
 
   async function findReadable(actor: Actor, orgId: string, id: string) {
     await authorize(actor, orgId, { privateCa: ["read"] });
@@ -494,14 +502,14 @@ export function registerPrivateCas(ctx: {
       summary: "The Organization's Private CAs, oldest first, each with its Issuing CAs",
       description: "Everyone in the Organization may ask, so as to propose a Managed Certificate against the right Issuing CA.",
       request: { params: OrgParam },
-      responses: { 200: json(z.object({ items: z.array(PrivateCa) })), ...errors(401, 403, 404) },
+      responses: { 200: json(z.object({ items: z.array(PrivateCa), publication: Publication })), ...errors(401, 403, 404) },
     }),
     async (c) => {
       const { orgId } = c.req.valid("param");
       await authorize(await requireUser(c), orgId, { privateCa: ["read"] });
       const rows = await db.select().from(privateCa).where(eq(privateCa.organizationId, orgId)).orderBy(asc(privateCa.createdAt), asc(privateCa.id));
       const issuingCas = await issuingCasOf(db, rows.map((r) => r.id));
-      return c.json({ items: rows.map((row) => toPrivateCa(row, issuingCas)) }, 200);
+      return c.json({ items: rows.map((row) => toPrivateCa(row, issuingCas)), publication: { baseUrl: pkiBaseURL, configured: pkiBaseURLConfigured } }, 200);
     },
   );
 

@@ -1,10 +1,13 @@
 import { useQuery } from "@tanstack/react-query";
 import { useParams } from "@tanstack/react-router";
 import { createColumnHelper, tableFeatures, useTable } from "@tanstack/react-table";
-import { CalendarClockIcon, ClipboardCheckIcon, FingerprintIcon, GlobeIcon, KeyRoundIcon, MoreHorizontalIcon, NetworkIcon, PlusIcon } from "lucide-react";
+import { BookOpenIcon, CalendarClockIcon, ClipboardCheckIcon, FingerprintIcon, GlobeIcon, KeyRoundIcon, MoreHorizontalIcon, NetworkIcon, PlusIcon } from "lucide-react";
 import { useMemo, useState, type FormEvent } from "react";
 import { toast } from "sonner";
 import { DataTable } from "@/components/data-table/data-table";
+import { GuideLink } from "@/components/guide";
+import { PublicationCheck, PublicationSummary } from "@/components/pki-publication";
+import { TrustRootDialog } from "@/components/trust-root-dialog";
 import { Badge } from "@/components/ui/badge";
 import { Button } from "@/components/ui/button";
 import { Dialog, DialogClose, DialogContent, DialogDescription, DialogFooter, DialogHeader, DialogTitle, DialogTrigger } from "@/components/ui/dialog";
@@ -128,7 +131,18 @@ export function PrivateCasPage() {
     <div className="flex flex-col gap-6">
       <PageHeader
         title="Private CAs"
-        action={org && can(org, "privateCa", "create") && <CreatePrivateCaDialog orgId={orgId} />}
+        guide="private-cas"
+        action={
+          <>
+            <Button variant="outline" asChild>
+              <GuideLink orgId={orgId} guide="private-cas" className="">
+                <BookOpenIcon />
+                <ActionLabel>Publishing guide</ActionLabel>
+              </GuideLink>
+            </Button>
+            {org && can(org, "privateCa", "create") && <CreatePrivateCaDialog orgId={orgId} />}
+          </>
+        }
         description="The Organization's own CAs, for internal names a public CA will not validate."
         howItWorks={
           <>
@@ -142,6 +156,7 @@ export function PrivateCasPage() {
         <p className="text-sm text-muted-foreground">You may not see the Private CAs.</p>
       ) : (
         <div className="flex flex-col gap-4">
+          {cas.data && <PublicationSummary publication={cas.data.publication} orgId={orgId} />}
           <DataTable table={table} empty={cas.isPending ? "Loading…" : "No Private CA yet."} />
           {cas.error && <p className="text-sm text-destructive">{cas.error.message}</p>}
         </div>
@@ -244,6 +259,9 @@ function usePrivateCaPermissions() {
 function RootActions({ ca }: { ca: PrivateCa }) {
   const { orgId, mayUpdate } = usePrivateCaPermissions();
   const [adding, setAdding] = useState(false);
+  const [trusting, setTrusting] = useState(false);
+  // The page's own list, already fetched: for where the root's CRLs are served.
+  const publication = useQuery({ queryKey: ["private-cas", orgId], queryFn: () => api.privateCas(orgId) }).data?.publication;
   // Under an active root only: the platform's signs the new one at once, the Organization's own signs its CSR later.
   const mayAdd = mayUpdate && ca.status === "active";
   if (!mayAdd && !ca.root) return null;
@@ -258,16 +276,11 @@ function RootActions({ ca }: { ca: PrivateCa }) {
         <DropdownMenuContent align="end" className="w-44">
           {mayAdd && <DropdownMenuItem onSelect={() => setAdding(true)}>Add Issuing CA…</DropdownMenuItem>}
           {mayAdd && ca.root && <DropdownMenuSeparator />}
-          {ca.root && (
-            <DropdownMenuItem asChild>
-              <a href={api.privateCaRootUrl(orgId, ca.id)} download>
-                Download root
-              </a>
-            </DropdownMenuItem>
-          )}
+          {ca.root && <DropdownMenuItem onSelect={() => setTrusting(true)}>Trust this root…</DropdownMenuItem>}
         </DropdownMenuContent>
       </DropdownMenu>
       <AddIssuingCaDialog orgId={orgId} ca={ca} open={adding} onOpenChange={setAdding} />
+      {ca.root && <TrustRootDialog orgId={orgId} ca={ca} publication={publication} open={trusting} onOpenChange={setTrusting} />}
     </div>
   );
 }
@@ -878,6 +891,10 @@ const HIERARCHIES: { value: PrivateCa["kind"]; title: string; description: strin
 
 function CreatePrivateCaForm({ orgId, onDone }: { orgId: string; onDone: () => void }) {
   const [step, setStep] = useState<CreateStepId>("hierarchy");
+  // Before the first Private CA, the administrator confirms that relying parties reach where its Certificates send them.
+  const existing = useQuery({ queryKey: ["private-cas", orgId], queryFn: () => api.privateCas(orgId) }).data;
+  const first = existing?.items.length === 0;
+  const [acknowledged, setAcknowledged] = useState(false);
   const [kind, setKind] = useState<PrivateCa["kind"]>("platform_root");
   const platformRoot = kind === "platform_root";
   const [name, setName] = useState("");
@@ -908,7 +925,12 @@ function CreatePrivateCaForm({ orgId, onDone }: { orgId: string; onDone: () => v
   const lifetimeOk = !platformRoot || (Number.isInteger(Number(lifetimeYears)) && Number(lifetimeYears) >= 1 && Number(lifetimeYears) <= MAX_LIFETIME_YEARS);
   const validityMissing = validityProblem(validity);
   const missing: Partial<Record<CreateStepId, Missing>> = {
-    hierarchy: name.trim() === "" ? { reason: "Give the Private CA a name.", field: "private-ca-name" } : undefined,
+    hierarchy:
+      name.trim() === ""
+        ? { reason: "Give the Private CA a name.", field: "private-ca-name" }
+        : first && !acknowledged
+          ? { reason: "Confirm that relying parties can fetch the addresses its Certificates will carry.", field: "publication-acknowledged" }
+          : undefined,
     issuing: subject.trim() === "" ? { reason: "Give the Issuing CA a subject, such as CN=Acme Internal TLS.", field: "private-ca-subject" } : undefined,
     key: lifetimeOk ? undefined : { reason: `Give a lifetime of 1 to ${MAX_LIFETIME_YEARS} years.`, field: "private-ca-lifetime" },
     names: hasRules(rules) ? undefined : { reason: "Give at least one zone or exact name it may issue for.", field: "private-ca-new-zones" },
@@ -926,6 +948,9 @@ function CreatePrivateCaForm({ orgId, onDone }: { orgId: string; onDone: () => v
       pending={create.isPending}
       onSubmit={() => create.mutate(undefined)}
     >
+      {step === "hierarchy" && first && existing && (
+        <PublicationCheck orgId={orgId} publication={existing.publication} acknowledged={acknowledged} onAcknowledge={setAcknowledged} />
+      )}
       {step === "hierarchy" && (
         <FieldSet>
           <FieldLegend>Name and hierarchy</FieldLegend>

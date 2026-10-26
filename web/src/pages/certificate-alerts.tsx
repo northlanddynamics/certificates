@@ -9,9 +9,13 @@ import { Field, FieldLabel } from "@/components/ui/field";
 import { Textarea } from "@/components/ui/textarea";
 import { api, can, type ManagedCertificate, type Me } from "@/lib/api";
 import { ISSUANCE_KIND_WORDS, isOwner } from "@/lib/managed-certificate";
+import { GuideLink } from "@/components/guide";
 import { chosenValidityLabel } from "@/lib/private-ca";
 import { cn } from "@/lib/utils";
 import { NamesDiff } from "./key-change-sheet";
+
+/** The failures DCV itself reports, as `DcvFailureCode` in server/src/issuance/dcv/dcv.ts names them: the DCV guide explains each. */
+const DCV_FAILURES = ["no_dns_provider", "dns_update_rejected", "dns_provider_unreachable", "cname_missing", "record_not_visible"];
 
 const when = (iso: string) => new Date(iso).toLocaleString();
 
@@ -230,6 +234,18 @@ export function AlertStrip({ org, m, userId, onChanged }: { org: Me["organizatio
               {failedAt && <span>Last attempt {when(failedAt)}</span>}
               {m.renewal.failing?.nextAttemptAt && <span>Next attempt {when(m.renewal.failing.nextAttemptAt)}</span>}
             </p>
+            {DCV_FAILURES.includes(failure.code) && (
+              <p className="flex flex-wrap gap-x-4">
+                {m.issuer.kind === "acme" && can(org, "dcvRule", "read") && (
+                  <Link to="/organizations/$orgId/certificates/$id" params={{ orgId: org.id, id: m.id }} hash="dcv" className="font-medium underline underline-offset-4">
+                    How each name is validated
+                  </Link>
+                )}
+                <GuideLink orgId={org.id} guide="dcv" section="fails">
+                  When validation fails
+                </GuideLink>
+              </p>
+            )}
           </Item>
         )}
         {proposal && (

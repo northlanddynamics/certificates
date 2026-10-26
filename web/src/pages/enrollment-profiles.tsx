@@ -1,7 +1,7 @@
 import { useMutation, useQuery } from "@tanstack/react-query";
 import { Link, useParams } from "@tanstack/react-router";
 import { createColumnHelper, tableFeatures, useTable } from "@tanstack/react-table";
-import { ClipboardCheckIcon, KeyRoundIcon, TriangleAlertIcon, LandmarkIcon, MoreHorizontalIcon, PlusIcon, ScrollTextIcon, ShieldCheckIcon, type LucideIcon } from "lucide-react";
+import { BookOpenIcon, ClipboardCheckIcon, InfoIcon, KeyRoundIcon, TriangleAlertIcon, LandmarkIcon, MoreHorizontalIcon, PlusIcon, ScrollTextIcon, ShieldCheckIcon, type LucideIcon } from "lucide-react";
 import { useState, type FormEvent } from "react";
 import { toast } from "sonner";
 import {
@@ -24,6 +24,7 @@ import {
 } from "../../../server/src/enrollment/enrollment-profile-kinds";
 import { ConfirmDialog } from "@/components/confirm-dialog";
 import { CopyButton } from "@/components/copy-button";
+import { GuideLink } from "@/components/guide";
 import { SteppedForm, STEPPED_DIALOG, type Missing } from "@/components/stepped-form";
 import { SummaryRows } from "@/components/summary-rows";
 import { Alert, AlertDescription, AlertTitle } from "@/components/ui/alert";
@@ -33,7 +34,8 @@ import { Button } from "@/components/ui/button";
 import { Checkbox } from "@/components/ui/checkbox";
 import { Dialog, DialogContent, DialogDescription, DialogFooter, DialogHeader, DialogTitle, DialogTrigger } from "@/components/ui/dialog";
 import { DropdownMenu, DropdownMenuContent, DropdownMenuItem, DropdownMenuSeparator, DropdownMenuTrigger } from "@/components/ui/dropdown-menu";
-import { Field, FieldDescription, FieldError, FieldGroup, FieldLabel, FieldLegend, FieldSet } from "@/components/ui/field";
+import { Field, FieldContent, FieldDescription, FieldError, FieldGroup, FieldLabel, FieldLegend, FieldSet, FieldTitle } from "@/components/ui/field";
+import { RadioGroup, RadioGroupItem } from "@/components/ui/radio-group";
 import { Input } from "@/components/ui/input";
 import { Select, SelectContent, SelectItem, SelectTrigger, SelectValue } from "@/components/ui/select";
 import { ActionLabel, PageHeader } from "@/components/page-header";
@@ -133,7 +135,18 @@ export function EnrollmentProfilesPage() {
     <div className="flex flex-col gap-6">
       <PageHeader
         title="Enrollment Profiles"
-        action={org && can(org, "enrollmentProfile", "create") && <NewProfileDialog orgId={orgId} />}
+        guide="enrollment-profiles"
+        action={
+          <>
+            <Button variant="outline" asChild>
+              <GuideLink orgId={orgId} guide="enrollment-profiles" className="">
+                <BookOpenIcon />
+                <ActionLabel>Enrollment guide</ActionLabel>
+              </GuideLink>
+            </Button>
+            {org && can(org, "enrollmentProfile", "create") && <NewProfileDialog orgId={orgId} />}
+          </>
+        }
         description="Devices enroll at a profile's SCEP URL and get a Device Certificate from its Issuing CA."
         howItWorks={
           <p>
@@ -200,7 +213,7 @@ function ProfileActions({ profile }: { profile: EnrollmentProfile }) {
   const mayDisable = org ? can(org, "enrollmentProfile", "disable") && profile.enabled : false;
   const kinds = useQuery({ queryKey: ["enrollment-validator-kinds", orgId], queryFn: () => api.enrollmentValidatorKinds(orgId), enabled: mayUpdate });
   const takesNameRules = kindTakesNameRules(kinds.data?.items, profile.validator.kind);
-  const [editing, setEditing] = useState<"issuing-ca" | "retention" | "name-rules" | "key-types" | "rotate-ra" | "rotate-challenge" | "retire-challenge" | "disable" | null>(null);
+  const [editing, setEditing] = useState<"intune-setup" | "issuing-ca" | "retention" | "name-rules" | "key-types" | "rotate-ra" | "rotate-challenge" | "retire-challenge" | "disable" | null>(null);
   const hasSharedChallenge = profile.sharedChallenge !== null;
   const openOne = (which: NonNullable<typeof editing>) => (open: boolean) => setEditing(open ? which : null);
   const test = useMutation({
@@ -229,6 +242,7 @@ function ProfileActions({ profile }: { profile: EnrollmentProfile }) {
                 Device Certificates
               </Link>
             </DropdownMenuItem>
+            {profile.validator.kind === "intune" && <DropdownMenuItem onSelect={() => setEditing("intune-setup")}>Intune setup values…</DropdownMenuItem>}
             <DropdownMenuItem onSelect={() => void navigator.clipboard.writeText(profile.scepUrl)}>Copy SCEP URL</DropdownMenuItem>
             <DropdownMenuItem onSelect={() => void navigator.clipboard.writeText(profile.caFingerprint)}>Copy CA fingerprint</DropdownMenuItem>
             <DropdownMenuItem asChild>
@@ -261,6 +275,13 @@ function ProfileActions({ profile }: { profile: EnrollmentProfile }) {
           </DropdownMenuContent>
         </DropdownMenu>
       </div>
+      {profile.validator.kind === "intune" && (
+        <Dialog open={editing === "intune-setup"} onOpenChange={openOne("intune-setup")}>
+          <DialogContent className="sm:max-w-2xl">
+            <IntuneSetupPanel orgId={orgId} profile={profile} onDone={() => setEditing(null)} />
+          </DialogContent>
+        </Dialog>
+      )}
       {mayUpdate && <IssuingCaDialog profile={profile} open={editing === "issuing-ca"} onOpenChange={openOne("issuing-ca")} />}
       {mayUpdate && <RetentionDialog profile={profile} open={editing === "retention"} onOpenChange={openOne("retention")} />}
       {mayUpdate && takesNameRules && <NameRulesDialog profile={profile} open={editing === "name-rules"} onOpenChange={openOne("name-rules")} />}
@@ -660,9 +681,44 @@ function DisableDialog({ profile, open, onOpenChange }: ProfileDialogProps) {
   );
 }
 
+const ENTRA_STEPS = [
+  "An app registration in Microsoft Entra ID for this platform",
+  "Application permission Intune → scep_challenge_provider",
+  "Application permission Microsoft Graph → Application.Read.All",
+  "Admin consent granted for both",
+  "A client secret, its value copied",
+];
+
+/**
+ * What must exist in Entra before an Intune profile can work, as a checklist for the administrator's own tracking: the
+ * platform cannot see Entra's settings, so nothing here is required to go on.
+ */
+function EntraChecklist({ orgId }: { orgId: string }) {
+  const [done, setDone] = useState<boolean[]>(ENTRA_STEPS.map(() => false));
+  return (
+    <div className="flex flex-col gap-2 rounded-md border bg-muted/40 p-3 text-sm">
+      <span className="font-medium">In Microsoft Entra, first</span>
+      {ENTRA_STEPS.map((step, i) => (
+        <Field key={step} orientation="horizontal">
+          <Checkbox id={`entra-step-${i}`} checked={done[i]} onCheckedChange={(on) => setDone((d) => d.map((v, j) => (j === i ? on === true : v)))} />
+          <FieldLabel htmlFor={`entra-step-${i}`} className="font-normal">
+            {step}
+          </FieldLabel>
+        </Field>
+      ))}
+      <span className="text-xs text-muted-foreground">
+        For your own tracking: the platform cannot see Entra.{" "}
+        <GuideLink orgId={orgId} guide="enrollment-profiles" section="intune">
+          Step by step
+        </GuideLink>
+      </span>
+    </div>
+  );
+}
+
 function NewProfileDialog({ orgId }: { orgId: string }) {
   const [open, setOpen] = useState(false);
-  // A profile just created with a Shared Challenge, shown once, until the dialog closes.
+  // A profile just created, with its Shared Challenge (shown once) or the values for Intune, until the dialog closes.
   const [created, setCreated] = useState<CreatedEnrollmentProfile | null>(null);
   return (
     <Dialog
@@ -683,12 +739,16 @@ function NewProfileDialog({ orgId }: { orgId: string }) {
         <DialogContent className="sm:max-w-2xl" showCloseButton={false} onInteractOutside={(e) => e.preventDefault()} onEscapeKeyDown={(e) => e.preventDefault()}>
           <SharedChallengePanel profile={created} challenge={created.sharedChallenge.challenge} onDone={() => setOpen(false)} />
         </DialogContent>
+      ) : created?.validator.kind === "intune" ? (
+        <DialogContent className="sm:max-w-2xl">
+          <IntuneSetupPanel orgId={orgId} profile={created} onDone={() => setOpen(false)} />
+        </DialogContent>
       ) : (
         <DialogContent className={STEPPED_DIALOG}>
           <DialogTitle className="sr-only">New Enrollment Profile</DialogTitle>
           <DialogDescription className="sr-only">The platform makes the profile's SCEP RA key, which it keeps, and has the Issuing CA sign its certificate.</DialogDescription>
           {/* Only mounted while open, so each opening starts from a clean form. */}
-          {open && <NewProfileForm orgId={orgId} onDone={(profile) => (profile.sharedChallenge ? setCreated(profile) : setOpen(false))} />}
+          {open && <NewProfileForm orgId={orgId} onDone={(profile) => (profile.sharedChallenge || profile.validator.kind === "intune" ? setCreated(profile) : setOpen(false))} />}
         </DialogContent>
       )}
     </Dialog>
@@ -764,6 +824,69 @@ function SharedChallengePanel({ profile, challenge, onDone }: { profile: Created
       <DialogFooter>
         <Button type="button" onClick={onDone}>
           I have copied the Shared Challenge
+        </Button>
+      </DialogFooter>
+    </div>
+  );
+}
+
+/** The subject alternative name an Intune SCEP profile adds, by which Intune's revocation requests find a device's certificates. */
+const INTUNE_DEVICE_SAN = "IntuneDeviceId://{{DeviceId}}";
+
+/**
+ * What to put in Intune for a profile on the Intune validator: the trusted certificate profile's certificate, and each
+ * value of the SCEP certificate profile, under the names Intune gives its fields. Shown on creating one, and from its menu.
+ */
+function IntuneSetupPanel({ orgId, profile, onDone }: { orgId: string; profile: EnrollmentProfile | CreatedEnrollmentProfile; onDone: () => void }) {
+  return (
+    <div className="flex min-w-0 flex-col gap-4">
+      <DialogHeader>
+        <DialogTitle>Finish in Intune: {profile.name}</DialogTitle>
+        <DialogDescription>Two profiles in Intune, with these values. Devices enroll once both reach them.</DialogDescription>
+      </DialogHeader>
+      <section className="flex flex-col gap-2 text-sm">
+        <h3 className="font-medium">1 · Trusted certificate profile</h3>
+        <div className="flex flex-wrap items-center gap-2">
+          <Button size="sm" asChild>
+            <a href={api.enrollmentProfileCaCertificateUrl(orgId, profile.id, "root")} download>
+              Download root certificate
+            </a>
+          </Button>
+          <Button size="sm" variant="outline" asChild>
+            <a href={api.enrollmentProfileCaCertificateUrl(orgId, profile.id, "issuing")} download>
+              Issuing CA certificate
+            </a>
+          </Button>
+        </div>
+        <span className="text-muted-foreground">The root, unless your devices must trust only the Issuing CA.</span>
+      </section>
+      <section className="flex flex-col gap-3 text-sm">
+        <h3 className="font-medium">2 · SCEP certificate profile</h3>
+        <CopyableValue label="SCEP Server URLs" value={profile.scepUrl} />
+        <CopyableValue label="Subject alternative name (URI)" value={INTUNE_DEVICE_SAN} />
+        <SummaryRows
+          rows={[
+            { label: "Root Certificate", value: "The trusted certificate profile from step 1" },
+            { label: "Key size (bits)", value: profile.allowedKeyTypes.map((t) => KEY_TYPE_LABEL[t]).join(", ") },
+            { label: "Key usage", value: profile.keyUsage.map((u) => KEY_USAGE_LABEL[u]).join(", ") },
+            { label: "Extended key usage", value: profile.extendedKeyUsage.map((u) => EXTENDED_KEY_USAGE_LABEL[u]).join(", ") },
+            { label: "Certificate validity", value: `Ignored: the profile issues for ${daysLabel(profile.validityDays)}` },
+          ]}
+        />
+      </section>
+      <Alert>
+        <InfoIcon />
+        <AlertTitle>The first enrollment is the real test</AlertTitle>
+        <AlertDescription>
+          It is what proves <code>scep_challenge_provider</code> and admin consent. A refused one is recorded in the Audit log as <code>enrollment.refused</code>, with its reason.{" "}
+          <GuideLink orgId={orgId} guide="enrollment-profiles" section="refused">
+            Why devices are refused
+          </GuideLink>
+        </AlertDescription>
+      </Alert>
+      <DialogFooter>
+        <Button type="button" onClick={onDone}>
+          Done
         </Button>
       </DialogFooter>
     </div>
@@ -948,24 +1071,29 @@ function NewProfileForm({ orgId, onDone }: { orgId: string; onDone: (created: Cr
       {step === "validator" && (
         <FieldGroup>
           <Field>
-            <FieldLabel htmlFor="profile-validator">Enrollment Validator</FieldLabel>
+            <FieldTitle id="profile-validator-label">Enrollment Validator</FieldTitle>
             {kinds.data && kinds.data.items.length === 0 ? (
               <FieldDescription>The platform runs no Enrollment Validator yet, so no profile can be created.</FieldDescription>
             ) : (
-              <Select value={kind} onValueChange={setValidatorKind}>
-                <SelectTrigger id="profile-validator" className="w-full">
-                  <SelectValue placeholder="Loading…" />
-                </SelectTrigger>
-                <SelectContent>
-                  {(kinds.data?.items ?? []).map((k) => (
-                    <SelectItem key={k.kind} value={k.kind}>
-                      {validatorLabel(k.kind)}
-                    </SelectItem>
-                  ))}
-                </SelectContent>
-              </Select>
+              <RadioGroup aria-labelledby="profile-validator-label" value={kind} onValueChange={setValidatorKind} className="grid gap-2 sm:grid-cols-2">
+                {(kinds.data?.items ?? []).map((k) => (
+                  <FieldLabel key={k.kind} htmlFor={`profile-validator-${k.kind}`}>
+                    <Field orientation="horizontal">
+                      <FieldContent>
+                        <FieldTitle>{validatorLabel(k.kind)}</FieldTitle>
+                        {VALIDATOR_DESCRIPTION[k.kind] && <FieldDescription>{VALIDATOR_DESCRIPTION[k.kind]}</FieldDescription>}
+                      </FieldContent>
+                      <RadioGroupItem value={k.kind} id={`profile-validator-${k.kind}`} />
+                    </Field>
+                  </FieldLabel>
+                ))}
+              </RadioGroup>
             )}
-            {VALIDATOR_DESCRIPTION[kind] && <FieldDescription>{VALIDATOR_DESCRIPTION[kind]}</FieldDescription>}
+            <FieldDescription>
+              <GuideLink orgId={orgId} guide="enrollment-profiles" section="choose">
+                Compare them
+              </GuideLink>
+            </FieldDescription>
           </Field>
           {usesSharedChallenge && (
             <Alert>
@@ -988,24 +1116,22 @@ function NewProfileForm({ orgId, onDone }: { orgId: string; onDone: (created: Cr
           {intune && (
             <FieldSet>
               <FieldLegend variant="label">Entra app</FieldLegend>
-              <FieldDescription>
-                Register an app in Microsoft Entra ID with a client secret, give it the application permissions Intune → scep_challenge_provider and Microsoft Graph →
-                Application.Read.All, and grant admin consent. Intune then validates each device's request, and is told what became of it.
-              </FieldDescription>
+              <EntraChecklist orgId={orgId} />
               <FieldGroup>
                 <Field data-invalid={tenantId.trim() !== "" && !TENANT.test(tenantId.trim())}>
                   <FieldLabel htmlFor="intune-tenant">Tenant ID</FieldLabel>
                   <Input id="intune-tenant" autoFocus value={tenantId} onChange={(e) => setTenantId(e.target.value)} placeholder="00000000-0000-0000-0000-000000000000" />
-                  <FieldDescription>The directory (tenant) ID, or a domain of it such as contoso.onmicrosoft.com.</FieldDescription>
+                  <FieldDescription>The directory (tenant) ID, or a domain of it such as contoso.onmicrosoft.com. In Entra: Overview.</FieldDescription>
                 </Field>
                 <Field data-invalid={appId.trim() !== "" && !GUID.test(appId.trim())}>
                   <FieldLabel htmlFor="intune-app">Application (client) ID</FieldLabel>
                   <Input id="intune-app" value={appId} onChange={(e) => setAppId(e.target.value)} placeholder="00000000-0000-0000-0000-000000000000" />
+                  <FieldDescription>In Entra: App registrations, then the app's Overview.</FieldDescription>
                 </Field>
                 <Field>
                   <FieldLabel htmlFor="intune-secret">Client secret</FieldLabel>
                   <Input id="intune-secret" type="password" autoComplete="off" value={appSecret} onChange={(e) => setAppSecret(e.target.value)} />
-                  <FieldDescription>Its value, not its ID. It is stored encrypted and never shown again. Test the connection from the list once the profile is created.</FieldDescription>
+                  <FieldDescription>Its value, not its ID, from the app's Certificates &amp; secrets. It is stored encrypted and never shown again. Test the connection from the list once the profile is created.</FieldDescription>
                 </Field>
               </FieldGroup>
             </FieldSet>

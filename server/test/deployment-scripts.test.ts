@@ -426,7 +426,7 @@ describe("declared parameters", () => {
     const examples = [...guide.matchAll(/^```(bash|powershell)\n([\s\S]*?)^```$/gm)]
       .filter(([, , content]) => content!.includes("# deploy-params:begin"))
       .map(([, interpreter, content]) => ({ interpreter: interpreter!, content: content! }));
-    expect(examples.map((e) => e.interpreter)).toEqual(["bash", "powershell"]);
+    expect(examples.map((e) => e.interpreter)).toEqual(["bash", "powershell", "powershell"]);
 
     const declared: unknown[] = [];
     for (const [i, { interpreter, content }] of examples.entries()) {
@@ -445,6 +445,11 @@ describe("declared parameters", () => {
       [
         { name: "TARGET_DIR", label: "Directory", required: true, default: undefined },
         { name: "SERVICE", label: "Service", required: false, default: undefined },
+      ],
+      [
+        { name: "SITE_NAME", label: "IIS site", required: true, default: undefined },
+        { name: "PORT", label: "HTTPS port", required: false, default: "443" },
+        { name: "HOST_HEADER", label: "Host name", required: false, default: undefined },
       ],
     ]);
   });

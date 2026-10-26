@@ -318,11 +318,12 @@ export function createApp(deps: AppDeps) {
   const dnsProviders = createDnsProviders(secrets, dnsRelay);
   registerDnsProviders({ app, db, requireUser, authorize, unitOfWork, secrets, dnsProviders, relay: dnsRelay });
   const dcvPlans = createDcvPlans(dnsProviders);
-  registerDcvConfiguration({ app, db, requireUser, authorize, unitOfWork, dcvPlans });
-  const dcv = createDcv(dnsProviders, dcvPlans, { resolver: createTxtResolver(), ...DEFAULT_DCV_CONFIG, ...deps.dcv });
+  const dcvConfig = { resolver: createTxtResolver(), ...DEFAULT_DCV_CONFIG, ...deps.dcv };
+  registerDcvConfiguration({ app, db, requireUser, authorize, unitOfWork, dcvPlans, resolver: dcvConfig.resolver });
+  const dcv = createDcv(dnsProviders, dcvPlans, dcvConfig);
   const pkiBaseURL = deps.pkiBaseURL ?? deps.baseURL;
   const crls = createCrls({ db, unitOfWork, kms: deps.kms, clock });
-  registerPrivateCas({ app, db, requireUser, authorize, unitOfWork, kms: deps.kms, clock, crls, pkiBaseURL });
+  registerPrivateCas({ app, db, requireUser, authorize, unitOfWork, kms: deps.kms, clock, crls, pkiBaseURL, pkiBaseURLConfigured: deps.pkiBaseURL !== undefined });
   registerPkiRoutes({ app, db });
   const privateCas = createPrivateCas({ kms: deps.kms, clock, crls, pkiBaseURL });
   const validatorKinds = deps.enrollmentValidators ?? ENROLLMENT_VALIDATOR_KINDS;

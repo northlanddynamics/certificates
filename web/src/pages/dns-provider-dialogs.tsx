@@ -12,6 +12,7 @@ import { RadioGroup, RadioGroupItem } from "@/components/ui/radio-group";
 import { Select, SelectContent, SelectItem, SelectTrigger, SelectValue } from "@/components/ui/select";
 import { Textarea } from "@/components/ui/textarea";
 import { ActionLabel } from "@/components/page-header";
+import { GuideLink } from "@/components/guide";
 import { TSIG_ALGORITHMS, api, type Agent, type DnsProvider, type DnsProviderSettings, type DnsProviderType } from "@/lib/api";
 import { useAction } from "@/lib/use-action";
 
@@ -215,7 +216,12 @@ function ProviderWizard({ orgId, provider, relay, onDone }: { orgId: string; pro
       {step === "type" && (
         <FieldSet>
           <FieldLegend>What kind of DNS does it connect to?</FieldLegend>
-          <FieldDescription>It cannot be changed afterwards.</FieldDescription>
+          <FieldDescription>
+            It cannot be changed afterwards.{" "}
+            <GuideLink guide="dns-providers" section={fields.type === "infoblox" ? "infoblox" : "rfc2136"}>
+              What you'll need
+            </GuideLink>
+          </FieldDescription>
           <RadioGroup value={fields.type} onValueChange={(type) => set({ type: type as DnsProviderType })}>
             {TYPES.map((t) => (
               <FieldLabel key={t.value} htmlFor={`dns-type-${t.value}`}>
@@ -316,7 +322,10 @@ function ProviderWizard({ orgId, provider, relay, onDone }: { orgId: string; pro
         <FieldSet>
           <FieldLegend>Where should its operations run?</FieldLegend>
           <FieldDescription>
-            By default the platform talks to the DNS server itself. Choose Agents to reach DNS inside your network instead: any chosen Agent that is online carries out the operation.
+            By default the platform talks to the DNS server itself. Choose Agents to reach DNS inside your network instead: any chosen Agent that is online carries out the operation.{" "}
+            <GuideLink guide="dns-providers" section="relay">
+              When to choose Agents
+            </GuideLink>
           </FieldDescription>
           <div className="flex max-h-72 flex-col gap-3 overflow-y-auto rounded-md border p-3">
             {(() => {
