@@ -468,6 +468,12 @@ export const issuance = pgTable(
     certificateId: uuid("certificate_id"),
     /** While it runs, whether it waits for the Agent that holds the key to make a new one and send its CSR: a Renewal of a Managed Certificate whose key an Agent holds begins so. */
     awaitingKey: boolean("awaiting_key").notNull().default(false),
+    /**
+     * Set once its issuer's CA answered that it would issue later: the handle its kind keeps the request by, and when it
+     * fails as timed out if the kind has not reported the result. Kept after it ends.
+     */
+    pendingHandle: text("pending_handle"),
+    pendingUntil: timestamp("pending_until", { withTimezone: true }),
     startedAt: timestamp("started_at", { withTimezone: true }).notNull(),
     finishedAt: timestamp("finished_at", { withTimezone: true }),
     createdAt: timestamp("created_at", { withTimezone: true }).notNull().defaultNow(),
@@ -479,6 +485,10 @@ export const issuance = pgTable(
       .on(t.managedCertificateId)
       .where(sql`${t.status} = 'running'`),
     check("issuance_kind", sql`${t.kind} in ('first_issue', 'renewal', 'name_change')`),
+    check("issuance_pending", sql`(${t.pendingHandle} is null) = (${t.pendingUntil} is null)`),
+    index("issuance_pending_until_idx")
+      .on(t.pendingUntil)
+      .where(sql`${t.status} = 'running' and ${t.pendingUntil} is not null`),
   ],
 );
 

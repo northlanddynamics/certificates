@@ -27,6 +27,7 @@ import { IntuneDouble } from "./intune-double";
 import { sharedChallenge } from "../../src/enrollment/shared-challenge";
 import { SCEP_DEFAULTS, type ScepConfig } from "../../src/enrollment/scep";
 import { startDirectoryProxy } from "./directory-proxy";
+import { HeldIssuer } from "./held-issuer";
 
 export const TEST_DATABASE_URL =
   process.env.TEST_DATABASE_URL ?? "postgres://postgres:postgres@localhost:5433/certs_test";
@@ -123,6 +124,10 @@ export interface Harness {
   scepRateLimit: Pick<ScepConfig, "perAddress" | "perProfile">;
   /** What the platform does when it starts: ends the Issuances an earlier run left running. */
   failInterruptedIssuances(): Promise<void>;
+  /** A test-only issuer kind in front of the platform's own, which answers "pending" while `holding` and reports later. */
+  heldIssuer: HeldIssuer;
+  /** One pass of timing out pending Issuances at the harness's clock: ends those past their deadline and returns how many. */
+  timeOutIssuances(): Promise<number>;
   /** The roots the CA's chains end in, as an export that includes the root finds them: Pebble's, unless a test sets `current` to something else. */
   caRoots: { current: () => Promise<string[]> };
   /** The private keys of the ACME accounts the platform created at the CA, as PEM; for tests to check they never leak. */
@@ -210,6 +215,7 @@ export async function createHarness(overrides: Partial<AppDeps> = {}, { database
     }),
   });
   let now = new Date("2026-01-01T00:00:00Z");
+  const heldIssuer = new HeldIssuer(() => now);
   const caDirectories: Record<BuiltInAcmeCaId, string> = { "letsencrypt-staging": PEBBLE_DIRECTORY, "letsencrypt-production": PEBBLE_DIRECTORY };
   const createdAccountKeys: string[] = [];
   const registrationRefusal: Harness["registrationRefusal"] = { reason: null };
@@ -271,6 +277,7 @@ export async function createHarness(overrides: Partial<AppDeps> = {}, { database
     dcv: { resolver: { lookupTxt: (name) => dcvResolver.current.lookupTxt(name), lookupCname: (name) => dcvResolver.current.lookupCname(name) }, visibilityTimeoutMs: 1500, pollIntervalMs: 50 },
     clock: () => now,
     scep,
+    issuers: (platform) => heldIssuer.wrap(platform),
     baseURL: BASE,
     pkiBaseURL: PKI_BASE_URL,
     secret: "test-secret-test-secret-test-secret-1234",
@@ -281,6 +288,7 @@ export async function createHarness(overrides: Partial<AppDeps> = {}, { database
     ...overrides,
   };
   const { app, auth, db, unitOfWork, issuances, renewals, notifications, auditForwarding, crls, enrollmentValidators, deviceCertificatePruning, sharedChallenges, deviceCertificateRevocations, deviceEnrollment, scep: scepRoutes } = createApp(deps);
+  heldIssuer.reportTo(issuances);
   if (migrate) await runMigrations(pool);
   const reset = async () => {
     await issuances.idle();
@@ -303,6 +311,7 @@ export async function createHarness(overrides: Partial<AppDeps> = {}, { database
     enrollmentValidations.length = 0;
     validatorDouble.reset();
     intune.reset();
+    heldIssuer.reset();
     createdAccountKeys.length = 0;
     registrationRefusal.reason = null;
     caDirectories["letsencrypt-staging"] = caDirectories["letsencrypt-production"] = PEBBLE_DIRECTORY;
@@ -350,6 +359,8 @@ export async function createHarness(overrides: Partial<AppDeps> = {}, { database
       if (!res.ok) throw new Error(`Pebble would not set the renewal information: ${res.status} ${await res.text()}`);
     },
     failInterruptedIssuances: () => issuances.failInterrupted(),
+    heldIssuer,
+    timeOutIssuances: () => issuances.timeOut(),
     caRoots,
     createdAccountKeys,
     pebbleDirectoryWithout: directoryProxy.without,

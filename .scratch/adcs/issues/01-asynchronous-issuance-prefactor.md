@@ -4,11 +4,11 @@
 
 **Blocked by:** None (can start immediately).
 
-**Status:** ready-for-agent
+**Status:** done
 
-- [ ] An issuer kind may answer an issue request with "pending" and a handle, in place of a Certificate.
-- [ ] A pending Issuance stays running, keeps its handle, and still stops another Issuance of its Managed Certificate from starting.
-- [ ] A pending Issuance resumes on the kind's result, ending in a stored Certificate or a recorded failure cause, with the same Audit Events and notices as an Issuance that finished at once.
-- [ ] A pending Issuance whose deadline passes fails with a "timed out" cause.
-- [ ] Pending Issuances survive a platform restart.
-- [ ] A test-only issuer kind exercises the pending path through Seam A. All existing ACME and Private CA tests pass unchanged.
+- [x] An issuer kind may answer an issue request with "pending" and a handle, in place of a Certificate.
+- [x] A pending Issuance stays running, keeps its handle, and still stops another Issuance of its Managed Certificate from starting.
+- [x] A pending Issuance resumes on the kind's result, ending in a stored Certificate or a recorded failure cause, with the same Audit Events and notices as an Issuance that finished at once.
+- [x] A pending Issuance whose deadline passes fails with a "timed out" cause.
+- [x] Pending Issuances survive a platform restart.
+- [x] A test-only issuer kind exercises the pending path through Seam A. All existing ACME and Private CA tests pass unchanged.

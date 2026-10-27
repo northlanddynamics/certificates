@@ -22,6 +22,8 @@ export const ISSUANCE_FAILURE_CODES = [
   "agent_key_failed",
   /** The Managed Certificate was archived while the Issuance waited for its Agent's key. */
   "archived",
+  /** The CA answered that it would issue later, and did not report by the deadline its kind set. */
+  "timed_out",
   /** The platform stopped while the Issuance was running. */
   "interrupted",
   /** Something went wrong in the platform itself. */

@@ -43,6 +43,13 @@ const RENEWAL_PASS_MS = 60_000;
   setTimeout(renewDue, RENEWAL_PASS_MS);
 })();
 
+// Pending Issuances whose CA has not answered by their deadline are ended as timed out once a minute; each pass waits for the one before it.
+const ISSUANCE_TIMEOUT_PASS_MS = 60_000;
+(async function timeOutIssuances() {
+  await issuances.timeOut().catch((err) => console.error("issuance timeout pass failed", err));
+  setTimeout(timeOutIssuances, ISSUANCE_TIMEOUT_PASS_MS);
+})();
+
 // Notices are sent, and silent Agents and Certificates nearing their end noticed, once a minute; each pass waits for the one before it.
 const NOTIFICATION_PASS_MS = 60_000;
 (async function notify() {
