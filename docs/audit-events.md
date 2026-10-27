@@ -55,14 +55,14 @@ Each resource's verbs, as of this writing. New ones may be added within version 
 | `validation_zone` | `created`, `deleted` |
 | `dcv_rule` | `created`, `changed`, `deleted` |
 | `managed_certificate` | `created`, `proposed`, `approved`, `rejected`, `owner_added`, `owner_removed`, `subscriber_added`, `subscriber_removed`, `renewal_policy_changed`, `csr_uploaded`, `names_changed`, `archived`, `issuer_changed`, `profile_detached` |
-| `certificate` | `revoked` |
+| `certificate` | `revoked`, `revocation_requested`, `revocation_failed` |
 | `certificate_profile` | `created`, `updated`, `disabled`, `enabled` |
 | `certificate_profile_settings` | `changed` |
 | `private_ca` | `created`, `issuing_ca_added`, `csr_signed`, `updated`, `retired`, `revoked`, `crl_published` |
 | `enrollment_profile` | `created`, `updated`, `disabled`, `ra_rotated`, `shared_challenge_rotated`, `shared_challenge_retired` |
 | `enrollment_validator` | `tested` |
 | `enrollment` | `refused` |
-| `device_certificate` | `issued`, `revoked`, `pruned` |
+| `device_certificate` | `issued`, `revoked`, `revocation_requested`, `revocation_failed`, `pruned` |
 | `name_change` | `proposed`, `approved`, `rejected`, `withdrawn`, `discarded` |
 | `issuance` | `started`, `succeeded`, `failed` |
 | `api_key` | `created`, `revoked`, `used` |
