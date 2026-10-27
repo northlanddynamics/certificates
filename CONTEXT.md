@@ -84,6 +84,10 @@ _Avoid_: delete, remove, decommission
 Telling the Certificate Authority to distrust one Certificate, with an RFC 5280 reason, which an Owner of its Managed Certificate or an Organization Administrator may do, even once it is archived; a Device Certificate is also revoked when its Enrollment Validator's revocation feed asks, and as `superseded` once the replacement a RenewalReq signed with it asked for is issued. The platform records it only once the CA has revoked the Certificate; a CA may confirm later, and until it does the Certificate shows its revocation requested and cannot be revoked again, while a refusal, an unreachable CA or no answer by the deadline leaves it unrevoked, with the cause. Nothing else revokes: not Archive, not a name change, not removing a user. It issues no replacement. A Private CA revokes by putting the Certificate on its Issuing CA's CRL in the same change, and offers two reasons an ACME CA does not take: `affiliationChanged` and `privilegeWithdrawn`.
 _Avoid_: cancel, kill, invalidate
 
+**Revocation Request**:
+A Revocation asked of a CA that confirms later, such as one reached through an Agent: until the CA answers, nothing is revoked and the Certificate cannot be revoked again; once it confirms, the Revocation is recorded as asked for, and when it refuses, cannot be reached or does not answer by the deadline the request fails with the cause, which shows until it is asked again. A confirmation that comes after the deadline is still recorded.
+_Avoid_: pending revocation, revocation job
+
 **Renewal**:
 Issuing a new Certificate for a Managed Certificate that already has one, under names that are already approved; whether an Issuance is a Renewal follows from the Managed Certificate having a Certificate, not from who asked. None happens, automatic or asked for, while its Certificate Profile is disabled.
 _Avoid_: reissue, re-key (unless the key is specifically being replaced)

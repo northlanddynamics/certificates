@@ -176,7 +176,7 @@ describe("a Certificate whose CA confirms its revocation later", () => {
     expect((await certificateOf(mcId, certificateId)).revocationRequest).toMatchObject({ status: "failed", failure: { code: "unreachable", message: "no Agent could reach the CA" } });
   });
 
-  test("not confirmed by its deadline, it fails as timed out", async () => {
+  test("not confirmed by its deadline, it fails as timed out, and is still revoked if the CA confirms late", async () => {
     const { mcId, certificateId } = await issued();
     h.heldIssuer.holdingRevocations = true;
     await revoke(mcId, certificateId);
@@ -188,8 +188,11 @@ describe("a Certificate whose CA confirms its revocation later", () => {
 
     expect((await certificateOf(mcId, certificateId)).revocationRequest).toMatchObject({ status: "failed", failure: { code: "timed_out" } });
     expect(await h.timeOutRevocations()).toBe(0);
-    expect(await h.heldIssuer.confirmRevocation(heldRequest())).toBe(false);
     expect((await certificateOf(mcId, certificateId)).revocation).toBeNull();
+
+    h.setNow(days(8));
+    expect(await h.heldIssuer.confirmRevocation(heldRequest())).toBe(true);
+    expect(await certificateOf(mcId, certificateId)).toMatchObject({ revocation: { reason: "keyCompromise", revokedAt: days(8).toISOString() }, revocationRequest: null });
   });
 
   test("a CA that revokes at once is never requested", async () => {

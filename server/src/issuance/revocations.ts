@@ -11,6 +11,7 @@ import { CertificateAuthorityError } from "./acme/certificate-authority";
 import type { Db, Tx } from "../platform/db/client";
 import { certificate, certificateRevocation, deviceCertificate, enrollmentProfile, revocationRequest } from "../platform/db/schema";
 import { certificateIssuerOf, issuerDetail, type CertificateIssuer, type Issuers } from "./issuer";
+import { lockManagedCertificate } from "../certificates/name-change";
 import type { RevocationReason } from "../pki/revocation-reasons";
 import type { Actor, Change, UnitOfWork } from "../platform/unit-of-work";
 
@@ -53,8 +54,8 @@ export interface Revocations {
   revoke(tx: Tx, change: Change, organizationId: string, issuedBy: CertificateIssuer, targets: { target: RevocationTarget; reason: RevocationReason }[]): Promise<("revoked" | "requested")[]>;
   /**
    * What the CA answered, later, for a pending Revocation Request: the Revocation is recorded (and the request gone), or
-   * the request fails with the cause. False when it no longer waits for an answer: it was answered, timed out, or
-   * asked again since.
+   * the request fails with the cause. A confirmation after it timed out is still recorded, since the CA has revoked it.
+   * False when it no longer waits for that answer: it was answered, refused, or asked again since.
    */
   report(requestId: string, result: RevocationReport): Promise<boolean>;
   /** One pass at the clock's time: fails the pending Revocation Requests whose deadline has passed. Returns how many. */
@@ -67,6 +68,12 @@ export async function revocationRequestsOf(db: Db | Tx, certificateIds: string[]
   const rows = await db.select().from(revocationRequest).where(inArray(revocationRequest.certificateId, certificateIds));
   return new Map(rows.map((row) => [row.certificateId!, row]));
 }
+
+/**
+ * Whether the CA's confirmation of a Revocation Request is still recorded: while it is pending, and once it timed out,
+ * since the CA has then revoked the Certificate however late. Not once the CA refused, or it was asked again since.
+ */
+const confirmable = (row: RevocationRequestRow) => row.status === "pending" || row.failureCode === "timed_out";
 
 /** Whether a Revocation Request waits for its CA, so that what it is of cannot be revoked again meanwhile. */
 export const awaiting = (row: RevocationRequestRow | null | undefined) => row?.status === "pending";
@@ -155,13 +162,28 @@ export function createRevocations({ db, unitOfWork, issuers, clock }: { db: Db; 
     return { kind: "device_certificate", deviceCertificate: device, requestedBy: actorOf(row), ...(row.requestedBy && { by: row.requestedBy }) };
   }
 
+  /**
+   * Locks what a Revocation Request is of as every revocation of it does (its Managed Certificate, or the Device
+   * Certificate), then the request itself, so that it takes turns with them; the request as it is now, if it still is.
+   */
+  async function lockRequest(tx: Tx, seen: RevocationRequestRow) {
+    if (seen.certificateId) {
+      const [issued] = await tx.select({ managedCertificateId: certificate.managedCertificateId }).from(certificate).where(eq(certificate.id, seen.certificateId));
+      if (issued) await lockManagedCertificate(tx, seen.organizationId, issued.managedCertificateId);
+    } else {
+      await tx.select({ id: deviceCertificate.id }).from(deviceCertificate).where(eq(deviceCertificate.id, seen.deviceCertificateId!)).for("update");
+    }
+    const [row] = await tx.select().from(revocationRequest).where(eq(revocationRequest.id, seen.id)).for("update");
+    return row;
+  }
+
   /** Fails the Revocation Request if it is still pending, on a change attributed to whoever asked. Whether it did. */
   async function fail(requestId: string, failure: { code: RevocationFailureCode; message: string }) {
     const [seen] = await db.select().from(revocationRequest).where(eq(revocationRequest.id, requestId));
     if (!seen || seen.status !== "pending") return false;
     return unitOfWork.run(actorOf(seen), async (tx, change) => {
       // Locked, so that a result reported twice at once, or with a timeout, is applied once.
-      const [row] = await tx.select().from(revocationRequest).where(eq(revocationRequest.id, requestId)).for("update");
+      const row = await lockRequest(tx, seen);
       if (!row || row.status !== "pending") return false;
       await tx
         .update(revocationRequest)
@@ -221,7 +243,7 @@ export function createRevocations({ db, unitOfWork, issuers, clock }: { db: Db; 
           requestedAt: change.occurredAt,
         });
         const about = aboutOf(one.target);
-        await change.audit({ organizationId, action: actionOf(one.target, "requested"), target: about.target, detail: { ...about.detail, reason: one.reason, ...issuerDetail(issuedBy) } });
+        await change.audit({ organizationId, action: actionOf(one.target, "requested"), target: about.target, detail: { ...about.detail, reason: one.reason } });
         outcomes.push("requested");
       }
       return outcomes;
@@ -230,10 +252,10 @@ export function createRevocations({ db, unitOfWork, issuers, clock }: { db: Db; 
     async report(requestId, result) {
       if (result !== "revoked") return fail(requestId, failureOf(result.failed));
       const [seen] = await db.select().from(revocationRequest).where(eq(revocationRequest.id, requestId));
-      if (!seen || seen.status !== "pending") return false;
+      if (!seen || !confirmable(seen)) return false;
       return unitOfWork.run(actorOf(seen), async (tx, change) => {
-        const [row] = await tx.select().from(revocationRequest).where(eq(revocationRequest.id, requestId)).for("update");
-        if (!row || row.status !== "pending") return false;
+        const row = await lockRequest(tx, seen);
+        if (!row || !confirmable(row)) return false;
         const target = await targetOf(tx, row);
         if (!target) return false;
         await record(tx, change, row.organizationId, target, row.reason);
