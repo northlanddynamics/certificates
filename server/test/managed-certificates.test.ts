@@ -137,6 +137,7 @@ describe("issuing the first Certificate", () => {
       issuedAt: expect.any(String),
       hasCsr: true,
       revocation: null,
+      revocationRequest: null,
     });
     expect(leaf.subjectAltName).toBe(`DNS:${name}`);
     // It is for the key the Owner holds: the one in the CSR.

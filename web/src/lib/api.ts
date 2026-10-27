@@ -144,6 +144,18 @@ export interface Revocation {
   revokedAt: string;
   revokedBy: { id: string; email: string };
 }
+/**
+ * That a CA which confirms later (one reached through an Agent) was asked to revoke a Certificate: `pending` until it
+ * confirms, when it becomes a Revocation, or `failed` with the cause, until it is asked again.
+ */
+export interface RevocationRequest {
+  reason: string;
+  status: "pending" | "failed";
+  requestedAt: string;
+  requestedBy: { id: string; email: string } | null;
+  deadline: string;
+  failure: { code: string; message: string } | null;
+}
 /** Each reason a Certificate may be revoked for (RFC 5280), by the name the server takes, in words, in the order offered. */
 const REVOCATION_REASON_LABELS: Record<RevocationReason, string> = {
   keyCompromise: "Key compromise",
@@ -264,6 +276,7 @@ export interface Certificate {
   /** Whether the CSR it was issued from is kept and can be downloaded. */
   hasCsr: boolean;
   revocation: Revocation | null;
+  revocationRequest: RevocationRequest | null;
 }
 /** One certificate of a Certificate's chain, as it says of itself. */
 export interface ChainCertificate {
@@ -402,6 +415,7 @@ export interface DeviceCertificate {
   notAfter: string;
   status: DeviceCertificateStatus;
   revocation: { reason: string; revokedAt: string } | null;
+  revocationRequest: RevocationRequest | null;
   createdAt: string;
 }
 export const DEVICE_CERTIFICATE_STATUSES = ["active", "expired", "revoked"] as const;

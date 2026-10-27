@@ -8,12 +8,14 @@ import { and, desc, eq, gt, isNotNull, isNull, lte, or, sql, type SQL } from "dr
 import type { Authorizer } from "../tenancy/authorization";
 import { CertificateAuthorityError } from "../issuance/acme/certificate-authority";
 import type { Db } from "../platform/db/client";
-import { deviceCertificate, enrollmentProfile, issuingCa } from "../platform/db/schema";
+import { deviceCertificate, enrollmentProfile, issuingCa, revocationRequest } from "../platform/db/schema";
 import type { DeviceCertificateRevocations } from "./device-certificate-revocation";
 import { DEVICE_KEY_TYPES, WEAK_DEVICE_KEY_TYPE } from "./enrollment-profile-kinds";
 import { HttpError, OrgParam, PageQuery, errors, json, pageOf } from "../platform/http";
 import { REVOCATION_REASONS_OF } from "../pki/revocation-reasons";
 import type { Actor, UnitOfWork } from "../platform/unit-of-work";
+import { RevocationRequest } from "../issuance/revocation";
+import { toRevocationRequest, type RevocationRequestRow } from "../issuance/revocations";
 
 const DEVICE_CERTIFICATE_STATUSES = ["active", "expired", "revoked"] as const;
 type DeviceCertificateStatus = (typeof DEVICE_CERTIFICATE_STATUSES)[number];
@@ -37,6 +39,9 @@ export const DeviceCertificate = z.object({
   notAfter: z.string(),
   status: z.enum(DEVICE_CERTIFICATE_STATUSES).openapi({ description: "`revoked` once revoked, whenever it ends; otherwise `expired` once it has ended, and `active` until then." }),
   revocation: z.object({ reason: DeviceRevocationReason, revokedAt: z.string() }).nullable(),
+  revocationRequest: RevocationRequest.nullable().openapi({
+    description: "Set while its CA has been asked to revoke it and has yet to confirm (a CA reached through an Agent), and kept once that failed, until it is asked again; gone once it is revoked.",
+  }),
   createdAt: z.string(),
 });
 
@@ -77,10 +82,10 @@ function inStatus(status: DeviceCertificateStatus, now: Date): SQL {
   return and(isNull(deviceCertificate.revokedAt), status === "active" ? gt(deviceCertificate.notAfter, now) : lte(deviceCertificate.notAfter, now))!;
 }
 
-type Row = { certificate: typeof deviceCertificate.$inferSelect; issuer: string };
+type Row = { certificate: typeof deviceCertificate.$inferSelect; issuer: string; revocationRequest: RevocationRequestRow | null };
 
 /** The Device Certificate as the API shows it; its status as `inStatus` finds it. */
-function toDeviceCertificate({ certificate: row, issuer }: Row, now: Date): z.infer<typeof DeviceCertificate> {
+function toDeviceCertificate({ certificate: row, issuer, revocationRequest: request }: Row, now: Date): z.infer<typeof DeviceCertificate> {
   return {
     id: row.id,
     enrollmentProfileId: row.enrollmentProfileId,
@@ -95,6 +100,7 @@ function toDeviceCertificate({ certificate: row, issuer }: Row, now: Date): z.in
     notAfter: row.notAfter.toISOString(),
     status: row.revokedAt ? "revoked" : row.notAfter <= now ? "expired" : "active",
     revocation: row.revokedAt ? { reason: row.revocationReason!, revokedAt: row.revokedAt.toISOString() } : null,
+    revocationRequest: request ? toRevocationRequest(request) : null,
     createdAt: row.createdAt.toISOString(),
   };
 }
@@ -121,7 +127,7 @@ export function registerDeviceCertificates(ctx: {
     if (!found) throw new HttpError(404, "Enrollment Profile not found");
   }
 
-  const selection = { certificate: deviceCertificate, issuer: issuingCa.subject };
+  const selection = { certificate: deviceCertificate, issuer: issuingCa.subject, revocationRequest };
   const ofProfile = (orgId: string, id: string) => and(eq(deviceCertificate.organizationId, orgId), eq(deviceCertificate.enrollmentProfileId, id));
 
   /** The profile's Device Certificate; a 404 when it has none such. */
@@ -132,6 +138,7 @@ export function registerDeviceCertificates(ctx: {
           .select(selection)
           .from(deviceCertificate)
           .innerJoin(issuingCa, eq(issuingCa.id, deviceCertificate.issuingCaId))
+          .leftJoin(revocationRequest, eq(revocationRequest.deviceCertificateId, deviceCertificate.id))
           .where(and(ofProfile(orgId, id), eq(deviceCertificate.id, certificateId)))
       : [];
     if (!row) throw new HttpError(404, "Device Certificate not found");
@@ -163,6 +170,7 @@ export function registerDeviceCertificates(ctx: {
           .select(selection)
           .from(deviceCertificate)
           .innerJoin(issuingCa, eq(issuingCa.id, deviceCertificate.issuingCaId))
+          .leftJoin(revocationRequest, eq(revocationRequest.deviceCertificateId, deviceCertificate.id))
           .where(where)
           .orderBy(desc(deviceCertificate.createdAt), desc(deviceCertificate.id))
           .limit(query.pageSize)
@@ -215,12 +223,17 @@ export function registerDeviceCertificates(ctx: {
       summary: "Revoke a Device Certificate with an RFC 5280 reason: it is on its Issuing CA's CRL the moment this succeeds",
       description:
         "The CRL is reissued in the same change, so the Revocation is recorded, audited and published together, or not at all (502 when the KMS did not answer to sign the CRL, 422 when it refused; ask again). " +
-        "The reasons a Private CA offers are taken; a revoked Device Certificate cannot be revoked again (409). Only Organization Administrators may.",
+        "A CA that confirms later (reached through an Agent) is answered 202: the Device Certificate shows its `revocationRequest` as `pending` until the CA confirms, when the Revocation is recorded and audited, or until it fails with the cause. " +
+        "The reasons a Private CA offers are taken; a revoked Device Certificate, or one whose revocation is pending, cannot be revoked again (409). Only Organization Administrators may.",
       request: {
         params: CertificateParams,
         body: { content: { "application/json": { schema: z.object({ reason: DeviceRevocationReason }) } } },
       },
-      responses: { 200: json(DeviceCertificate, "Revoked"), ...errors(400, 401, 403, 404, 409, 422, 502) },
+      responses: {
+        200: json(DeviceCertificate, "Revoked"),
+        202: json(DeviceCertificate, "Requested: its CA confirms it later, and until then it shows its `revocationRequest`"),
+        ...errors(400, 401, 403, 404, 409, 422, 502),
+      },
     }),
     async (c) => {
       const { orgId, id, certificateId } = c.req.valid("param");
@@ -229,15 +242,16 @@ export function registerDeviceCertificates(ctx: {
       await authorize(actor, orgId, { deviceCertificate: ["revoke"] });
       const { certificate: found } = await findCertificate(orgId, id, certificateId);
 
-      await unitOfWork.run(actor, async (tx, change) => {
-        const [revoked] = await revocations.revoke(tx, change, orgId, [{ id: found.id, reason }]).catch((err: unknown) => {
-          // As when an Issuing CA is revoked: a KMS that does not answer is 502, one that says no 422.
+      const outcome = await unitOfWork.run(actor, async (tx, change) => {
+        const [revoked] = await revocations.revoke(tx, change, orgId, [{ id: found.id, reason }], actor).catch((err: unknown) => {
+          // As when an Issuing CA is revoked: a CA (or the KMS) that does not answer is 502, one that says no 422.
           if (err instanceof CertificateAuthorityError) throw new HttpError(err.kind === "unreachable" ? 502 : 422, err.message);
           throw err;
         });
-        if (!revoked) throw new HttpError(409, "the Device Certificate is already revoked");
+        if (!revoked) throw new HttpError(409, "the Device Certificate is already revoked, or its revocation is requested and waits for its CA to confirm it");
+        return revoked;
       });
-      return c.json(toDeviceCertificate(await findCertificate(orgId, id, certificateId), clock()), 200);
+      return c.json(toDeviceCertificate(await findCertificate(orgId, id, certificateId), clock()), outcome === "requested" ? 202 : 200);
     },
   );
 }

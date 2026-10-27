@@ -19,7 +19,8 @@ import { isOwner, ownedByUser, ownersOf } from "./owners";
 import { roleCan, type Permissions } from "../tenancy/permissions";
 import { MAX_RENEWAL_DAYS, RENEWAL_MODES, failuresOf, nextAttemptAt, renewalDue } from "../issuance/renewal";
 import { informationOf } from "../issuance/renewal-information";
-import { Revocation, revocationsOf, toRevocation, type RevocationRow } from "../issuance/revocation";
+import { Revocation, RevocationRequest, revocationsOf, toRevocation, type RevocationRow } from "../issuance/revocation";
+import { revocationRequestsOf, toRevocationRequest, type RevocationRequestRow } from "../issuance/revocations";
 import type { Actor } from "../platform/unit-of-work";
 
 export const ManagedCertificateParams = OrgParam.extend({ id: z.string().openapi({ param: { name: "id", in: "path" } }) });
@@ -59,6 +60,9 @@ export const Certificate = z.object({
   issuedAt: z.string(),
   hasCsr: z.boolean().openapi({ description: "Whether the CSR it was issued from is kept, and so can be downloaded; not for one issued before the platform kept it." }),
   revocation: Revocation.nullable().openapi({ description: "Set once the CA has been told to revoke it, by whom and why." }),
+  revocationRequest: RevocationRequest.nullable().openapi({
+    description: "Set while its CA has been asked to revoke it and has yet to confirm (a CA reached through an Agent), and kept once that failed, until it is asked again; gone once it is revoked.",
+  }),
 });
 
 const ChainCertificate = z.object({
@@ -185,7 +189,7 @@ export const toIssuance = (row: typeof issuance.$inferSelect) => ({
   awaitingKey: row.awaitingKey,
   pending: row.pendingHandle && row.pendingUntil ? { handle: row.pendingHandle, deadline: row.pendingUntil.toISOString() } : null,
 });
-export const toCertificate = (row: typeof certificate.$inferSelect, revocation: RevocationRow | undefined) => ({
+export const toCertificate = (row: typeof certificate.$inferSelect, revocation: RevocationRow | undefined, request: RevocationRequestRow | undefined) => ({
   id: row.id,
   fingerprint: row.fingerprint,
   serial: row.serial,
@@ -199,6 +203,7 @@ export const toCertificate = (row: typeof certificate.$inferSelect, revocation: 
   issuedAt: row.issuedAt.toISOString(),
   hasCsr: row.csr !== null,
   revocation: revocation ? toRevocation(revocation) : null,
+  revocationRequest: request ? toRevocationRequest(request) : null,
 });
 
 export function createManagedCertificateReader({ db, authorize, clock, agentOfflineAfterSeconds }: { db: Db; authorize: Authorizer["authorize"]; clock: () => Date; agentOfflineAfterSeconds: number }) {
@@ -298,6 +303,7 @@ export function createManagedCertificateReader({ db, authorize, clock, agentOffl
     const nameChanges = await pendingNameChanges(db, ids);
     const information = await informationOf(db, currentCertificates.map((c) => c.id));
     const revocations = await revocationsOf(db, currentCertificates.map((c) => c.id));
+    const revocationRequests = await revocationRequestsOf(db, currentCertificates.map((c) => c.id));
     const holders = new Map(
       (
         await db
@@ -363,7 +369,7 @@ export function createManagedCertificateReader({ db, authorize, clock, agentOffl
           blocked: row.renewalBlockedAt && policy.mode === "automatic" && !row.archivedAt && profile && !profile.enabled ? { since: row.renewalBlockedAt.toISOString(), profile: { id: profile.id, name: profile.name } } : null,
         },
         issuance: latest ? toIssuance(latest) : null,
-        currentCertificate: current ? toCertificate(current, revocations.get(current.id)) : null,
+        currentCertificate: current ? toCertificate(current, revocations.get(current.id), revocationRequests.get(current.id)) : null,
         agent: holder ? { id: holder.id, hostName: holder.hostName, status: agentStatus(holder, now, agentOfflineAfterSeconds) } : null,
       };
     });

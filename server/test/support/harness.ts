@@ -124,10 +124,12 @@ export interface Harness {
   scepRateLimit: Pick<ScepConfig, "perAddress" | "perProfile">;
   /** What the platform does when it starts: ends the Issuances an earlier run left running. */
   failInterruptedIssuances(): Promise<void>;
-  /** A test-only issuer kind in front of the platform's own, which answers "pending" while `holding` and reports later. */
+  /** A test-only issuer kind in front of the platform's own, which answers "pending" while `holding` (or `holdingRevocations`) and reports later. */
   heldIssuer: HeldIssuer;
   /** One pass of timing out pending Issuances at the harness's clock: ends those past their deadline and returns how many. */
   timeOutIssuances(): Promise<number>;
+  /** One pass of timing out pending Revocation Requests at the harness's clock: fails those past their deadline and returns how many. */
+  timeOutRevocations(): Promise<number>;
   /** The roots the CA's chains end in, as an export that includes the root finds them: Pebble's, unless a test sets `current` to something else. */
   caRoots: { current: () => Promise<string[]> };
   /** The private keys of the ACME accounts the platform created at the CA, as PEM; for tests to check they never leak. */
@@ -287,8 +289,8 @@ export async function createHarness(overrides: Partial<AppDeps> = {}, { database
     enrollmentValidators: { test_allow: allowing(true), test_names: allowing(false), test_renewal: allowing(true, true), test_double: validatorDouble.kind(), intune: createIntuneKind({ fetch: intune.fetch }), shared_challenge: sharedChallenge },
     ...overrides,
   };
-  const { app, auth, db, unitOfWork, issuances, renewals, notifications, auditForwarding, crls, enrollmentValidators, deviceCertificatePruning, sharedChallenges, deviceCertificateRevocations, deviceEnrollment, scep: scepRoutes } = createApp(deps);
-  heldIssuer.reportTo(issuances);
+  const { app, auth, db, unitOfWork, issuances, revocations: certificateRevocations, renewals, notifications, auditForwarding, crls, enrollmentValidators, deviceCertificatePruning, sharedChallenges, deviceCertificateRevocations, deviceEnrollment, scep: scepRoutes } = createApp(deps);
+  heldIssuer.reportTo(issuances, certificateRevocations);
   if (migrate) await runMigrations(pool);
   const reset = async () => {
     await issuances.idle();
@@ -361,6 +363,7 @@ export async function createHarness(overrides: Partial<AppDeps> = {}, { database
     failInterruptedIssuances: () => issuances.failInterrupted(),
     heldIssuer,
     timeOutIssuances: () => issuances.timeOut(),
+    timeOutRevocations: () => certificateRevocations.timeOut(),
     caRoots,
     createdAccountKeys,
     pebbleDirectoryWithout: directoryProxy.without,
