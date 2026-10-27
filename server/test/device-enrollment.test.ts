@@ -668,6 +668,7 @@ describe("a profile's Device Certificates", () => {
       notAfter: new Date(START + 365 * DAY_MS).toISOString(),
       status: "active",
       revocation: null,
+      revocationRequest: null,
       createdAt: new Date(START).toISOString(),
     });
   });

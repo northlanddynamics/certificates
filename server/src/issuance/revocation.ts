@@ -14,6 +14,18 @@ export const Revocation = z.object({
   revokedBy: z.object({ id: z.string(), email: z.string() }),
 });
 
+export const RevocationRequest = z.object({
+  reason: RevocationReasonName,
+  status: z.enum(["pending", "failed"]).openapi({ description: "`pending` while the CA has yet to confirm it; `failed` once it refused, could not be reached or did not answer by the deadline." }),
+  requestedAt: z.string(),
+  requestedBy: z.object({ id: z.string(), email: z.string() }).nullable().openapi({ description: "Who asked; none when no person did." }),
+  deadline: z.string().openapi({ description: "When it fails as `timed_out` if the CA has not answered." }),
+  failure: z
+    .object({ code: z.enum(["rejected", "unreachable", "timed_out", "internal"]), message: z.string() })
+    .nullable()
+    .openapi({ description: "Why it failed: the CA said no (`rejected`), could not be reached (`unreachable`), did not answer in time (`timed_out`), or the platform failed (`internal`)." }),
+});
+
 export type RevocationRow = typeof certificateRevocation.$inferSelect;
 
 export const toRevocation = (row: RevocationRow) => ({

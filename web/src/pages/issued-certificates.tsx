@@ -13,13 +13,14 @@ import { acmeCaName, useAcmeCas } from "@/lib/acme-cas";
 import { caLabel, type StatusVariant } from "@/lib/managed-certificate";
 import { useCertificateFacts, useCertificates, useManagedCertificatePage } from "@/lib/use-managed-certificate";
 import { date } from "@/lib/utils";
-import { RevokeDialog, revokedLine } from "./revocation-controls";
+import { RevokeDialog, awaitsCa, requestedLine, revokedLine } from "./revocation-controls";
 
-type CertificateState = { label: "Current" | "Superseded" | "Expired" | "Revoked"; variant: StatusVariant };
+type CertificateState = { label: "Current" | "Superseded" | "Expired" | "Revoked" | "Revocation requested"; variant: StatusVariant };
 
 /** Where a Certificate stands: revoked or ended whatever else, otherwise the Managed Certificate's current one or superseded. */
 function stateOf(c: Certificate, isCurrent: boolean): CertificateState {
   if (c.revocation) return { label: "Revoked", variant: "destructive" };
+  if (awaitsCa(c)) return { label: "Revocation requested", variant: "warning" };
   // An old one that has ended is history; only the current one ending is at fault.
   if (Date.parse(c.notAfter) <= Date.now()) return { label: "Expired", variant: isCurrent ? "destructive" : "neutral" };
   return isCurrent ? { label: "Current", variant: "success" } : { label: "Superseded", variant: "neutral" };
@@ -164,6 +165,11 @@ function CertificateSheet({ org, m, certificateId, isCurrent, onClose }: { org: 
               {c.revocation && (
                 <Fact label="Revocation">
                   <span className="text-destructive">{revokedLine(c.revocation)}</span>
+                </Fact>
+              )}
+              {c.revocationRequest && (
+                <Fact label="Revocation">
+                  <span className={c.revocationRequest.status === "failed" ? "text-destructive" : undefined}>{requestedLine(c.revocationRequest)}</span>
                 </Fact>
               )}
               <Fact label="Subject names">

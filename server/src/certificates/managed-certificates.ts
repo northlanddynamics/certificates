@@ -29,6 +29,7 @@ import { OwnerRef, addOwner } from "./owners";
 import { carries, roleCan, type Permissions } from "../tenancy/permissions";
 import { IssuerField, issuerAsked, issuerRefusal, validityDaysField } from "../private-ca/private-ca";
 import { revocationsOf } from "../issuance/revocation";
+import { revocationRequestsOf } from "../issuance/revocations";
 import type { Actor, UnitOfWork } from "../platform/unit-of-work";
 
 const MAX_OWNERS = 50;
@@ -300,7 +301,8 @@ export function registerManagedCertificates(ctx: {
       const mc = await findReadable(await requireUser(c), orgId, id);
       const rows = await certificatesOf(orgId, mc.id);
       const revocations = await revocationsOf(db, rows.map((row) => row.id));
-      return c.json({ items: rows.map((row) => toCertificate(row, revocations.get(row.id))) }, 200);
+      const requests = await revocationRequestsOf(db, rows.map((row) => row.id));
+      return c.json({ items: rows.map((row) => toCertificate(row, revocations.get(row.id), requests.get(row.id))) }, 200);
     },
   );
 
@@ -322,7 +324,8 @@ export function registerManagedCertificates(ctx: {
       const row = (await certificatesOf(orgId, mc.id)).find((r) => r.id === certificateId);
       if (!row) throw new HttpError(404, "Certificate not found");
       const revocations = await revocationsOf(db, [row.id]);
-      return c.json({ ...toCertificate(row, revocations.get(row.id)), ...certificateFacts(row.chainPem), acmeAccount: row.acmeAccountId && row.acmeCaId ? { id: row.acmeAccountId, acmeCaId: row.acmeCaId } : null }, 200);
+      const requests = await revocationRequestsOf(db, [row.id]);
+      return c.json({ ...toCertificate(row, revocations.get(row.id), requests.get(row.id)), ...certificateFacts(row.chainPem), acmeAccount: row.acmeAccountId && row.acmeCaId ? { id: row.acmeAccountId, acmeCaId: row.acmeCaId } : null }, 200);
     },
   );
 }

@@ -7,7 +7,7 @@ import { Button } from "@/components/ui/button";
 import { Dialog, DialogContent, DialogDescription, DialogFooter, DialogHeader, DialogTitle, DialogTrigger } from "@/components/ui/dialog";
 import { Field, FieldLabel } from "@/components/ui/field";
 import { Select, SelectContent, SelectItem, SelectTrigger, SelectValue } from "@/components/ui/select";
-import { api, can, revocationReasonLabel, revocationReasonsFor, type Certificate, type ManagedCertificate, type Me, type Revocation } from "@/lib/api";
+import { api, can, revocationReasonLabel, revocationReasonsFor, type Certificate, type ManagedCertificate, type Me, type Revocation, type RevocationRequest } from "@/lib/api";
 import { isOwner } from "@/lib/managed-certificate";
 
 const when = (iso: string) => new Date(iso).toLocaleString();
@@ -53,15 +53,15 @@ export function RevokeDialog({ org, m, certificate, userId, onChanged }: { org: 
   const [reason, setReason] = useState("");
   const revoke = useMutation({
     mutationFn: () => api.revokeCertificate(org.id, m.id, certificate.id, reason),
-    onSuccess: () => {
+    onSuccess: (revoked) => {
       setOpen(false);
-      toast.success(`The Certificate with serial ${certificate.serial} was revoked`);
+      toast.success(`The Certificate with serial ${certificate.serial} was ${revoked.revocation ? "revoked" : "asked to be revoked; its CA confirms it later"}`);
       onChanged();
     },
   });
   const selectId = `revocation-reason-${certificate.id}`;
 
-  if (certificate.revocation || !(can(org, "managedCertificate", "revoke") || owns)) return null;
+  if (certificate.revocation || awaitsCa(certificate) || !(can(org, "managedCertificate", "revoke") || owns)) return null;
   return (
     <Dialog
       open={open}
@@ -114,6 +114,15 @@ export function RevokeDialog({ org, m, certificate, userId, onChanged }: { org: 
     </Dialog>
   );
 }
+
+/** Whether a Certificate's revocation was asked of a CA that has yet to confirm it, so it cannot be asked again meanwhile. */
+export const awaitsCa = (certificate: { revocationRequest: RevocationRequest | null }) => certificate.revocationRequest?.status === "pending";
+
+/** What a revocation asked of a CA that confirms later comes to, in words: waiting for it, or why it failed. */
+export const requestedLine = (request: RevocationRequest) =>
+  request.status === "pending"
+    ? `Revocation requested ${when(request.requestedAt)}${request.requestedBy ? ` by ${request.requestedBy.email}` : ""} (${revocationReasonLabel(request.reason)}); waiting for the CA to confirm it`
+    : `Revocation failed${request.failure ? `: ${request.failure.message}` : ""}. It is not revoked; revoke it again to retry`;
 
 /** What a Certificate's revocation comes to, in words, for the line that says how the Managed Certificate stands. */
 export const revokedLine = (revocation: Revocation) =>

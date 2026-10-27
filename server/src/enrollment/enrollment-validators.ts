@@ -223,7 +223,8 @@ export function createEnrollmentValidatorRuns(deps: { db: Db; unitOfWork: UnitOf
       const ofRequest = revoked.slice(next, next + ids.length);
       next += ids.length;
       if (ids.length === 0) return { ref, outcome: "not_found" };
-      return { ref, outcome: ofRequest.includes(true) ? "revoked" : "already_revoked" };
+      // One whose CA confirms later counts as revoked once asked for: the feed is answered on this change.
+      return { ref, outcome: ofRequest.some((one) => one !== false) ? "revoked" : "already_revoked" };
     });
     await queue(tx, change, profiles[0]!, "revocations", { source: feed.source, outcomes });
   }

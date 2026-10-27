@@ -54,6 +54,7 @@ import { registerOwnerRoutes } from "./certificates/owner-routes";
 import { createRenewalScheduler } from "./issuance/renewal-scheduler";
 import { registerRenewalRoutes } from "./issuance/renewal-routes";
 import { registerRevocationRoutes } from "./issuance/revocation-routes";
+import { createRevocations } from "./issuance/revocations";
 import type { Mailer } from "./platform/mailer";
 import type { MemberRemovalHook } from "./tenancy/member-removal";
 import { removeTeamFromOwners, removeUserFromOwners } from "./certificates/owners";
@@ -112,7 +113,7 @@ export interface AppDeps {
   enrollmentValidators?: EnrollmentValidators;
   /** How the SCEP routes are rate limited and tell devices apart: see `ScepConfig`. */
   scep?: Partial<ScepConfig>;
-  /** Managed Certificates' issuers (issuer.ts) as the platform reaches them: its own, unless a test wraps them in a test-only kind. */
+  /** Certificates' issuers (issuer.ts) as the platform reaches them: its own, unless a test wraps them in a test-only kind. */
   issuers?: (platform: Issuers) => Issuers;
 }
 
@@ -329,7 +330,10 @@ export function createApp(deps: AppDeps) {
   registerPkiRoutes({ app, db });
   const privateCas = createPrivateCas({ kms: deps.kms, clock, crls, pkiBaseURL });
   const validatorKinds = deps.enrollmentValidators ?? ENROLLMENT_VALIDATOR_KINDS;
-  const revocations = createDeviceCertificateRevocations({ privateCas });
+  const platformIssuers = createIssuers({ acme: deps.certificateAuthority, acmeCas, secrets, privateCas });
+  const issuers = deps.issuers?.(platformIssuers) ?? platformIssuers;
+  const certificateRevocations = createRevocations({ db, unitOfWork, issuers, clock });
+  const revocations = createDeviceCertificateRevocations({ revocations: certificateRevocations });
   const enrollmentValidators = createEnrollmentValidatorRuns({ db, unitOfWork, secrets, revocations, kinds: validatorKinds, clock });
   const sharedChallenges = createSharedChallenges({ db, unitOfWork, clock });
   registerEnrollmentProfiles({ app, db, requireUser, authorize, unitOfWork, secrets, privateCas, kinds: validatorKinds, validators: enrollmentValidators, sharedChallenges, baseURL: deps.baseURL, clock });
@@ -337,8 +341,6 @@ export function createApp(deps: AppDeps) {
   const deviceCertificatePruning = createDeviceCertificatePruning({ db, unitOfWork, clock });
   const deviceEnrollment = createDeviceEnrollment({ db, unitOfWork, privateCas, revocations, sharedChallenges, kinds: validatorKinds, validators: enrollmentValidators, transactions: createScepTransactions({ db, clock }), clock });
   const scep = registerScep({ app, db, secrets, enrollment: deviceEnrollment, kinds: validatorKinds, clock, config: deps.scep });
-  const platformIssuers = createIssuers({ acme: deps.certificateAuthority, acmeCas, secrets, privateCas });
-  const issuers = deps.issuers?.(platformIssuers) ?? platformIssuers;
   const issuances = createIssuances({ db, unitOfWork, issuers, dcv, clock });
   const notifications = createNotifications({
     db,
@@ -382,7 +384,7 @@ export function createApp(deps: AppDeps) {
   registerArchiveRoutes({ app, requireUser, authorize, unitOfWork, issuances, reader });
   registerIssuerRoutes({ app, requireUser, authorize, unitOfWork, reader });
   registerProfileDetachRoutes({ app, requireUser, authorize, unitOfWork, reader });
-  registerRevocationRoutes({ app, db, requireUser, unitOfWork, reader, issuers });
+  registerRevocationRoutes({ app, db, requireUser, unitOfWork, reader, revocations: certificateRevocations });
   registerHistory({ app, db, requireUser, reader });
   registerDeploymentScripts({ app, db, requireUser, authorize, unitOfWork });
   registerDeployments({ app, db, requireUser, authorize, unitOfWork, workItems, issuances, notifications, acmeCas });
@@ -407,5 +409,5 @@ export function createApp(deps: AppDeps) {
     }),
   );
 
-  return { app, auth, db, unitOfWork, issuances, renewals, notifications, auditForwarding, crls, enrollmentValidators, deviceCertificatePruning, sharedChallenges, deviceCertificateRevocations: revocations, deviceEnrollment, scep };
+  return { app, auth, db, unitOfWork, issuances, renewals, notifications, auditForwarding, crls, enrollmentValidators, deviceCertificatePruning, sharedChallenges, deviceCertificateRevocations: revocations, revocations: certificateRevocations, deviceEnrollment, scep };
 }

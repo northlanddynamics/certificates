@@ -13,7 +13,7 @@ const localKmsKey = process.env.LOCAL_KMS_KEY;
 if (!databaseUrl || !secret || !localKmsKey) throw new Error("DATABASE_URL, AUTH_SECRET and LOCAL_KMS_KEY are required");
 
 const pool = new Pool({ connectionString: databaseUrl });
-const { app, auth, db, issuances, renewals, notifications, auditForwarding, crls, enrollmentValidators, deviceCertificatePruning, sharedChallenges } = createApp({
+const { app, auth, db, issuances, revocations, renewals, notifications, auditForwarding, crls, enrollmentValidators, deviceCertificatePruning, sharedChallenges } = createApp({
   pool,
   mailer: new ConsoleMailer(),
   clock: () => new Date(),
@@ -48,6 +48,13 @@ const ISSUANCE_TIMEOUT_PASS_MS = 60_000;
 (async function timeOutIssuances() {
   await issuances.timeOut().catch((err) => console.error("issuance timeout pass failed", err));
   setTimeout(timeOutIssuances, ISSUANCE_TIMEOUT_PASS_MS);
+})();
+
+// Revocations whose CA has not confirmed them by their deadline are failed as timed out once a minute; each pass waits for the one before it.
+const REVOCATION_TIMEOUT_PASS_MS = 60_000;
+(async function timeOutRevocations() {
+  await revocations.timeOut().catch((err) => console.error("revocation timeout pass failed", err));
+  setTimeout(timeOutRevocations, REVOCATION_TIMEOUT_PASS_MS);
 })();
 
 // Notices are sent, and silent Agents and Certificates nearing their end noticed, once a minute; each pass waits for the one before it.

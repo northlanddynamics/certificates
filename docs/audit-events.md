@@ -55,14 +55,14 @@ Each resource's verbs, as of this writing. New ones may be added within version 
 | `validation_zone` | `created`, `deleted` |
 | `dcv_rule` | `created`, `changed`, `deleted` |
 | `managed_certificate` | `created`, `proposed`, `approved`, `rejected`, `owner_added`, `owner_removed`, `subscriber_added`, `subscriber_removed`, `renewal_policy_changed`, `csr_uploaded`, `names_changed`, `archived`, `issuer_changed`, `profile_detached` |
-| `certificate` | `revoked` |
+| `certificate` | `revoked`, `revocation_requested`, `revocation_failed` |
 | `certificate_profile` | `created`, `updated`, `disabled`, `enabled` |
 | `certificate_profile_settings` | `changed` |
 | `private_ca` | `created`, `issuing_ca_added`, `csr_signed`, `updated`, `retired`, `revoked`, `crl_published` |
 | `enrollment_profile` | `created`, `updated`, `disabled`, `ra_rotated`, `shared_challenge_rotated`, `shared_challenge_retired` |
 | `enrollment_validator` | `tested` |
 | `enrollment` | `refused` |
-| `device_certificate` | `issued`, `revoked`, `pruned` |
+| `device_certificate` | `issued`, `revoked`, `revocation_requested`, `revocation_failed`, `pruned` |
 | `name_change` | `proposed`, `approved`, `rejected`, `withdrawn`, `discarded` |
 | `issuance` | `started`, `succeeded`, `failed` |
 | `api_key` | `created`, `revoked`, `used` |
@@ -139,6 +139,8 @@ A Managed Certificate requested through a Certificate Profile has `certificatePr
 `enrollment.refused` targets the Enrollment Profile (`enrollment_profile`, its id) under which a device's request was refused, with no actor. Its `detail` has the `enrollmentProfile` (`id`, `name`), the `reason` the device was given (such as a PKCSReq without the profile's Shared Challenge or with a wrong one, which never quotes what was sent, a key the profile does not allow, a name its name rules do not, or the Enrollment Validator's own refusal), the `validator` (`{ "kind": ... }`), and the SCEP `transactionId`. Nothing is issued.
 
 `enrollment_validator.tested` targets the Enrollment Profile whose Enrollment Validator an Organization Administrator tested. Its `detail` has the `validator` (`{ "kind": ... }`), `ok`, the `error` when it failed, and, when it worked, the `note` of what the test could not prove (an Intune test cannot prove the `scep_challenge_provider` permission).
+
+A CA that confirms a revocation later (one reached through an Agent) is asked first and confirms afterwards. Asking records `certificate.revocation_requested` (targeting the Managed Certificate, attributed to whoever asked) or `device_certificate.revocation_requested` (targeting the Device Certificate; with no actor and `detail.by` when no person asked, as for `device_certificate.revoked`), with the `serial` and `reason`, and for a Certificate its `certificateId` and `fingerprint`, for a Device Certificate its `enrollmentProfile` and `subject`. Nothing is revoked yet. Once the CA confirms, `certificate.revoked` or `device_certificate.revoked` is recorded then, attributed to whoever asked, as it would have been at once, even when the confirmation comes after the request timed out. When the CA refuses, cannot be reached or does not confirm by the deadline, `certificate.revocation_failed` or `device_certificate.revocation_failed` is recorded instead, attributed the same way (the platform made the change, but on that person's request) and with the same `detail`, and a `failure` with its `code` (`rejected`, `unreachable`, `timed_out` or `internal`) and `message`; the Certificate stays unrevoked.
 
 `device_certificate.pruned` targets the Organization (`organization`, its id), with no actor: one per pruning pass that deleted any of its Device Certificates, those that ended more than their Enrollment Profile's retention period ago. Its `detail` has the `count` deleted and the `enrollmentProfiles` they belonged to (`id`, `name`, `count`). The Audit Events of what was pruned are kept.
 

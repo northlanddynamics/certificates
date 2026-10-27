@@ -17,6 +17,7 @@ import { InputGroup, InputGroupAddon, InputGroupInput } from "@/components/ui/in
 import { Select, SelectContent, SelectItem, SelectTrigger, SelectValue } from "@/components/ui/select";
 import { PageHeader } from "@/components/page-header";
 import { DEVICE_KEY_TYPE_LABELS, WEAK_DEVICE_KEY_TYPE } from "../../../server/src/enrollment/enrollment-profile-kinds";
+import { awaitsCa, requestedLine } from "./revocation-controls";
 import { DEVICE_CERTIFICATE_STATUSES, api, can, revocationReasonLabel, revocationReasonsOf, type DeviceCertificate, type DeviceCertificateStatus, type EnrollmentProfile, type Me } from "@/lib/api";
 import { useOrg } from "@/lib/use-org";
 
@@ -214,6 +215,7 @@ function CertificateDetails({ org, certificate, profile }: { org: Me["organizati
     ["Valid", `${new Date(certificate.notBefore).toLocaleString()} – ${new Date(certificate.notAfter).toLocaleString()}`],
     ["Enrolled", new Date(certificate.createdAt).toLocaleString()],
     ...(certificate.revocation ? ([["Revoked", `${new Date(certificate.revocation.revokedAt).toLocaleString()}: ${revocationReasonLabel(certificate.revocation.reason)}`]] as [string, string][]) : []),
+    ...(certificate.revocationRequest ? ([["Revocation", requestedLine(certificate.revocationRequest)]] as [string, string][]) : []),
   ];
   return (
     <div className="flex flex-col gap-4">
@@ -245,15 +247,15 @@ function RevokeDialog({ org, certificate }: { org: Me["organizations"][number]; 
   const [reason, setReason] = useState("");
   const revoke = useMutation({
     mutationFn: () => api.revokeDeviceCertificate(org.id, certificate.enrollmentProfileId, certificate.id, reason),
-    onSuccess: async () => {
+    onSuccess: async (revoked) => {
       setOpen(false);
-      toast.success(`The Device Certificate for ${certificate.subject} was revoked`);
+      toast.success(`The Device Certificate for ${certificate.subject} was ${revoked.revocation ? "revoked" : "asked to be revoked; its CA confirms it later"}`);
       await queryClient.invalidateQueries({ queryKey: ["device-certificates", org.id, certificate.enrollmentProfileId] });
     },
   });
   const selectId = `revocation-reason-${certificate.id}`;
 
-  if (certificate.revocation || !can(org, "deviceCertificate", "revoke")) return null;
+  if (certificate.revocation || awaitsCa(certificate) || !can(org, "deviceCertificate", "revoke")) return null;
   return (
     <Dialog
       open={open}

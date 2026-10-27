@@ -17,7 +17,7 @@ import { IssuingCaStopped, mayRepoint, RepointDialog } from "./issuer-controls";
 import { KeyChangeSheet, keyChanges, type KeyChange } from "./key-change-sheet";
 import { Owners } from "./owner-controls";
 import { Renewal } from "./renewal-controls";
-import { RevokeDialog, revokedLine } from "./revocation-controls";
+import { RevokeDialog, requestedLine, revokedLine } from "./revocation-controls";
 
 type Org = Me["organizations"][number];
 
@@ -196,6 +196,11 @@ function CurrentCertificateCard({ org, m, userId, onChanged }: { org: Org; m: Ma
             {current.revocation && (
               <Fact label="Revoked">
                 <span className="text-destructive">{revokedLine(current.revocation)}</span>
+              </Fact>
+            )}
+            {current.revocationRequest && (
+              <Fact label="Revocation">
+                <span className={current.revocationRequest.status === "failed" ? "text-destructive" : undefined}>{requestedLine(current.revocationRequest)}</span>
               </Fact>
             )}
           </dl>

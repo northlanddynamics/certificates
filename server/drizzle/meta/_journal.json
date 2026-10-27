@@ -407,6 +407,13 @@
       "when": 1793137680833,
       "tag": "0057_issuance_pending",
       "breakpoints": true
+    },
+    {
+      "idx": 58,
+      "version": "7",
+      "when": 1793139849757,
+      "tag": "0058_revocation_request",
+      "breakpoints": true
     }
   ]
 }
