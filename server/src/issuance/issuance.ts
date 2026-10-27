@@ -9,7 +9,7 @@
 // pending, with the handle the issuer's kind keeps the request by, until the kind reports the result (`report`) or the
 // deadline it set passes (`timeOut`). Either ends it as an Issuance that ended at once would have.
 import { X509Certificate } from "node:crypto";
-import { and, desc, eq, inArray, isNotNull, isNull, lte, ne } from "drizzle-orm";
+import { and, desc, eq, inArray, isNotNull, isNull, lte, ne, type SQL } from "drizzle-orm";
 import { CertificateAuthorityError } from "./acme/certificate-authority";
 import { parseCsr } from "../pki/csr";
 import type { Dcv } from "./dcv/dcv";
@@ -141,10 +141,10 @@ export interface Issuances {
   /**
    * What the issuer's CA answered, later, for a pending Issuance: what it issued, which is stored as an Issuance that
    * ended at once stores it; a failure (thrown as `issue` throws it), which ends it as failed; or that it is pending still,
-   * with the handle and deadline it has now. False when the Issuance no longer waits for it: it has ended (though a
-   * Certificate the CA issued after all, after the deadline, is still kept), or its Certificate is stored already.
+   * with the handle and deadline it has now. False when the Issuance no longer waits for it: it has ended (it timed out,
+   * or the platform stopped before the answer that the CA would issue later was recorded), or its Certificate is stored already.
    */
-  report(issuanceId: string, result: Issued | Pending | { failed: unknown }): Promise<boolean>;
+  report(issuanceId: string, result: Issued | Pending | Failed): Promise<boolean>;
   /** One pass at the clock's time: ends the pending Issuances whose deadline has passed as timed out. Returns how many it ended. */
   timeOut(): Promise<number>;
   /** Resolves once every Issuance started so far has recorded its outcome, or is pending. */
@@ -154,6 +154,11 @@ export interface Issuances {
    * still makes, nor those pending, whose kind still reports. Call it once, before serving.
    */
   failInterrupted(): Promise<void>;
+}
+
+/** What an issuer's kind reports when its CA failed to issue for a pending Issuance: the error, as `Issuers.issue` would throw it. */
+export interface Failed {
+  failed: unknown;
 }
 
 export interface IssuancesDeps {
@@ -219,10 +224,10 @@ export function createIssuances({ db, unitOfWork, issuers, dcv, clock }: Issuanc
 
   /**
    * Records how the Issuance ended, on the change's transaction. A failure ends only an Issuance that is still running
-   * (one a restart's sweep already ended stays as it was); a Certificate that was issued always ends it as succeeded.
-   * Returns whether the Issuance's row changed.
+   * (one a restart's sweep already ended stays as it was), and only while `still` holds; a Certificate that was issued
+   * always ends it as succeeded. Returns whether the Issuance's row changed.
    */
-  async function end(tx: Tx, change: Change, row: typeof issuance.$inferSelect, outcome: Outcome) {
+  async function end(tx: Tx, change: Change, row: typeof issuance.$inferSelect, outcome: Outcome, still?: SQL) {
     const failed = outcome.kind === "failed";
     const ended = await tx
       .update(issuance)
@@ -234,15 +239,18 @@ export function createIssuances({ db, unitOfWork, issuers, dcv, clock }: Issuanc
         failureMessage: failed ? outcome.message : null,
         finishedAt: change.occurredAt,
       })
-      .where(failed ? and(eq(issuance.id, row.id), eq(issuance.status, "running")) : eq(issuance.id, row.id))
+      .where(failed ? and(eq(issuance.id, row.id), eq(issuance.status, "running"), still) : eq(issuance.id, row.id))
       .returning({ id: issuance.id });
     return ended.length > 0;
   }
 
-  /** `issuer` is the Managed Certificate's, when it was read before the Issuance failed. Returns whether it ended the Issuance. */
-  const fail = (row: typeof issuance.$inferSelect, failure: Failure, leftovers: string[] = [], issuer?: Issuer) =>
+  /**
+   * `issuer` is the Managed Certificate's, when it was read before the Issuance failed; `still` is what must hold of it
+   * still for it to fail. Returns whether it ended the Issuance.
+   */
+  const fail = (row: typeof issuance.$inferSelect, failure: Failure, leftovers: string[] = [], issuer?: Issuer, still?: SQL) =>
     unitOfWork.run(actorOf(row), async (tx, change) => {
-      if (!(await end(tx, change, row, { kind: "failed", ...failure }))) return false;
+      if (!(await end(tx, change, row, { kind: "failed", ...failure }, still))) return false;
       await change.audit({
         organizationId: row.organizationId,
         action: "issuance.failed",
@@ -269,13 +277,16 @@ export function createIssuances({ db, unitOfWork, issuers, dcv, clock }: Issuanc
     return found;
   }
 
-  /** Records that the CA will issue later, as its kind answered, on an Issuance that still runs. Returns whether it did. */
-  const wait = (row: typeof issuance.$inferSelect, { pending }: Pending) =>
+  /**
+   * Records that the CA will issue later, as its kind answered, on an Issuance that still runs. Its first answer is not
+   * recorded over one the kind has reported since. Returns whether it recorded it.
+   */
+  const wait = (row: typeof issuance.$inferSelect, { pending }: Pending, { first }: { first: boolean }) =>
     unitOfWork.run(actorOf(row), async (tx) => {
       const waiting = await tx
         .update(issuance)
         .set({ pendingHandle: pending.handle, pendingUntil: pending.deadline })
-        .where(and(eq(issuance.id, row.id), eq(issuance.status, "running")))
+        .where(and(eq(issuance.id, row.id), eq(issuance.status, "running"), first ? isNull(issuance.pendingHandle) : undefined))
         .returning({ id: issuance.id });
       return waiting.length > 0;
     });
@@ -311,15 +322,16 @@ export function createIssuances({ db, unitOfWork, issuers, dcv, clock }: Issuanc
       await fail(row, failureOf(err), leftovers(), mc && issuerOf(mc));
       return;
     }
-    if ("pending" in answer) await wait(row, answer);
-    else await store(row, mc, answer, leftovers);
+    if ("pending" in answer) await wait(row, answer, { first: true });
+    else await store(row, mc, answer, leftovers, { reported: false });
   }
 
   /**
    * Stores the Certificate the CA issued for the Issuance and ends it as succeeded, or fails it when what was issued is
-   * not what was asked for. Returns false, storing nothing, when the Issuance has a Certificate already.
+   * not what was asked for. Returns false, storing nothing, when the Issuance has a Certificate already, or when the
+   * Certificate was `reported` by the kind of a pending Issuance and it no longer runs.
    */
-  async function store(row: typeof issuance.$inferSelect, mc: typeof managedCertificate.$inferSelect, issued: Issued, leftovers: () => string[]) {
+  async function store(row: typeof issuance.$inferSelect, mc: typeof managedCertificate.$inferSelect, issued: Issued, leftovers: () => string[], { reported }: { reported: boolean }) {
     // The CA has issued: from here on the Certificate is kept whatever else happens to the Issuance.
     try {
       const leaf = readLeaf(issued.chainPem);
@@ -333,7 +345,7 @@ export function createIssuances({ db, unitOfWork, issuers, dcv, clock }: Issuanc
       return await unitOfWork.run(actorOf(row), async (tx, change) => {
         // Locked, so that a result reported twice at once is stored once.
         const [now] = await tx.select({ status: issuance.status }).from(issuance).where(eq(issuance.id, row.id)).for("update");
-        if (now?.status === "succeeded") return false;
+        if (now?.status === "succeeded" || (reported && now?.status !== "running")) return false;
         await tx.insert(certificate).values({
           id: certificateId,
           organizationId: row.organizationId,
@@ -487,22 +499,24 @@ export function createIssuances({ db, unitOfWork, issuers, dcv, clock }: Issuanc
     async report(issuanceId, result) {
       const [row] = await db.select().from(issuance).where(eq(issuance.id, issuanceId));
       // Not only a pending one: a kind may report before the answer that it would issue later is recorded.
-      if (!row || row.awaitingKey || row.status === "succeeded") return false;
-      if ("pending" in result) return row.status === "running" && wait(row, result);
+      if (!row || row.awaitingKey || row.status !== "running") return false;
+      if ("pending" in result) return wait(row, result, { first: false });
       const mc = await managedCertificateOf(row);
-      if ("failed" in result) return row.status === "running" && fail(row, failureOf(result.failed), [], issuerOf(mc));
-      return store(row, mc, result, () => []);
+      if ("failed" in result) return fail(row, failureOf(result.failed), [], issuerOf(mc));
+      return store(row, mc, result, () => [], { reported: true });
     },
     async timeOut() {
+      const now = clock();
       const rows = await db
         .select({ issuance, managedCertificate })
         .from(issuance)
         .innerJoin(managedCertificate, eq(managedCertificate.id, issuance.managedCertificateId))
-        .where(and(eq(issuance.status, "running"), isNotNull(issuance.pendingUntil), lte(issuance.pendingUntil, clock())));
+        .where(and(eq(issuance.status, "running"), isNotNull(issuance.pendingUntil), lte(issuance.pendingUntil, now)));
       let ended = 0;
       for (const { issuance: row, managedCertificate: mc } of rows) {
         const failure = { code: "timed_out" as const, message: `the CA did not issue by ${row.pendingUntil!.toISOString()}, as it said it would; ask for it again` };
-        if (await fail(row, failure, [], issuerOf(mc))) ended++;
+        // Not one whose kind has reported a later deadline since it was read.
+        if (await fail(row, failure, [], issuerOf(mc), lte(issuance.pendingUntil, now))) ended++;
       }
       return ended;
     },

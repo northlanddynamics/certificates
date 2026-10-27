@@ -205,17 +205,29 @@ describe("a pending Issuance whose deadline passes", () => {
     expect((await managedCertificate(mc.id)).issuance).toMatchObject({ id: again.body.id, status: "succeeded" });
   });
 
-  test("still keeps a Certificate the CA issued after all, after the deadline", async () => {
+  test("is not revived by a Certificate the kind reports after it", async () => {
     h.heldIssuer.holding = true;
     const { mc } = await created();
     h.setNow(days(8));
     await h.timeOutIssuances();
 
-    expect(await h.heldIssuer.release(mc.issuance.id)).toBe(true);
+    expect(await h.heldIssuer.release(mc.issuance.id)).toBe(false);
 
     const after = await managedCertificate(mc.id);
-    expect(after.issuance).toMatchObject({ status: "succeeded", failure: null });
-    expect(after.currentCertificate).not.toBeNull();
+    expect(after.issuance).toMatchObject({ status: "failed", failure: { code: "timed_out" } });
+    expect(after.currentCertificate).toBeNull();
+    expect((await auditOf()).map((e) => e.action)).not.toContain("issuance.succeeded");
+  });
+
+  test("is not timed out when the kind has reported a later deadline", async () => {
+    h.heldIssuer.holding = true;
+    const { mc } = await created();
+    await h.heldIssuer.stillPending(mc.issuance.id, "request-42", days(10));
+
+    h.setNow(days(8));
+    expect(await h.timeOutIssuances()).toBe(0);
+    h.setNow(days(10));
+    expect(await h.timeOutIssuances()).toBe(1);
   });
 });
 
