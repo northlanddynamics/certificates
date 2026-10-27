@@ -39,6 +39,10 @@ export const Issuance = z.object({
     .openapi({ description: "Why it failed: which step, and what the DNS Provider or the CA said." }),
   certificateId: z.string().nullable(),
   awaitingKey: z.boolean().openapi({ description: "Whether it waits for the Agent that holds the key to make a new one and send its CSR, as a Renewal of a key an Agent holds begins: it waits as long as the Agent is away." }),
+  pending: z
+    .object({ handle: z.string(), deadline: z.string() })
+    .nullable()
+    .openapi({ description: "Set once the CA answered that it would issue later: what it keeps the request by, and when the Issuance fails as `timed_out` if the CA has not answered. Kept once it has ended." }),
 });
 
 export const Certificate = z.object({
@@ -179,6 +183,7 @@ export const toIssuance = (row: typeof issuance.$inferSelect) => ({
   failure: row.failureCode && row.failureMessage ? { code: row.failureCode, message: row.failureMessage } : null,
   certificateId: row.certificateId,
   awaitingKey: row.awaitingKey,
+  pending: row.pendingHandle && row.pendingUntil ? { handle: row.pendingHandle, deadline: row.pendingUntil.toISOString() } : null,
 });
 export const toCertificate = (row: typeof certificate.$inferSelect, revocation: RevocationRow | undefined) => ({
   id: row.id,

@@ -80,6 +80,15 @@ export interface Issued {
 }
 
 /**
+ * What an issuer's CA answers when it issues later, as a CA reached through an Agent may: the `handle` its kind keeps the
+ * request by, which the Issuance records, and the `deadline` by which it must report the result (Issuances.report) or
+ * the Issuance fails as timed out.
+ */
+export interface Pending {
+  pending: { handle: string; deadline: Date };
+}
+
+/**
  * What an Issuance asks the issuer's CA for: a Certificate for the CSR and the Managed Certificate's (approved) `names`,
  * which the CSR asks for, valid for the `validityDays` the Managed Certificate chose (none for the CA's default). Only a
  * Private CA lets one be chosen; an ACME CA decides its own, and that kind ignores it. `dcv` gives the DNS challenge
@@ -87,6 +96,8 @@ export interface Issued {
  * Certificate (PEM) a Renewal replaces, for a CA that coordinates Renewals.
  */
 export interface IssueRequest {
+  /** The Issuance asking, which a kind that answers Pending names when it reports the result. */
+  issuanceId: string;
   csr: string;
   names: string[];
   validityDays: number | null;
@@ -96,11 +107,11 @@ export interface IssueRequest {
 
 export interface Issuers {
   /**
-   * Has the issuer's CA issue for the request. Throws an IssuanceFailure when the issuer cannot issue for the
-   * Organization (it has no ACME Account with the ACME CA), and a CertificateAuthorityError when the CA says no or
-   * does not answer.
+   * Has the issuer's CA issue for the request: what it served, or Pending when it will answer later. Throws an
+   * IssuanceFailure when the issuer cannot issue for the Organization (it has no ACME Account with the ACME CA), and a
+   * CertificateAuthorityError when the CA says no or does not answer.
    */
-  issue(db: Db | Tx, organizationId: string, issuer: Issuer, request: IssueRequest): Promise<Issued>;
+  issue(db: Db | Tx, organizationId: string, issuer: Issuer, request: IssueRequest): Promise<Issued | Pending>;
   /**
    * Has the CA a Certificate came from revoke it (PEM, its chain or the leaf alone) for `reason`, once its revocation is
    * recorded on the change's transaction. Throws a CertificateAuthorityError when the CA says no (it does not take the
@@ -117,7 +128,7 @@ export interface Issuers {
 
 /** What one kind of issuer does for the issuers of its kind: `Issuers`, for a Managed Certificate's issuer and a Certificate's of that kind. */
 interface KindOfIssuer<M extends Issuer, C extends CertificateIssuer> {
-  issue(db: Db | Tx, organizationId: string, issuer: M, request: IssueRequest): Promise<Issued>;
+  issue(db: Db | Tx, organizationId: string, issuer: M, request: IssueRequest): Promise<Issued | Pending>;
   revoke(tx: Tx, change: Change, organizationId: string, issuedBy: C, request: { certificate: string; reason: RevocationReason }): Promise<void>;
   /** Whether its CAs may suggest when to renew; `renewalInfo` is never asked of a kind whose do not. */
   offersRenewalInfo: boolean;

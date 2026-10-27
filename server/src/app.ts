@@ -37,7 +37,7 @@ import { certificateProfileSettings, member, organization } from "./platform/db/
 import { createAuthorizer } from "./tenancy/authorization";
 import { HttpError, errors, json } from "./platform/http";
 import { createIssuances } from "./issuance/issuance";
-import { createIssuers } from "./issuance/issuer";
+import { createIssuers, type Issuers } from "./issuance/issuer";
 import type { Kms } from "./platform/crypto/kms";
 import { registerApprovals } from "./certificates/approvals";
 import { registerArchiveRoutes } from "./certificates/archive-routes";
@@ -112,6 +112,8 @@ export interface AppDeps {
   enrollmentValidators?: EnrollmentValidators;
   /** How the SCEP routes are rate limited and tell devices apart: see `ScepConfig`. */
   scep?: Partial<ScepConfig>;
+  /** Managed Certificates' issuers (issuer.ts) as the platform reaches them: its own, unless a test wraps them in a test-only kind. */
+  issuers?: (platform: Issuers) => Issuers;
 }
 
 export function createApp(deps: AppDeps) {
@@ -335,8 +337,9 @@ export function createApp(deps: AppDeps) {
   const deviceCertificatePruning = createDeviceCertificatePruning({ db, unitOfWork, clock });
   const deviceEnrollment = createDeviceEnrollment({ db, unitOfWork, privateCas, revocations, sharedChallenges, kinds: validatorKinds, validators: enrollmentValidators, transactions: createScepTransactions({ db, clock }), clock });
   const scep = registerScep({ app, db, secrets, enrollment: deviceEnrollment, kinds: validatorKinds, clock, config: deps.scep });
-  const issuers = createIssuers({ acme: deps.certificateAuthority, acmeCas, secrets, privateCas });
-  const issuances = createIssuances({ db, unitOfWork, issuers, dcv });
+  const platformIssuers = createIssuers({ acme: deps.certificateAuthority, acmeCas, secrets, privateCas });
+  const issuers = deps.issuers?.(platformIssuers) ?? platformIssuers;
+  const issuances = createIssuances({ db, unitOfWork, issuers, dcv, clock });
   const notifications = createNotifications({
     db,
     unitOfWork,
