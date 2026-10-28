@@ -119,7 +119,7 @@ An Organization's Active Directory Certificate Services CA, which the platform i
 _Avoid_: Microsoft CA, AD CA, enterprise CA
 
 **Certificate Template**:
-An ADCS CA's own template, which decides the validity, key usage and EKUs of what it issues. The platform discovers templates and offers only those it can use: published, enrollable by the Agents' account, and taking the subject from the request.
+An ADCS CA's own template, which decides the validity, key usage and EKUs of what it issues. The platform discovers templates, on adding the ADCS CA, on Refresh and once a day, and offers only those it can use and an Organization Administrator has not hidden: published, enrollable by the Agents' account, and taking the subject from the request; with Server Authentication for TLS, with Client Authentication for devices. One that discovery no longer reports is kept, as unavailable.
 _Avoid_: profile (a Certificate Profile and an Enrollment Profile are the platform's own), template (unqualified)
 
 **Permitted Name Rules**:

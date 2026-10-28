@@ -1,5 +1,6 @@
 // The server's own list of the reasons each kind of issuer takes, from a module that imports only types.
 import { ISSUING_CA_REVOCATION_REASONS, REVOCATION_REASONS_OF, type RevocationReason } from "../../../server/src/pki/revocation-reasons";
+import type { TemplatePurpose } from "../../../server/src/adcs/adcs-kinds";
 import type { KeyAlgorithm } from "./csr-generator";
 import type { PkiPublication } from "./pki-publication";
 
@@ -325,8 +326,16 @@ export interface AdcsTemplate {
   subjectFromRequest: boolean;
   enrollable: boolean;
   published: boolean;
-  /** Whether the platform can issue under it: published, enrollable and supplying the subject from the request. */
+  /** Whether the CA's last discovery reported it; one no longer reported is kept, as unavailable. */
+  reported: boolean;
+  /** Whether the platform can issue under it: reported, published, enrollable and supplying the subject from the request. */
   available: boolean;
+  /** Why the platform cannot issue under it; none while it is available. */
+  unavailableReason: string | null;
+  /** Hidden by an Organization Administrator: offered for nothing. */
+  hidden: boolean;
+  /** What it is offered for while available and not hidden. */
+  offeredFor: TemplatePurpose[];
 }
 /** An Organization's Active Directory Certificate Services CA, reached only through the Agents assigned to it. */
 export interface AdcsCa {
@@ -341,7 +350,12 @@ export interface AdcsCa {
   /** The CRL Distribution Point URLs in its CA certificate: ADCS publishes the CRL. */
   cdpUrls: string[];
   templates: AdcsTemplate[];
+  /** The ids of the templates offered for TLS and for devices. */
+  offered: { tls: string[]; devices: string[] };
+  /** When a discovery last succeeded. */
   discoveredAt: string;
+  /** When the latest discovery failed, and why; none once one succeeds. */
+  discoveryFailure: { at: string; error: string } | null;
   createdAt: string;
 }
 /** An Organization's own CA, whose keys are in the KMS: a root and the Issuing CAs under it. */
@@ -961,6 +975,9 @@ export const api = {
   createAdcsCa: (orgId: string, body: { name: string; configString: string; agentIds: string[] }) => call<AdcsCa>(`/api/organizations/${orgId}/adcs-cas`, { body }),
   changeAdcsCa: (orgId: string, id: string, body: { name?: string; agentIds?: string[] }) => call<AdcsCa>(`/api/organizations/${orgId}/adcs-cas/${id}`, { method: "PATCH", body }),
   deleteAdcsCa: (orgId: string, id: string) => call<null>(`/api/organizations/${orgId}/adcs-cas/${id}`, { method: "DELETE" }),
+  refreshAdcsCa: (orgId: string, id: string) => call<AdcsCa>(`/api/organizations/${orgId}/adcs-cas/${id}/refresh`, { method: "POST", body: {} }),
+  setAdcsTemplateHidden: (orgId: string, id: string, templateId: string, hidden: boolean) =>
+    call<AdcsCa>(`/api/organizations/${orgId}/adcs-cas/${id}/templates/${templateId}/${hidden ? "hide" : "show"}`, { method: "POST", body: {} }),
   adcsCaChainUrl: (orgId: string, id: string) => `/api/organizations/${orgId}/adcs-cas/${id}/chain`,
   createPrivateCa: (orgId: string, body: NewPrivateCa) => call<PrivateCa>(`/api/organizations/${orgId}/private-cas`, { body }),
   addIssuingCa: (orgId: string, id: string, body: NewIssuingCa) => call<IssuingCa>(`/api/organizations/${orgId}/private-cas/${id}/issuing-cas`, { body }),

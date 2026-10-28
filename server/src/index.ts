@@ -13,7 +13,7 @@ const localKmsKey = process.env.LOCAL_KMS_KEY;
 if (!databaseUrl || !secret || !localKmsKey) throw new Error("DATABASE_URL, AUTH_SECRET and LOCAL_KMS_KEY are required");
 
 const pool = new Pool({ connectionString: databaseUrl });
-const { app, auth, db, issuances, revocations, renewals, notifications, auditForwarding, crls, enrollmentValidators, deviceCertificatePruning, sharedChallenges } = createApp({
+const { app, auth, db, issuances, revocations, renewals, adcsDiscovery, notifications, auditForwarding, crls, enrollmentValidators, deviceCertificatePruning, sharedChallenges } = createApp({
   pool,
   mailer: new ConsoleMailer(),
   clock: () => new Date(),
@@ -104,6 +104,14 @@ const SHARED_CHALLENGE_EXPIRY_PASS_MS = 60_000;
 (async function expireSharedChallenges() {
   await sharedChallenges.expire().catch((err) => console.error("Shared Challenge expiry pass failed", err));
   setTimeout(expireSharedChallenges, SHARED_CHALLENGE_EXPIRY_PASS_MS);
+})();
+
+// ADCS CAs are discovered again a day after their last discovery: their chains and Certificate Templates follow ADCS.
+// A pass looks for those due once an hour; each pass waits for the one before it.
+const ADCS_DISCOVERY_PASS_MS = 3_600_000;
+(async function discoverAdcsCas() {
+  await adcsDiscovery.discoverDue().catch((err) => console.error("ADCS discovery pass failed", err));
+  setTimeout(discoverAdcsCas, ADCS_DISCOVERY_PASS_MS);
 })();
 
 if (process.env.OPERATOR_EMAIL && process.env.OPERATOR_PASSWORD) {

@@ -118,6 +118,8 @@ export interface Harness {
   setPebbleWindow(certificate: string, window: { start: Date; end: Date }): Promise<void>;
   /** One pass of the CRL scheduler at the harness's clock: reissues the Private CAs' CRLs that are due and returns how many. */
   runCrlScheduler(): Promise<number>;
+  /** One pass of the daily ADCS discovery at the harness's clock: discovers again the ADCS CAs last discovered a day ago or more, and returns how many. */
+  runAdcsDiscovery(): Promise<number>;
   /** The KMS as the platform sees it: `failing` makes every signature it is asked for fail. */
   kms: { failing: boolean };
   /** The SCEP routes' rate limits (see `ScepConfig`), which a test may lower; the platform's defaults again after reset. */
@@ -289,7 +291,7 @@ export async function createHarness(overrides: Partial<AppDeps> = {}, { database
     enrollmentValidators: { test_allow: allowing(true), test_names: allowing(false), test_renewal: allowing(true, true), test_double: validatorDouble.kind(), intune: createIntuneKind({ fetch: intune.fetch }), shared_challenge: sharedChallenge },
     ...overrides,
   };
-  const { app, auth, db, unitOfWork, issuances, revocations: certificateRevocations, renewals, notifications, auditForwarding, crls, enrollmentValidators, deviceCertificatePruning, sharedChallenges, deviceCertificateRevocations, deviceEnrollment, scep: scepRoutes } = createApp(deps);
+  const { app, auth, db, unitOfWork, issuances, revocations: certificateRevocations, renewals, adcsDiscovery, notifications, auditForwarding, crls, enrollmentValidators, deviceCertificatePruning, sharedChallenges, deviceCertificateRevocations, deviceEnrollment, scep: scepRoutes } = createApp(deps);
   heldIssuer.reportTo(issuances, certificateRevocations);
   if (migrate) await runMigrations(pool);
   const reset = async () => {
@@ -347,6 +349,7 @@ export async function createHarness(overrides: Partial<AppDeps> = {}, { database
     settleIssuances: () => issuances.idle(),
     runRenewalScheduler: () => renewals.tick(),
     runCrlScheduler: () => crls.tick(),
+    runAdcsDiscovery: () => adcsDiscovery.discoverDue(),
     kms: kmsState,
     scepRateLimit: scep,
     ari,

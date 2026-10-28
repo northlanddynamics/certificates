@@ -1033,7 +1033,11 @@ export const adcsCa = pgTable(
     caCertificatePem: text("ca_certificate_pem").notNull(),
     chainPem: text("chain_pem").array().notNull(),
     cdpUrls: text("cdp_urls").array().notNull(),
+    /** When a discovery last succeeded, which is what the chain and templates are from. */
     discoveredAt: timestamp("discovered_at", { withTimezone: true }).notNull(),
+    /** When the latest discovery failed, and why; null once one succeeds. A failed one changes nothing else. */
+    discoveryFailedAt: timestamp("discovery_failed_at", { withTimezone: true }),
+    discoveryError: text("discovery_error"),
     createdAt: timestamp("created_at", { withTimezone: true }).notNull(),
   },
   (t) => [
@@ -1062,7 +1066,10 @@ export const adcsCaAgent = pgTable(
   ],
 );
 
-/** A Certificate Template of an ADCS CA, with the facts discovery last reported of it. */
+/**
+ * A Certificate Template of an ADCS CA, with the facts discovery last reported of it. One that a discovery no longer
+ * reports is kept, as not `reported`, since what names it must keep its issuer; it is reported again when it comes back.
+ */
 export const adcsTemplate = pgTable(
   "adcs_template",
   {
@@ -1082,6 +1089,10 @@ export const adcsTemplate = pgTable(
     subjectFromRequest: boolean("subject_from_request").notNull(),
     enrollable: boolean("enrollable").notNull(),
     published: boolean("published").notNull(),
+    /** Whether the CA's last discovery reported it. */
+    reported: boolean("reported").notNull().default(true),
+    /** Hidden by an Organization Administrator: offered for nothing, whatever ADCS allows. */
+    hidden: boolean("hidden").notNull().default(false),
   },
   (t) => [
     unique("adcs_template_ca_name_unique").on(t.adcsCaId, t.name),
