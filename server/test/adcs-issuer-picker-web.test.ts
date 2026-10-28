@@ -1,7 +1,8 @@
 // The issuer picker's ADCS CAs, as the new Managed Certificate and Deployment dialogs list them (web/src/lib/adcs-ca.ts).
 // It decides nothing: the server refuses a template not offered for TLS, and a key the template does not take.
 import { describe, expect, test } from "bun:test";
-import { adcsTemplateTitle, adcsTlsChoices, keyAlgorithmsTakenBy, templateKeysLabel } from "../../web/src/lib/adcs-ca";
+import { adcsTemplateTitle, adcsTlsChoices, templateKeysLabel } from "../../web/src/lib/adcs-ca";
+import { templateKeyAlgorithms as keyAlgorithmsTakenBy } from "../src/adcs/adcs-kinds";
 import type { AdcsCa, AdcsTemplate } from "../../web/src/lib/api";
 
 const template = (id: string, over: Partial<AdcsTemplate> = {}) =>

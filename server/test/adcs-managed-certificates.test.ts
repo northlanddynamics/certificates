@@ -418,7 +418,29 @@ describe("the Agents that submit", () => {
     expect(failed.failure.message).toContain("Access is denied");
   });
 
-  test("an Agent that takes the request and does not report in time is given up on for another", async () => {
+  test("an Agent given the request that does not take it in time is given up on for another", async () => {
+    const slow = await windowsAgent();
+    const quick = await windowsAgent();
+    const { ca, tls } = await adcsCa([slow, quick]);
+    setNow(after(60_000));
+    await slow.poll();
+    const created = await create(ca, tls);
+    await h.settleIssuances();
+    expect((await mcOf(created.body.id)).issuance.adcs.agent.id).toBe(slow.id);
+
+    // It does not poll for the item; the other is online.
+    setNow(after(60_000 + SUBMIT_TIMEOUT_MS));
+    await quick.poll();
+    await h.runAdcsRequests();
+    expect((await mcOf(created.body.id)).issuance.adcs.agent.id).toBe(quick.id);
+    await work(quick);
+    expect((await mcOf(created.body.id)).issuance.status).toBe("succeeded");
+    // It is not given the item it was given up on.
+    await slow.work();
+    expect(slow.received.filter((i) => i.type === "adcs.submit")).toEqual([]);
+  });
+
+  test("an Agent that took the request is waited for, never given up on for a second submission", async () => {
     const slow = await windowsAgent();
     const quick = await windowsAgent();
     const { ca, tls } = await adcsCa([slow, quick]);
@@ -427,18 +449,28 @@ describe("the Agents that submit", () => {
     slow.stalled = true;
     const created = await create(ca, tls);
     await work(slow);
-    expect((await mcOf(created.body.id)).issuance.adcs.agent.id).toBe(slow.id);
-
-    setNow(after(60_000 + SUBMIT_TIMEOUT_MS));
-    await slow.poll();
+    setNow(after(60_000 + 2 * SUBMIT_TIMEOUT_MS));
     await quick.poll();
     await h.runAdcsRequests();
-    expect((await mcOf(created.body.id)).issuance.adcs.agent.id).toBe(quick.id);
-    await work(quick);
+    expect((await mcOf(created.body.id)).issuance.adcs).toMatchObject({ status: "submitted", agent: { id: slow.id } });
+    expect(quick.received.filter((i) => i.type === "adcs.submit")).toEqual([]);
+    // It reports at last, and that is the Certificate.
+    slow.stalled = false;
+    const item = slow.received.find((i) => i.type === "adcs.submit")!;
+    expect((await slow.report(item.id, { ok: true, submission: await adcs.submit(item.payload.configString, item.payload.template, item.payload.csr) })).status).toBe(200);
     expect((await mcOf(created.body.id)).issuance.status).toBe("succeeded");
-    // What the slow one says now is refused: it was given up on.
-    const late = await slow.report(slow.received.find((i) => i.type === "adcs.submit")!.id, { ok: true });
-    expect(late.status).toBe(409);
+  });
+
+  test("a template that became unavailable while the request waited fails it with that cause", async () => {
+    const { ca, agents, tls } = await adcsCa();
+    setNow(after(3600_000));
+    const created = await create(ca, tls);
+    await h.settleIssuances();
+    adcs.templates = defaultTemplates().map((t) => (t.name === "CorpWebServer" ? { ...t, enrollable: false } : t));
+    await refresh(ca, agents[0]!);
+    await h.runAdcsRequests();
+    expect((await mcOf(created.body.id)).issuance).toMatchObject({ status: "failed", failure: { code: "template_unavailable" } });
+    expect(agents[0]!.received.filter((i) => i.type === "adcs.submit")).toEqual([]);
   });
 
   test("a template unavailable at submission fails the Issuance with that cause", async () => {

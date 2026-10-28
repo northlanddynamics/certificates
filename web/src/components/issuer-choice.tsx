@@ -13,7 +13,9 @@ import { ACME_CA_TAG_LABELS, acmeCaName, useAcmeCas } from "@/lib/acme-cas";
 import { api, type AcmeCa, type IssuerRef } from "@/lib/api";
 import { KEY_ALGORITHM_LABELS, NO_KEY_ALGORITHMS } from "@/lib/csr-generator";
 import { commonNameOf, daysLabel, findIssuingCa, isValidityDays, permittedNamesLabel, validityLabel } from "@/lib/private-ca";
-import { adcsTemplateTitle, adcsTlsChoices, keyAlgorithmsTakenBy, templateKeysLabel } from "@/lib/adcs-ca";
+import { adcsTemplateTitle, adcsTlsChoices, templateKeysLabel } from "@/lib/adcs-ca";
+// The server's own judgement of a key against a template, from a module that imports nothing.
+import { templateKeyAlgorithms } from "../../../server/src/adcs/adcs-kinds";
 
 /** The issuer chosen: an ACME CA by id, an Issuing CA of one of the Organization's Private CAs by id, or an ADCS CA and one of its templates by id. */
 export type IssuerChoice = IssuerRef;
@@ -104,7 +106,7 @@ export function useIssuerChoice(
     : issuer.kind === "private_ca"
       ? chosenCa?.certificateKeyAlgorithms
       : issuer.kind === "adcs"
-        ? chosenTemplate && keyAlgorithms.data && keyAlgorithmsTakenBy(chosenTemplate, keyAlgorithms.data.acmeKeyAlgorithms)
+        ? chosenTemplate && keyAlgorithms.data && templateKeyAlgorithms(chosenTemplate, keyAlgorithms.data.acmeKeyAlgorithms)
         : keyAlgorithms.data?.acmeKeyAlgorithms;
   // The validity chosen, in days; none for the Issuing CA's default.
   const chosenValidity = validityDays.trim() === "" ? null : Number(validityDays);

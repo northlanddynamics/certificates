@@ -63,7 +63,8 @@ export function purposesOf(t: Pick<TemplateFacts, "extendedKeyUsages">): Templat
 /** What the platform offers a template for: what it suits, while it is available and not hidden. */
 export const offeredFor = (t: Kept & Pick<TemplateFacts, "extendedKeyUsages"> & { hidden: boolean }): TemplatePurpose[] => (t.hidden || !isAvailable(t) ? [] : purposesOf(t));
 
-const TEMPLATE_KEY_LABELS: Record<TemplateKeyAlgorithm, string> = { rsa: "RSA", "ecdsa-p256": "ECDSA P-256", "ecdsa-p384": "ECDSA P-384", "ecdsa-p521": "ECDSA P-521" };
+/** The key algorithms a template may allow, in words. */
+export const TEMPLATE_KEY_LABELS: Record<TemplateKeyAlgorithm, string> = { rsa: "RSA", "ecdsa-p256": "ECDSA P-256", "ecdsa-p384": "ECDSA P-384", "ecdsa-p521": "ECDSA P-521" };
 
 /**
  * Why a template refuses a key of `keyAlgorithm`, as the platform names keys (`rsa-2048`, `ecdsa-p256`, `ml-dsa-65`...),

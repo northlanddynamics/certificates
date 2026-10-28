@@ -2,7 +2,8 @@
 // Issuance's CSR becomes a request (`adcs_request`) that one online Agent assigned to the CA submits under the
 // Certificate Template, as `adcs.submit`, and the Issuance waits, pending, until that Agent reports. An Agent that cannot
 // reach the CA has it given to another online one; while none is online it waits, and after 7 days it fails as "no Agent
-// available". An Agent given it that does not report in time is given up on for another. Before anything is submitted the
+// available". An Agent that has not taken the work item in time is given up on for another; one that has taken it is not,
+// since ADCS may be issuing for it, and a second submission would issue twice. Before anything is submitted the
 // platform checks what ADCS would not: the template is still available, the names keep to the CA's Permitted Name Rules,
 // and the key to the template's key requirements. The template decides validity.
 import * as x509 from "@peculiar/x509";
@@ -34,7 +35,7 @@ export const NO_AGENT_TIMEOUT_MS = 7 * 24 * 3600_000;
 const DEADLINE_BACKSTOP_MS = 3600_000;
 
 export interface AdcsSubmitConfig {
-  /** How long an Agent given a request to submit has to report on it before it is given to another online one. */
+  /** How long an Agent given a request to submit has to take it before it is given to another online one. */
   submitTimeoutMs: number;
 }
 
@@ -293,13 +294,24 @@ export function createAdcsIssuance({
       }
       if (row.status === "submitted") {
         if (change.occurredAt.getTime() - row.submittedAt!.getTime() < config.submitTimeoutMs) return;
-        // The Agent did not report in time: another is given it, or, when there is none, any that comes online again.
+        // An Agent that took the item may be submitting it now: it is waited for, never given up on for a second submission.
+        const [item] = await tx.select({ status: workItem.status }).from(workItem).where(eq(workItem.id, row.workItemId!));
+        if (item?.status !== "pending") return;
+        // The Agent did not take it in time: another is given it, or, when there is none, any that comes online again.
         await expireItem(tx, change, row);
         const tried = [...row.triedAgentIds, row.agentId!];
         if (!(await dispatch(tx, change, row, tried))) await dispatch(tx, change, row, []);
         return;
       }
-      await dispatch(tx, change, row, row.triedAgentIds);
+      // What waits is submitted under the template only while the platform can still issue under it.
+      const [template] = await tx.select().from(adcsTemplate).where(eq(adcsTemplate.id, row.templateId));
+      const unavailable = unavailableReason(template!);
+      if (unavailable) {
+        await fail(tx, change, row, new IssuanceFailure("template_unavailable", `${templateLabel(ca!, template!)} is unavailable: ${unavailable}`));
+        return;
+      }
+      // An Agent that could not reach the CA before is tried again once no other is online: the CA may be back.
+      if (!(await dispatch(tx, change, row, row.triedAgentIds)) && row.triedAgentIds.length > 0) await dispatch(tx, change, row, []);
     });
   }
 
