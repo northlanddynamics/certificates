@@ -26,6 +26,7 @@ import { createDeviceCertificateRevocations } from "./enrollment/device-certific
 import { registerDeviceCertificates } from "./enrollment/device-certificates";
 import { createDeviceCertificatePruning } from "./enrollment/device-certificate-pruning";
 import { createDeviceEnrollment } from "./enrollment/device-enrollment";
+import { createEnrollmentIssuers } from "./enrollment/enrollment-issuer";
 import { createSharedChallenges } from "./enrollment/shared-challenge";
 import { registerEnrollmentProfiles } from "./enrollment/enrollment-profiles";
 import type { EnrollmentValidators } from "./enrollment/enrollment-validator";
@@ -336,11 +337,12 @@ export function createApp(deps: AppDeps) {
   const revocations = createDeviceCertificateRevocations({ revocations: certificateRevocations });
   const enrollmentValidators = createEnrollmentValidatorRuns({ db, unitOfWork, secrets, revocations, kinds: validatorKinds, clock });
   const sharedChallenges = createSharedChallenges({ db, unitOfWork, clock });
-  registerEnrollmentProfiles({ app, db, requireUser, authorize, unitOfWork, secrets, privateCas, kinds: validatorKinds, validators: enrollmentValidators, sharedChallenges, baseURL: deps.baseURL, clock });
+  const enrollmentIssuers = createEnrollmentIssuers({ privateCas });
+  registerEnrollmentProfiles({ app, db, requireUser, authorize, unitOfWork, secrets, issuers: enrollmentIssuers, kinds: validatorKinds, validators: enrollmentValidators, sharedChallenges, baseURL: deps.baseURL, clock });
   registerDeviceCertificates({ app, db, requireUser, authorize, unitOfWork, revocations, clock });
   const deviceCertificatePruning = createDeviceCertificatePruning({ db, unitOfWork, clock });
-  const deviceEnrollment = createDeviceEnrollment({ db, unitOfWork, privateCas, revocations, sharedChallenges, kinds: validatorKinds, validators: enrollmentValidators, transactions: createScepTransactions({ db, clock }), clock });
-  const scep = registerScep({ app, db, secrets, enrollment: deviceEnrollment, kinds: validatorKinds, clock, config: deps.scep });
+  const deviceEnrollment = createDeviceEnrollment({ db, unitOfWork, issuers: enrollmentIssuers, revocations, sharedChallenges, kinds: validatorKinds, validators: enrollmentValidators, transactions: createScepTransactions({ db, clock }), clock });
+  const scep = registerScep({ app, db, secrets, issuers: enrollmentIssuers, enrollment: deviceEnrollment, kinds: validatorKinds, clock, config: deps.scep });
   const issuances = createIssuances({ db, unitOfWork, issuers, dcv, clock });
   const notifications = createNotifications({
     db,

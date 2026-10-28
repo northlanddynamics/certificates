@@ -3,7 +3,7 @@
 // when its validator's kind uses one (shared-challenge.ts), a renewal must be signed with a Device Certificate of the
 // profile that is neither revoked nor expired, the device's key must be one the profile allows, its names must keep the
 // profile's name rules when it has them and its Issuing CA's Permitted Name Rules, and the Enrollment Validator must
-// allow it; then the Issuing CA signs a Device Certificate through the Private CA module, which is stored with its Audit
+// allow it; then the profile's issuer issues a Device Certificate (enrollment-issuer.ts), which is stored with its Audit
 // Event in one Unit of Work, and for a renewal that Unit of Work also revokes the Device Certificate it was signed with
 // as superseded (device-certificate-revocation.ts). A request is answered with its Device Certificate or refused, never
 // left pending; a refusal is an Audit Event. Each request belongs to a transaction, which is answered the same each
@@ -20,7 +20,7 @@ import { DEVICE_EXTENDED_KEY_USAGES, DEVICE_KEY_TYPES, type DeviceKeyType } from
 import { describeValidatorError, kindOf, type EnrollmentValidator, type EnrollmentValidators } from "./enrollment-validator";
 import type { EnrollmentValidatorRuns } from "./enrollment-validators";
 import { IssuanceFailure } from "../issuance/issuance-failure";
-import { findIssuingCa, type PrivateCas } from "../private-ca/private-ca";
+import { enrollmentIssuerColumns, enrollmentIssuerOf, type EnrollmentIssuers } from "./enrollment-issuer";
 import { nameRulesRefusal } from "./name-rules";
 import type { ScepAnswer, ScepClaim, ScepTransactions } from "./scep-transactions";
 import type { SharedChallenges } from "./shared-challenge";
@@ -67,16 +67,6 @@ export interface DeviceEnrollment {
   answerOf(profile: ProfileRow, transactionId: string): Promise<DeviceEnrollmentAnswer | undefined>;
 }
 
-/**
- * The certificates above what the profile's Issuing CA signs, up to the root (PEM, the Issuing CA's first). A profile is
- * made only on an Issuing CA that has its certificate, which it then keeps.
- */
-export async function issuingChainOf(db: Db | Tx, profile: ProfileRow): Promise<string[]> {
-  const of = (await findIssuingCa(db, profile.organizationId, profile.issuingCaId))!;
-  const above = [of.ca.chainPem, of.ca.rootCertificatePem].filter((pem): pem is string => pem !== null).flatMap((pem) => pem.match(/-----BEGIN CERTIFICATE-----[^-]+-----END CERTIFICATE-----/g) ?? []);
-  return [of.issuing.certificatePem!, ...above];
-}
-
 /** The device key's type as a profile names it, such as "rsa-2048"; none for a key no profile can allow. */
 function keyTypeOf(key: ReturnType<typeof createPublicKey>): DeviceKeyType | undefined {
   const type = `rsa-${key.asymmetricKeyDetails?.modulusLength}`;
@@ -95,7 +85,7 @@ const publicKeyOf = (csr: Uint8Array) => createPublicKey({ key: Buffer.from(new 
 export function createDeviceEnrollment(deps: {
   db: Db;
   unitOfWork: UnitOfWork;
-  privateCas: PrivateCas;
+  issuers: EnrollmentIssuers;
   revocations: DeviceCertificateRevocations;
   sharedChallenges: SharedChallenges;
   kinds: EnrollmentValidators;
@@ -103,7 +93,7 @@ export function createDeviceEnrollment(deps: {
   transactions: ScepTransactions;
   clock: () => Date;
 }): DeviceEnrollment {
-  const { db, unitOfWork, privateCas, revocations, sharedChallenges, kinds, validators, transactions, clock } = deps;
+  const { db, unitOfWork, issuers, revocations, sharedChallenges, kinds, validators, transactions, clock } = deps;
 
   /**
    * Why the profile does not take this renewal, if it does not; otherwise the Device Certificate it renews, which
@@ -132,9 +122,9 @@ export function createDeviceEnrollment(deps: {
     if (!superseded) throw new RevokedMeanwhile();
   }
 
-  /** A recorded answer, as the device is sent it: its Device Certificate with the chain the profile's Issuing CA has now, or the refusal. */
+  /** A recorded answer, as the device is sent it: its Device Certificate with the chain the profile's issuer has now, or the refusal. */
   const answered = async (profile: ProfileRow, answer: ScepAnswer): Promise<DeviceEnrollmentAnswer> =>
-    "issuedPem" in answer ? { issued: { certificatePem: answer.issuedPem, chainPem: await issuingChainOf(db, profile) } } : { refused: answer.refusal };
+    "issuedPem" in answer ? { issued: { certificatePem: answer.issuedPem, chainPem: await issuers.chainOf(db, profile.organizationId, enrollmentIssuerOf(profile)) } } : { refused: answer.refusal };
   const decidedOf = (request: DeviceEnrollmentRequest) => ({ csr: request.csr, transactionId: request.transactionId });
 
   /**
@@ -174,7 +164,8 @@ export function createDeviceEnrollment(deps: {
       const broken = nameRulesRefusal(profile.nameRules, request.csr);
       if (broken) return refused(broken);
     }
-    const caRefusal = await privateCas.deviceRefusal(db, profile.organizationId, profile.issuingCaId, request.csr);
+    const issuer = enrollmentIssuerOf(profile);
+    const caRefusal = await issuers.deviceRefusal(db, profile.organizationId, issuer, request.csr);
     if (caRefusal) return refused(caRefusal);
     let validator: EnrollmentValidator;
     try {
@@ -194,9 +185,9 @@ export function createDeviceEnrollment(deps: {
     );
     if (!decision.allowed) return refused(decision.reason, true, retryable);
 
-    let issued: Awaited<ReturnType<PrivateCas["issueDevice"]>>;
+    let issued: Awaited<ReturnType<EnrollmentIssuers["issueDevice"]>>;
     try {
-      issued = await privateCas.issueDevice(db, profile.organizationId, profile.issuingCaId, {
+      issued = await issuers.issueDevice(db, profile.organizationId, issuer, {
         csr: request.csr,
         validityDays: profile.validityDays,
         keyUsage: profile.keyUsage,
@@ -219,7 +210,7 @@ export function createDeviceEnrollment(deps: {
           .values({
             organizationId: profile.organizationId,
             enrollmentProfileId: profile.id,
-            issuingCaId: profile.issuingCaId,
+            ...enrollmentIssuerColumns(issuer),
             serial,
             fingerprint: fingerprintOf(certificate.rawData),
             subject: certificate.subject,

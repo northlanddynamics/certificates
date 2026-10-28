@@ -2,6 +2,16 @@
 // certifies. A new value is an entry here. The web imports these too, so that what it offers is what the API accepts;
 // this module imports nothing, so either side can.
 
+/**
+ * Every kind of issuer (enrollment-issuer.ts) a profile can have. A new kind is an entry here, which the database checks
+ * on `enrollment_profile.issuer_kind` and `device_certificate.issuer_kind` (schema.ts) must list too.
+ */
+export const ENROLLMENT_ISSUER_KINDS = [
+  /** An Issuing CA of one of the Organization's Private CAs. */
+  "private_ca",
+] as const;
+export type EnrollmentIssuerKind = (typeof ENROLLMENT_ISSUER_KINDS)[number];
+
 /** The key usages a profile may give its Device Certificates (RFC 5280, 4.2.1.3); no CA usages. */
 export const DEVICE_KEY_USAGES = ["digitalSignature", "nonRepudiation", "keyEncipherment", "dataEncipherment", "keyAgreement"] as const;
 export type DeviceKeyUsage = (typeof DEVICE_KEY_USAGES)[number];
