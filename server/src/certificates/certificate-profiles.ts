@@ -21,7 +21,7 @@ import type { AcmeCas } from "../issuance/acme/acme-cas";
 import { issuerColumns, issuerOf, type Issuer } from "../issuance/issuer";
 import { KEY_ALGORITHMS, type KeyAlgorithm } from "../pki/csr";
 import { findIssuingCa, issuingCaLabel, issuingRefusal, keyAlgorithmRefusal, validityDaysField, validityRefusal } from "../private-ca/private-ca";
-import { adcsIssuerRefusal, findAdcsIssuer, templateLabel } from "../adcs/adcs-issuance";
+import { adcsIssuerRefusal, findAdcsIssuer, templateUnavailableRefusal } from "../adcs/adcs-issuance";
 import { unavailableReason } from "../adcs/adcs-kinds";
 import { RenewalPolicy } from "./managed-certificate-reader";
 import { NO_NAME_RULES, ProfileNameRulesField, ProfileNameRulesShown, normalizeProfileNameRules, profileNamesRefusal, type ProfileNameRules } from "./profile-name-rules";
@@ -54,7 +54,7 @@ const ProfileIssuer = z
   .openapi({
     description:
       "`acme`: the ACME CA `acmeCaId`, through the Organization's ACME Account with it. `private_ca`: the Issuing CA `issuingCaId` of one of its Private CAs. " +
-      "`adcs`: the Certificate Template `templateId` of one of its ADCS CAs, through an Agent; the template decides validity.",
+      "`adcs`: the Certificate Template `templateId` of one of its ADCS CAs, through an Agent; the Certificate Template decides validity.",
   });
 
 export const CertificateProfile = z.object({
@@ -134,7 +134,7 @@ async function hasAcmeAccount(tx: Db | Tx, orgId: string, acmeCaId: string) {
 
 const noAcmeAccount = (caName: string) => `the Organization has no ACME Account with ${caName}; register one first`;
 
-/** Why the ADCS template each profile names is unavailable, by profile: none for one that names an available template, or none. */
+/** Why the ADCS template each profile names is unavailable, by profile: none for a profile whose template is available, or that names no template. */
 async function templatesUnavailableOf(db: Db | Tx, rows: ProfileRow[]) {
   const ids = [...new Set(rows.flatMap((row) => (row.adcsTemplateId ? [row.adcsTemplateId] : [])))];
   const templates = ids.length === 0 ? [] : await db.select().from(adcsTemplate).where(inArray(adcsTemplate.id, ids));
@@ -142,8 +142,8 @@ async function templatesUnavailableOf(db: Db | Tx, rows: ProfileRow[]) {
   return (row: ProfileRow) => (row.adcsTemplateId ? (why.get(row.adcsTemplateId) ?? null) : null);
 }
 
-/** The profile as the API shows it, with its default Team and whether its template is unavailable. */
-async function shown(db: Db | Tx, row: ProfileRow, defaultTeam: TeamRef | null) {
+/** The profile as the API shows it, with its default Team, after looking up whether its template is unavailable. */
+async function shownWithTemplateState(db: Db | Tx, row: ProfileRow, defaultTeam: TeamRef | null) {
   return toProfile(row, defaultTeam, (await templatesUnavailableOf(db, [row]))(row));
 }
 
@@ -194,8 +194,8 @@ export async function requestedThrough(db: Db | Tx, acmeCas: AcmeCas, orgId: str
     if (refusal) throw unusable(refusal);
   } else {
     const { ca, template } = await findAdcsIssuer(db, orgId, issuer);
-    const unavailable = template && unavailableReason(template);
-    if (unavailable) throw unusable(`${templateLabel(ca!, template!)} is unavailable: ${unavailable}`);
+    const unavailable = ca && template && templateUnavailableRefusal(ca, template);
+    if (unavailable) throw unusable(unavailable);
   }
   return { profile: { id: row.id, name: row.name }, issuer, validityDays: row.validityDays, renewalPolicy: policyOf(row), defaultTeamId: row.defaultTeamId, nameRules: nameRulesOf(row) };
 }
@@ -420,7 +420,7 @@ export function registerCertificateProfiles(ctx: {
           });
           return { row: row!, defaultTeam };
         });
-        return c.json(await shown(db, row, defaultTeam), 201);
+        return c.json(await shownWithTemplateState(db, row, defaultTeam), 201);
       } catch (err) {
         if (isUniqueViolation(err)) throw taken(body.name);
         throw err;
@@ -456,7 +456,7 @@ export function registerCertificateProfiles(ctx: {
       const { orgId, id } = c.req.valid("param");
       const { role } = await authorize(await requireUser(c), orgId, { certificateProfile: ["read"] });
       const row = await findProfile(orgId, id, role);
-      return c.json({ ...(await shown(db, row, (await defaultTeamsOf(orgId, [row]))(row))), linked: await linkedOf(db, row.id), pending: await pendingOf(db, row.id) }, 200);
+      return c.json({ ...(await shownWithTemplateState(db, row, (await defaultTeamsOf(orgId, [row]))(row))), linked: await linkedOf(db, row.id), pending: await pendingOf(db, row.id) }, 200);
     },
   );
 
@@ -494,7 +494,7 @@ export function registerCertificateProfiles(ctx: {
           });
           return row!;
         });
-        return c.json(await shown(db, row, (await defaultTeamsOf(orgId, [row]))(row)), 200);
+        return c.json(await shownWithTemplateState(db, row, (await defaultTeamsOf(orgId, [row]))(row)), 200);
       },
     );
   }
@@ -542,6 +542,7 @@ export function registerCertificateProfiles(ctx: {
         const { row, defaultTeam } = await unitOfWork.run(actor, async (tx, change) => {
           // Locked, so that two edits take turns and each is checked against what the other left.
           const [current] = await tx.select().from(certificateProfile).where(eq(certificateProfile.id, id)).for("update");
+          // Only the editable fields are compared, so whether its template is unavailable is not looked up here.
           const before = toProfile(current!, current!.defaultTeamId === null ? null : await teamOf(tx, orgId, current!.defaultTeamId), null);
           const issuing: Issuing = {
             issuer: body.issuer ?? issuerOf(current!),
@@ -588,7 +589,7 @@ export function registerCertificateProfiles(ctx: {
           });
           return { row: row!, defaultTeam: after.defaultTeam };
         });
-        return c.json(await shown(db, row, defaultTeam), 200);
+        return c.json(await shownWithTemplateState(db, row, defaultTeam), 200);
       } catch (err) {
         if (isUniqueViolation(err)) throw taken(body.name!);
         throw err;

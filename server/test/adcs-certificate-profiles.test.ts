@@ -248,6 +248,27 @@ describe("requesting through a Certificate Profile on an ADCS CA", () => {
   });
 });
 
+describe("disabling and detaching", () => {
+  test("behave as for any profile: a disabled one is refused and stops Renewal, and a detached Managed Certificate renews from the ADCS CA", async () => {
+    const { ca, agent, tls } = await adcsCa();
+    const profile = await profileOn(ca, tls);
+    const made = await requestThrough(profile.id, ["web.corp.example"], acmeOrg.cookie);
+    await work(agent);
+
+    expect((await api(acmeOrg, `/certificate-profiles/${profile.id}/disable`, {}, "POST")).status).toBe(200);
+    const refused = await requestThrough(profile.id, ["api.corp.example"], acmeOrg.cookie);
+    expect(refused.status).toBe(422);
+    expect(refused.body.error).toBe("the Certificate Profile Corp web is disabled, so nothing is issued under it");
+    expect((await api(acmeOrg, `/managed-certificates/${made.body.id}/renewals`, {}, "POST")).status).toBe(422);
+
+    expect((await api(acmeOrg, `/managed-certificates/${made.body.id}/profile`, undefined, "DELETE")).status).toBe(200);
+    expect((await api(acmeOrg, `/managed-certificates/${made.body.id}/renewals`, {}, "POST")).status).toBe(202);
+    await work(agent);
+    expect((await mcOf(made.body.id)).issuance).toMatchObject({ kind: "renewal", status: "succeeded" });
+    expect(adcs.issued.map((i) => i.template)).toEqual(["CorpWebServer", "CorpWebServer"]);
+  });
+});
+
 describe("a profile whose template is unavailable", () => {
   test("shows why, in the list and when read, but stays enabled; requests through it are refused and its Issuances fail until the template is back", async () => {
     const { ca, agent, tls } = await adcsCa();
@@ -257,7 +278,7 @@ describe("a profile whose template is unavailable", () => {
     await work(agent);
     expect((await mcOf(made.body.id)).issuance.status).toBe("succeeded");
 
-    // The gMSA loses the right to enroll on it.
+    // The Agents' account may no longer enroll on it.
     adcs.templates = defaultTemplates().map((t) => (t.name === "CorpWebServer" ? { ...t, enrollable: false } : t));
     await refresh(ca, agent);
     const read = await api(acmeOrg, `/certificate-profiles/${profile.id}`);

@@ -48,7 +48,7 @@ describe("a Certificate Profile on an ADCS CA", () => {
 
   test("warns, while its template is unavailable, that it stays enabled but issues nothing until the template is back", () => {
     expect(templateUnavailableWarning("The CA no longer reports it.")).toBe(
-      "The CA no longer reports it. The profile stays enabled, but requests through it are refused and its Issuances fail until ADCS makes the template available again; nothing needs reconfiguring.",
+      "The CA no longer reports it. The profile stays enabled, but requests through it are refused and its Issuances fail until ADCS makes the Certificate Template available again; nothing needs reconfiguring.",
     );
   });
 });

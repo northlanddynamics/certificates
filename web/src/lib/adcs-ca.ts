@@ -61,4 +61,4 @@ export function adcsIssuerTitle(cas: Pick<AdcsCa, "id" | "name" | "templates">[]
 
 /** What a Certificate Profile whose template is unavailable warns of, given why (as the server says it). */
 export const templateUnavailableWarning = (reason: string) =>
-  `${reason} The profile stays enabled, but requests through it are refused and its Issuances fail until ADCS makes the template available again; nothing needs reconfiguring.`;
+  `${reason} The profile stays enabled, but requests through it are refused and its Issuances fail until ADCS makes the Certificate Template available again; nothing needs reconfiguring.`;

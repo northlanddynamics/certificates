@@ -62,9 +62,10 @@ function IssuerName({ orgId, issuer }: { orgId: string; issuer: CertificateProfi
 
 /** The validity a profile fixes, in words: an ACME CA's and an ADCS template's are their own. */
 const validityText = (profile: CertificateProfile) =>
-  profile.issuer.kind === "acme" ? "The CA's" : profile.issuer.kind === "adcs" ? "The template's" : chosenValidityLabel(profile.validityDays);
+  profile.issuer.kind === "acme" ? "The CA's" : profile.issuer.kind === "adcs" ? "The Certificate Template's" : chosenValidityLabel(profile.validityDays);
 
-const sameIssuer = (a: IssuerRef, b: IssuerRef) => JSON.stringify(a) === JSON.stringify(b);
+const sameIssuer = (a: IssuerRef, b: IssuerRef) =>
+  a.kind === "acme" ? b.kind === "acme" && a.acmeCaId === b.acmeCaId : a.kind === "private_ca" ? b.kind === "private_ca" && a.issuingCaId === b.issuingCaId : b.kind === "adcs" && a.adcsCaId === b.adcsCaId && a.templateId === b.templateId;
 
 /** Warns that the profile's ADCS template is unavailable, and what that means. */
 function TemplateUnavailableAlert({ reason }: { reason: string }) {
@@ -91,7 +92,7 @@ const columns = (orgId: string, mayEdit: boolean, mayDisable: boolean) =>
             {row.original.templateUnavailable && (
               <Badge variant="warning" title={templateUnavailableWarning(row.original.templateUnavailable)}>
                 <TriangleAlertIcon data-icon="inline-start" />
-                Template unavailable
+                Certificate Template unavailable
               </Badge>
             )}
           </span>
@@ -277,9 +278,10 @@ function ProfileForm({ orgId, profile, onDone }: { orgId: string; profile?: Cert
     canRegisterAcmeAccounts: org ? can(org, "acmeAccount", "create") : false,
     initial: profile && { issuer: profile.issuer, validityDays: profile.validityDays },
   });
-  // A profile kept on its ADCS template while it is unavailable, which the picker no longer offers: its keys stay as they are.
-  const keptUnavailable = profile?.templateUnavailable && choice.issuer && sameIssuer(choice.issuer, profile.issuer) ? profile.templateUnavailable : null;
-  const keyChoices = keptUnavailable ? profile!.allowedKeyAlgorithms : choice.keyAlgorithms;
+  // A profile kept on an ADCS template the picker no longer offers (unavailable, or hidden): its keys stay as they are, and an unavailable one is warned of.
+  const keptUnoffered = profile && profile.issuer.kind === "adcs" && choice.issuer && sameIssuer(choice.issuer, profile.issuer) && !choice.chosenAdcs;
+  const keptUnavailable = keptUnoffered ? profile.templateUnavailable : null;
+  const keyChoices = keptUnoffered ? profile.allowedKeyAlgorithms : choice.keyAlgorithms;
   const [keys, setKeys] = useState<KeyAlgorithm[]>(profile?.allowedKeyAlgorithms ?? ["ecdsa-p256"]);
   const [mode, setMode] = useState<RenewalPolicy["mode"]>(profile?.renewalPolicy.mode ?? "automatic");
   const [days, setDays] = useState(String(profile?.renewalPolicy.daysBeforeExpiry ?? 30));

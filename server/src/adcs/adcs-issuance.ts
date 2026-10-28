@@ -68,6 +68,12 @@ export const adcsPermittedNamesOf = (row: Pick<AdcsCaRow, "permittedExactNames" 
 export const templateLabel = (ca: Pick<AdcsCaRow, "name">, template: Pick<TemplateRow, "displayName" | "name">) =>
   `the Certificate Template ${template.displayName || template.name} of the ADCS CA ${ca.name}`;
 
+/** Why nothing is issued under the template now, naming it and its CA; none while it is available. */
+export function templateUnavailableRefusal(ca: Pick<AdcsCaRow, "name">, template: TemplateRow) {
+  const unavailable = unavailableReason(template);
+  return unavailable ? `${templateLabel(ca, template)} is unavailable: ${unavailable}` : undefined;
+}
+
 /** Why the ADCS CA may not issue for the names (normalised): those its Permitted Name Rules do not permit. None when it has none, or they do. */
 export function adcsNamesRefusal(ca: AdcsCaRow, names: string[]) {
   const rules = adcsPermittedNamesOf(ca);
@@ -426,9 +432,9 @@ export function createAdcsIssuance({
       }
       // What waits is submitted under the template only while the platform can still issue under it.
       const [template] = await tx.select().from(adcsTemplate).where(eq(adcsTemplate.id, row.templateId));
-      const unavailable = unavailableReason(template!);
+      const unavailable = templateUnavailableRefusal(ca!, template!);
       if (unavailable) {
-        await fail(tx, change, row, new IssuanceFailure("template_unavailable", `${templateLabel(ca!, template!)} is unavailable: ${unavailable}`));
+        await fail(tx, change, row, new IssuanceFailure("template_unavailable", unavailable));
         return;
       }
       // An Agent that could not reach the CA before is tried again once no other is online: the CA may be back.
@@ -465,8 +471,8 @@ export function createAdcsIssuance({
     async issue(dbOrTx, organizationId, issuer, request) {
       const { ca, template } = await findAdcsIssuer(dbOrTx, organizationId, issuer);
       if (!ca || !template) throw new IssuanceFailure("internal", "the ADCS CA or its Certificate Template is gone");
-      const unavailable = unavailableReason(template);
-      if (unavailable) throw new IssuanceFailure("template_unavailable", `${templateLabel(ca, template)} is unavailable: ${unavailable}`);
+      const unavailable = templateUnavailableRefusal(ca, template);
+      if (unavailable) throw new IssuanceFailure("template_unavailable", unavailable);
       const outside = adcsNamesRefusal(ca, request.names);
       if (outside) throw new IssuanceFailure("name_not_permitted", outside);
       const keyRefusal = templateKeyRefusal(template, (await parseCsr(request.csr)).keyAlgorithm);
