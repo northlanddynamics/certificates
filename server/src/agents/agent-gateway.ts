@@ -72,7 +72,7 @@ const WorkItem = z.object({
       "`adcs.submit` asks the Agent to submit a CSR to an ADCS CA with MS-WCCE, as its own account, under a Certificate Template, and to report what ADCS answered as `submission`: the payload has `configString`, `template` (the template's ADCS name) and `csr` (PEM). " +
       "ADCS may issue it (`issued`), hold it for a CA manager's approval (`pending`) or deny it (`denied`). " +
       "`adcs.check` asks the Agent to ask an ADCS CA again where a request it held pending stands, and to report it as `submission`, in the same shape: the payload has `configString` and `requestId`, ADCS's ID of the request. " +
-      "`adcs.revoke` asks the Agent to have an ADCS CA revoke a Certificate it issued, and to report `revocation` (`status`: `revoked`) once it has, or had already: the payload has `configString`, `serialNumber` (hex) and `reason`, the RFC 5280 CRLReason code, which ADCS takes as its own. " +
+      "`adcs.revoke` asks the Agent to have an ADCS CA revoke a Certificate it issued, and to report `revocation` (`status`: `revoked`) once it has, or had already: the payload has `configString`, `serialNumber` (lower-case hex, without leading zeros) and `reason`, the RFC 5280 CRLReason code, which ADCS takes as its own. " +
       "An Agent that cannot reach ADCS (one not on Windows) fails an ADCS item as `rejected`, saying so; one whose CA does not answer fails it as `unreachable`, and the platform asks another; ADCS refusing the request is `rejected`, with its reason. " +
       "The Agent reports how it went to `POST /api/agent/work-items/{id}/result`.",
   }),

@@ -20,8 +20,14 @@ import type { Change } from "../platform/unit-of-work";
 /** How long an Agent has to report a revocation before its Revocation Request fails as timed out. */
 export const REVOCATION_DEADLINE_MS = 3600_000;
 
-/** The first certificate of a PEM chain: the Certificate itself. */
-const leafOf = (pem: string) => pem.match(/-----BEGIN CERTIFICATE-----[^-]+-----END CERTIFICATE-----/)?.[0] ?? pem;
+/**
+ * The serial number of the first certificate of a PEM chain (the Certificate itself), as `adcs.revoke` gives it: lower-case
+ * hex without leading zeros, the number rather than its DER bytes.
+ */
+function serialNumberOf(pem: string) {
+  const leaf = pem.match(/-----BEGIN CERTIFICATE-----[^-]+-----END CERTIFICATE-----/)?.[0] ?? pem;
+  return BigInt(`0x${new x509.X509Certificate(leaf).serialNumber}`).toString(16);
+}
 
 export interface AdcsRevocation {
   /**
@@ -34,7 +40,7 @@ export interface AdcsRevocation {
 }
 
 /** What an `adcs.revoke` work item keeps: what the Agent is given, the Revocation Request it is for, and the Agents tried for it. */
-type Payload = { configString: string; serialNumber: string; reason: number; adcsCaId: string; revocationRequestId: string; tried: string[] };
+type RevokeWork = { configString: string; serialNumber: string; reason: number; adcsCaId: string; revocationRequestId: string; tried: string[] };
 
 export function createAdcsRevocation({ workItems, offlineAfterSeconds }: { workItems: WorkItems; offlineAfterSeconds: number }): AdcsRevocation {
   let revocations: Pick<Revocations, "report"> | undefined;
@@ -47,7 +53,7 @@ export function createAdcsRevocation({ workItems, offlineAfterSeconds }: { workI
     });
 
   /** Gives the revocation to an online assigned Agent not yet tried for it; the work item's id, or none when there is no such Agent. */
-  async function dispatch(tx: Tx, change: Change, organizationId: string, payload: Payload) {
+  async function dispatch(tx: Tx, change: Change, organizationId: string, payload: RevokeWork) {
     const next = (await assignedAgentsOf(tx, payload.adcsCaId, change.occurredAt, offlineAfterSeconds)).find((a) => a.online && !payload.tried.includes(a.id));
     if (!next) return undefined;
     return workItems.enqueueIn(tx, change, organizationId, next.id, ADCS_WORK_TYPES.revoke, { ...payload, tried: [...payload.tried, next.id] });
@@ -55,7 +61,7 @@ export function createAdcsRevocation({ workItems, offlineAfterSeconds }: { workI
 
   /** What follows from an Agent's report of `adcs.revoke`, on the transaction that records the report. */
   async function revoked(tx: Tx, change: Change, item: { organizationId: string; agentId: string; payload: Record<string, unknown> }, result: WorkResult) {
-    const payload = item.payload as Payload;
+    const payload = item.payload as RevokeWork;
     const [request] = await tx
       .select({ status: revocationRequest.status })
       .from(revocationRequest)
@@ -89,8 +95,8 @@ export function createAdcsRevocation({ workItems, offlineAfterSeconds }: { workI
       if (!ca) throw new CertificateAuthorityError("rejected", "the ADCS CA the Certificate came from is gone");
       const answers: RevocationAnswer[] = [];
       for (const { requestId, certificate, reason } of requests) {
-        const serialNumber = new x509.X509Certificate(leafOf(certificate)).serialNumber.toLowerCase();
-        const payload: Payload = { configString: ca.configString, serialNumber, reason: REVOCATION_REASONS[reason], adcsCaId: ca.id, revocationRequestId: requestId, tried: [] };
+        const serialNumber = serialNumberOf(certificate);
+        const payload: RevokeWork = { configString: ca.configString, serialNumber, reason: REVOCATION_REASONS[reason], adcsCaId: ca.id, revocationRequestId: requestId, tried: [] };
         const itemId = await dispatch(tx, change, organizationId, payload);
         if (!itemId) throw new CertificateAuthorityError("unreachable", `no Agent assigned to the ADCS CA ${ca.name} is online to revoke the Certificate; ask again once one is`);
         answers.push({ pending: { handle: itemId, deadline: new Date(change.occurredAt.getTime() + REVOCATION_DEADLINE_MS) } });

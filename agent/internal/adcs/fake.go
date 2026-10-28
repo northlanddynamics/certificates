@@ -271,7 +271,7 @@ func (f *Fake) Revoke(_ context.Context, configString, serialNumber string, reas
 	}
 	f.mu.Lock()
 	defer f.mu.Unlock()
-	serial := strings.ToLower(strings.TrimLeft(serialNumber, "0"))
+	serial := serialNumber
 	if !f.issued[serial] {
 		return Refused("the CA has no certificate with serial number %s", serialNumber)
 	}
@@ -285,7 +285,7 @@ func (f *Fake) Revoke(_ context.Context, configString, serialNumber string, reas
 func (f *Fake) RevocationReason(serialNumber string) (int, bool, error) {
 	f.mu.Lock()
 	defer f.mu.Unlock()
-	reason, revoked := f.revoked[strings.ToLower(strings.TrimLeft(serialNumber, "0"))]
+	reason, revoked := f.revoked[serialNumber]
 	return reason, revoked, nil
 }
 
