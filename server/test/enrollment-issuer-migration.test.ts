@@ -82,12 +82,10 @@ describe("migrating Enrollment Profiles to name their issuer by kind", () => {
     for (const cert of [second, renewed]) expect(await read(cert.certificate).verify({ publicKey: read(issuing).publicKey, signatureOnly: true })).toBe(true);
 
     const listed = (await h.api(`${profilePath}/device-certificates`, { cookie: org.cookie })).body.items as { id: string; subject: string; status: string }[];
-    expect(listed.map((one) => [one.subject, one.status])).toEqual([
-      ["CN=first", "active"],
-      ["CN=second", "active"],
-      ["CN=first", "revoked"],
-    ]);
-    const revoked = await h.api(`${profilePath}/device-certificates/${listed[1]!.id}/revocation`, { cookie: org.cookie, body: { reason: "keyCompromise" } });
+    // The harness's clock stands still, so all were issued at once: in no order.
+    expect(listed.map((one) => `${one.subject} ${one.status}`).sort()).toEqual(["CN=first active", "CN=first revoked", "CN=second active"]);
+    const secondId = listed.find((one) => one.subject === "CN=second")!.id;
+    const revoked = await h.api(`${profilePath}/device-certificates/${secondId}/revocation`, { cookie: org.cookie, body: { reason: "keyCompromise" } });
     expect(revoked.status).toBe(200);
     expect(revoked.body).toMatchObject({ status: "revoked", revocation: { reason: "keyCompromise" } });
   });
