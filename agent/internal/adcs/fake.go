@@ -243,6 +243,7 @@ func (f *Fake) Submit(_ context.Context, configString, template string, csrDER [
 	return issued, nil
 }
 
+// Check says where the request stands: pending until a CA manager approves or denies it, then as it was decided.
 func (f *Fake) Check(_ context.Context, configString, requestID string) (Submission, error) {
 	if err := f.reach(configString); err != nil {
 		return Submission{}, err

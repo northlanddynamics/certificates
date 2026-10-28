@@ -8,6 +8,7 @@
 import * as x509 from "@peculiar/x509";
 import { webcrypto } from "node:crypto";
 import type { TemplateFacts } from "../../src/adcs/adcs-kinds";
+import type { SubmissionResult } from "../../src/adcs/adcs-work";
 import { CLIENT_AUTHENTICATION, SERVER_AUTHENTICATION } from "../../src/adcs/adcs-kinds";
 
 x509.cryptoProvider.set(webcrypto as unknown as Crypto);
@@ -87,7 +88,7 @@ async function makeCa(subject: string, issuer: { subject: string; keys: CryptoKe
 }
 
 /** What ADCS answers a request with, or holds it as, as `adcs.submit` and `adcs.check` report it. */
-export type Disposition = { status: "issued"; requestId: string; certificate: string } | { status: "pending"; requestId: string } | { status: "denied"; requestId: string; message: string };
+type Disposition = SubmissionResult;
 
 export class AdcsDouble {
   /** The templates it publishes and knows of, with their facts. */
