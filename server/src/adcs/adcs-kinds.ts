@@ -35,7 +35,7 @@ export interface TemplateFacts {
   published: boolean;
 }
 
-/** A template as the platform keeps it: whether its last discovery reported it at all, as one no longer reported is kept. */
+/** A template's facts, and, for one the platform keeps, whether its last discovery reported it (one just discovered was). */
 type Kept = Pick<TemplateFacts, "published" | "enrollable" | "subjectFromRequest"> & { reported?: boolean };
 
 /** Why the platform cannot issue under a template, or none when it can: it must be reported, published, enrollable by the gMSA, and take the subject from the request. */
@@ -50,13 +50,14 @@ export function unavailableReason(t: Kept): string | null {
 /** Whether the platform can issue under the template. */
 export const isAvailable = (t: Kept) => unavailableReason(t) === null;
 
-/** What a template may be offered for: TLS with Server Authentication, devices with Client Authentication. */
-export const TEMPLATE_PURPOSES = ["tls", "devices"] as const;
-export type TemplatePurpose = (typeof TEMPLATE_PURPOSES)[number];
+/** What a template may be offered for, and the EKU it needs for each: TLS with Server Authentication, devices with Client Authentication. */
+const PURPOSE_EKUS = { tls: SERVER_AUTHENTICATION, devices: CLIENT_AUTHENTICATION } as const;
+export type TemplatePurpose = keyof typeof PURPOSE_EKUS;
+export const TEMPLATE_PURPOSES = Object.keys(PURPOSE_EKUS) as TemplatePurpose[];
 
 /** What its EKUs suit a template for, whether or not it is offered: both with both. */
 export function purposesOf(t: Pick<TemplateFacts, "extendedKeyUsages">): TemplatePurpose[] {
-  return TEMPLATE_PURPOSES.filter((purpose) => t.extendedKeyUsages.includes(purpose === "tls" ? SERVER_AUTHENTICATION : CLIENT_AUTHENTICATION));
+  return TEMPLATE_PURPOSES.filter((purpose) => t.extendedKeyUsages.includes(PURPOSE_EKUS[purpose]));
 }
 
 /** What the platform offers a template for: what it suits, while it is available and not hidden. */

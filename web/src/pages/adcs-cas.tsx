@@ -100,7 +100,8 @@ function AdcsCaCard({ orgId, ca, agents, mayManage, mayDelete }: { orgId: string
         </CardAction>
       </CardHeader>
       <CardContent className="flex flex-col gap-6">
-        {ca.discoveryFailure && (
+        {refresh.error && <p className="text-sm text-destructive">{refresh.error.message}</p>}
+        {!refresh.error && ca.discoveryFailure && (
           <Alert variant="destructive">
             <AlertTitle>The last discovery failed, {new Date(ca.discoveryFailure.at).toLocaleString()}</AlertTitle>
             <AlertDescription>{ca.discoveryFailure.error} The chain and templates below are from the last discovery that worked.</AlertDescription>
@@ -176,7 +177,6 @@ function TemplateTable({ orgId, ca, mayManage }: { orgId: string; ca: AdcsCa; ma
         </TableHeader>
         <TableBody>
           {ca.templates.map((t) => {
-            const reason = t.unavailableReason;
             return (
               <TableRow key={t.id}>
                 <TableCell>
@@ -192,7 +192,7 @@ function TemplateTable({ orgId, ca, mayManage }: { orgId: string; ca: AdcsCa; ma
                 <TableCell>{t.managerApproval ? "CA manager" : "None"}</TableCell>
                 <TableCell>
                   {t.hidden && <Badge variant="outline">Hidden</Badge>}{" "}
-                  {reason === null ? (
+                  {t.unavailableReason === null ? (
                     <Badge variant="secondary">Available</Badge>
                   ) : (
                     <Tooltip>
@@ -201,7 +201,7 @@ function TemplateTable({ orgId, ca, mayManage }: { orgId: string; ca: AdcsCa; ma
                           Unavailable
                         </Badge>
                       </TooltipTrigger>
-                      <TooltipContent>{reason}</TooltipContent>
+                      <TooltipContent>{t.unavailableReason}</TooltipContent>
                     </Tooltip>
                   )}
                 </TableCell>

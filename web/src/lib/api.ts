@@ -1,5 +1,6 @@
 // The server's own list of the reasons each kind of issuer takes, from a module that imports only types.
 import { ISSUING_CA_REVOCATION_REASONS, REVOCATION_REASONS_OF, type RevocationReason } from "../../../server/src/pki/revocation-reasons";
+import type { TemplatePurpose } from "../../../server/src/adcs/adcs-kinds";
 import type { KeyAlgorithm } from "./csr-generator";
 import type { PkiPublication } from "./pki-publication";
 
@@ -334,7 +335,7 @@ export interface AdcsTemplate {
   /** Hidden by an Organization Administrator: offered for nothing. */
   hidden: boolean;
   /** What it is offered for while available and not hidden. */
-  offeredFor: ("tls" | "devices")[];
+  offeredFor: TemplatePurpose[];
 }
 /** An Organization's Active Directory Certificate Services CA, reached only through the Agents assigned to it. */
 export interface AdcsCa {

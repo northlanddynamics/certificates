@@ -11,7 +11,7 @@ import { OpenAPIHono, createRoute, z } from "@hono/zod-openapi";
 import * as x509 from "@peculiar/x509";
 import { and, asc, eq, inArray, sql } from "drizzle-orm";
 import type { Context } from "hono";
-import { CONFIG_STRING, TEMPLATE_PURPOSES, isAvailable, offeredFor, unavailableReason, type TemplateFacts } from "./adcs-kinds";
+import { CONFIG_STRING, isAvailable, offeredFor, unavailableReason, type TemplateFacts, type TemplatePurpose } from "./adcs-kinds";
 import { ADCS_WORK_TYPES, DiscoveryResult } from "./adcs-work";
 import { NoAgentAnswered, relayToAgents } from "../agents/agent-relay";
 import type { WorkItems } from "../agents/work-items";
@@ -79,7 +79,7 @@ const Template = z.object({
   unavailableReason: z.string().nullable().openapi({ description: "Why the platform cannot issue under it; none while it is available." }),
   hidden: z.boolean().openapi({ description: "Hidden by an Organization Administrator: offered for nothing, whatever ADCS allows." }),
   offeredFor: z
-    .array(z.enum(TEMPLATE_PURPOSES))
+    .array(z.enum(["tls", "devices"]))
     .openapi({ description: "What it is offered for while it is available and not hidden: `tls` with Server Authentication, `devices` with Client Authentication, both with both." }),
 });
 
@@ -136,7 +136,7 @@ const toTemplate = (row: TemplateRow): z.infer<typeof Template> => ({
 
 const toAdcsCa = (row: AdcsCaRow, agentIds: string[], allTemplates: TemplateRow[]): z.infer<typeof AdcsCa> => {
   const templates = allTemplates.filter((t) => t.adcsCaId === row.id).map(toTemplate);
-  const offeredForPurpose = (purpose: (typeof TEMPLATE_PURPOSES)[number]) => templates.filter((t) => t.offeredFor.includes(purpose)).map((t) => t.id);
+  const offeredForPurpose = (purpose: TemplatePurpose) => templates.filter((t) => t.offeredFor.includes(purpose)).map((t) => t.id);
   return {
     id: row.id,
     name: row.name,
@@ -299,7 +299,8 @@ export function registerAdcsCas(ctx: {
       if (facts) await tx.update(adcsTemplate).set({ ...facts, reported: true }).where(eq(adcsTemplate.id, t.id));
       else if (t.reported) await tx.update(adcsTemplate).set({ reported: false }).where(eq(adcsTemplate.id, t.id));
     }
-    const added = discovered.templates.filter((t) => !wasAvailable.has(keyOf(t.name)));
+    const isNew = (t: TemplateFacts) => !wasAvailable.has(keyOf(t.name));
+    const added = discovered.templates.filter(isNew);
     if (added.length > 0) {
       await tx.insert(adcsTemplate).values(added.map((t) => ({ ...t, organizationId: row.organizationId, adcsCaId: row.id })));
     }
@@ -343,9 +344,12 @@ export function registerAdcsCas(ctx: {
   /**
    * Discovers an ADCS CA again, through its Agents, and records what was found; `actor` is null for the scheduler's. A
    * discovery that fails is recorded on the CA, and audited, and leaves its chain and templates as they were; its
-   * HttpError is thrown again. The Agents are asked outside any transaction.
+   * HttpError is thrown again. The Agents are asked outside any transaction, so a discovery whose outcome is recorded
+   * only after one that began later (a slow Refresh beside the daily one) records nothing: the later one stands.
    */
   async function rediscover(actor: Actor | null, row: AdcsCaRow): Promise<AdcsCaRow> {
+    const startedAt = clock();
+    const overtaken = (current: AdcsCaRow) => current.discoveredAt > startedAt || (current.discoveryFailedAt !== null && current.discoveryFailedAt > startedAt);
     const agentIds = (await agentsOf(db, [row.id])).map((a) => a.agentId);
     let discovered: Discovered;
     try {
@@ -354,8 +358,8 @@ export function registerAdcsCas(ctx: {
       if (!(err instanceof HttpError)) throw err;
       await unitOfWork.run(actor, async (tx, change) => {
         const current = await find(tx, row.organizationId, row.id, true);
-        // Removed meanwhile: nothing to record it on.
-        if (!current) return;
+        // Removed meanwhile, nothing to record it on; or overtaken.
+        if (!current || overtaken(current)) return;
         await tx.update(adcsCa).set({ discoveryFailedAt: change.occurredAt, discoveryError: err.message }).where(eq(adcsCa.id, row.id));
         await change.audit({
           organizationId: row.organizationId,
@@ -369,7 +373,7 @@ export function registerAdcsCas(ctx: {
     return unitOfWork.run(actor, async (tx, change) => {
       const current = await find(tx, row.organizationId, row.id, true);
       if (!current) throw new HttpError(404, "ADCS CA not found");
-      return recordDiscovery(tx, change, current, discovered);
+      return overtaken(current) ? current : recordDiscovery(tx, change, current, discovered);
     });
   }
 
