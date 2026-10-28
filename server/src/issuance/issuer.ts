@@ -33,7 +33,7 @@ export type CertificateIssuer =
   | { kind: "private_ca"; issuingCaId: string }
   | { kind: "adcs"; adcsCaId: string; templateId: string; requestId: string };
 
-/** The columns that store an issuer, as a Managed Certificate's and a Certificate's rows have them; a Certificate Profile's have no ADCS ones yet. */
+/** The columns that store an issuer, as a Managed Certificate's, a Certificate's and a Certificate Profile's rows have them; a row selected for a non-ADCS issuer may leave out the ADCS ones. */
 type IssuerRow = { issuerKind: IssuerKind; acmeCaId: string | null; issuingCaId: string | null; adcsCaId?: string | null; adcsTemplateId?: string | null };
 
 /** Whichever of an issuer row's references its kind needs; the database checks that it is there. */

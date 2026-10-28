@@ -1,7 +1,7 @@
 import { useQuery } from "@tanstack/react-query";
 import { useParams } from "@tanstack/react-router";
 import { createColumnHelper, tableFeatures, useTable } from "@tanstack/react-table";
-import { ClipboardCheckIcon, GlobeIcon, KeyRoundIcon, LandmarkIcon, PlusIcon, RefreshCwIcon, TagIcon, UsersIcon, type LucideIcon } from "lucide-react";
+import { ClipboardCheckIcon, GlobeIcon, KeyRoundIcon, LandmarkIcon, PlusIcon, RefreshCwIcon, TagIcon, TriangleAlertIcon, UsersIcon, type LucideIcon } from "lucide-react";
 import { useState } from "react";
 import { toast } from "sonner";
 import { ConfirmDialog } from "@/components/confirm-dialog";
@@ -9,6 +9,7 @@ import { DataTable } from "@/components/data-table/data-table";
 import { IssuerChoiceFields, useIssuerChoice } from "@/components/issuer-choice";
 import { SteppedForm, STEPPED_DIALOG, type Missing } from "@/components/stepped-form";
 import { SummaryRows } from "@/components/summary-rows";
+import { Alert, AlertDescription, AlertTitle } from "@/components/ui/alert";
 import { Badge } from "@/components/ui/badge";
 import { Button } from "@/components/ui/button";
 import { Checkbox } from "@/components/ui/checkbox";
@@ -20,8 +21,9 @@ import { Select, SelectContent, SelectItem, SelectTrigger, SelectValue } from "@
 import { Textarea } from "@/components/ui/textarea";
 import { ActionLabel, PageHeader } from "@/components/page-header";
 import { acmeCaName, useAcmeCas } from "@/lib/acme-cas";
+import { adcsIssuerTitle, templateUnavailableWarning } from "@/lib/adcs-ca";
 import { CERTIFICATE_PROFILE_GUIDE } from "@/lib/certificate-profile-guide";
-import { api, can, type CertificateProfile, type CertificateProfileChanges, type RenewalPolicy } from "@/lib/api";
+import { api, can, type CertificateProfile, type CertificateProfileChanges, type IssuerRef, type RenewalPolicy } from "@/lib/api";
 import { KEY_ALGORITHM_LABELS, type KeyAlgorithm } from "@/lib/csr-generator";
 import { MAX_NAMES, splitNames } from "@/lib/csr-names";
 import { chosenValidityLabel, findIssuingCa } from "@/lib/private-ca";
@@ -45,12 +47,34 @@ type StepId = (typeof STEPS)[number]["id"];
 
 const renewalLabel = (policy: RenewalPolicy) => (policy.mode === "manual" ? "Renewed by hand" : `Automatic, ${policy.daysBeforeExpiry} days before expiry`);
 
-/** The profile's issuer in words: the ACME CA's name, or the Issuing CA's title; its id while the CAs are not yet read, or for one no longer listed. */
+/**
+ * The profile's issuer in words: the ACME CA's name, the Issuing CA's title, or the ADCS template with its CA; its id
+ * while the CAs are not yet read, or for one no longer listed.
+ */
 function IssuerName({ orgId, issuer }: { orgId: string; issuer: CertificateProfile["issuer"] }) {
   const acmeCas = useAcmeCas(orgId);
   const privateCas = useQuery({ queryKey: ["private-cas", orgId], queryFn: () => api.privateCas(orgId), enabled: issuer.kind === "private_ca" });
+  const adcsCas = useQuery({ queryKey: ["adcs-cas", orgId], queryFn: () => api.adcsCas(orgId), enabled: issuer.kind === "adcs" });
   if (issuer.kind === "acme") return <>{acmeCaName(acmeCas.data?.items, issuer.acmeCaId)}</>;
+  if (issuer.kind === "adcs") return <>{adcsIssuerTitle(adcsCas.data?.items ?? [], issuer) ?? issuer.templateId}</>;
   return <>{findIssuingCa(privateCas.data?.items ?? [], issuer.issuingCaId)?.name ?? issuer.issuingCaId}</>;
+}
+
+/** The validity a profile fixes, in words: an ACME CA's and an ADCS template's are their own. */
+const validityText = (profile: CertificateProfile) =>
+  profile.issuer.kind === "acme" ? "The CA's" : profile.issuer.kind === "adcs" ? "The template's" : chosenValidityLabel(profile.validityDays);
+
+const sameIssuer = (a: IssuerRef, b: IssuerRef) => JSON.stringify(a) === JSON.stringify(b);
+
+/** Warns that the profile's ADCS template is unavailable, and what that means. */
+function TemplateUnavailableAlert({ reason }: { reason: string }) {
+  return (
+    <Alert className="border-warning/50 bg-warning/5">
+      <TriangleAlertIcon className="text-warning" />
+      <AlertTitle>Its Certificate Template is unavailable</AlertTitle>
+      <AlertDescription>{templateUnavailableWarning(reason)}</AlertDescription>
+    </Alert>
+  );
 }
 
 // The server lists every profile, so there is nothing to page.
@@ -63,15 +87,22 @@ const columns = (orgId: string, mayEdit: boolean, mayDisable: boolean) =>
       cell: ({ row }) => (
         <div className="flex flex-col gap-1">
           <span className="font-medium">
-            {row.original.name} {!row.original.enabled && <Badge variant="neutral">Disabled</Badge>}
+            {row.original.name} {!row.original.enabled && <Badge variant="neutral">Disabled</Badge>}{" "}
+            {row.original.templateUnavailable && (
+              <Badge variant="warning" title={templateUnavailableWarning(row.original.templateUnavailable)}>
+                <TriangleAlertIcon data-icon="inline-start" />
+                Template unavailable
+              </Badge>
+            )}
           </span>
+          {row.original.templateUnavailable && <span className="text-sm text-warning">{row.original.templateUnavailable}</span>}
           {row.original.description && <span className="text-sm text-muted-foreground">{row.original.description}</span>}
         </div>
       ),
     }),
     columnHelper.display({ id: "issuer", header: "Issuer", cell: ({ row }) => <IssuerName orgId={orgId} issuer={row.original.issuer} /> }),
     columnHelper.accessor("allowedKeyAlgorithms", { header: "Keys", cell: ({ cell }) => cell.getValue().map((algorithm) => KEY_ALGORITHM_LABELS[algorithm]).join(", ") }),
-    columnHelper.display({ id: "validity", header: "Validity", cell: ({ row }) => (row.original.issuer.kind === "acme" ? "The CA's" : chosenValidityLabel(row.original.validityDays)) }),
+    columnHelper.display({ id: "validity", header: "Validity", cell: ({ row }) => validityText(row.original) }),
     columnHelper.accessor("renewalPolicy", { header: "Renewal", cell: ({ cell }) => renewalLabel(cell.getValue()) }),
     columnHelper.accessor("nameRules", { header: "Names", cell: ({ cell }) => nameRulesLabel(cell.getValue()) ?? <span className="text-muted-foreground">Any the issuer takes</span> }),
     columnHelper.accessor("defaultTeam", { header: "Co-Owner", cell: ({ cell }) => cell.getValue()?.name ?? <span className="text-muted-foreground">None</span> }),
@@ -240,7 +271,15 @@ function ProfileForm({ orgId, profile, onDone }: { orgId: string; profile?: Cert
   const [step, setStep] = useState<StepId>("details");
   const [name, setName] = useState(profile?.name ?? "");
   const [description, setDescription] = useState(profile?.description ?? "");
-  const choice = useIssuerChoice(orgId, { canReadPrivateCas: org ? can(org, "privateCa", "read") : false, canRegisterAcmeAccounts: org ? can(org, "acmeAccount", "create") : false, initial: profile && { issuer: profile.issuer, validityDays: profile.validityDays } });
+  const choice = useIssuerChoice(orgId, {
+    canReadPrivateCas: org ? can(org, "privateCa", "read") : false,
+    canReadAdcsCas: org ? can(org, "adcsCa", "read") : false,
+    canRegisterAcmeAccounts: org ? can(org, "acmeAccount", "create") : false,
+    initial: profile && { issuer: profile.issuer, validityDays: profile.validityDays },
+  });
+  // A profile kept on its ADCS template while it is unavailable, which the picker no longer offers: its keys stay as they are.
+  const keptUnavailable = profile?.templateUnavailable && choice.issuer && sameIssuer(choice.issuer, profile.issuer) ? profile.templateUnavailable : null;
+  const keyChoices = keptUnavailable ? profile!.allowedKeyAlgorithms : choice.keyAlgorithms;
   const [keys, setKeys] = useState<KeyAlgorithm[]>(profile?.allowedKeyAlgorithms ?? ["ecdsa-p256"]);
   const [mode, setMode] = useState<RenewalPolicy["mode"]>(profile?.renewalPolicy.mode ?? "automatic");
   const [days, setDays] = useState(String(profile?.renewalPolicy.daysBeforeExpiry ?? 30));
@@ -252,7 +291,7 @@ function ProfileForm({ orgId, profile, onDone }: { orgId: string; profile?: Cert
   const [wildcards, setWildcards] = useState(profile?.nameRules.wildcards ?? true);
 
   // Only the algorithms the chosen issuer takes count, so choosing another issuer drops those it does not.
-  const allowedKeys = choice.keyAlgorithms.filter((algorithm) => keys.includes(algorithm));
+  const allowedKeys = keyChoices.filter((algorithm) => keys.includes(algorithm));
   const daysOk = /^\d+$/.test(days) && Number(days) >= 1 && Number(days) <= 365;
   const maxNamesOk = maxNames.trim() === "" || (/^\d+$/.test(maxNames.trim()) && Number(maxNames) >= 1 && Number(maxNames) <= MAX_NAMES);
   const settings = {
@@ -263,8 +302,8 @@ function ProfileForm({ orgId, profile, onDone }: { orgId: string; profile?: Cert
     defaultTeamId: teamId === NO_TEAM ? null : teamId,
     nameRules: { exact: splitNames(exactNames), zones: splitNames(zones), maxNames: maxNames.trim() === "" ? null : Number(maxNames), wildcards },
   };
-  // None until an issuer is chosen, which the Issuer step asks for before Review; ADCS CAs are not offered to a profile.
-  const issuer = choice.issuer?.kind === "adcs" ? null : choice.issuer;
+  // None until an issuer is chosen, which the Issuer step asks for before Review. An ADCS template decides its own validity.
+  const issuer = choice.issuer;
   const changes: CertificateProfileChanges | null = issuer && { ...settings, issuer, validityDays: issuer.kind === "private_ca" ? choice.chosenValidity : null };
   const save = useAction(
     async () => {
@@ -286,7 +325,7 @@ function ProfileForm({ orgId, profile, onDone }: { orgId: string; profile?: Cert
       : choice.registered === false
         ? { reason: "The Organization has no account with that ACME CA: choose another." }
         : undefined,
-    keys: allowedKeys.length > 0 ? undefined : { reason: "Allow at least one key algorithm.", field: `profile-key-${choice.keyAlgorithms[0]}` },
+    keys: allowedKeys.length > 0 ? undefined : { reason: "Allow at least one key algorithm.", field: `profile-key-${keyChoices[0]}` },
     names: maxNamesOk ? undefined : { reason: `Give at most ${MAX_NAMES} names, or leave it empty for any.`, field: "profile-max-names" },
     renewal: daysOk ? undefined : { reason: "Give 1 to 365 days before expiry.", field: "profile-renewal-days" },
   };
@@ -328,6 +367,7 @@ function ProfileForm({ orgId, profile, onDone }: { orgId: string; profile?: Cert
       {step === "issuer" && (
         <FieldSet>
           <FieldLegend>Where is it issued from?</FieldLegend>
+          {keptUnavailable && <TemplateUnavailableAlert reason={keptUnavailable} />}
           <IssuerChoiceFields choice={choice} idPrefix="profile" trying="a profile" />
         </FieldSet>
       )}
@@ -337,7 +377,7 @@ function ProfileForm({ orgId, profile, onDone }: { orgId: string; profile?: Cert
           <FieldLegend>Key algorithms</FieldLegend>
           <FieldDescription>The keys a requester's CSR may be for: those the issuer takes. With one, the CSR Generator is set to it.</FieldDescription>
           <div className="flex flex-col gap-3">
-            {choice.keyAlgorithms.map((algorithm) => (
+            {keyChoices.map((algorithm) => (
               <Field key={algorithm} orientation="horizontal">
                 <Checkbox
                   id={`profile-key-${algorithm}`}
@@ -461,7 +501,7 @@ function ProfileForm({ orgId, profile, onDone }: { orgId: string; profile?: Cert
               rows={[
                 { label: "Name", value: settings.name },
                 ...(settings.description ? [{ label: "Description", value: settings.description }] : []),
-                { label: "Issued from", value: choice.title ?? "" },
+                { label: "Issued from", value: choice.title ?? (issuer ? <IssuerName orgId={orgId} issuer={issuer} /> : "") },
                 ...(choice.validityText ? [{ label: "Validity", value: choice.validityText }] : []),
                 { label: "Key algorithms", value: allowedKeys.map((algorithm) => KEY_ALGORITHM_LABELS[algorithm]).join(", ") },
                 { label: "Names", value: nameRulesLabel(settings.nameRules) ?? <span className="text-muted-foreground">Any the issuer takes</span> },

@@ -51,3 +51,14 @@ export function adcsRequestState(request: AdcsRequest | null) {
 
 /** A template in a few words, with its CA: "<template> · <ADCS CA>". */
 export const adcsTemplateTitle = (caName: string, template: Pick<AdcsTemplate, "displayName" | "name">) => `${template.displayName || template.name} · ${caName}`;
+
+/** The template an ADCS issuer names, with its CA, whether or not it is offered now; none while the CA is not listed or has no such template. */
+export function adcsIssuerTitle(cas: Pick<AdcsCa, "id" | "name" | "templates">[], issuer: { adcsCaId: string; templateId: string }) {
+  const ca = cas.find((c) => c.id === issuer.adcsCaId);
+  const template = ca?.templates.find((t) => t.id === issuer.templateId);
+  return ca && template ? adcsTemplateTitle(ca.name, template) : undefined;
+}
+
+/** What a Certificate Profile whose template is unavailable warns of, given why (as the server says it). */
+export const templateUnavailableWarning = (reason: string) =>
+  `${reason} The profile stays enabled, but requests through it are refused and its Issuances fail until ADCS makes the template available again; nothing needs reconfiguring.`;

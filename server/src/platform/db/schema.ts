@@ -689,6 +689,9 @@ export const certificateProfile = pgTable(
     issuerKind: text("issuer_kind").$type<IssuerKind>().notNull(),
     acmeCaId: text("acme_ca_id"),
     issuingCaId: uuid("issuing_ca_id"),
+    /** The ADCS kind's reference: the Organization's ADCS CA, and the Certificate Template of it the profile issues under. */
+    adcsCaId: uuid("adcs_ca_id"),
+    adcsTemplateId: uuid("adcs_template_id"),
     /** The key algorithms a requester's key may have: some of those its issuer takes. */
     allowedKeyAlgorithms: text("allowed_key_algorithms").array().$type<KeyAlgorithm[]>().notNull(),
     /** For a Private CA only: how many days its Managed Certificates' Certificates are valid for; null for the Issuing CA's default. */
@@ -715,7 +718,7 @@ export const certificateProfile = pgTable(
     unique("certificate_profile_id_organization_unique").on(t.id, t.organizationId),
     check(
       "certificate_profile_issuer_kind",
-      sql`(${t.issuerKind} = 'acme' and ${t.acmeCaId} is not null and ${t.issuingCaId} is null) or (${t.issuerKind} = 'private_ca' and ${t.issuingCaId} is not null and ${t.acmeCaId} is null)`,
+      sql`(${t.issuerKind} = 'acme' and ${t.acmeCaId} is not null and ${t.issuingCaId} is null and ${t.adcsCaId} is null and ${t.adcsTemplateId} is null) or (${t.issuerKind} = 'private_ca' and ${t.issuingCaId} is not null and ${t.acmeCaId} is null and ${t.adcsCaId} is null and ${t.adcsTemplateId} is null) or (${t.issuerKind} = 'adcs' and ${t.adcsCaId} is not null and ${t.adcsTemplateId} is not null and ${t.acmeCaId} is null and ${t.issuingCaId} is null)`,
     ),
     check("certificate_profile_validity", sql`${t.validityDays} is null or (${t.issuerKind} = 'private_ca' and ${t.validityDays} >= 1)`),
     check("certificate_profile_key_algorithms", sql`cardinality(${t.allowedKeyAlgorithms}) >= 1`),
@@ -723,6 +726,8 @@ export const certificateProfile = pgTable(
     check("certificate_profile_renewal_days", sql`${t.renewalDaysBeforeExpiry} between 1 and 365`),
     check("certificate_profile_max_names", sql`${t.maxNames} is null or ${t.maxNames} >= 1`),
     foreignKey({ columns: [t.issuingCaId, t.organizationId], foreignColumns: [issuingCa.id, issuingCa.organizationId] }),
+    foreignKey({ columns: [t.adcsCaId, t.organizationId], foreignColumns: [adcsCa.id, adcsCa.organizationId] }),
+    foreignKey({ columns: [t.adcsTemplateId, t.adcsCaId], foreignColumns: [adcsTemplate.id, adcsTemplate.adcsCaId] }),
   ],
 );
 

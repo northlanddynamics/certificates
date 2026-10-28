@@ -1,7 +1,7 @@
 // The issuer picker's ADCS CAs, as the new Managed Certificate and Deployment dialogs list them (web/src/lib/adcs-ca.ts).
 // It decides nothing: the server refuses a template not offered for TLS, and a key the template does not take.
 import { describe, expect, test } from "bun:test";
-import { MANAGER_APPROVAL_NOTE, adcsRequestState, adcsTemplateTitle, adcsTlsChoices, templateApprovalLabel, templateKeysLabel } from "../../web/src/lib/adcs-ca";
+import { MANAGER_APPROVAL_NOTE, adcsIssuerTitle, adcsRequestState, adcsTemplateTitle, adcsTlsChoices, templateApprovalLabel, templateKeysLabel, templateUnavailableWarning } from "../../web/src/lib/adcs-ca";
 import { templateKeyAlgorithms as keyAlgorithmsTakenBy } from "../src/adcs/adcs-kinds";
 import type { AdcsCa, AdcsRequest, AdcsTemplate } from "../../web/src/lib/api";
 
@@ -35,6 +35,21 @@ describe("the ADCS CAs in the issuer picker", () => {
     expect(templateApprovalLabel(template("Web", { managerApproval: true }))).toBe("Needs CA manager approval");
     expect(templateApprovalLabel(template("Web", { managerApproval: false }))).toBe("None");
     expect(MANAGER_APPROVAL_NOTE).toContain("waits at ADCS until a CA manager issues or denies it");
+  });
+});
+
+describe("a Certificate Profile on an ADCS CA", () => {
+  test("names its template with its CA, even while the template is no longer offered", () => {
+    const corp = ca("Corp", [template("Web"), template("Gone")], ["Web"]);
+    expect(adcsIssuerTitle([corp], { adcsCaId: "Corp", templateId: "Gone" })).toBe("Gone display · Corp");
+    expect(adcsIssuerTitle([corp], { adcsCaId: "Corp", templateId: "Other" })).toBeUndefined();
+    expect(adcsIssuerTitle([], { adcsCaId: "Corp", templateId: "Web" })).toBeUndefined();
+  });
+
+  test("warns, while its template is unavailable, that it stays enabled but issues nothing until the template is back", () => {
+    expect(templateUnavailableWarning("The CA no longer reports it.")).toBe(
+      "The CA no longer reports it. The profile stays enabled, but requests through it are refused and its Issuances fail until ADCS makes the template available again; nothing needs reconfiguring.",
+    );
   });
 });
 

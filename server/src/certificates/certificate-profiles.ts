@@ -1,24 +1,28 @@
 // An Organization's Certificate Profiles: how it issues one kind of Managed Certificate, which members request against
 // instead of choosing a CA, a key algorithm, a validity and a Renewal Policy themselves. A profile fixes its issuer (an
-// ACME CA the Organization has an ACME Account with, or an active Issuing CA of one of its Private CAs), the key
-// algorithms a requester's key may have, the validity for a Private CA, the starting Renewal Policy, and may name a
-// Team to be co-Owner of what is made from it. These are copied onto each Managed Certificate made from it (ADR 0012),
+// ACME CA the Organization has an ACME Account with, an active Issuing CA of one of its Private CAs, or one of its ADCS
+// CAs and a Certificate Template of it offered for TLS), the key algorithms a requester's key may have, the validity for
+// a Private CA (an ADCS template decides its own), the starting Renewal Policy, and may name a Team to be co-Owner of
+// what is made from it. These are copied onto each Managed Certificate made from it (ADR 0012),
 // so editing a profile changes none already made. Its name rules (profile-name-rules.ts) are not copied: a
 // non-administrator's request and Name Change keep to them as they are now, as is whether it is enabled: while it is
 // disabled nothing is issued under it (issuance.ts refuses to begin). Only Organization Administrators create, edit,
-// disable and enable them; every member lists the enabled ones.
+// disable and enable them; every member lists the enabled ones. A profile whose ADCS template has become unavailable
+// says so but stays enabled: requests through it are refused, and Issuances under it fail, until the template is back.
 import { OpenAPIHono, createRoute, z } from "@hono/zod-openapi";
 import { and, asc, count, eq, inArray, isNull } from "drizzle-orm";
 import { isDeepStrictEqual } from "node:util";
 import type { Authorizer } from "../tenancy/authorization";
 import { roleCan } from "../tenancy/permissions";
 import type { Db, Tx } from "../platform/db/client";
-import { acmeAccount, certificateProfile, managedCertificate, nameChange, team } from "../platform/db/schema";
+import { acmeAccount, adcsTemplate, certificateProfile, managedCertificate, nameChange, team } from "../platform/db/schema";
 import { HttpError, OrgParam, errors, isUniqueViolation, json } from "../platform/http";
 import type { AcmeCas } from "../issuance/acme/acme-cas";
 import { issuerColumns, issuerOf, type Issuer } from "../issuance/issuer";
 import { KEY_ALGORITHMS, type KeyAlgorithm } from "../pki/csr";
 import { findIssuingCa, issuingCaLabel, issuingRefusal, keyAlgorithmRefusal, validityDaysField, validityRefusal } from "../private-ca/private-ca";
+import { adcsIssuerRefusal, findAdcsIssuer, templateLabel } from "../adcs/adcs-issuance";
+import { unavailableReason } from "../adcs/adcs-kinds";
 import { RenewalPolicy } from "./managed-certificate-reader";
 import { NO_NAME_RULES, ProfileNameRulesField, ProfileNameRulesShown, normalizeProfileNameRules, profileNamesRefusal, type ProfileNameRules } from "./profile-name-rules";
 import type { Actor, UnitOfWork } from "../platform/unit-of-work";
@@ -42,8 +46,16 @@ const ValidityDays = validityDaysField.openapi({ description: "For a Private CA 
 const DefaultTeamId = z.string().openapi({ description: "A Team of the Organization made co-Owner of each Managed Certificate made from the profile." });
 
 const ProfileIssuer = z
-  .discriminatedUnion("kind", [z.object({ kind: z.literal("acme"), acmeCaId: z.string().min(1) }), z.object({ kind: z.literal("private_ca"), issuingCaId: z.string() })])
-  .openapi({ description: "`acme`: the ACME CA `acmeCaId`, through the Organization's ACME Account with it. `private_ca`: the Issuing CA `issuingCaId` of one of its Private CAs." });
+  .discriminatedUnion("kind", [
+    z.object({ kind: z.literal("acme"), acmeCaId: z.string().min(1) }),
+    z.object({ kind: z.literal("private_ca"), issuingCaId: z.string() }),
+    z.object({ kind: z.literal("adcs"), adcsCaId: z.string(), templateId: z.string() }),
+  ])
+  .openapi({
+    description:
+      "`acme`: the ACME CA `acmeCaId`, through the Organization's ACME Account with it. `private_ca`: the Issuing CA `issuingCaId` of one of its Private CAs. " +
+      "`adcs`: the Certificate Template `templateId` of one of its ADCS CAs, through an Agent; the template decides validity.",
+  });
 
 export const CertificateProfile = z.object({
   id: z.string(),
@@ -51,7 +63,15 @@ export const CertificateProfile = z.object({
   description: z.string(),
   issuer: ProfileIssuer,
   allowedKeyAlgorithms: z.array(z.enum(KEY_ALGORITHMS)),
-  validityDays: z.number().int().nullable().openapi({ description: "For a Private CA issuer: how many days its Certificates are valid for; none for the Issuing CA's default, and always none for an ACME CA, which decides." }),
+  validityDays: z
+    .number()
+    .int()
+    .nullable()
+    .openapi({ description: "For a Private CA issuer: how many days its Certificates are valid for; none for the Issuing CA's default, and always none for an ACME CA or an ADCS CA, which decide." }),
+  templateUnavailable: z.string().nullable().openapi({
+    description:
+      "For an ADCS CA issuer: why its Certificate Template is unavailable, while it is. The profile stays enabled, but requests through it are refused and Issuances under it fail until the template is available again. None otherwise.",
+  }),
   renewalPolicy: RenewalPolicy.openapi({ description: "The Renewal Policy each Managed Certificate made from it starts with." }),
   defaultTeam: z.object({ id: z.string(), name: z.string() }).nullable().openapi({ description: "The Team made co-Owner of each Managed Certificate made from it; none when it names none." }),
   nameRules: ProfileNameRulesShown.openapi({
@@ -84,15 +104,15 @@ function nameRulesAsked(rules: ProfileNameRules): ProfileNameRules {
   return normal.rules;
 }
 
-function toProfile(row: ProfileRow, defaultTeam: TeamRef | null): z.infer<typeof CertificateProfile> {
+function toProfile(row: ProfileRow, defaultTeam: TeamRef | null, templateUnavailable: string | null): z.infer<typeof CertificateProfile> {
   return {
     id: row.id,
     name: row.name,
     description: row.description,
-    // A profile's issuer is an ACME CA or an Issuing CA: the database allows no other.
-    issuer: issuerOf(row) as z.infer<typeof CertificateProfile>["issuer"],
+    issuer: issuerOf(row),
     allowedKeyAlgorithms: row.allowedKeyAlgorithms,
     validityDays: row.validityDays,
+    templateUnavailable,
     renewalPolicy: policyOf(row),
     defaultTeam,
     nameRules: nameRulesOf(row),
@@ -114,6 +134,19 @@ async function hasAcmeAccount(tx: Db | Tx, orgId: string, acmeCaId: string) {
 
 const noAcmeAccount = (caName: string) => `the Organization has no ACME Account with ${caName}; register one first`;
 
+/** Why the ADCS template each profile names is unavailable, by profile: none for one that names an available template, or none. */
+async function templatesUnavailableOf(db: Db | Tx, rows: ProfileRow[]) {
+  const ids = [...new Set(rows.flatMap((row) => (row.adcsTemplateId ? [row.adcsTemplateId] : [])))];
+  const templates = ids.length === 0 ? [] : await db.select().from(adcsTemplate).where(inArray(adcsTemplate.id, ids));
+  const why = new Map(templates.map((template) => [template.id, unavailableReason(template)]));
+  return (row: ProfileRow) => (row.adcsTemplateId ? (why.get(row.adcsTemplateId) ?? null) : null);
+}
+
+/** The profile as the API shows it, with its default Team and whether its template is unavailable. */
+async function shown(db: Db | Tx, row: ProfileRow, defaultTeam: TeamRef | null) {
+  return toProfile(row, defaultTeam, (await templatesUnavailableOf(db, [row]))(row));
+}
+
 /** Why nothing may be issued under the profile now, naming it; none when it is enabled. */
 export const disabledRefusal = (profile: { name: string; enabled: boolean }) =>
   profile.enabled ? undefined : `the Certificate Profile ${profile.name} is disabled, so nothing is issued under it`;
@@ -131,7 +164,8 @@ export type RequestedThrough = {
 /**
  * The Organization's profile a Managed Certificate with a key of `keyAlgorithm` is requested through, and what it is
  * made with. A 422 when the Organization has no such profile, it is disabled, it does not allow the key algorithm, or its
- * issuer is no longer usable: an ACME CA the Organization has no ACME Account with, or an Issuing CA that does not issue.
+ * issuer is no longer usable: an ACME CA the Organization has no ACME Account with, an Issuing CA that does not issue,
+ * or an ADCS template that is unavailable.
  * The names, the CSR, the profile's name rules (for a non-administrator) and the issuer's own limits are the request's to check.
  */
 export async function requestedThrough(db: Db | Tx, acmeCas: AcmeCas, orgId: string, profileId: string, keyAlgorithm: KeyAlgorithm): Promise<RequestedThrough> {
@@ -159,7 +193,9 @@ export async function requestedThrough(db: Db | Tx, acmeCas: AcmeCas, orgId: str
     const refusal = of ? issuingRefusal(of) : "the Organization has no such Issuing CA";
     if (refusal) throw unusable(refusal);
   } else {
-    throw unusable("its issuer is an ADCS CA, which Certificate Profiles cannot name yet");
+    const { ca, template } = await findAdcsIssuer(db, orgId, issuer);
+    const unavailable = template && unavailableReason(template);
+    if (unavailable) throw unusable(`${templateLabel(ca!, template!)} is unavailable: ${unavailable}`);
   }
   return { profile: { id: row.id, name: row.name }, issuer, validityDays: row.validityDays, renewalPolicy: policyOf(row), defaultTeamId: row.defaultTeamId, nameRules: nameRulesOf(row) };
 }
@@ -215,9 +251,10 @@ export function registerCertificateProfiles(ctx: {
   const { app, db, requireUser, authorize, unitOfWork, acmeCas } = ctx;
 
   /**
-   * Why a profile may not issue with these: a 400 for a validity with an ACME CA, which decides its own; a 422 for an
-   * ACME CA the Organization cannot use or has no ACME Account with, an Issuing CA that is not its own or does not
-   * issue, a validity above the Issuing CA's maximum, or a key algorithm the issuer does not take. None when it may.
+   * Why a profile may not issue with these: a 400 for a validity with an ACME CA or an ADCS CA, which decide their own; a
+   * 422 for an ACME CA the Organization cannot use or has no ACME Account with, an Issuing CA that is not its own or does
+   * not issue, a validity above the Issuing CA's maximum, an ADCS template not offered for TLS, or a key algorithm the
+   * issuer does not take. None when it may.
    */
   async function issuingRefused(tx: Db | Tx, orgId: string, { issuer, allowedKeyAlgorithms, validityDays }: Issuing): Promise<HttpError | undefined> {
     const keysRefusal = (on: { caKeyAlgorithm?: KeyAlgorithm; label: string }) =>
@@ -230,7 +267,14 @@ export function registerCertificateProfiles(ctx: {
       const refusal = keysRefusal({ label: ca.name });
       return refusal ? new HttpError(422, refusal) : undefined;
     }
-    if (issuer.kind !== "private_ca") return new HttpError(422, "a Certificate Profile cannot name an ADCS CA yet");
+    if (issuer.kind === "adcs") {
+      if (validityDays !== null) return new HttpError(400, "a validity can be fixed only by a profile whose issuer is a Private CA: an ADCS CA's Certificate Template decides it");
+      for (const keyAlgorithm of allowedKeyAlgorithms) {
+        const refused = await adcsIssuerRefusal(tx, orgId, issuer, { names: [], validityDays: null, keyAlgorithm });
+        if (refused) return new HttpError(refused.status, refused.message);
+      }
+      return undefined;
+    }
     const of = await findIssuingCa(tx, orgId, issuer.issuingCaId);
     if (!of) return new HttpError(422, "the Organization has no such Issuing CA");
     const refusal = issuingRefusal(of) ?? validityRefusal(of, validityDays) ?? keysRefusal({ caKeyAlgorithm: of.ca.keyAlgorithm, label: issuingCaLabel(of) });
@@ -289,7 +333,8 @@ export function registerCertificateProfiles(ctx: {
         .where(and(eq(certificateProfile.organizationId, orgId), seesDisabled(role) ? undefined : eq(certificateProfile.enabled, true)))
         .orderBy(asc(certificateProfile.name), asc(certificateProfile.id));
       const teamOfRow = await defaultTeamsOf(orgId, rows);
-      return c.json({ items: rows.map((row) => toProfile(row, teamOfRow(row))) }, 200);
+      const unavailableOfRow = await templatesUnavailableOf(db, rows);
+      return c.json({ items: rows.map((row) => toProfile(row, teamOfRow(row), unavailableOfRow(row))) }, 200);
     },
   );
 
@@ -300,9 +345,9 @@ export function registerCertificateProfiles(ctx: {
       tags: ["Certificate Profiles"],
       summary: "Create a Certificate Profile",
       description:
-        "`issuer` is an ACME CA the Organization has an ACME Account with, or an active Issuing CA of one of its Private CAs, under an active root (422 otherwise). " +
-        "`allowedKeyAlgorithms` are some of those the issuer takes (422 otherwise): an ML-DSA Private CA takes only ML-DSA ones, every other issuer none. " +
-        "`validityDays` is for a Private CA only (400 with an ACME CA), at most its Issuing CA's maximum (422 otherwise). " +
+        "`issuer` is an ACME CA the Organization has an ACME Account with, an active Issuing CA of one of its Private CAs, under an active root, or a Certificate Template of one of its ADCS CAs offered for TLS: available, not hidden, with Server Authentication (422 otherwise). " +
+        "`allowedKeyAlgorithms` are some of those the issuer takes (422 otherwise): an ML-DSA Private CA takes only ML-DSA ones, every other issuer none, and an ADCS template only those its key requirements allow. " +
+        "`validityDays` is for a Private CA only (400 with an ACME CA or an ADCS CA), at most its Issuing CA's maximum (422 otherwise). " +
         "`renewalPolicy` is what each Managed Certificate made from it starts with (automatic, 30 days before expiry, unless given), and `defaultTeamId` a Team of the Organization (422 otherwise) made co-Owner of each. " +
         "`nameRules` limit the names a non-administrator may request through it (none unless given); ones that are not names, or a wildcard among `exact` when `wildcards` is off, are refused with 400. " +
         "Its issuer, the requester's key algorithm, its validity and its Renewal Policy are copied onto each Managed Certificate made from it, so editing it later changes none of them; " +
@@ -375,7 +420,7 @@ export function registerCertificateProfiles(ctx: {
           });
           return { row: row!, defaultTeam };
         });
-        return c.json(toProfile(row, defaultTeam), 201);
+        return c.json(await shown(db, row, defaultTeam), 201);
       } catch (err) {
         if (isUniqueViolation(err)) throw taken(body.name);
         throw err;
@@ -411,7 +456,7 @@ export function registerCertificateProfiles(ctx: {
       const { orgId, id } = c.req.valid("param");
       const { role } = await authorize(await requireUser(c), orgId, { certificateProfile: ["read"] });
       const row = await findProfile(orgId, id, role);
-      return c.json({ ...toProfile(row, (await defaultTeamsOf(orgId, [row]))(row)), linked: await linkedOf(db, row.id), pending: await pendingOf(db, row.id) }, 200);
+      return c.json({ ...(await shown(db, row, (await defaultTeamsOf(orgId, [row]))(row))), linked: await linkedOf(db, row.id), pending: await pendingOf(db, row.id) }, 200);
     },
   );
 
@@ -449,7 +494,7 @@ export function registerCertificateProfiles(ctx: {
           });
           return row!;
         });
-        return c.json(toProfile(row, (await defaultTeamsOf(orgId, [row]))(row)), 200);
+        return c.json(await shown(db, row, (await defaultTeamsOf(orgId, [row]))(row)), 200);
       },
     );
   }
@@ -497,7 +542,7 @@ export function registerCertificateProfiles(ctx: {
         const { row, defaultTeam } = await unitOfWork.run(actor, async (tx, change) => {
           // Locked, so that two edits take turns and each is checked against what the other left.
           const [current] = await tx.select().from(certificateProfile).where(eq(certificateProfile.id, id)).for("update");
-          const before = toProfile(current!, current!.defaultTeamId === null ? null : await teamOf(tx, orgId, current!.defaultTeamId));
+          const before = toProfile(current!, current!.defaultTeamId === null ? null : await teamOf(tx, orgId, current!.defaultTeamId), null);
           const issuing: Issuing = {
             issuer: body.issuer ?? issuerOf(current!),
             allowedKeyAlgorithms: body.allowedKeyAlgorithms ?? current!.allowedKeyAlgorithms,
@@ -543,7 +588,7 @@ export function registerCertificateProfiles(ctx: {
           });
           return { row: row!, defaultTeam: after.defaultTeam };
         });
-        return c.json(toProfile(row, defaultTeam), 200);
+        return c.json(await shown(db, row, defaultTeam), 200);
       } catch (err) {
         if (isUniqueViolation(err)) throw taken(body.name!);
         throw err;

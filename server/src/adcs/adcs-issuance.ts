@@ -76,7 +76,7 @@ export function adcsNamesRefusal(ca: AdcsCaRow, names: string[]) {
 }
 
 /** The Organization's ADCS CA and the template of it, each none when it has none such. */
-async function findIssuer(db: Db | Tx, organizationId: string, issuer: AdcsIssuer) {
+export async function findAdcsIssuer(db: Db | Tx, organizationId: string, issuer: AdcsIssuer) {
   const isId = (id: string) => /^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/i.test(id);
   const [ca] = isId(issuer.adcsCaId) ? await db.select().from(adcsCa).where(and(eq(adcsCa.organizationId, organizationId), eq(adcsCa.id, issuer.adcsCaId))) : [];
   const [template] =
@@ -93,7 +93,7 @@ async function findIssuer(db: Db | Tx, organizationId: string, issuer: AdcsIssue
 export async function adcsIssuerRefusal(db: Db | Tx, organizationId: string, issuer: AdcsIssuer, asked: { names: string[]; validityDays: number | null; keyAlgorithm?: KeyAlgorithm }) {
   const refused = (status: 400 | 422, message: string) => ({ status, message });
   if (asked.validityDays !== null) return refused(400, "a validity can be chosen only for a Managed Certificate issued from a Private CA: an ADCS CA's Certificate Template decides it");
-  const { ca, template } = await findIssuer(db, organizationId, issuer);
+  const { ca, template } = await findAdcsIssuer(db, organizationId, issuer);
   if (!ca) return refused(422, "the Organization has no such ADCS CA");
   if (!template) return refused(422, `the ADCS CA ${ca.name} has no such Certificate Template`);
   if (!offeredFor(template).includes("tls")) {
@@ -463,7 +463,7 @@ export function createAdcsIssuance({
 
   return {
     async issue(dbOrTx, organizationId, issuer, request) {
-      const { ca, template } = await findIssuer(dbOrTx, organizationId, issuer);
+      const { ca, template } = await findAdcsIssuer(dbOrTx, organizationId, issuer);
       if (!ca || !template) throw new IssuanceFailure("internal", "the ADCS CA or its Certificate Template is gone");
       const unavailable = unavailableReason(template);
       if (unavailable) throw new IssuanceFailure("template_unavailable", `${templateLabel(ca, template)} is unavailable: ${unavailable}`);

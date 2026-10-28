@@ -708,11 +708,13 @@ export interface CertificateProfile {
   id: string;
   name: string;
   description: string;
-  /** An ACME CA, or an Issuing CA of one of the Organization's Private CAs: a profile names no ADCS CA yet. */
-  issuer: Exclude<IssuerRef, { kind: "adcs" }>;
+  /** An ACME CA, an Issuing CA of one of the Organization's Private CAs, or a Certificate Template of one of its ADCS CAs. */
+  issuer: IssuerRef;
   allowedKeyAlgorithms: KeyAlgorithm[];
-  /** For a Private CA issuer: the validity it fixes; none for the Issuing CA's default, and always none for an ACME CA. */
+  /** For a Private CA issuer: the validity it fixes; none for the Issuing CA's default, and always none for an ACME CA or an ADCS CA. */
   validityDays: number | null;
+  /** For an ADCS CA issuer: why its template is unavailable, while it is; requests through it are refused and its Issuances fail meanwhile. */
+  templateUnavailable: string | null;
   /** What each Managed Certificate made from it starts with. */
   renewalPolicy: RenewalPolicy;
   /** The Team made co-Owner of each Managed Certificate made from it. */
