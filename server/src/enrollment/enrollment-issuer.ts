@@ -2,10 +2,11 @@
 // Certificate records as the issuer it came from. Its kinds are an Issuing CA of one of the Organization's Private CAs,
 // for now the only one. Creating and changing a profile, issuing its RA certificate and its Device Certificates, serving
 // GetCACert and revoking a Device Certificate reach the CA through here, and tell its kinds apart nowhere else.
-import type * as x509 from "@peculiar/x509";
+import * as x509 from "@peculiar/x509";
 import type { Db, Tx } from "../platform/db/client";
 import type { CertificateIssuer } from "../issuance/issuer";
 import type { EnrollmentIssuerKind } from "./enrollment-profile-kinds";
+import { fingerprintOf } from "../pki/fingerprint";
 import { enrollmentProfileRefusal, findIssuingCa, issuingRefusal, type IssuingCaOf, type PrivateCas } from "../private-ca/private-ca";
 
 /** An Enrollment Profile's issuer, as it and its Device Certificates store it: its kind and that kind's reference. */
@@ -32,11 +33,27 @@ export const enrollmentIssuerColumns = (issuer: EnrollmentIssuer) => ({ issuerKi
 /** The issuer a Device Certificate came from as a Certificate's Revocation names it (revocations.ts). */
 export const asCertificateIssuer = (issuer: EnrollmentIssuer): CertificateIssuer => issuer;
 
-/** Whether two issuers are the same. */
-export const sameEnrollmentIssuer = (a: EnrollmentIssuer, b: EnrollmentIssuer) => a.kind === b.kind && a.issuingCaId === b.issuingCaId;
+/** The issuer a profile is created with or pointed at, as its API names it: by `issuingCaId`. */
+export const enrollmentIssuerAsked = (body: { issuingCaId: string }): EnrollmentIssuer => ({ kind: "private_ca", issuingCaId: body.issuingCaId });
+
+/** What tells issuers apart, which two of the same issuer share. */
+export const enrollmentIssuerKey = (issuer: EnrollmentIssuer) => `${issuer.kind}:${issuer.issuingCaId}`;
 
 /** What an Audit Event of an Enrollment Profile says of its issuer: which Issuing CA. */
-export const enrollmentIssuerDetail = (found: FoundEnrollmentIssuer) => ({ issuingCa: { id: found.of.issuing.id, subject: found.of.issuing.subject } });
+export const enrollmentIssuerDetail = (found: FoundEnrollmentIssuer) => ({ id: found.of.issuing.id, subject: found.of.issuing.subject });
+
+/**
+ * What an Enrollment Profile shows of its issuer: the Issuing CA and its Private CA, and the SHA-256 fingerprint of the
+ * CA certificate GetCACert serves. A profile is made only on an Issuing CA that has its certificate, which it then keeps.
+ */
+export const enrollmentIssuerFields = (found: FoundEnrollmentIssuer) => ({
+  caFingerprint: fingerprintOf(new x509.X509Certificate(found.of.issuing.certificatePem!).rawData),
+  issuingCaId: found.of.issuing.id,
+  privateCaId: found.of.ca.id,
+});
+
+/** The CA certificate (PEM) devices must trust: the issuer's root, or the certificate of the CA that issues; none while the platform has none. */
+export const enrollmentIssuerCaCertificate = (found: FoundEnrollmentIssuer, ca: "root" | "issuing") => (ca === "root" ? found.of.ca.rootCertificatePem : found.of.issuing.certificatePem);
 
 export interface EnrollmentIssuers {
   /** The Organization's issuer, found; none when it has no such one (or for what cannot be its reference). */

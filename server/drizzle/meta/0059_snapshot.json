@@ -1,5 +1,5 @@
 {
-  "id": "bf5d076a-b151-4ae6-9be8-4876fb579d4d",
+  "id": "c6d7450a-53b0-4c3a-957e-63c5deb96d70",
   "prevId": "b433484b-ff1d-430a-9629-d576c6e386db",
   "version": "7",
   "dialect": "postgresql",
@@ -2850,7 +2850,7 @@
       "checkConstraints": {
         "device_certificate_issuer_kind": {
           "name": "device_certificate_issuer_kind",
-          "value": "\"device_certificate\".\"issuer_kind\" = 'private_ca' and \"device_certificate\".\"issuing_ca_id\" is not null"
+          "value": "(\"device_certificate\".\"issuer_kind\" = 'private_ca' and \"device_certificate\".\"issuing_ca_id\" is not null)"
         },
         "device_certificate_revocation": {
           "name": "device_certificate_revocation",
@@ -3311,7 +3311,7 @@
       "checkConstraints": {
         "enrollment_profile_issuer_kind": {
           "name": "enrollment_profile_issuer_kind",
-          "value": "\"enrollment_profile\".\"issuer_kind\" = 'private_ca' and \"enrollment_profile\".\"issuing_ca_id\" is not null"
+          "value": "(\"enrollment_profile\".\"issuer_kind\" = 'private_ca' and \"enrollment_profile\".\"issuing_ca_id\" is not null)"
         },
         "enrollment_profile_validity": {
           "name": "enrollment_profile_validity",

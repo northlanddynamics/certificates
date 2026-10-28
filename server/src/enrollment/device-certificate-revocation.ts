@@ -11,7 +11,7 @@ import { deviceCertificate, enrollmentProfile, revocationRequest } from "../plat
 import type { RevocationReason } from "../pki/revocation-reasons";
 import type { Change } from "../platform/unit-of-work";
 import type { Revocations, RevokedBy } from "../issuance/revocations";
-import { asCertificateIssuer, enrollmentIssuerOf, type EnrollmentIssuer } from "./enrollment-issuer";
+import { asCertificateIssuer, enrollmentIssuerKey, enrollmentIssuerOf, type EnrollmentIssuer } from "./enrollment-issuer";
 
 export type { RevokedBy } from "../issuance/revocations";
 
@@ -60,8 +60,8 @@ export function createDeviceCertificateRevocations({ revocations: asked }: { rev
         .orderBy(asc(deviceCertificate.id))
         .for("update", { of: deviceCertificate });
       const unrevoked = new Map(rows.filter((row) => row.revokedAt === null && row.requestStatus !== "pending").map((row) => [row.id, row]));
-      // What each issuer is asked to revoke, in the order given, by a key naming it; and which of those each asked-for one is.
-      const byCa = new Map<string, { issuer: EnrollmentIssuer; asked: { row: (typeof rows)[number]; reason: RevocationReason; by?: RevokedBy }[] }>();
+      // What each issuer is asked to revoke, in the order given, by its key; and which of those each asked-for one is.
+      const byIssuer = new Map<string, { issuer: EnrollmentIssuer; asked: { row: (typeof rows)[number]; reason: RevocationReason; by?: RevokedBy }[] }>();
       const asking: ({ key: string; index: number } | undefined)[] = [];
       for (const { id, reason, by } of revocations) {
         const row = unrevoked.get(id);
@@ -71,14 +71,14 @@ export function createDeviceCertificateRevocations({ revocations: asked }: { rev
         }
         unrevoked.delete(id);
         const issuer = enrollmentIssuerOf(row);
-        const key = JSON.stringify(issuer);
-        const ofCa = byCa.get(key) ?? { issuer, asked: [] };
-        byCa.set(key, ofCa);
-        asking.push({ key, index: ofCa.asked.push({ row, reason, by }) - 1 });
+        const key = enrollmentIssuerKey(issuer);
+        const ofIssuer = byIssuer.get(key) ?? { issuer, asked: [] };
+        byIssuer.set(key, ofIssuer);
+        asking.push({ key, index: ofIssuer.asked.push({ row, reason, by }) - 1 });
       }
       const answers = new Map<string, ("revoked" | "requested")[]>();
-      for (const [key, { issuer, asked: ofCa }] of byCa) {
-        const targets = ofCa.map(({ row, reason, by }) => ({
+      for (const [key, { issuer, asked: ofIssuer }] of byIssuer) {
+        const targets = ofIssuer.map(({ row, reason, by }) => ({
           target: { kind: "device_certificate" as const, deviceCertificate: row, requestedBy: actor, ...(by && { by }) },
           reason,
         }));

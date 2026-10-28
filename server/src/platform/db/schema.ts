@@ -648,7 +648,7 @@ export const enrollmentProfile = pgTable(
     foreignKey({ columns: [t.validatorSecretId, t.organizationId], foreignColumns: [secret.id, secret.organizationId] }),
     // Lets other tables reference a profile together with its Organization, so none can point at another's.
     unique("enrollment_profile_id_organization_unique").on(t.id, t.organizationId),
-    check("enrollment_profile_issuer_kind", sql`${t.issuerKind} = 'private_ca' and ${t.issuingCaId} is not null`),
+    check("enrollment_profile_issuer_kind", sql`(${t.issuerKind} = 'private_ca' and ${t.issuingCaId} is not null)`),
     check("enrollment_profile_validity", sql`${t.validityDays} >= 1`),
     check("enrollment_profile_retention", sql`${t.retentionDays} >= 0`),
     check("enrollment_profile_shared_challenge", sql`(${t.sharedChallengeId} is null) = (${t.sharedChallengeHash} is null)`),
@@ -774,7 +774,7 @@ export const deviceCertificate = pgTable(
     // What the weak-key filter looks for (WEAK_DEVICE_KEY_TYPE), a few among many.
     index("device_certificate_weak_key_idx").on(t.enrollmentProfileId).where(sql`${t.keyType} = 'rsa-1024'`),
     index("device_certificate_revoked_idx").on(t.issuingCaId).where(sql`${t.revokedAt} is not null`),
-    check("device_certificate_issuer_kind", sql`${t.issuerKind} = 'private_ca' and ${t.issuingCaId} is not null`),
+    check("device_certificate_issuer_kind", sql`(${t.issuerKind} = 'private_ca' and ${t.issuingCaId} is not null)`),
     check("device_certificate_revocation", sql`(${t.revokedAt} is null) = (${t.revocationReason} is null)`),
     check("device_certificate_revocation_reason", sql`${t.revocationReason} in ('unspecified', 'keyCompromise', 'affiliationChanged', 'superseded', 'cessationOfOperation', 'privilegeWithdrawn')`),
   ],
