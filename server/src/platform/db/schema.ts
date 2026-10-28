@@ -12,7 +12,7 @@ import type { IssuerKind } from "../../issuance/issuer-kinds";
 import type { AcmeCaTag } from "../../issuance/acme/acme-cas";
 import type { KeyAlgorithm, KeyCustody, SigningKeyAlgorithm } from "../../pki/csr";
 import type { IssuingCaStatus, PrivateCaKind, PrivateCaStatus } from "../../private-ca/private-ca-kinds";
-import type { DeviceExtendedKeyUsage, DeviceKeyType, DeviceKeyUsage } from "../../enrollment/enrollment-profile-kinds";
+import type { DeviceExtendedKeyUsage, DeviceKeyType, DeviceKeyUsage, EnrollmentIssuerKind } from "../../enrollment/enrollment-profile-kinds";
 import type { NameRules } from "../../enrollment/name-rules";
 import type { AgentArch, AgentOs } from "../../agents/agent-kinds";
 import type { ApprovalStatus } from "../../certificates/approval";
@@ -606,7 +606,10 @@ export const enrollmentProfile = pgTable(
     name: text("name").notNull(),
     /** What its SCEP URL is under: random, and nothing else about the profile or its Organization. */
     publicId: text("public_id").notNull(),
-    issuingCaId: uuid("issuing_ca_id").notNull(),
+    /** Its issuer (enrollment-issuer.ts): the kind of CA its RA certificate and Device Certificates come from, and that kind's reference in the columns below. */
+    issuerKind: text("issuer_kind").$type<EnrollmentIssuerKind>().notNull().default("private_ca"),
+    /** The Private CA kind's reference: the Issuing CA, of one of the Organization's Private CAs. */
+    issuingCaId: uuid("issuing_ca_id"),
     /** How long its Device Certificates are valid for, in days, though never past the Issuing CA's end. */
     validityDays: integer("validity_days").notNull(),
     keyUsage: text("key_usage").array().$type<DeviceKeyUsage[]>().notNull(),
@@ -645,6 +648,7 @@ export const enrollmentProfile = pgTable(
     foreignKey({ columns: [t.validatorSecretId, t.organizationId], foreignColumns: [secret.id, secret.organizationId] }),
     // Lets other tables reference a profile together with its Organization, so none can point at another's.
     unique("enrollment_profile_id_organization_unique").on(t.id, t.organizationId),
+    check("enrollment_profile_issuer_kind", sql`(${t.issuerKind} = 'private_ca' and ${t.issuingCaId} is not null)`),
     check("enrollment_profile_validity", sql`${t.validityDays} >= 1`),
     check("enrollment_profile_retention", sql`${t.retentionDays} >= 0`),
     check("enrollment_profile_shared_challenge", sql`(${t.sharedChallengeId} is null) = (${t.sharedChallengeHash} is null)`),
@@ -734,8 +738,9 @@ export const deviceCertificate = pgTable(
       .notNull()
       .references(() => organization.id),
     enrollmentProfileId: uuid("enrollment_profile_id").notNull(),
-    /** The Issuing CA that signed it, whose CRL lists it once revoked. */
-    issuingCaId: uuid("issuing_ca_id").notNull(),
+    /** The issuer (enrollment-issuer.ts) it came from, its profile's then: its kind, and for a Private CA the Issuing CA that signed it, whose CRL lists it once revoked. */
+    issuerKind: text("issuer_kind").$type<EnrollmentIssuerKind>().notNull().default("private_ca"),
+    issuingCaId: uuid("issuing_ca_id"),
     /** Its serial number, upper-case hex, and the SHA-256 of its DER, lower-case hex. */
     serial: text("serial").notNull(),
     fingerprint: text("fingerprint").notNull(),
@@ -769,6 +774,7 @@ export const deviceCertificate = pgTable(
     // What the weak-key filter looks for (WEAK_DEVICE_KEY_TYPE), a few among many.
     index("device_certificate_weak_key_idx").on(t.enrollmentProfileId).where(sql`${t.keyType} = 'rsa-1024'`),
     index("device_certificate_revoked_idx").on(t.issuingCaId).where(sql`${t.revokedAt} is not null`),
+    check("device_certificate_issuer_kind", sql`(${t.issuerKind} = 'private_ca' and ${t.issuingCaId} is not null)`),
     check("device_certificate_revocation", sql`(${t.revokedAt} is null) = (${t.revocationReason} is null)`),
     check("device_certificate_revocation_reason", sql`${t.revocationReason} in ('unspecified', 'keyCompromise', 'affiliationChanged', 'superseded', 'cessationOfOperation', 'privilegeWithdrawn')`),
   ],

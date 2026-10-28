@@ -414,6 +414,13 @@
       "when": 1793139849757,
       "tag": "0058_revocation_request",
       "breakpoints": true
+    },
+    {
+      "idx": 59,
+      "version": "7",
+      "when": 1793145791362,
+      "tag": "0059_enrollment_issuer_kind",
+      "breakpoints": true
     }
   ]
 }

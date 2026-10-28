@@ -1,6 +1,6 @@
 // An Organization's Enrollment Profiles: templates under which devices obtain Device Certificates in bulk from one of its
-// Private CAs' Issuing CAs, with no Approval and no Owners. A profile fixes the Issuing CA, the validity, key usage and
-// extended key usages of what it issues and the device keys it certifies, and names the Enrollment Validator
+// Private CAs' Issuing CAs, with no Approval and no Owners. A profile fixes its issuer (enrollment-issuer.ts), the
+// validity, key usage and extended key usages of what it issues and the device keys it certifies, and names the Enrollment Validator
 // (enrollment-validator.ts) that decides each request: its kind, its settings and its write-only secret. A profile whose
 // validator does not vouch for names may carry name rules (name-rules.ts) instead. Devices enroll at its SCEP URL (scep.ts), under an opaque public
 // id. The platform makes each profile an RA: a software RSA key, held as a Secret, and a certificate the Issuing CA signs
@@ -31,11 +31,21 @@ import type { EnrollmentValidatorRuns } from "./enrollment-validators";
 import { HttpError, OrgParam, errors, isUniqueViolation, json } from "../platform/http";
 import { IssuanceFailure } from "../issuance/issuance-failure";
 import { NameRules } from "./name-rules";
-import { enrollmentProfileRefusal, findIssuingCa, issuingRefusal, type IssuingCaOf, type PrivateCas } from "../private-ca/private-ca";
+import {
+  enrollmentIssuerAsked,
+  enrollmentIssuerCaCertificate,
+  enrollmentIssuerColumns,
+  enrollmentIssuerDetail,
+  enrollmentIssuerFields,
+  enrollmentIssuerKey,
+  enrollmentIssuerOf,
+  type EnrollmentIssuer,
+  type EnrollmentIssuers,
+  type FoundEnrollmentIssuer,
+} from "./enrollment-issuer";
 import type { Secrets } from "../platform/crypto/secrets";
 import { sharedChallengesOf, type SharedChallenges } from "./shared-challenge";
 import type { Actor, UnitOfWork } from "../platform/unit-of-work";
-import { fingerprintOf } from "../pki/fingerprint";
 
 type ProfileRow = typeof enrollmentProfile.$inferSelect;
 
@@ -97,18 +107,17 @@ const CreatedEnrollmentProfile = EnrollmentProfile.extend({
 /** The SCEP URL of the profile with this public id, on the platform's base URL. */
 export const scepUrlOf = (baseURL: string, publicId: string) => `${baseURL.replace(/\/+$/, "")}/scep/${publicId}`;
 
-function toProfile(row: ProfileRow, of: IssuingCaOf, baseURL: string, now: Date): z.infer<typeof EnrollmentProfile> {
+function toProfile(row: ProfileRow, issuer: FoundEnrollmentIssuer, baseURL: string, now: Date): z.infer<typeof EnrollmentProfile> {
   const ra = new x509.X509Certificate(row.raCertificatePem);
-  // A profile is made only on an Issuing CA that has its certificate, which it then keeps.
-  const caFingerprint = fingerprintOf(new x509.X509Certificate(of.issuing.certificatePem!).rawData);
+  const { caFingerprint, issuingCaId, privateCaId } = enrollmentIssuerFields(issuer);
   return {
     id: row.id,
     name: row.name,
     publicId: row.publicId,
     scepUrl: scepUrlOf(baseURL, row.publicId),
     caFingerprint,
-    issuingCaId: row.issuingCaId,
-    privateCaId: of.ca.id,
+    issuingCaId,
+    privateCaId,
     validityDays: row.validityDays,
     keyUsage: row.keyUsage,
     extendedKeyUsage: row.extendedKeyUsage,
@@ -139,7 +148,7 @@ export function registerEnrollmentProfiles(ctx: {
   authorize: Authorizer["authorize"];
   unitOfWork: UnitOfWork;
   secrets: Secrets;
-  privateCas: PrivateCas;
+  issuers: EnrollmentIssuers;
   /** The validator kinds the platform runs, and how it runs a profile's. */
   kinds: EnrollmentValidators;
   validators: EnrollmentValidatorRuns;
@@ -148,9 +157,21 @@ export function registerEnrollmentProfiles(ctx: {
   baseURL: string;
   clock: () => Date;
 }) {
-  const { app, db, requireUser, authorize, unitOfWork, secrets, privateCas, kinds, validators, sharedChallenges, baseURL, clock } = ctx;
+  const { app, db, requireUser, authorize, unitOfWork, secrets, issuers, kinds, validators, sharedChallenges, baseURL, clock } = ctx;
 
-  /** The Organization's profile with its Issuing CA and Private CA; a 404 when it has none such. */
+  /** The profile's issuer, found. */
+  const issuerOfProfile = async (row: ProfileRow) => (await issuers.find(db, row.organizationId, enrollmentIssuerOf(row)))!;
+
+  /** The Organization's issuer `issuer`, which must take an Enrollment Profile; a 422 otherwise. */
+  async function issuerTaking(orgId: string, issuer: EnrollmentIssuer) {
+    const found = await issuers.find(db, orgId, issuer);
+    if (!found) throw new HttpError(422, "the Organization has no such Issuing CA");
+    const refusal = issuers.profileRefusal(found);
+    if (refusal) throw new HttpError(422, refusal);
+    return { issuer, found };
+  }
+
+  /** The Organization's profile with its issuer, found; a 404 when it has none such. */
   async function findProfile(orgId: string, id: string) {
     const notFound = () => new HttpError(404, "Enrollment Profile not found");
     if (!isId(id)) throw notFound();
@@ -159,18 +180,17 @@ export function registerEnrollmentProfiles(ctx: {
       .from(enrollmentProfile)
       .where(and(eq(enrollmentProfile.organizationId, orgId), eq(enrollmentProfile.id, id)));
     if (!row) throw notFound();
-    const of = await findIssuingCa(db, orgId, row.issuingCaId);
-    return { row, of: of! };
+    return { row, issuer: await issuerOfProfile(row) };
   }
 
   /**
-   * A new RA for the profile with this public id: a software RSA key (PKCS #8 PEM) and a certificate the Issuing CA
-   * signs for it. A 422 when the Issuing CA does not issue.
+   * A new RA for the profile with this public id: a software RSA key (PKCS #8 PEM) and a certificate the issuer's CA
+   * issues for it. A 422 when that CA does not issue.
    */
-  async function makeRa(orgId: string, issuingCaId: string, publicId: string) {
+  async function makeRa(orgId: string, issuer: EnrollmentIssuer, publicId: string) {
     const key = generateKeyPairSync("rsa", { modulusLength: 2048 });
     try {
-      const certificate = await privateCas.issueRa(db, orgId, issuingCaId, {
+      const certificate = await issuers.issueRa(db, orgId, issuer, {
         publicKey: key.publicKey.export({ format: "der", type: "spki" }),
         subject: new x509.Name([{ CN: [`SCEP RA ${publicId}`] }]),
         validityDays: RA_VALIDITY_DAYS,
@@ -218,7 +238,7 @@ export function registerEnrollmentProfiles(ctx: {
       const { orgId } = c.req.valid("param");
       await authorize(await requireUser(c), orgId, { enrollmentProfile: ["read"] });
       const rows = await db.select().from(enrollmentProfile).where(eq(enrollmentProfile.organizationId, orgId)).orderBy(asc(enrollmentProfile.createdAt), asc(enrollmentProfile.id));
-      const items = await Promise.all(rows.map(async (row) => toProfile(row, (await findIssuingCa(db, orgId, row.issuingCaId))!, baseURL, clock())));
+      const items = await Promise.all(rows.map(async (row) => toProfile(row, await issuerOfProfile(row), baseURL, clock())));
       return c.json({ items }, 200);
     },
   );
@@ -272,10 +292,7 @@ export function registerEnrollmentProfiles(ctx: {
       if (!kind.secret && body.validator.secret !== undefined) throw new HttpError(400, `validator.secret: an Enrollment Validator of the kind ${body.validator.kind} takes none`);
       const validatorSecret = kind.secret ? refuse("validator.secret", kind.secret, body.validator.secret) : undefined;
       if (kind.vouchesForNames && body.nameRules) throw new HttpError(422, `an Enrollment Validator of the kind ${body.validator.kind} vouches for the names a device asks for, so the profile takes no name rules`);
-      const of = isId(body.issuingCaId) ? await findIssuingCa(db, orgId, body.issuingCaId) : undefined;
-      if (!of) throw new HttpError(422, "the Organization has no such Issuing CA");
-      const refusal = issuingRefusal(of) ?? enrollmentProfileRefusal(of.ca);
-      if (refusal) throw new HttpError(422, refusal);
+      const { issuer, found } = await issuerTaking(orgId, enrollmentIssuerAsked(body));
 
       const taken = () => new HttpError(409, `the Organization already has an Enrollment Profile named ${body.name}`);
       const [named] = await db
@@ -285,7 +302,7 @@ export function registerEnrollmentProfiles(ctx: {
       if (named) throw taken();
 
       const publicId = randomBytes(16).toString("hex");
-      const ra = await makeRa(orgId, of.issuing.id, publicId);
+      const ra = await makeRa(orgId, issuer, publicId);
       const raCertificate = ra.certificate;
       const shared = kind.usesSharedChallenge ? sharedChallenges.issue() : undefined;
       const validityDays = body.validityDays ?? (shared ? DEFAULT_SHARED_CHALLENGE_VALIDITY_DAYS : DEFAULT_DEVICE_VALIDITY_DAYS);
@@ -300,7 +317,7 @@ export function registerEnrollmentProfiles(ctx: {
               organizationId: orgId,
               name: body.name,
               publicId,
-              issuingCaId: of.issuing.id,
+              ...enrollmentIssuerColumns(issuer),
               validityDays,
               keyUsage: body.keyUsage,
               extendedKeyUsage: body.extendedKeyUsage,
@@ -321,7 +338,7 @@ export function registerEnrollmentProfiles(ctx: {
             target: { type: "enrollment_profile", id: row!.id },
             detail: {
               name: body.name,
-              issuingCa: { id: of.issuing.id, subject: of.issuing.subject },
+              issuingCa: enrollmentIssuerDetail(found),
               validityDays,
               keyUsage: body.keyUsage,
               extendedKeyUsage: body.extendedKeyUsage,
@@ -335,7 +352,7 @@ export function registerEnrollmentProfiles(ctx: {
           });
           return row!;
         });
-        return c.json({ ...toProfile(row, of, baseURL, clock()), sharedChallenge: shared?.shown ?? null }, 201);
+        return c.json({ ...toProfile(row, found, baseURL, clock()), sharedChallenge: shared?.shown ?? null }, 201);
       } catch (err) {
         if (isUniqueViolation(err)) throw taken();
         throw err;
@@ -354,8 +371,8 @@ export function registerEnrollmentProfiles(ctx: {
     async (c) => {
       const { orgId, id } = c.req.valid("param");
       await authorize(await requireUser(c), orgId, { enrollmentProfile: ["read"] });
-      const { row, of } = await findProfile(orgId, id);
-      return c.json(toProfile(row, of, baseURL, clock()), 200);
+      const { row, issuer } = await findProfile(orgId, id);
+      return c.json(toProfile(row, issuer, baseURL, clock()), 200);
     },
   );
 
@@ -373,8 +390,8 @@ export function registerEnrollmentProfiles(ctx: {
       const { orgId, id } = c.req.valid("param");
       const { ca } = c.req.valid("query");
       await authorize(await requireUser(c), orgId, { enrollmentProfile: ["read"] });
-      const { row, of } = await findProfile(orgId, id);
-      const pem = ca === "root" ? of.ca.rootCertificatePem : of.issuing.certificatePem;
+      const { row, issuer } = await findProfile(orgId, id);
+      const pem = enrollmentIssuerCaCertificate(issuer, ca);
       if (!pem) throw new HttpError(404, `the Private CA has no ${ca === "root" ? "root" : "Issuing CA certificate"} yet`);
       const fileName = `${row.name.replace(/[^A-Za-z0-9._-]+/g, "-").toLowerCase() || "enrollment-profile"}.${ca}.pem`;
       return c.body(pem, 200, { "content-type": "application/x-pem-file", "content-disposition": `attachment; filename="${fileName}"` });
@@ -419,7 +436,7 @@ export function registerEnrollmentProfiles(ctx: {
    */
   async function locked(tx: Tx, read: ProfileRow) {
     const [row] = await tx.select().from(enrollmentProfile).where(eq(enrollmentProfile.id, read.id)).for("update");
-    const changed = (["enabled", "issuingCaId", "retentionDays", "raCertificatePem"] as const).some((field) => row![field] !== read[field]);
+    const changed = (["enabled", "issuerKind", "issuingCaId", "retentionDays", "raCertificatePem"] as const).some((field) => row![field] !== read[field]);
     if (changed) throw new HttpError(409, "the Enrollment Profile was changed meanwhile; ask again");
     return row!;
   }
@@ -441,7 +458,7 @@ export function registerEnrollmentProfiles(ctx: {
       const { orgId, id } = c.req.valid("param");
       const actor = await requireUser(c);
       await authorize(actor, orgId, { enrollmentProfile: ["disable"] });
-      const { row: found, of } = await findProfile(orgId, id);
+      const { row: found, issuer } = await findProfile(orgId, id);
       if (!found.enabled) throw new HttpError(409, "the Enrollment Profile is already disabled");
       const row = await unitOfWork.run(actor, async (tx, change) => {
         const current = await locked(tx, found);
@@ -449,7 +466,7 @@ export function registerEnrollmentProfiles(ctx: {
         await change.audit({ organizationId: orgId, action: "enrollment_profile.disabled", target: { type: "enrollment_profile", id }, detail: { name: current.name } });
         return row!;
       });
-      return c.json(toProfile(row, of, baseURL, clock()), 200);
+      return c.json(toProfile(row, issuer, baseURL, clock()), 200);
     },
   );
 
@@ -478,16 +495,14 @@ export function registerEnrollmentProfiles(ctx: {
       const actor = await requireUser(c);
       await authorize(actor, orgId, { enrollmentProfile: ["update"] });
       const found = await findProfile(orgId, id);
-      const repointing = body.issuingCaId !== undefined && body.issuingCaId !== found.row.issuingCaId;
-      // The Issuing CA it is pointed at and the RA that one signed, when it is pointed at another.
-      let to: { of: IssuingCaOf; ra: Awaited<ReturnType<typeof makeRa>> } | undefined;
+      const asked = body.issuingCaId === undefined ? undefined : enrollmentIssuerAsked({ issuingCaId: body.issuingCaId });
+      const repointing = asked !== undefined && enrollmentIssuerKey(asked) !== enrollmentIssuerKey(enrollmentIssuerOf(found.row));
+      // The issuer it is pointed at and the RA that one issued, when it is pointed at another.
+      let to: { issuer: EnrollmentIssuer; found: FoundEnrollmentIssuer; ra: Awaited<ReturnType<typeof makeRa>> } | undefined;
       if (repointing) {
-        const of = isId(body.issuingCaId!) ? await findIssuingCa(db, orgId, body.issuingCaId!) : undefined;
-        if (!of) throw new HttpError(422, "the Organization has no such Issuing CA");
-        const refusal = issuingRefusal(of) ?? enrollmentProfileRefusal(of.ca);
-        if (refusal) throw new HttpError(422, refusal);
-        // Signed before the change, as when a profile is created: the KMS is not asked inside a transaction.
-        to = { of, ra: await makeRa(orgId, of.issuing.id, found.row.publicId) };
+        const taking = await issuerTaking(orgId, asked);
+        // Issued before the change, as when a profile is created: the KMS is not asked inside a transaction.
+        to = { ...taking, ra: await makeRa(orgId, taking.issuer, found.row.publicId) };
       }
       const retaining = body.retentionDays !== undefined && body.retentionDays !== found.row.retentionDays;
       if (body.nameRules) {
@@ -497,14 +512,14 @@ export function registerEnrollmentProfiles(ctx: {
       }
       const changingNameRules = body.nameRules !== undefined && !isDeepStrictEqual(body.nameRules, found.row.nameRules);
       const changingKeyTypes = body.allowedKeyTypes !== undefined && !isDeepStrictEqual(body.allowedKeyTypes, found.row.allowedKeyTypes);
-      if (!to && !retaining && !changingNameRules && !changingKeyTypes) return c.json(toProfile(found.row, found.of, baseURL, clock()), 200);
+      if (!to && !retaining && !changingNameRules && !changingKeyTypes) return c.json(toProfile(found.row, found.issuer, baseURL, clock()), 200);
 
       const row = await unitOfWork.run(actor, async (tx, change) => {
         const current = await locked(tx, found.row);
         if (to) await secrets.replace(tx, orgId, current.raKeySecretId, to.ra.privateKeyPem);
         const [row] = await tx
           .update(enrollmentProfile)
-          .set({ ...(to && { issuingCaId: to.of.issuing.id, raCertificatePem: to.ra.certificate.toString("pem") }), ...(retaining && { retentionDays: body.retentionDays }), ...(changingNameRules && { nameRules: body.nameRules }), ...(changingKeyTypes && { allowedKeyTypes: body.allowedKeyTypes }) })
+          .set({ ...(to && { ...enrollmentIssuerColumns(to.issuer), raCertificatePem: to.ra.certificate.toString("pem") }), ...(retaining && { retentionDays: body.retentionDays }), ...(changingNameRules && { nameRules: body.nameRules }), ...(changingKeyTypes && { allowedKeyTypes: body.allowedKeyTypes }) })
           .where(eq(enrollmentProfile.id, id))
           .returning();
         await change.audit({
@@ -514,7 +529,7 @@ export function registerEnrollmentProfiles(ctx: {
           detail: {
             name: current.name,
             changes: {
-              ...(to && { issuingCa: { from: { id: found.of.issuing.id, subject: found.of.issuing.subject }, to: { id: to.of.issuing.id, subject: to.of.issuing.subject } } }),
+              ...(to && { issuingCa: { from: enrollmentIssuerDetail(found.issuer), to: enrollmentIssuerDetail(to.found) } }),
               ...(retaining && { retentionDays: { from: current.retentionDays, to: body.retentionDays } }),
               ...(changingNameRules && { nameRules: { from: current.nameRules, to: body.nameRules } }),
               ...(changingKeyTypes && { allowedKeyTypes: { from: current.allowedKeyTypes, to: body.allowedKeyTypes } }),
@@ -524,7 +539,7 @@ export function registerEnrollmentProfiles(ctx: {
         });
         return row!;
       });
-      return c.json(toProfile(row, to?.of ?? found.of, baseURL, clock()), 200);
+      return c.json(toProfile(row, to?.found ?? found.issuer, baseURL, clock()), 200);
     },
   );
 
@@ -545,9 +560,9 @@ export function registerEnrollmentProfiles(ctx: {
       const actor = await requireUser(c);
       await authorize(actor, orgId, { enrollmentProfile: ["update"] });
       const found = await findProfile(orgId, id);
-      const refusal = issuingRefusal(found.of);
+      const refusal = issuers.profileRefusal(found.issuer);
       if (refusal) throw new HttpError(422, refusal);
-      const ra = await makeRa(orgId, found.row.issuingCaId, found.row.publicId);
+      const ra = await makeRa(orgId, enrollmentIssuerOf(found.row), found.row.publicId);
       const row = await unitOfWork.run(actor, async (tx, change) => {
         const current = await locked(tx, found.row);
         await secrets.replace(tx, orgId, current.raKeySecretId, ra.privateKeyPem);
@@ -560,7 +575,7 @@ export function registerEnrollmentProfiles(ctx: {
         });
         return row!;
       });
-      return c.json(toProfile(row, found.of, baseURL, clock()), 200);
+      return c.json(toProfile(row, found.issuer, baseURL, clock()), 200);
     },
   );
 
@@ -583,7 +598,7 @@ export function registerEnrollmentProfiles(ctx: {
       await authorize(actor, orgId, { enrollmentProfile: ["update"] });
       const found = await findProfile(orgId, id);
       const { row, shown } = await sharedChallenges.rotate(actor, found.row, previousExpiresAt);
-      return c.json({ ...toProfile(row, found.of, baseURL, clock()), sharedChallenge: shown }, 200);
+      return c.json({ ...toProfile(row, found.issuer, baseURL, clock()), sharedChallenge: shown }, 200);
     },
   );
 
@@ -604,7 +619,7 @@ export function registerEnrollmentProfiles(ctx: {
       await authorize(actor, orgId, { enrollmentProfile: ["update"] });
       const found = await findProfile(orgId, id);
       const row = await sharedChallenges.retire(actor, found.row);
-      return c.json(toProfile(row, found.of, baseURL, clock()), 200);
+      return c.json(toProfile(row, found.issuer, baseURL, clock()), 200);
     },
   );
 }

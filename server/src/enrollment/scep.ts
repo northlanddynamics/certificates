@@ -10,7 +10,8 @@ import { getConnInfo } from "hono/bun";
 import { FailInfo, ScepServer, type ScepResult } from "ts-scep";
 import type { Db } from "../platform/db/client";
 import { enrollmentProfile } from "../platform/db/schema";
-import { issuingChainOf, type DeviceEnrollment, type DeviceEnrollmentAnswer } from "./device-enrollment";
+import type { DeviceEnrollment, DeviceEnrollmentAnswer } from "./device-enrollment";
+import { enrollmentIssuerOf, type EnrollmentIssuers } from "./enrollment-issuer";
 import { kindOf, type EnrollmentValidators } from "./enrollment-validator";
 import type { Secrets } from "../platform/crypto/secrets";
 
@@ -74,13 +75,14 @@ export function registerScep(ctx: {
   app: OpenAPIHono;
   db: Db;
   secrets: Secrets;
+  issuers: EnrollmentIssuers;
   enrollment: DeviceEnrollment;
   kinds: EnrollmentValidators;
   clock: () => Date;
   /** Read on each request, so that it may be changed while the app runs. */
   config?: Partial<ScepConfig>;
 }) {
-  const { app, db, secrets, enrollment, kinds, clock } = ctx;
+  const { app, db, secrets, issuers, enrollment, kinds, clock } = ctx;
   const config = () => ({ ...SCEP_DEFAULTS, ...ctx.config });
   const limiter = createRateLimiter(clock);
 
@@ -88,13 +90,13 @@ export function registerScep(ctx: {
   async function serverOf(publicId: string) {
     const [profile] = await db.select().from(enrollmentProfile).where(eq(enrollmentProfile.publicId, publicId));
     if (!profile) return undefined;
-    const [issuing, ...above] = await issuingChainOf(db, profile);
+    const [issuing, ...above] = await issuers.chainOf(db, profile.organizationId, enrollmentIssuerOf(profile));
     return new ScepServer({
       ca: { certificate: issuing!, chain: above },
       ra: { certificate: profile.raCertificatePem, privateKey: await secrets.open(db, profile.organizationId, profile.raKeySecretId) },
       capabilities: kindOf(kinds, profile.validatorKind)?.allowsRenewal ? [...CAPABILITIES, "Renewal"] : CAPABILITIES,
       handler: {
-        // ts-scep has already checked that a RenewalReq's signer was issued by the profile's Issuing CA.
+        // ts-scep has already checked that a RenewalReq's signer was issued by the CA certificate GetCACert serves.
         enroll: async (request) =>
           resultOf(
             await enrollment.enroll(profile, {

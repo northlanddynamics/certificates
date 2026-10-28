@@ -11,6 +11,7 @@ import { deviceCertificate, enrollmentProfile, revocationRequest } from "../plat
 import type { RevocationReason } from "../pki/revocation-reasons";
 import type { Change } from "../platform/unit-of-work";
 import type { Revocations, RevokedBy } from "../issuance/revocations";
+import { asCertificateIssuer, enrollmentIssuerKey, enrollmentIssuerOf, type EnrollmentIssuer } from "./enrollment-issuer";
 
 export type { RevokedBy } from "../issuance/revocations";
 
@@ -46,6 +47,7 @@ export function createDeviceCertificateRevocations({ revocations: asked }: { rev
           serial: deviceCertificate.serial,
           subject: deviceCertificate.subject,
           certificatePem: deviceCertificate.certificatePem,
+          issuerKind: deviceCertificate.issuerKind,
           issuingCaId: deviceCertificate.issuingCaId,
           revokedAt: deviceCertificate.revokedAt,
           requestStatus: revocationRequest.status,
@@ -58,9 +60,9 @@ export function createDeviceCertificateRevocations({ revocations: asked }: { rev
         .orderBy(asc(deviceCertificate.id))
         .for("update", { of: deviceCertificate });
       const unrevoked = new Map(rows.filter((row) => row.revokedAt === null && row.requestStatus !== "pending").map((row) => [row.id, row]));
-      // What each Issuing CA is asked to revoke, in the order given; and which of those each asked-for one is.
-      const byCa = new Map<string, { row: (typeof rows)[number]; reason: RevocationReason; by?: RevokedBy }[]>();
-      const asking: ({ issuingCaId: string; index: number } | undefined)[] = [];
+      // What each issuer is asked to revoke, in the order given, by its key; and which of those each asked-for one is.
+      const byIssuer = new Map<string, { issuer: EnrollmentIssuer; asked: { row: (typeof rows)[number]; reason: RevocationReason; by?: RevokedBy }[] }>();
+      const asking: ({ key: string; index: number } | undefined)[] = [];
       for (const { id, reason, by } of revocations) {
         const row = unrevoked.get(id);
         if (!row) {
@@ -68,21 +70,23 @@ export function createDeviceCertificateRevocations({ revocations: asked }: { rev
           continue;
         }
         unrevoked.delete(id);
-        const ofCa = byCa.get(row.issuingCaId) ?? [];
-        byCa.set(row.issuingCaId, ofCa);
-        asking.push({ issuingCaId: row.issuingCaId, index: ofCa.push({ row, reason, by }) - 1 });
+        const issuer = enrollmentIssuerOf(row);
+        const key = enrollmentIssuerKey(issuer);
+        const ofIssuer = byIssuer.get(key) ?? { issuer, asked: [] };
+        byIssuer.set(key, ofIssuer);
+        asking.push({ key, index: ofIssuer.asked.push({ row, reason, by }) - 1 });
       }
       const answers = new Map<string, ("revoked" | "requested")[]>();
-      for (const [issuingCaId, ofCa] of byCa) {
-        const targets = ofCa.map(({ row, reason, by }) => ({
+      for (const [key, { issuer, asked: ofIssuer }] of byIssuer) {
+        const targets = ofIssuer.map(({ row, reason, by }) => ({
           target: { kind: "device_certificate" as const, deviceCertificate: row, requestedBy: actor, ...(by && { by }) },
           reason,
         }));
-        answers.set(issuingCaId, await asked.revoke(tx, change, organizationId, { kind: "private_ca", issuingCaId }, targets));
+        answers.set(key, await asked.revoke(tx, change, organizationId, asCertificateIssuer(issuer), targets));
       }
       return asking.map((one) => {
         if (!one) return false;
-        return answers.get(one.issuingCaId)![one.index] === "revoked" ? true : "requested";
+        return answers.get(one.key)![one.index] === "revoked" ? true : "requested";
       });
     },
   };
