@@ -197,9 +197,9 @@ export function createEnrollmentValidatorRuns(deps: { db: Db; unitOfWork: UnitOf
     for (const request of requests) {
       const serial = canonicalSerial(request.serial);
       const rows = await tx
-        .select({ id: deviceCertificate.id, issuer: issuingCa.subject })
+        .select({ id: deviceCertificate.id, issuer: issuingCa.subject, certificatePem: deviceCertificate.certificatePem })
         .from(deviceCertificate)
-        .innerJoin(issuingCa, eq(issuingCa.id, deviceCertificate.issuingCaId))
+        .leftJoin(issuingCa, eq(issuingCa.id, deviceCertificate.issuingCaId))
         .where(
           and(
             eq(deviceCertificate.organizationId, organizationId),
@@ -208,7 +208,9 @@ export function createEnrollmentValidatorRuns(deps: { db: Db; unitOfWork: UnitOf
           ),
         )
         .orderBy(asc(deviceCertificate.createdAt));
-      asked.push({ ref: request.ref, ids: rows.filter((r) => request.issuer === null || sameName(r.issuer, request.issuer)).map((r) => r.id) });
+      // One from an ADCS CA names its issuer itself.
+      const issuerOf = (r: (typeof rows)[number]) => r.issuer ?? new x509.X509Certificate(r.certificatePem).issuer;
+      asked.push({ ref: request.ref, ids: rows.filter((r) => request.issuer === null || sameName(issuerOf(r), request.issuer)).map((r) => r.id) });
     }
     const by = { enrollmentValidator: { kind: feed.kindName } };
     const revoked = await revocations.revoke(

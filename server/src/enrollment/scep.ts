@@ -2,7 +2,9 @@
 // enroll. ts-scep handles the protocol, running as the profile's RA: it opens each request's envelope with the RA key and
 // verifies its signer, and signs the CertRep with the RA key, encrypted to the device. What is issued is decided by
 // device enrollment (device-enrollment.ts); this is its SCEP adapter, which rate limits the routes and answers a device
-// SUCCESS with its certificate or FAILURE with a failInfo, never PENDING.
+// SUCCESS with its certificate or FAILURE with a failInfo, or, on an ADCS CA, PENDING until ADCS has answered, which the
+// device asks after with GetCertInitial. A profile with no RA certificate yet (on an ADCS CA, until ADCS first issues
+// one) serves no SCEP.
 import type { OpenAPIHono } from "@hono/zod-openapi";
 import { eq } from "drizzle-orm";
 import type { Context } from "hono";
@@ -68,6 +70,7 @@ const CAPABILITIES = ["POSTPKIOperation", "SHA-256", "SHA-512", "AES", "SCEPStan
 function resultOf(answer: DeviceEnrollmentAnswer): ScepResult {
   if ("issued" in answer) return { status: "success", certificates: [answer.issued.certificatePem, ...answer.issued.chainPem] };
   if ("refused" in answer) return { status: "failure", failInfo: FailInfo.badRequest, failInfoText: answer.refused };
+  if ("pending" in answer) return { status: "pending" };
   return { status: "failure", failInfo: FailInfo.badRequest, failInfoText: "the transaction is still being decided; send it again later" };
 }
 
@@ -86,10 +89,14 @@ export function registerScep(ctx: {
   const config = () => ({ ...SCEP_DEFAULTS, ...ctx.config });
   const limiter = createRateLimiter(clock);
 
-  /** The SCEP server of the profile with this public id, whatever its Organization: the id, unguessable, is all a device has. None when there is no such profile. */
+  /**
+   * The SCEP server of the profile with this public id, whatever its Organization: the id, unguessable, is all a device
+   * has. None when there is no such profile, and "no RA" while it has no RA certificate.
+   */
   async function serverOf(publicId: string) {
     const [profile] = await db.select().from(enrollmentProfile).where(eq(enrollmentProfile.publicId, publicId));
     if (!profile) return undefined;
+    if (profile.raCertificatePem === null) return "no RA" as const;
     const [issuing, ...above] = await issuers.chainOf(db, profile.organizationId, enrollmentIssuerOf(profile));
     return new ScepServer({
       ca: { certificate: issuing!, chain: above },
@@ -106,7 +113,7 @@ export function registerScep(ctx: {
               ...(request.renewal && { renewalSignedWith: request.signerCertificate.raw }),
             }),
           ),
-        // GetCertInitial: the platform never answers PENDING, but a client may still ask after a request it sent.
+        // GetCertInitial: a client answered PENDING asks after its request, and any may ask after one it sent.
         async poll(request) {
           const answer = await enrollment.answerOf(profile, request.transactionId);
           return answer ? resultOf(answer) : { status: "failure", failInfo: FailInfo.badCertId, failInfoText: "no such transaction" };
@@ -141,6 +148,7 @@ export function registerScep(ctx: {
     if (profileWait !== undefined) return limited(profileWait);
     const server = await serverOf(publicId);
     if (!server) return c.text("not found", 404);
+    if (server === "no RA") return c.text("the Enrollment Profile has no RA certificate yet: it serves SCEP once ADCS issues one", 503, { "retry-after": "300" });
     return server.fetchHandler(c.req.raw);
   });
 

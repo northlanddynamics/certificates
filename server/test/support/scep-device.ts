@@ -1,8 +1,23 @@
 // A SCEP device for tests: it enrolls at an Enrollment Profile's SCEP URL as a real device would, through ts-scep's
 // client, which builds the GetCACaps, GetCACert and PKCSReq messages (signed and enveloped data) and parses the CertRep.
-// It talks to the platform in-process, through the harness's app, with no credentials.
+// It talks to the platform in-process, through the harness's app, with no credentials. A device answered PENDING (an
+// Enrollment Profile on an ADCS CA) asks after its request with GetCertInitial, as a real one does (`submit`, `check`).
 import type { KeyObject, X509Certificate } from "node:crypto";
-import { ScepClient, certificateSubject, createCsr, createSelfSignedCertificate, generateRsaKeyPair, parseCsr, type CreateCsrOptions, type DigestAlgorithm, type EncryptionAlgorithm, type KeyTransportAlgorithm, type SubjectAltNames } from "ts-scep";
+import {
+  PkiStatus,
+  ScepClient,
+  certificateSubject,
+  createCsr,
+  createSelfSignedCertificate,
+  generateRsaKeyPair,
+  parseCsr,
+  type CreateCsrOptions,
+  type DigestAlgorithm,
+  type EncryptionAlgorithm,
+  type KeyTransportAlgorithm,
+  type PendingEnrollment,
+  type SubjectAltNames,
+} from "ts-scep";
 import type { Harness } from "./harness";
 
 export interface DeviceRequest {
@@ -28,8 +43,21 @@ export interface Enrolled {
   privateKey: KeyObject;
 }
 
+/** A request the platform answered PENDING: what the device keeps to ask after it, and its key. */
+export interface Pending {
+  pending: PendingEnrollment;
+  privateKey: KeyObject;
+}
+
 export interface ScepDevice {
   client: ScepClient;
+  /**
+   * Makes a key and a CSR for `request` and sends it (PKCSReq, or a RenewalReq signed with `current`): resolves with what
+   * it holds once enrolled, or with what it keeps when answered PENDING; throws ts-scep's ScepFailureError on FAILURE.
+   */
+  submit(request: DeviceRequest, current?: Enrolled): Promise<{ enrolled: Enrolled } | Pending>;
+  /** Asks after a pending request (GetCertInitial): what it holds once issued, or "pending"; throws ScepFailureError on FAILURE. */
+  check(pending: Pending): Promise<Enrolled | "pending">;
   /** Makes a key and a CSR for `request` and enrolls (PKCSReq); resolves with the certificate, the CertRep's chain and the key, or throws ts-scep's ScepFailureError. */
   enroll(request: DeviceRequest): Promise<Enrolled>;
   /** Like `enroll`, with a new key, but a RenewalReq signed with what the device holds. */
@@ -65,12 +93,22 @@ export function scepDevice(h: Harness, scepUrl: string, { usePost, keyTransport 
   });
   const csrOf = ({ subject, subjectAltNames, challengePassword, extendedKeyUsage, extensions }: DeviceRequest, privateKey: KeyObject) =>
     createCsr({ subject, privateKey, challengePassword, subjectAltNames, extendedKeyUsage, extensions });
-  async function send(request: DeviceRequest, current?: Enrolled): Promise<Enrolled> {
+  async function submit(request: DeviceRequest, current?: Enrolled): Promise<{ enrolled: Enrolled } | Pending> {
     const { transactionId, keyBits = 2048 } = request;
     const privateKey = request.privateKey ?? generateRsaKeyPair(keyBits).privateKey;
     const csr = csrOf(request, privateKey);
     const result = await client.enroll({ csr, privateKey, transactionId, ...(current && { signer: current, renewal: true }) });
-    if (result.status !== 0) throw new Error(`the platform answered PENDING, which it never should`);
+    if (result.status === PkiStatus.PENDING) return { pending: result.pending, privateKey };
+    return { enrolled: { certificate: result.certificate, certificates: result.certificates, privateKey } };
+  }
+  async function send(request: DeviceRequest, current?: Enrolled): Promise<Enrolled> {
+    const sent = await submit(request, current);
+    if ("pending" in sent) throw new Error("the platform answered PENDING, which a profile on an Issuing CA never should");
+    return sent.enrolled;
+  }
+  async function check({ pending, privateKey }: Pending): Promise<Enrolled | "pending"> {
+    const result = await client.poll(pending);
+    if (result.status === PkiStatus.PENDING) return "pending";
     return { certificate: result.certificate, certificates: result.certificates, privateKey };
   }
   async function poll(request: DeviceRequest & { privateKey: KeyObject; transactionId: string }): Promise<Enrolled> {
@@ -80,8 +118,8 @@ export function scepDevice(h: Harness, scepUrl: string, { usePost, keyTransport 
     const subject = parseCsr(csr).subject;
     const identity = { certificate: createSelfSignedCertificate({ subject, privateKey }), privateKey };
     const result = await client.poll({ transactionId, issuer: certificateSubject(ca), subject, identity, csr });
-    if (result.status !== 0) throw new Error(`the platform answered PENDING, which it never should`);
+    if (result.status !== PkiStatus.SUCCESS) throw new Error("the platform answered PENDING, which a profile on an Issuing CA never should");
     return { certificate: result.certificate, certificates: result.certificates, privateKey };
   }
-  return { client, enroll: (request) => send(request), renew: (request, current) => send(request, current), poll };
+  return { client, enroll: (request) => send(request), renew: (request, current) => send(request, current), poll, submit, check };
 }

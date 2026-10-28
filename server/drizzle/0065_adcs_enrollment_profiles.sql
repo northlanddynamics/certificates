@@ -1,0 +1,32 @@
+ALTER TABLE "device_certificate" DROP CONSTRAINT "device_certificate_issuer_kind";--> statement-breakpoint
+ALTER TABLE "enrollment_profile" DROP CONSTRAINT "enrollment_profile_issuer_kind";--> statement-breakpoint
+ALTER TABLE "enrollment_profile" DROP CONSTRAINT "enrollment_profile_validity";--> statement-breakpoint
+ALTER TABLE "adcs_request" ALTER COLUMN "issuance_id" DROP NOT NULL;--> statement-breakpoint
+ALTER TABLE "enrollment_profile" ALTER COLUMN "validity_days" DROP NOT NULL;--> statement-breakpoint
+ALTER TABLE "enrollment_profile" ALTER COLUMN "ra_certificate_pem" DROP NOT NULL;--> statement-breakpoint
+ALTER TABLE "adcs_request" ADD COLUMN "purpose" text DEFAULT 'issuance' NOT NULL;--> statement-breakpoint
+ALTER TABLE "adcs_request" ADD COLUMN "enrollment_profile_id" uuid;--> statement-breakpoint
+ALTER TABLE "device_certificate" ADD COLUMN "adcs_ca_id" uuid;--> statement-breakpoint
+ALTER TABLE "device_certificate" ADD COLUMN "adcs_template_id" uuid;--> statement-breakpoint
+ALTER TABLE "device_certificate" ADD COLUMN "adcs_request_id" text;--> statement-breakpoint
+ALTER TABLE "enrollment_profile" ADD COLUMN "adcs_ca_id" uuid;--> statement-breakpoint
+ALTER TABLE "enrollment_profile" ADD COLUMN "adcs_template_id" uuid;--> statement-breakpoint
+ALTER TABLE "enrollment_profile" ADD COLUMN "adcs_ra_template_id" uuid;--> statement-breakpoint
+ALTER TABLE "enrollment_profile" ADD COLUMN "next_ra_key_secret_id" uuid;--> statement-breakpoint
+ALTER TABLE "scep_transaction" ADD COLUMN "adcs_request_id" uuid;--> statement-breakpoint
+ALTER TABLE "scep_transaction" ADD COLUMN "decided" jsonb;--> statement-breakpoint
+ALTER TABLE "adcs_request" ADD CONSTRAINT "adcs_request_enrollment_profile_id_organization_id_enrollment_profile_id_organization_id_fk" FOREIGN KEY ("enrollment_profile_id","organization_id") REFERENCES "public"."enrollment_profile"("id","organization_id") ON DELETE no action ON UPDATE no action;--> statement-breakpoint
+ALTER TABLE "device_certificate" ADD CONSTRAINT "device_certificate_adcs_ca_id_organization_id_adcs_ca_id_organization_id_fk" FOREIGN KEY ("adcs_ca_id","organization_id") REFERENCES "public"."adcs_ca"("id","organization_id") ON DELETE no action ON UPDATE no action;--> statement-breakpoint
+ALTER TABLE "device_certificate" ADD CONSTRAINT "device_certificate_adcs_template_id_adcs_ca_id_adcs_template_id_adcs_ca_id_fk" FOREIGN KEY ("adcs_template_id","adcs_ca_id") REFERENCES "public"."adcs_template"("id","adcs_ca_id") ON DELETE no action ON UPDATE no action;--> statement-breakpoint
+ALTER TABLE "enrollment_profile" ADD CONSTRAINT "enrollment_profile_adcs_ca_id_organization_id_adcs_ca_id_organization_id_fk" FOREIGN KEY ("adcs_ca_id","organization_id") REFERENCES "public"."adcs_ca"("id","organization_id") ON DELETE no action ON UPDATE no action;--> statement-breakpoint
+ALTER TABLE "enrollment_profile" ADD CONSTRAINT "enrollment_profile_adcs_template_id_adcs_ca_id_adcs_template_id_adcs_ca_id_fk" FOREIGN KEY ("adcs_template_id","adcs_ca_id") REFERENCES "public"."adcs_template"("id","adcs_ca_id") ON DELETE no action ON UPDATE no action;--> statement-breakpoint
+ALTER TABLE "enrollment_profile" ADD CONSTRAINT "enrollment_profile_adcs_ra_template_id_adcs_ca_id_adcs_template_id_adcs_ca_id_fk" FOREIGN KEY ("adcs_ra_template_id","adcs_ca_id") REFERENCES "public"."adcs_template"("id","adcs_ca_id") ON DELETE no action ON UPDATE no action;--> statement-breakpoint
+ALTER TABLE "enrollment_profile" ADD CONSTRAINT "enrollment_profile_next_ra_key_secret_id_organization_id_secret_id_organization_id_fk" FOREIGN KEY ("next_ra_key_secret_id","organization_id") REFERENCES "public"."secret"("id","organization_id") ON DELETE no action ON UPDATE no action;--> statement-breakpoint
+ALTER TABLE "scep_transaction" ADD CONSTRAINT "scep_transaction_adcs_request_id_adcs_request_id_fk" FOREIGN KEY ("adcs_request_id") REFERENCES "public"."adcs_request"("id") ON DELETE no action ON UPDATE no action;--> statement-breakpoint
+CREATE INDEX "adcs_request_enrollment_profile_idx" ON "adcs_request" USING btree ("enrollment_profile_id","created_at");--> statement-breakpoint
+CREATE UNIQUE INDEX "scep_transaction_adcs_request_unique" ON "scep_transaction" USING btree ("adcs_request_id");--> statement-breakpoint
+ALTER TABLE "adcs_request" ADD CONSTRAINT "adcs_request_purpose" CHECK (("adcs_request"."purpose" = 'issuance' and "adcs_request"."issuance_id" is not null and "adcs_request"."enrollment_profile_id" is null) or ("adcs_request"."purpose" in ('device', 'ra') and "adcs_request"."enrollment_profile_id" is not null and "adcs_request"."issuance_id" is null));--> statement-breakpoint
+ALTER TABLE "device_certificate" ADD CONSTRAINT "device_certificate_issuer_kind" CHECK (("device_certificate"."issuer_kind" = 'private_ca' and "device_certificate"."issuing_ca_id" is not null and "device_certificate"."adcs_ca_id" is null and "device_certificate"."adcs_template_id" is null and "device_certificate"."adcs_request_id" is null) or ("device_certificate"."issuer_kind" = 'adcs' and "device_certificate"."adcs_ca_id" is not null and "device_certificate"."adcs_template_id" is not null and "device_certificate"."adcs_request_id" is not null and "device_certificate"."issuing_ca_id" is null));--> statement-breakpoint
+ALTER TABLE "enrollment_profile" ADD CONSTRAINT "enrollment_profile_issuer_kind" CHECK (("enrollment_profile"."issuer_kind" = 'private_ca' and "enrollment_profile"."issuing_ca_id" is not null and "enrollment_profile"."adcs_ca_id" is null and "enrollment_profile"."adcs_template_id" is null and "enrollment_profile"."adcs_ra_template_id" is null and "enrollment_profile"."ra_certificate_pem" is not null and "enrollment_profile"."next_ra_key_secret_id" is null) or ("enrollment_profile"."issuer_kind" = 'adcs' and "enrollment_profile"."adcs_ca_id" is not null and "enrollment_profile"."adcs_template_id" is not null and "enrollment_profile"."adcs_ra_template_id" is not null and "enrollment_profile"."issuing_ca_id" is null));--> statement-breakpoint
+ALTER TABLE "enrollment_profile" ADD CONSTRAINT "enrollment_profile_validity" CHECK (("enrollment_profile"."issuer_kind" = 'adcs') = ("enrollment_profile"."validity_days" is null) and ("enrollment_profile"."validity_days" is null or "enrollment_profile"."validity_days" >= 1));--> statement-breakpoint
+ALTER TABLE "scep_transaction" ADD CONSTRAINT "scep_transaction_adcs_request" CHECK (("scep_transaction"."adcs_request_id" is null) = ("scep_transaction"."decided" is null));

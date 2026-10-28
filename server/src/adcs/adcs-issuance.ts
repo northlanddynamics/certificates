@@ -11,6 +11,10 @@
 // ADCS's ID of it, and an online assigned Agent is asked again where it stands, as `adcs.check`, on a backoff that grows to
 // once every 15 minutes, until ADCS issues or denies it, or until 7 days after it was submitted, when it is pending too
 // long. A check is only a question, so one that is not answered in time is asked of another Agent, or again later.
+//
+// An Enrollment Profile on an ADCS CA has its requests go the same way (`request`): a device's CSR, which its SCEP
+// transaction waits for, and the profile's RA certificate. What comes of those is handed to whoever registered for
+// their purpose (`handle`), on the transaction that learned it, rather than to an Issuance.
 import * as x509 from "@peculiar/x509";
 import { and, asc, desc, eq, inArray, isNotNull, lte, or } from "drizzle-orm";
 import { offeredFor, templateKeyRefusal, unavailableReason } from "./adcs-kinds";
@@ -28,11 +32,26 @@ import type { Change, UnitOfWork } from "../platform/unit-of-work";
 
 type AdcsCaRow = typeof adcsCa.$inferSelect;
 type TemplateRow = typeof adcsTemplate.$inferSelect;
-type RequestRow = typeof adcsRequest.$inferSelect;
+export type AdcsRequestRow = typeof adcsRequest.$inferSelect;
+type RequestRow = AdcsRequestRow;
 type AdcsIssuer = { adcsCaId: string; templateId: string };
 
+/** What a request not for an Issuance is for: a device's Device Certificate, or an Enrollment Profile's RA certificate. */
+export type AdcsRequestPurpose = Exclude<RequestRow["purpose"], "issuance">;
+
+/**
+ * Who takes what comes of the requests of one purpose, on the transaction that learned it, with the request locked: the
+ * Certificate (PEM) ADCS issued for it, or why it failed (an IssuanceFailure or a CertificateAuthorityError, whose
+ * message says why). Neither is told twice.
+ */
+export interface AdcsOutcomes {
+  issued(tx: Tx, change: Change, request: RequestRow, certificatePem: string): Promise<void>;
+  failed(tx: Tx, change: Change, request: RequestRow, failure: Error): Promise<void>;
+}
+
 /** The statuses of a request that has not ended. */
-const OPEN: RequestRow["status"][] = ["waiting", "submitted", "pending"];
+export const OPEN_REQUEST_STATUSES: RequestRow["status"][] = ["waiting", "submitted", "pending"];
+const OPEN = OPEN_REQUEST_STATUSES;
 
 /** How long a request may wait for an Agent to submit it before its Issuance fails as "no Agent available". */
 export const NO_AGENT_TIMEOUT_MS = 7 * 24 * 3600_000;
@@ -131,7 +150,7 @@ export async function adcsRequestsOf(db: Db, issuanceIds: string[]): Promise<Map
     .where(inArray(adcsRequest.issuanceId, issuanceIds));
   return new Map(
     rows.map(({ request, hostName }) => [
-      request.issuanceId,
+      request.issuanceId!,
       {
         status: request.status,
         agent: request.agentId && hostName !== null ? { id: request.agentId, hostName } : null,
@@ -162,8 +181,20 @@ export interface AdcsIssuance {
   issue(db: Db | Tx, organizationId: string, issuer: AdcsIssuer, request: IssueRequest): Promise<Pending>;
   /** The root (PEM) the ADCS CA's chain ends in. */
   roots(db: Db | Tx, organizationId: string, adcsCaId: string): Promise<string[]>;
-  /** Where the outcome of each request is reported. */
+  /** Where the outcome of each request for an Issuance is reported. */
   reportTo(issuances: Issuances): void;
+  /**
+   * Records a request for an Enrollment Profile (`purpose`) on the change, and gives it to an online assigned Agent, or
+   * has it wait for one; its outcome goes to whoever handles its purpose. The caller has checked what ADCS would not.
+   * Returns the request's id.
+   */
+  request(
+    tx: Tx,
+    change: Change,
+    request: { organizationId: string; adcsCaId: string; templateId: string; csrPem: string; purpose: AdcsRequestPurpose; enrollmentProfileId: string },
+  ): Promise<string>;
+  /** Has `outcomes` take what comes of the requests of the purpose. */
+  handle(purpose: AdcsRequestPurpose, outcomes: AdcsOutcomes): void;
   /**
    * One pass at the clock's time: gives each request waiting for an Agent to an online one; gives up on an Agent that has
    * not reported in time for another; fails requests that waited 7 days as "no Agent available"; has an Agent check each
@@ -189,6 +220,12 @@ export function createAdcsIssuance({
   config: AdcsSubmitConfig;
 }): AdcsIssuance {
   let issuances: Issuances | undefined;
+  const handlers = new Map<AdcsRequestPurpose, AdcsOutcomes>();
+  const handlerOf = (row: RequestRow) => {
+    const handler = row.purpose === "issuance" ? undefined : handlers.get(row.purpose);
+    if (!handler) throw new Error(`nothing takes the outcome of ADCS requests for ${row.purpose}`);
+    return handler;
+  };
 
   /** Has the Issuance told what came of its request, once the change that recorded it has committed. */
   const report = (change: Change, issuanceId: string, result: Issued | Pending | Failed) =>
@@ -234,10 +271,11 @@ export function createAdcsIssuance({
     return next;
   }
 
-  /** Ends the request (locked by the caller) as failed, and has its Issuance fail with `failure`. */
-  async function fail(tx: Tx, change: Change, row: RequestRow, failure: unknown) {
-    await tx.update(adcsRequest).set({ status: "failed", finishedAt: change.occurredAt }).where(eq(adcsRequest.id, row.id));
-    report(change, row.issuanceId, { failed: failure });
+  /** Ends the request (locked by the caller) as failed, and has its Issuance, or whoever handles its purpose, fail with `failure`. */
+  async function fail(tx: Tx, change: Change, row: RequestRow, failure: Error) {
+    const [failed] = await tx.update(adcsRequest).set({ status: "failed", finishedAt: change.occurredAt }).where(eq(adcsRequest.id, row.id)).returning();
+    if (row.purpose === "issuance") report(change, row.issuanceId!, { failed: failure });
+    else await handlerOf(row).failed(tx, change, failed!, failure);
   }
 
   /** What the Issuance waits for while ADCS holds its request: its deadline moves to when the request is pending too long, and an hour after. */
@@ -270,7 +308,7 @@ export function createAdcsIssuance({
 
   /** The audit detail of what ADCS answered the request with, through the Agent. */
   const answerDetail = (row: RequestRow, ca: AdcsCaRow, template: TemplateRow, by: { id: string; hostName: string } | undefined, adcsRequestId: string) => ({
-    issuanceId: row.issuanceId,
+    ...(row.purpose === "issuance" ? { issuanceId: row.issuanceId } : { enrollmentProfileId: row.enrollmentProfileId, purpose: row.purpose }),
     adcsCa: { id: ca.id, name: ca.name },
     template: { id: template.id, name: template.name },
     agent: by ?? null,
@@ -284,8 +322,7 @@ export function createAdcsIssuance({
   async function answered(tx: Tx, change: Change, row: RequestRow, by: { id: string; hostName: string }, answer: SubmissionResult, { submission }: { submission: boolean }) {
     const [ca] = await tx.select().from(adcsCa).where(eq(adcsCa.id, row.adcsCaId));
     const [template] = await tx.select().from(adcsTemplate).where(eq(adcsTemplate.id, row.templateId));
-    const [of] = await tx.select({ managedCertificateId: issuance.managedCertificateId }).from(issuance).where(eq(issuance.id, row.issuanceId));
-    const target = { type: "managed_certificate", id: of!.managedCertificateId };
+    const target = await auditTargetOf(tx, row);
     const detail = answerDetail(row, ca!, template!, by, answer.requestId);
     // A request is ADCS's own once submitted: a check reporting another is not about it.
     if (!submission && answer.requestId !== row.adcsRequestId) {
@@ -304,7 +341,8 @@ export function createAdcsIssuance({
         .set({ status: "issued", adcsRequestId: answer.requestId, certificatePem: answer.certificate, workItemId: null, finishedAt: change.occurredAt })
         .where(eq(adcsRequest.id, row.id))
         .returning();
-      report(change, row.issuanceId, issuedOf(ca!, issued!));
+      if (row.purpose === "issuance") report(change, row.issuanceId!, issuedOf(ca!, issued!));
+      else await handlerOf(row).issued(tx, change, issued!, answer.certificate);
       return;
     }
     if (answer.status === "denied") {
@@ -329,8 +367,15 @@ export function createAdcsIssuance({
       .returning();
     if (submission) {
       await change.audit({ organizationId: row.organizationId, action: "adcs_ca.request_pending", target, detail: { ...detail, pendingUntil: pendingUntilOf(row.submittedAt!).toISOString() } });
-      report(change, row.issuanceId, pendingOf(pending!));
+      if (row.purpose === "issuance") report(change, row.issuanceId!, pendingOf(pending!));
     }
+  }
+
+  /** What the Audit Events of the request are about: an Issuance's Managed Certificate, or the Enrollment Profile. */
+  async function auditTargetOf(tx: Tx, row: RequestRow) {
+    if (row.purpose !== "issuance") return { type: "enrollment_profile", id: row.enrollmentProfileId! };
+    const [of] = await tx.select({ managedCertificateId: issuance.managedCertificateId }).from(issuance).where(eq(issuance.id, row.issuanceId!));
+    return { type: "managed_certificate", id: of!.managedCertificateId };
   }
 
   /** Stops the Agent being given the request's work item, or reporting on it: it was given up on. */
@@ -405,7 +450,7 @@ export function createAdcsIssuance({
       if (workItemId) await tx.select({ id: workItem.id }).from(workItem).where(eq(workItem.id, workItemId)).for("update");
       const [row] = await tx.select().from(adcsRequest).where(eq(adcsRequest.id, id)).for("update");
       if (!row || !OPEN.includes(row.status) || row.workItemId !== workItemId) return;
-      const [of] = await tx.select({ status: issuance.status }).from(issuance).where(eq(issuance.id, row.issuanceId));
+      const [of] = row.purpose === "issuance" ? await tx.select({ status: issuance.status }).from(issuance).where(eq(issuance.id, row.issuanceId!)) : [{ status: "running" }];
       if (of?.status !== "running") {
         // Its Issuance ended without it (the platform stopped before it was recorded, or it timed out): nothing to submit for.
         await expireItem(tx, change, row);
@@ -493,6 +538,17 @@ export function createAdcsIssuance({
     reportTo(to) {
       issuances = to;
     },
+    async request(tx, change, { organizationId, adcsCaId, templateId, csrPem, purpose, enrollmentProfileId }) {
+      const [row] = await tx
+        .insert(adcsRequest)
+        .values({ organizationId, adcsCaId, templateId, purpose, enrollmentProfileId, csr: csrPem, status: "waiting", createdAt: change.occurredAt })
+        .returning();
+      await dispatch(tx, change, row!, []);
+      return row!.id;
+    },
+    handle(purpose, outcomes) {
+      handlers.set(purpose, outcomes);
+    },
     async tick() {
       const now = clock();
       // A pending request is looked at only when there is something to do: its check is due or out, or it is pending too long.
@@ -517,7 +573,7 @@ export function createAdcsIssuance({
         .innerJoin(issuance, eq(issuance.id, adcsRequest.issuanceId))
         .innerJoin(adcsCa, eq(adcsCa.id, adcsRequest.adcsCaId))
         .where(and(eq(adcsRequest.status, "issued"), eq(issuance.status, "running")));
-      for (const { request, ca } of unreported) await issuances?.report(request.issuanceId, issuedOf(ca, request));
+      for (const { request, ca } of unreported) await issuances?.report(request.issuanceId!, issuedOf(ca, request));
       // So is that a request is pending at ADCS, which moves its Issuance's deadline; reporting it again changes nothing.
       const stillPending = await db
         .select({ request: adcsRequest, pendingUntil: issuance.pendingUntil })
@@ -526,7 +582,7 @@ export function createAdcsIssuance({
         .where(and(eq(adcsRequest.status, "pending"), eq(issuance.status, "running")));
       for (const { request, pendingUntil } of stillPending) {
         const wanted = pendingOf(request);
-        if (!pendingUntil || pendingUntil.getTime() < wanted.pending.deadline.getTime()) await issuances?.report(request.issuanceId, wanted);
+        if (!pendingUntil || pendingUntil.getTime() < wanted.pending.deadline.getTime()) await issuances?.report(request.issuanceId!, wanted);
       }
       return open.length;
     },
