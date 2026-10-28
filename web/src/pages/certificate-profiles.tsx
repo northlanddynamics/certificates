@@ -263,8 +263,8 @@ function ProfileForm({ orgId, profile, onDone }: { orgId: string; profile?: Cert
     defaultTeamId: teamId === NO_TEAM ? null : teamId,
     nameRules: { exact: splitNames(exactNames), zones: splitNames(zones), maxNames: maxNames.trim() === "" ? null : Number(maxNames), wildcards },
   };
-  // None until an issuer is chosen, which the Issuer step asks for before Review.
-  const { issuer } = choice;
+  // None until an issuer is chosen, which the Issuer step asks for before Review; ADCS CAs are not offered to a profile.
+  const issuer = choice.issuer?.kind === "adcs" ? null : choice.issuer;
   const changes: CertificateProfileChanges | null = issuer && { ...settings, issuer, validityDays: issuer.kind === "private_ca" ? choice.chosenValidity : null };
   const save = useAction(
     async () => {

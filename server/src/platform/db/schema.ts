@@ -147,6 +147,9 @@ export const managedCertificate = pgTable(
     acmeCaId: text("acme_ca_id"),
     /** The Private CA kind's reference: the Issuing CA, of one of the Organization's Private CAs, its Certificates are issued from. */
     issuingCaId: uuid("issuing_ca_id"),
+    /** The ADCS kind's reference: the Organization's ADCS CA, and the Certificate Template of it its Certificates are issued under. */
+    adcsCaId: uuid("adcs_ca_id"),
+    adcsTemplateId: uuid("adcs_template_id"),
     /**
      * The Private CA kind's validity: how many days its Certificates are valid for, at most the Issuing CA's maximum. Null
      * when it chose none, and it gets the Issuing CA's default; always null for the ACME kind, whose CA decides.
@@ -183,10 +186,12 @@ export const managedCertificate = pgTable(
     foreignKey({ columns: [t.certificateProfileId, t.organizationId], foreignColumns: [certificateProfile.id, certificateProfile.organizationId] }),
     check(
       "managed_certificate_issuer_kind",
-      sql`(${t.issuerKind} = 'acme' and ${t.acmeCaId} is not null and ${t.issuingCaId} is null) or (${t.issuerKind} = 'private_ca' and ${t.issuingCaId} is not null and ${t.acmeCaId} is null)`,
+      sql`(${t.issuerKind} = 'acme' and ${t.acmeCaId} is not null and ${t.issuingCaId} is null and ${t.adcsCaId} is null and ${t.adcsTemplateId} is null) or (${t.issuerKind} = 'private_ca' and ${t.issuingCaId} is not null and ${t.acmeCaId} is null and ${t.adcsCaId} is null and ${t.adcsTemplateId} is null) or (${t.issuerKind} = 'adcs' and ${t.adcsCaId} is not null and ${t.adcsTemplateId} is not null and ${t.acmeCaId} is null and ${t.issuingCaId} is null)`,
     ),
     check("managed_certificate_validity", sql`${t.validityDays} is null or (${t.issuerKind} = 'private_ca' and ${t.validityDays} >= 1)`),
     foreignKey({ columns: [t.issuingCaId, t.organizationId], foreignColumns: [issuingCa.id, issuingCa.organizationId] }),
+    foreignKey({ columns: [t.adcsCaId, t.organizationId], foreignColumns: [adcsCa.id, adcsCa.organizationId] }),
+    foreignKey({ columns: [t.adcsTemplateId, t.adcsCaId], foreignColumns: [adcsTemplate.id, adcsTemplate.adcsCaId] }),
     check("managed_certificate_key_custody", sql`${t.keyCustody} in ('owner', 'agent')`),
     check("managed_certificate_owner_has_csr", sql`${t.keyCustody} <> 'owner' or ${t.csr} is not null`),
     check("managed_certificate_renewal_mode", sql`${t.renewalMode} in ('automatic', 'manual')`),
@@ -520,13 +525,17 @@ export const certificate = pgTable(
     csr: text("csr"),
     /**
      * The CA it came from (what that CA calls itself), and the issuer (issuer.ts) it came from: its kind, and for ACME the
-     * ACME CA and the account used there, for a Private CA the Issuing CA that signed it.
+     * ACME CA and the account used there, for a Private CA the Issuing CA that signed it, for an ADCS CA the CA, the
+     * Certificate Template it was issued under and ADCS's own ID of the request that issued it.
      */
     ca: text("ca").notNull(),
     issuerKind: text("issuer_kind").$type<IssuerKind>().notNull().default("acme"),
     acmeCaId: text("acme_ca_id"),
     acmeAccountId: uuid("acme_account_id").references(() => acmeAccount.id),
     issuingCaId: uuid("issuing_ca_id"),
+    adcsCaId: uuid("adcs_ca_id"),
+    adcsTemplateId: uuid("adcs_template_id"),
+    adcsRequestId: text("adcs_request_id"),
     issuedAt: timestamp("issued_at", { withTimezone: true }).notNull(),
     createdAt: timestamp("created_at", { withTimezone: true }).notNull().defaultNow(),
   },
@@ -534,9 +543,11 @@ export const certificate = pgTable(
     unique("certificate_organization_fingerprint_unique").on(t.organizationId, t.fingerprint),
     check(
       "certificate_issuer_kind",
-      sql`(${t.issuerKind} = 'acme' and ${t.acmeCaId} is not null and ${t.acmeAccountId} is not null and ${t.issuingCaId} is null) or (${t.issuerKind} = 'private_ca' and ${t.issuingCaId} is not null and ${t.acmeCaId} is null and ${t.acmeAccountId} is null)`,
+      sql`(${t.issuerKind} = 'acme' and ${t.acmeCaId} is not null and ${t.acmeAccountId} is not null and ${t.issuingCaId} is null and ${t.adcsCaId} is null) or (${t.issuerKind} = 'private_ca' and ${t.issuingCaId} is not null and ${t.acmeCaId} is null and ${t.acmeAccountId} is null and ${t.adcsCaId} is null) or (${t.issuerKind} = 'adcs' and ${t.adcsCaId} is not null and ${t.adcsTemplateId} is not null and ${t.adcsRequestId} is not null and ${t.acmeCaId} is null and ${t.acmeAccountId} is null and ${t.issuingCaId} is null)`,
     ),
     foreignKey({ columns: [t.issuingCaId, t.organizationId], foreignColumns: [issuingCa.id, issuingCa.organizationId] }),
+    foreignKey({ columns: [t.adcsCaId, t.organizationId], foreignColumns: [adcsCa.id, adcsCa.organizationId] }),
+    foreignKey({ columns: [t.adcsTemplateId, t.adcsCaId], foreignColumns: [adcsTemplate.id, adcsTemplate.adcsCaId] }),
     index("certificate_managed_certificate_idx").on(t.managedCertificateId, t.createdAt),
     foreignKey({ columns: [t.managedCertificateId, t.organizationId], foreignColumns: [managedCertificate.id, managedCertificate.organizationId] }),
   ],
@@ -1038,9 +1049,17 @@ export const adcsCa = pgTable(
     /** When the latest discovery failed, and why; null once one succeeds. A failed one changes nothing else. */
     discoveryFailedAt: timestamp("discovery_failed_at", { withTimezone: true }),
     discoveryError: text("discovery_error"),
+    /**
+     * Its optional Permitted Name Rules (permitted-names.ts), which the platform enforces before anything is submitted:
+     * never as name constraints, since ADCS's own certificate is not the platform's. Both null while it has none, and it
+     * relies on Approval alone.
+     */
+    permittedExactNames: text("permitted_exact_names").array(),
+    permittedZones: text("permitted_zones").array(),
     createdAt: timestamp("created_at", { withTimezone: true }).notNull(),
   },
   (t) => [
+    check("adcs_ca_permitted_names", sql`(${t.permittedExactNames} is null) = (${t.permittedZones} is null)`),
     unique("adcs_ca_organization_name_unique").on(t.organizationId, t.name),
     unique("adcs_ca_organization_config_string_unique").on(t.organizationId, t.configString),
     // Lets other tables reference an ADCS CA together with its Organization, so none can point at another's.
@@ -1098,6 +1117,54 @@ export const adcsTemplate = pgTable(
     unique("adcs_template_ca_name_unique").on(t.adcsCaId, t.name),
     foreignKey({ columns: [t.adcsCaId, t.organizationId], foreignColumns: [adcsCa.id, adcsCa.organizationId] }).onDelete("cascade"),
     unique("adcs_template_id_organization_unique").on(t.id, t.organizationId),
+    // Lets what names a template name its CA with it, so that none names one of another CA.
+    unique("adcs_template_id_ca_unique").on(t.id, t.adcsCaId),
+  ],
+);
+
+/**
+ * A request to an ADCS CA for an Issuance (adcs-issuance.ts): the CSR an Agent submits under the template, as `adcs.submit`,
+ * to one online assigned Agent at a time. It `waiting`s while no assigned Agent is online, is `submitted` while one has the
+ * work item, and ends `issued` (with ADCS's request ID and the Certificate) or `failed`. An Agent that cannot reach the CA
+ * is recorded in `triedAgentIds`, and another is given it.
+ */
+export const adcsRequest = pgTable(
+  "adcs_request",
+  {
+    id: uuid("id").primaryKey().defaultRandom(),
+    organizationId: text("organization_id")
+      .notNull()
+      .references(() => organization.id),
+    adcsCaId: uuid("adcs_ca_id").notNull(),
+    templateId: uuid("template_id").notNull(),
+    issuanceId: uuid("issuance_id")
+      .notNull()
+      .references(() => issuance.id),
+    csr: text("csr").notNull(),
+    status: text("status").$type<"waiting" | "submitted" | "issued" | "failed">().notNull(),
+    /** The Agent that has the work item, and the item, while it is submitted; once it has ended, the Agent that reported last. */
+    agentId: uuid("agent_id"),
+    workItemId: uuid("work_item_id"),
+    /** When the Agent that has it was given it. */
+    submittedAt: timestamp("submitted_at", { withTimezone: true }),
+    /** The Agents that could not reach the CA for it. */
+    triedAgentIds: uuid("tried_agent_ids").array().notNull().default(sql`'{}'`),
+    /** ADCS's ID of the request, once an Agent has reported it, and the Certificate (PEM) ADCS issued. */
+    adcsRequestId: text("adcs_request_id"),
+    certificatePem: text("certificate_pem"),
+    createdAt: timestamp("created_at", { withTimezone: true }).notNull(),
+    finishedAt: timestamp("finished_at", { withTimezone: true }),
+  },
+  (t) => [
+    uniqueIndex("adcs_request_issuance_unique").on(t.issuanceId),
+    index("adcs_request_open_idx")
+      .on(t.status)
+      .where(sql`${t.status} in ('waiting', 'submitted')`),
+    foreignKey({ columns: [t.adcsCaId, t.organizationId], foreignColumns: [adcsCa.id, adcsCa.organizationId] }),
+    foreignKey({ columns: [t.templateId, t.adcsCaId], foreignColumns: [adcsTemplate.id, adcsTemplate.adcsCaId] }),
+    check("adcs_request_status", sql`${t.status} in ('waiting', 'submitted', 'issued', 'failed')`),
+    check("adcs_request_submitted", sql`${t.status} <> 'submitted' or (${t.agentId} is not null and ${t.workItemId} is not null and ${t.submittedAt} is not null)`),
+    check("adcs_request_issued", sql`${t.status} <> 'issued' or (${t.adcsRequestId} is not null and ${t.certificatePem} is not null)`),
   ],
 );
 

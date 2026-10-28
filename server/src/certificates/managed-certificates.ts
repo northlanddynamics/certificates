@@ -20,7 +20,7 @@ import { HttpError, OrgParam, PageQuery, errors, json, pageOf } from "../platfor
 import { issuerAuditDetail, issuerColumns } from "../issuance/issuer";
 import { InventoryQuery, inventoryCondition } from "./inventory-filters";
 import { refusalError, type Issuances } from "../issuance/issuance";
-import { Certificate, CertificateFacts, Issuance, ManagedCertificate, ManagedCertificateParams, RenewalPolicy, toCertificate, toIssuance, type ManagedCertificateReader } from "./managed-certificate-reader";
+import { Certificate, CertificateFacts, Issuance, ManagedCertificate, ManagedCertificateParams, RenewalPolicy, issuancesShown, toCertificate, type ManagedCertificateReader } from "./managed-certificate-reader";
 import { requestedThrough } from "./certificate-profiles";
 import { certificateProfileSettingsOf, profileRequiredRefusal, requestsWithoutProfile } from "./certificate-profile-settings";
 import { profileNamesRefusal } from "./profile-name-rules";
@@ -261,7 +261,7 @@ export function registerManagedCertificates(ctx: {
         .from(issuance)
         .where(and(eq(issuance.organizationId, orgId), eq(issuance.managedCertificateId, mc.id)))
         .orderBy(desc(issuance.startedAt), desc(issuance.createdAt));
-      return c.json({ items: rows.map(toIssuance) }, 200);
+      return c.json({ items: await issuancesShown(db, rows) }, 200);
     },
   );
 
@@ -283,7 +283,7 @@ export function registerManagedCertificates(ctx: {
       const begun = await unitOfWork.run(actor, (tx, change) => issuances.begin(tx, change, actor, mc, "issue"));
       if ("refused" in begun) throw refusalError(begun, "issue");
       const [row] = await db.select().from(issuance).where(eq(issuance.id, begun.issuanceId));
-      return c.json(toIssuance(row!), 202);
+      return c.json((await issuancesShown(db, [row!]))[0]!, 202);
     },
   );
 

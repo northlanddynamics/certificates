@@ -1,7 +1,8 @@
 // An Active Directory Certificate Services CA, in memory, for Seam A: what an Agent on a domain-joined Windows host reaches
 // with MS-WCCE, as its gMSA. It holds a CA key and chain (an issuing CA under a root, with a CRL Distribution Point), the
-// templates it publishes with their facts, and which of them the gMSA may enroll on. The Agent stand-in (agent-double.ts)
-// answers ADCS work items from it. (The Go Agent has its own fake behind the same contract; Seam B.)
+// templates it publishes with their facts, and which of them the gMSA may enroll on, and it issues what is submitted under a
+// template it publishes and the gMSA may enroll on, with the names the request supplies and the template's validity. The
+// Agent stand-in (agent-double.ts) answers ADCS work items from it. (The Go Agent has its own fake behind the same contract; Seam B.)
 import * as x509 from "@peculiar/x509";
 import { webcrypto } from "node:crypto";
 import type { TemplateFacts } from "../../src/adcs/adcs-kinds";
@@ -92,6 +93,11 @@ export class AdcsDouble {
   reportedChain: string[] | null = null;
   /** How often it was asked to discover. */
   discoveries = 0;
+  /** Its clock, which what it issues is valid from. */
+  now: () => Date = () => new Date();
+  /** What it issued, in order: ADCS's request ID, the template's name and the Certificate. */
+  readonly issued: { requestId: string; template: string; certificate: x509.X509Certificate }[] = [];
+  private nextRequestId = 100;
 
   private constructor(
     /** Its config string, `host\CA Name`. */
@@ -130,5 +136,42 @@ export class AdcsDouble {
     this.reach(configString);
     this.discoveries++;
     return { chain: this.reportedChain ?? this.chainPem, templates: this.templates.map((t) => ({ ...t })) };
+  }
+
+  /**
+   * What `adcs.submit` gets: the CSR (PEM) submitted under the template, issued at once with the names the request supplies,
+   * the template's EKUs and validity (never past the CA's end), signed by its CA certificate. A template it does not publish,
+   * or the gMSA may not enroll on, is refused, as ADCS refuses it.
+   */
+  async submit(configString: string, templateName: string, csrPem: string) {
+    const now = this.now();
+    this.reach(configString);
+    const template = this.templates.find((t) => t.name.toLowerCase() === templateName.toLowerCase());
+    if (!template?.published) throw new AdcsDoubleError("rejected", `The requested certificate template is not supported by this CA: ${templateName}`);
+    if (!template.enrollable) throw new AdcsDoubleError("rejected", `Access is denied: the account may not enroll on ${templateName}`);
+    if (!template.subjectFromRequest) throw new AdcsDoubleError("rejected", `${templateName} builds the subject from Active Directory`);
+    const csr = new x509.Pkcs10CertificateRequest(csrPem);
+    // The subject alternative names the request supplies, as it has them.
+    const requested = csr.getExtension("2.5.29.17");
+    const notAfter = Math.min(now.getTime() + template.validityDays * DAY_MS, this.ca.certificate.notAfter.getTime());
+    const certificate = await x509.X509CertificateGenerator.create({
+      serialNumber: "61" + Buffer.from(webcrypto.getRandomValues(new Uint8Array(9))).toString("hex"),
+      subject: csr.subject,
+      issuer: this.ca.subject,
+      notBefore: new Date(now.getTime() - 60_000),
+      notAfter: new Date(notAfter),
+      signingAlgorithm: ALGORITHM,
+      publicKey: csr.publicKey,
+      signingKey: this.ca.keys.privateKey,
+      extensions: [
+        new x509.BasicConstraintsExtension(false, undefined, true),
+        new x509.ExtendedKeyUsageExtension(template.extendedKeyUsages),
+        new x509.CRLDistributionPointsExtension([CDP_URL]),
+        ...(requested ? [requested] : []),
+      ],
+    });
+    const requestId = String(this.nextRequestId++);
+    this.issued.push({ requestId, template: template.name, certificate });
+    return { status: "issued" as const, requestId, certificate: certificate.toString("pem") };
   }
 }

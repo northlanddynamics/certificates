@@ -435,6 +435,13 @@
       "when": 1793156040525,
       "tag": "0061_adcs_templates_current",
       "breakpoints": true
+    },
+    {
+      "idx": 62,
+      "version": "7",
+      "when": 1793189058347,
+      "tag": "0062_adcs_tls_managed_certificates",
+      "breakpoints": true
     }
   ]
 }

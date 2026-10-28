@@ -21,8 +21,9 @@ import { issuingCa, privateCa } from "../platform/db/schema";
 import { HttpError, OrgParam, PemResponse, errors, fileNameOf, isUniqueViolation, json, pemFile } from "../platform/http";
 import { IssuanceFailure } from "../issuance/issuance-failure";
 import type { Issuer } from "../issuance/issuer";
+import { adcsIssuerRefusal } from "../adcs/adcs-issuance";
 import type { Kms } from "../platform/crypto/kms";
-import { constraintNamesOf, namesOutside, normalizePermittedNames, samePermittedNames, type PermittedNames } from "./permitted-names";
+import { constraintNamesOf, namesOutside, permittedNamesAsked, permittedNamesField, samePermittedNames, type PermittedNames } from "./permitted-names";
 import { DEFAULT_LIFETIME_YEARS, DEFAULT_VALIDITY_DAYS, ISSUING_CA_STATUSES, MAX_LIFETIME_YEARS, MAX_VALIDITY_DAYS, PRIVATE_CA_KINDS, PRIVATE_CA_STATUSES, type PrivateCaKind } from "./private-ca-kinds";
 import { ISSUING_CA_REVOCATION_REASONS } from "../pki/revocation-reasons";
 import type { Actor, Change, UnitOfWork } from "../platform/unit-of-work";
@@ -37,22 +38,8 @@ export type IssuingCaOf = { issuing: IssuingCaRow; ca: PrivateCaRow };
 export const PrivateCaParams = OrgParam.extend({ id: z.string().openapi({ param: { name: "id", in: "path" } }) });
 const IssuingCaParams = PrivateCaParams.extend({ issuingCaId: z.string().openapi({ param: { name: "issuingCaId", in: "path" } }) });
 
-const MAX_RULES = 100;
-
 /** An Issuing CA's permitted name rules, as they are given and shown. */
-const PermittedNamesField = z
-  .object({
-    exact: z.array(z.string().max(255)).max(MAX_RULES).default([]).openapi({ description: "Names permitted exactly: a DNS name, or a wildcard (`*.` then a DNS name), which permits that wildcard alone." }),
-    zones: z.array(z.string().max(255)).max(MAX_RULES).default([]).openapi({ description: "Zones: each permits the name and every name beneath it, wildcards included. Never a wildcard." }),
-  })
-  .openapi({ description: "The names the Issuing CA may issue for, normalised as names are (lower case, no trailing dot). No IP addresses." });
-
-/** The rules given, normalised; a 400 when they cannot be rules. */
-function permittedNamesAsked(rules: PermittedNames): PermittedNames {
-  const normal = normalizePermittedNames(rules);
-  if ("invalid" in normal) throw new HttpError(400, normal.invalid);
-  return normal.rules;
-}
+const PermittedNamesField = permittedNamesField("The names the Issuing CA may issue for, normalised as names are (lower case, no trailing dot). No IP addresses.");
 
 /** A number of days a TLS Certificate is valid for. */
 export const validityDaysField = z.number().int().min(1).max(MAX_VALIDITY_DAYS);
@@ -235,10 +222,12 @@ export function keyAlgorithmRefusal(keyAlgorithm: KeyAlgorithm, on: { caKeyAlgor
  * Why a Managed Certificate may not ask the issuer for the names (normalised), the validity and, when given, the key
  * algorithm: a 422 when it is an Issuing CA that is not the Organization's, or does not issue (it or its root), or does
  * not permit the names, or allows no such validity, or when the issuer takes no such key algorithm; a 400 for a
- * validity asked of an ACME CA, which decides its own (and checks control of the names instead). None when it may.
+ * validity asked of an ACME CA, which decides its own (and checks control of the names instead). An ADCS CA is checked
+ * as `adcsIssuerRefusal` says. None when it may.
  */
 export async function issuerRefusal(db: Db | Tx, organizationId: string, issuer: Issuer, asked: { names: string[]; validityDays: number | null; keyAlgorithm?: KeyAlgorithm }) {
   const refused = (status: 400 | 422, message: string) => ({ status, message });
+  if (issuer.kind === "adcs") return adcsIssuerRefusal(db, organizationId, issuer, asked);
   if (issuer.kind !== "private_ca") {
     if (asked.validityDays !== null) return refused(400, "a validity can be chosen only for a Managed Certificate issued from a Private CA");
     const refusal = asked.keyAlgorithm && keyAlgorithmRefusal(asked.keyAlgorithm, { label: "an ACME CA" });
@@ -259,13 +248,19 @@ export const IssuerField = z
   .discriminatedUnion("kind", [
     z.object({ kind: z.literal("acme"), acmeCaId: AcmeCaId.default(DEFAULT_ACME_CA_ID) }),
     z.object({ kind: z.literal("private_ca"), issuingCaId: z.string() }),
+    z.object({ kind: z.literal("adcs"), adcsCaId: z.string(), templateId: z.string() }),
   ])
-  .openapi({ description: "`acme`: through the Organization's ACME account with the ACME CA `acmeCaId`, Let's Encrypt Staging unless given. `private_ca`: from an active Issuing CA of one of the Organization's Private CAs, with no DCV." });
+  .openapi({
+    description:
+      "`acme`: through the Organization's ACME account with the ACME CA `acmeCaId`, Let's Encrypt Staging unless given. `private_ca`: from an active Issuing CA of one of the Organization's Private CAs, with no DCV. " +
+      "`adcs`: from one of the Organization's ADCS CAs under its Certificate Template `templateId`, which must be available, not hidden and offered for TLS, through an Agent and with no DCV; the template decides validity.",
+  });
 
 /**
  * The issuer asked for: `issuer`, or the ACME kind with the ACME CA `acmeCaId` (Let's Encrypt Staging unless given), which
  * must be one the Organization can use. An Issuing CA must be one of the Organization's, active under an active root,
- * permit the names (normalised), and allow the validity chosen, which only a Private CA lets be chosen.
+ * permit the names (normalised), and allow the validity chosen, which only a Private CA lets be chosen. An ADCS CA's
+ * template must be offered for TLS, and the names and key keep to the CA's and the template's limits.
  */
 export async function issuerAsked(
   db: Db,

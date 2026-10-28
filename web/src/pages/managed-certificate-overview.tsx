@@ -127,7 +127,12 @@ function NamesCard({ org, m, userId, onChange }: { org: Org; m: ManagedCertifica
  */
 function CertificateIssuer({ org, m, certificate, acmeCas }: { org: Org; m: ManagedCertificate; certificate: Certificate; acmeCas: AcmeCa[] | undefined }) {
   const { issuer } = m;
-  const same = issuer.kind === "acme" ? certificate.acmeCaId === issuer.acmeCaId : certificate.issuingCaId === issuer.issuingCa.id;
+  const same =
+    issuer.kind === "acme"
+      ? certificate.acmeCaId === issuer.acmeCaId
+      : issuer.kind === "private_ca"
+        ? certificate.issuingCaId === issuer.issuingCa.id
+        : certificate.adcs?.adcsCaId === issuer.adcsCa.id && certificate.adcs.templateId === issuer.template.id;
   if (same) return <IssuerName org={org} issuer={issuer} acmeCas={acmeCas} />;
   return <>{certificate.acmeCaId ? acmeCaName(acmeCas, certificate.acmeCaId) : caLabel(certificate.ca)}</>;
 }
@@ -191,6 +196,11 @@ function CurrentCertificateCard({ org, m, userId, onChanged }: { org: Org; m: Ma
             {current.acmeCaId && (
               <Fact label="ACME Account">
                 <span className="font-mono text-xs text-muted-foreground">{current.acmeAccountId}</span>
+              </Fact>
+            )}
+            {current.adcs && (
+              <Fact label="ADCS request" action={<CopyButton text={current.adcs.requestId} label="Copy the ADCS request ID" />}>
+                <span className="font-mono text-xs text-muted-foreground">{current.adcs.requestId}</span>
               </Fact>
             )}
             {current.revocation && (
@@ -270,6 +280,7 @@ function IssuerSection({ org, m, onChanged }: { org: Org; m: ManagedCertificate;
         <IssuerName org={org} issuer={m.issuer} acmeCas={acmeCas} />
       </span>
       {m.issuer.kind === "private_ca" && <span className="text-muted-foreground">Validity: {chosenValidityLabel(m.validityDays)}</span>}
+      {m.issuer.kind === "adcs" && <span className="text-muted-foreground">Validity: as the Certificate Template decides; issued through the ADCS CA's Agents.</span>}
       {m.profile && <span className="text-muted-foreground">From the Certificate Profile {profileLabel(m.profile)}</span>}
       <IssuingCaStopped org={org} m={m} />
       {repoint && <RepointDialog org={org} m={m} open={repointing} onOpenChange={setRepointing} onChanged={onChanged} />}

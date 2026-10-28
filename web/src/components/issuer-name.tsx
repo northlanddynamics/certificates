@@ -5,12 +5,22 @@ import { acmeCaName } from "@/lib/acme-cas";
 import { commonNameOf } from "@/lib/private-ca";
 
 /**
- * Where a Managed Certificate is issued from, named as `issuerLabel` names it ("<Issuing CA> · <Private CA>", or the ACME
- * CA), with the CA a link to its page for those who may open that page.
+ * Where a Managed Certificate is issued from, named as `issuerLabel` names it ("<Issuing CA> · <Private CA>",
+ * "<Certificate Template> · <ADCS CA>", or the ACME CA), with the CA a link to its page for those who may open that page.
  */
 export function IssuerName({ org, issuer, acmeCas }: { org: Me["organizations"][number]; issuer: Issuer; acmeCas: AcmeCa[] | undefined }) {
   if (issuer.kind === "acme") {
     return <CaLink show={can(org, "acmeAccount", "read")} to={`/organizations/${org.id}/acme-accounts`}>{acmeCaName(acmeCas, issuer.acmeCaId)}</CaLink>;
+  }
+  if (issuer.kind === "adcs") {
+    return (
+      <>
+        {issuer.template.displayName || issuer.template.name} ·{" "}
+        <CaLink show={can(org, "adcsCa", "read")} to={`/organizations/${org.id}/adcs-cas`}>
+          {issuer.adcsCa.name}
+        </CaLink>
+      </>
+    );
   }
   return (
     <>

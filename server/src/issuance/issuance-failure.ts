@@ -16,8 +16,12 @@ export const ISSUANCE_FAILURE_CODES = [
   "ca_rejected",
   /** A Private CA's permitted name rules do not permit one of the names: they changed after the names were accepted. */
   "name_not_permitted",
-  /** The CA did not answer. */
+  /** The CA did not answer: for an ADCS CA, no assigned Agent that was asked could reach it. */
   "ca_unreachable",
+  /** An ADCS CA: no Agent assigned to it was online to submit the request for 7 days. */
+  "no_agent_available",
+  /** An ADCS CA: the Certificate Template is no longer available (published, enrollable by the Agents' account, supplying the subject from the request). */
+  "template_unavailable",
   /** The Agent that holds the key did not make a new one: it could not, was revoked first, or sent a CSR that could not be used. */
   "agent_key_failed",
   /** The Managed Certificate was archived while the Issuance waited for its Agent's key. */

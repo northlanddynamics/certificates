@@ -3,7 +3,7 @@
 import { z } from "@hono/zod-openapi";
 import { TEMPLATE_KEY_ALGORITHMS } from "./adcs-kinds";
 
-export const ADCS_WORK_TYPES = { discover: "adcs.discover" } as const;
+export const ADCS_WORK_TYPES = { discover: "adcs.discover", submit: "adcs.submit" } as const;
 
 /** The longest PEM certificate an Agent may report, and how many certificates a chain may have. */
 const MAX_CERTIFICATE_PEM = 32_768;
@@ -36,3 +36,12 @@ export const DiscoveryResult = z
   })
   .openapi({ description: "For `adcs.discover`: what the Agent found at the ADCS CA." });
 export type DiscoveryResult = z.infer<typeof DiscoveryResult>;
+
+export const SubmissionResult = z
+  .object({
+    status: z.literal("issued").openapi({ description: "`issued`: ADCS issued the Certificate at once." }),
+    requestId: z.string().min(1).max(64).openapi({ description: "ADCS's ID of the request." }),
+    certificate: z.string().max(MAX_CERTIFICATE_PEM).openapi({ description: "The Certificate ADCS issued, PEM." }),
+  })
+  .openapi({ description: "For `adcs.submit`: what ADCS answered the request with." });
+export type SubmissionResult = z.infer<typeof SubmissionResult>;

@@ -8,12 +8,18 @@ import (
 	"certificate-platform/agent/internal/platform"
 )
 
-// The work item type by which the platform has the Agent discover an ADCS CA, as its own account.
-const workDiscover = "adcs.discover"
+// The work item types by which the platform has the Agent discover an ADCS CA, and submit a request to it, as its own account.
+const (
+	workDiscover = "adcs.discover"
+	workSubmit   = "adcs.submit"
+)
 
-// adcsWork is what an ADCS work item carries. It holds no secret: the Agent reaches ADCS as itself.
+// adcsWork is what an ADCS work item carries. It holds no secret: the Agent reaches ADCS as itself. Template and CSR (PEM)
+// are for a submission.
 type adcsWork struct {
 	ConfigString string `json:"configString"`
+	Template     string `json:"template"`
+	CSR          string `json:"csr"`
 }
 
 // adcsClient is how the Agent reaches ADCS: the one it was given, or the host's.
@@ -62,6 +68,32 @@ func (r *runner) discover(ctx context.Context, item platform.WorkItem) platform.
 	}
 	r.cfg.Log.Info("discovered an ADCS CA", "id", item.ID, "configString", work.ConfigString, "templates", len(templates))
 	return platform.WorkResult{OK: true, Discovery: discovery}
+}
+
+// submit submits the CSR to the CA under the template, and reports what ADCS answered.
+func (r *runner) submit(ctx context.Context, item platform.WorkItem) platform.WorkResult {
+	var work adcsWork
+	if err := decode(item, &work); err != nil || work.ConfigString == "" || work.Template == "" {
+		return r.adcsFailed(item, adcs.Refused("the work item does not name an ADCS CA and a template"))
+	}
+	block, _ := pem.Decode([]byte(work.CSR))
+	if block == nil || block.Type != "CERTIFICATE REQUEST" {
+		return r.adcsFailed(item, adcs.Refused("the work item carries no CSR"))
+	}
+	client, err := r.adcsClient()
+	if err != nil {
+		return r.adcsFailed(item, err)
+	}
+	submission, err := client.Submit(ctx, work.ConfigString, work.Template, block.Bytes)
+	if err != nil {
+		return r.adcsFailed(item, err)
+	}
+	r.cfg.Log.Info("submitted a request to an ADCS CA", "id", item.ID, "configString", work.ConfigString, "template", work.Template, "status", submission.Status, "requestId", submission.RequestID)
+	return platform.WorkResult{OK: true, Submission: &platform.Submission{
+		Status:      submission.Status,
+		RequestID:   submission.RequestID,
+		Certificate: string(pem.EncodeToMemory(&pem.Block{Type: "CERTIFICATE", Bytes: submission.Certificate})),
+	}}
 }
 
 // nonNil is a list as JSON has it: empty, never null.

@@ -22,6 +22,8 @@ export type RevocationReason = keyof typeof REVOCATION_REASONS;
 export const REVOCATION_REASONS_OF: Record<IssuerKind, readonly RevocationReason[]> = {
   acme: ["unspecified", "keyCompromise", "superseded", "cessationOfOperation"],
   private_ca: ["unspecified", "keyCompromise", "affiliationChanged", "superseded", "cessationOfOperation", "privilegeWithdrawn"],
+  // Revoking at an ADCS CA is not built yet: none is offered.
+  adcs: [],
 };
 
 /**

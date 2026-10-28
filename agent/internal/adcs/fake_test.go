@@ -19,5 +19,6 @@ func TestTheFakeKeepsTheContract(t *testing.T) {
 		Unreachable:       `ca99.corp.example\Corp Issuing CA`,
 		SuppliedTemplate:  "CorpWebServer",
 		DirectoryTemplate: "Workstation",
+		Name:              "contract.corp.example",
 	})
 }

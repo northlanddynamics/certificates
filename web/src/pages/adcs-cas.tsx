@@ -1,6 +1,6 @@
 import { useMutation, useQuery, useQueryClient } from "@tanstack/react-query";
 import { useParams } from "@tanstack/react-router";
-import { ClipboardCheckIcon, DownloadIcon, NetworkIcon, PlusIcon, RotateCwIcon, ServerIcon } from "lucide-react";
+import { ClipboardCheckIcon, DownloadIcon, ListChecksIcon, NetworkIcon, PlusIcon, RotateCwIcon, ServerIcon, TriangleAlertIcon } from "lucide-react";
 import { useState, type ReactNode } from "react";
 import { ConfirmDialog } from "@/components/confirm-dialog";
 import { ActionLabel, PageHeader } from "@/components/page-header";
@@ -14,10 +14,13 @@ import { Checkbox } from "@/components/ui/checkbox";
 import { Dialog, DialogContent, DialogDescription, DialogTitle, DialogTrigger } from "@/components/ui/dialog";
 import { Field, FieldDescription, FieldError, FieldGroup, FieldLabel, FieldLegend, FieldSet } from "@/components/ui/field";
 import { Input } from "@/components/ui/input";
+import { Textarea } from "@/components/ui/textarea";
 import { Table, TableBody, TableCell, TableHead, TableHeader, TableRow } from "@/components/ui/table";
 import { Tooltip, TooltipContent, TooltipTrigger } from "@/components/ui/tooltip";
 import { assignableAgents, ekuLabel, isConfigString, templatePurposes } from "@/lib/adcs-ca";
 import { api, can, type AdcsCa, type Agent } from "@/lib/api";
+import { splitNames } from "@/lib/csr-names";
+import { permittedNamesLabel } from "@/lib/private-ca";
 import { useAction } from "@/lib/use-action";
 import { useOrg } from "@/lib/use-org";
 
@@ -107,9 +110,11 @@ function AdcsCaCard({ orgId, ca, agents, mayManage, mayDelete }: { orgId: string
             <AlertDescription>{ca.discoveryFailure.error} The chain and templates below are from the last discovery that worked.</AlertDescription>
           </Alert>
         )}
+        {!ca.permittedNames && <NoPermittedNames />}
         <SummaryRows
           rows={[
             { label: "Runs through", value: ca.agentIds.map(hostOf).join(", ") },
+            { label: "Permitted names", value: ca.permittedNames ? permittedNamesLabel(ca.permittedNames) : <span className="text-muted-foreground">None: Approval alone decides</span> },
             {
               label: "Chain",
               value: (
@@ -153,6 +158,20 @@ function AdcsCaCard({ orgId, ca, agents, mayManage, mayDelete }: { orgId: string
         onConfirm={() => remove.mutate(undefined)}
       />
     </Card>
+  );
+}
+
+/** What an ADCS CA without Permitted Name Rules relies on: Approval alone stands between a Member and a Certificate the domain trusts. */
+function NoPermittedNames() {
+  return (
+    <Alert className="border-warning/50 bg-warning/5">
+      <TriangleAlertIcon className="text-warning" />
+      <AlertTitle>No Permitted Name Rules</AlertTitle>
+      <AlertDescription>
+        ADCS checks its templates' permissions against the Agents' account, not against whoever asks, so Approval alone decides which names it is asked for. Give it Permitted Name Rules to refuse
+        other names before anything is submitted.
+      </AlertDescription>
+    </Alert>
   );
 }
 
@@ -228,10 +247,11 @@ function TemplateTable({ orgId, ca, mayManage }: { orgId: string; ca: AdcsCa; ma
   );
 }
 
-type StepId = "ca" | "agents" | "review";
+type StepId = "ca" | "agents" | "names" | "review";
 const STEPS = {
   ca: { title: "The CA", icon: ServerIcon },
   agents: { title: "Agents", icon: NetworkIcon },
+  names: { title: "Permitted names", icon: ListChecksIcon },
   review: { title: "Review", icon: ClipboardCheckIcon },
 };
 
@@ -267,8 +287,12 @@ function AdcsCaWizard({ orgId, agents, ca, title, onDone }: { orgId: string; age
   const [name, setName] = useState(ca?.name ?? "");
   const [configString, setConfigString] = useState(ca?.configString ?? "");
   const [agentIds, setAgentIds] = useState<string[]>(ca?.agentIds ?? []);
+  const [exact, setExact] = useState(ca?.permittedNames?.exact.join("\n") ?? "");
+  const [zones, setZones] = useState(ca?.permittedNames?.zones.join("\n") ?? "");
   const [step, setStep] = useState<StepId>("ca");
-  const steps = (["ca", "agents", "review"] as const).map((id) => ({ id, ...STEPS[id] }));
+  const steps = (["ca", "agents", "names", "review"] as const).map((id) => ({ id, ...STEPS[id] }));
+  // No rule at all is none: the CA relies on Approval alone.
+  const permittedNames = splitNames(exact).length + splitNames(zones).length === 0 ? null : { exact: splitNames(exact), zones: splitNames(zones) };
   const choices = assignableAgents(agents, agentIds);
 
   const missing: Partial<Record<StepId, Missing>> = {
@@ -283,8 +307,8 @@ function AdcsCaWizard({ orgId, agents, ca, title, onDone }: { orgId: string; age
   const save = useAction(
     () =>
       ca
-        ? api.changeAdcsCa(orgId, ca.id, { name: name.trim(), agentIds })
-        : api.createAdcsCa(orgId, { name: name.trim(), configString: configString.trim(), agentIds }),
+        ? api.changeAdcsCa(orgId, ca.id, { name: name.trim(), agentIds, permittedNames })
+        : api.createAdcsCa(orgId, { name: name.trim(), configString: configString.trim(), agentIds, permittedNames }),
     ["adcs-cas"],
     onDone,
   );
@@ -293,6 +317,7 @@ function AdcsCaWizard({ orgId, agents, ca, title, onDone }: { orgId: string; age
     { label: "Name", value: name.trim() },
     { label: "Config string", value: <span className="font-mono text-xs">{configString.trim()}</span> },
     { label: "Runs through", value: agentIds.map(hostOf).join(", ") },
+    { label: "Permitted names", value: permittedNames ? permittedNamesLabel(permittedNames) : "None: Approval alone decides" },
   ];
 
   return (
@@ -343,6 +368,26 @@ function AdcsCaWizard({ orgId, agents, ca, title, onDone }: { orgId: string; age
             )}
           </div>
         </FieldSet>
+      )}
+
+      {step === "names" && (
+        <FieldGroup>
+          <FieldSet>
+            <FieldLegend>Which names may it be asked for?</FieldLegend>
+            <FieldDescription>The platform refuses any other name before anything reaches ADCS, at proposal, Name Change and Issuance. A name or zone to a line.</FieldDescription>
+          </FieldSet>
+          <Field>
+            <FieldLabel htmlFor="adcs-zones">Permitted zones</FieldLabel>
+            <Textarea id="adcs-zones" rows={3} value={zones} onChange={(e) => setZones(e.target.value)} placeholder="e.g. corp.example" />
+            <FieldDescription>Each permits the name and every name beneath it, wildcards included.</FieldDescription>
+          </Field>
+          <Field>
+            <FieldLabel htmlFor="adcs-exact">Permitted names</FieldLabel>
+            <Textarea id="adcs-exact" rows={3} value={exact} onChange={(e) => setExact(e.target.value)} placeholder="e.g. portal.example.com" />
+            <FieldDescription>Each permits that name alone; a wildcard permits that wildcard alone.</FieldDescription>
+          </Field>
+          {!permittedNames && <NoPermittedNames />}
+        </FieldGroup>
       )}
 
       {step === "review" && (

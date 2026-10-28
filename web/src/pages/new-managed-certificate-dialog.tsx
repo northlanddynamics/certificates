@@ -106,7 +106,7 @@ function NewManagedCertificateForm({
   onCreated: (created: ManagedCertificate) => void;
 }) {
   const [step, setStep] = useState<StepId>("profile");
-  const choice = useIssuerChoice(org.id, { canReadPrivateCas: can(org, "privateCa", "read"), canRegisterAcmeAccounts: can(org, "acmeAccount", "create") });
+  const choice = useIssuerChoice(org.id, { canReadPrivateCas: can(org, "privateCa", "read"), canReadAdcsCas: can(org, "adcsCa", "read"), canRegisterAcmeAccounts: can(org, "acmeAccount", "create") });
   const { chosenCa, validityOk } = choice;
   const profiles = useQuery({ queryKey: ["certificate-profiles", org.id], queryFn: () => api.certificateProfiles(org.id), enabled: can(org, "certificateProfile", "read") });
   // Custom only for those who may request without a profile: the Organization may require one of those who may not create outright.
@@ -270,6 +270,7 @@ function NewManagedCertificateForm({
             />
             <FieldDescription>One per line; wildcards as *.example.com. The certificate is issued for exactly these names.</FieldDescription>
             {!profile && chosenCa && <FieldDescription>{permitsOnlyLabel(chosenCa)}</FieldDescription>}
+            {!profile && choice.chosenAdcs?.ca.permittedNames && <FieldDescription>{permitsOnlyLabel({ name: `The ADCS CA ${choice.chosenAdcs.ca.name}`, permittedNames: choice.chosenAdcs.ca.permittedNames })}</FieldDescription>}
             {profile && profileRules && (
               <FieldDescription>
                 Names through {profile.name}: {profileRules}

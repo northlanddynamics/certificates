@@ -13,13 +13,20 @@ import { ACME_CA_TAG_LABELS, acmeCaName, useAcmeCas } from "@/lib/acme-cas";
 import { api, type AcmeCa, type IssuerRef } from "@/lib/api";
 import { KEY_ALGORITHM_LABELS, NO_KEY_ALGORITHMS } from "@/lib/csr-generator";
 import { commonNameOf, daysLabel, findIssuingCa, isValidityDays, permittedNamesLabel, validityLabel } from "@/lib/private-ca";
+import { adcsTemplateTitle, adcsTlsChoices, templateKeysLabel } from "@/lib/adcs-ca";
+// The server's own judgement of a key against a template, from a module that imports nothing.
+import { templateKeyAlgorithms } from "../../../server/src/adcs/adcs-kinds";
 
-/** The issuer chosen: an ACME CA by id, or an Issuing CA of one of the Organization's Private CAs by id. */
+/** The issuer chosen: an ACME CA by id, an Issuing CA of one of the Organization's Private CAs by id, or an ADCS CA and one of its templates by id. */
 export type IssuerChoice = IssuerRef;
 /** The issuer as a radio button's value, and back. */
-const issuerValue = (i: IssuerChoice) => (i.kind === "acme" ? `acme:${i.acmeCaId}` : `private_ca:${i.issuingCaId}`);
+const issuerValue = (i: IssuerChoice) => (i.kind === "acme" ? `acme:${i.acmeCaId}` : i.kind === "private_ca" ? `private_ca:${i.issuingCaId}` : `adcs:${i.adcsCaId}:${i.templateId}`);
 const issuerOfValue = (value: string): IssuerChoice => {
   const [kind, ref] = value.split(/:(.*)/s) as [string, string];
+  if (kind === "adcs") {
+    const [adcsCaId, templateId] = ref.split(":") as [string, string];
+    return { kind: "adcs", adcsCaId, templateId };
+  }
   return kind === "acme" ? { kind: "acme", acmeCaId: ref } : { kind: "private_ca", issuingCaId: ref };
 };
 
@@ -45,48 +52,74 @@ const ACME_CA_FILTER_LABELS: Record<AcmeCaFilter, string> = { all: "Every tag", 
 export const useKeyAlgorithms = () => useQuery({ queryKey: ["key-algorithms"], queryFn: () => api.keyAlgorithms(), staleTime: Infinity });
 
 /**
- * The state of choosing where Certificates are issued from: an ACME CA or an active Issuing CA under an active root, and
- * for an Issuing CA a validity (empty for its default), starting from `initial` when given, and otherwise from the first
- * that can issue, in the order they are offered; none while nothing can. Anyone may list the ACME CAs, and see which the
- * Organization has an account with; the Private CAs are fetched only for whoever may read them. `canRegisterAcmeAccounts`
- * says whether the caller may register an account with an ACME CA that has none.
+ * The state of choosing where Certificates are issued from: an ACME CA, an active Issuing CA under an active root, or an
+ * ADCS CA's template offered for TLS; for an Issuing CA a validity (empty for its default), which an ADCS template decides
+ * itself. It starts from `initial` when given, and otherwise from the first that can issue, in the order they are offered;
+ * none while nothing can. Anyone may list the ACME CAs, and see which the Organization has an account with; the Private CAs
+ * are fetched only for whoever may read them, and the ADCS CAs only when `canReadAdcsCas` (and so only where they are
+ * offered at all). `canRegisterAcmeAccounts` says whether the caller may register an account with an ACME CA that has none.
  */
 export function useIssuerChoice(
   orgId: string,
-  { canReadPrivateCas, canRegisterAcmeAccounts = false, initial }: { canReadPrivateCas: boolean; canRegisterAcmeAccounts?: boolean; initial?: { issuer: IssuerChoice; validityDays: number | null } },
+  {
+    canReadPrivateCas,
+    canReadAdcsCas = false,
+    canRegisterAcmeAccounts = false,
+    initial,
+  }: { canReadPrivateCas: boolean; canReadAdcsCas?: boolean; canRegisterAcmeAccounts?: boolean; initial?: { issuer: IssuerChoice; validityDays: number | null } },
 ) {
   const [picked, setIssuer] = useState<IssuerChoice | null>(initial?.issuer ?? null);
   const [validityDays, setValidityDays] = useState(initial?.validityDays == null ? "" : String(initial.validityDays));
   const [acmeCaFilter, setAcmeCaFilter] = useState<AcmeCaFilter>("all");
   const acmeCas = useAcmeCas(orgId);
   const privateCas = useQuery({ queryKey: ["private-cas", orgId], queryFn: () => api.privateCas(orgId), enabled: canReadPrivateCas });
+  const adcsCas = useQuery({ queryKey: ["adcs-cas", orgId], queryFn: () => api.adcsCas(orgId), enabled: canReadAdcsCas });
   const keyAlgorithms = useKeyAlgorithms();
+  // The ADCS CAs with the templates they offer for TLS.
+  const adcsChoices = adcsTlsChoices(adcsCas.data?.items ?? []);
   // The Private CAs whose root is active, each with its active Issuing CAs: those that can issue, grouped as they are offered.
   const activeCas = (privateCas.data?.items ?? [])
     .filter((ca) => ca.status === "active")
     .map((ca) => ({ ...ca, issuingCas: ca.issuingCas.filter((i) => i.status === "active") }))
     .filter((ca) => ca.issuingCas.length > 0);
   // Decided once both lists are read, so that it does not move as they arrive.
-  const known = acmeCas.data !== undefined && (!canReadPrivateCas || privateCas.data !== undefined);
+  const known = acmeCas.data !== undefined && (!canReadPrivateCas || privateCas.data !== undefined) && (!canReadAdcsCas || adcsCas.data !== undefined);
   const readyAcmeCa = acmeCas.data?.items.find((ca) => ca.hasAccount);
   const readyIssuingCa = activeCas[0]?.issuingCas[0];
+  const readyAdcs = adcsChoices[0];
   const firstReady: IssuerChoice | null = !known
     ? null
     : readyAcmeCa
       ? { kind: "acme", acmeCaId: readyAcmeCa.id }
       : readyIssuingCa
         ? { kind: "private_ca", issuingCaId: readyIssuingCa.id }
-        : null;
+        : readyAdcs
+          ? { kind: "adcs", adcsCaId: readyAdcs.ca.id, templateId: readyAdcs.templates[0]!.id }
+          : null;
   const issuer = picked ?? firstReady;
   const chosenCa = issuer?.kind === "private_ca" ? findIssuingCa(activeCas, issuer.issuingCaId) : undefined;
-  // What a Managed Certificate on the chosen CA may have, as the server says; none until it has said.
-  const takes = !issuer ? undefined : issuer.kind === "private_ca" ? chosenCa?.certificateKeyAlgorithms : keyAlgorithms.data?.acmeKeyAlgorithms;
+  const chosenAdcs = issuer?.kind === "adcs" ? adcsChoices.find((c) => c.ca.id === issuer.adcsCaId) : undefined;
+  const chosenTemplate = issuer?.kind === "adcs" ? chosenAdcs?.templates.find((t) => t.id === issuer.templateId) : undefined;
+  // What a Managed Certificate on the chosen CA may have, as the server says; none until it has said. An ADCS template takes the classical keys it allows.
+  const takes = !issuer
+    ? undefined
+    : issuer.kind === "private_ca"
+      ? chosenCa?.certificateKeyAlgorithms
+      : issuer.kind === "adcs"
+        ? chosenTemplate && keyAlgorithms.data && templateKeyAlgorithms(chosenTemplate, keyAlgorithms.data.acmeKeyAlgorithms)
+        : keyAlgorithms.data?.acmeKeyAlgorithms;
   // The validity chosen, in days; none for the Issuing CA's default.
   const chosenValidity = validityDays.trim() === "" ? null : Number(validityDays);
   const validityOk = !chosenCa || chosenValidity === null || isValidityDays(validityDays, chosenCa.validity.maximumDays);
   // Whether the chosen ACME CA has an account to issue through; unknown (undefined) until the ACME CAs are read.
   const registered = !issuer ? undefined : issuer.kind !== "acme" || acmeCas.data?.items.find((ca) => ca.id === issuer.acmeCaId)?.hasAccount;
-  const title = !issuer ? undefined : issuer.kind === "acme" ? acmeCaName(acmeCas.data?.items, issuer.acmeCaId) : chosenCa?.name;
+  const title = !issuer
+    ? undefined
+    : issuer.kind === "acme"
+      ? acmeCaName(acmeCas.data?.items, issuer.acmeCaId)
+      : issuer.kind === "private_ca"
+        ? chosenCa?.name
+        : chosenAdcs && chosenTemplate && adcsTemplateTitle(chosenAdcs.ca.name, chosenTemplate);
   return {
     orgId,
     /** The issuer chosen; none while nothing that can issue has been chosen. */
@@ -101,6 +134,10 @@ export function useIssuerChoice(
     setAcmeCaFilter,
     activeCas,
     chosenCa,
+    /** The ADCS CAs, each with the templates it offers for TLS. */
+    adcsChoices,
+    /** The ADCS CA and template chosen, when one is. */
+    chosenAdcs: chosenAdcs && chosenTemplate && { ca: chosenAdcs.ca, template: chosenTemplate },
     /** The key algorithms the chosen CA takes; none until known. */
     keyAlgorithms: takes ?? NO_KEY_ALGORITHMS,
     chosenValidity,
@@ -112,8 +149,14 @@ export function useIssuerChoice(
     canRegisterAcmeAccounts,
     /** The issuer chosen in words, for a summary. */
     title,
-    /** The validity chosen in words, for a summary; none for an ACME CA, which decides its own. */
-    validityText: chosenCa ? (chosenValidity !== null ? daysLabel(chosenValidity) : `${daysLabel(chosenCa.validity.defaultDays)} (the default)`) : null,
+    /** The validity chosen in words, for a summary; none for an ACME CA, which decides its own; an ADCS template's own. */
+    validityText: chosenCa
+      ? chosenValidity !== null
+        ? daysLabel(chosenValidity)
+        : `${daysLabel(chosenCa.validity.defaultDays)} (the default)`
+      : chosenTemplate
+        ? `${daysLabel(chosenTemplate.validityDays)}, as the template decides`
+        : null,
     /** What the API is given: the issuer, and for an Issuing CA the validity when one is chosen; none while no issuer is. */
     request: issuer && { issuer, ...(issuer.kind === "private_ca" && chosenValidity !== null && { validityDays: chosenValidity }) },
   };
@@ -125,7 +168,8 @@ export function useIssuerChoice(
  * the ids apart between forms.
  */
 export function IssuerChoiceFields({ choice, idPrefix, trying }: { choice: ReturnType<typeof useIssuerChoice>; idPrefix: string; trying: string }) {
-  const { orgId, issuer, setIssuer, validityDays, setValidityDays, acmeCas, acmeCaFilter, setAcmeCaFilter, activeCas, chosenCa, validityOk, registered, acmeCasKnown, known, canRegisterAcmeAccounts } = choice;
+  const { orgId, issuer, setIssuer, validityDays, setValidityDays, acmeCas, acmeCaFilter, setAcmeCaFilter, activeCas, chosenCa, adcsChoices, validityOk, registered, acmeCasKnown, known, canRegisterAcmeAccounts } =
+    choice;
   const listed = acmeCaChoices(acmeCas, acmeCaFilter);
   return (
     <>
@@ -150,7 +194,7 @@ export function IssuerChoiceFields({ choice, idPrefix, trying }: { choice: Retur
         <Alert className="border-warning/50 bg-warning/5">
           <TriangleAlertIcon className="text-warning" />
           <AlertTitle>Nothing can issue yet</AlertTitle>
-          <AlertDescription>An ACME CA needs an ACME account, and a Private CA an active Issuing CA, before it can issue.</AlertDescription>
+          <AlertDescription>An ACME CA needs an ACME account, a Private CA an active Issuing CA, and an ADCS CA a template offered for TLS, before it can issue.</AlertDescription>
         </Alert>
       )}
       <RadioGroup value={issuer ? issuerValue(issuer) : ""} onValueChange={(value) => setIssuer(issuerOfValue(value))}>
@@ -197,6 +241,31 @@ export function IssuerChoiceFields({ choice, idPrefix, trying }: { choice: Retur
                     <FieldDescription>Validity: {validityLabel(issuing.validity)}.</FieldDescription>
                   </FieldContent>
                   <RadioGroupItem value={`private_ca:${issuing.id}`} id={`${idPrefix}-issuing-${issuing.id}`} />
+                </Field>
+              </FieldLabel>
+            ))}
+          </div>
+        ))}
+        {adcsChoices.map(({ ca, templates }) => (
+          <div key={ca.id} role="group" aria-labelledby={`${idPrefix}-adcs-${ca.id}`} className="flex flex-col gap-3">
+            <p id={`${idPrefix}-adcs-${ca.id}`} className="pt-2 text-sm font-medium">
+              ADCS CA {ca.name}
+              <span className="block text-xs font-normal text-muted-foreground">The Organization's Active Directory Certificate Services CA, reached through its Agents; no DCV.</span>
+              <span className="block text-xs font-normal text-muted-foreground">
+                {ca.permittedNames ? `Permitted names: ${permittedNamesLabel(ca.permittedNames)}.` : "No Permitted Name Rules: Approval alone decides the names."}
+              </span>
+            </p>
+            {templates.map((template) => (
+              <FieldLabel key={template.id} htmlFor={`${idPrefix}-adcs-${ca.id}-${template.id}`}>
+                <Field orientation="horizontal">
+                  <FieldContent>
+                    <FieldTitle>{template.displayName || template.name}</FieldTitle>
+                    <FieldDescription className="font-mono text-xs">{template.name}</FieldDescription>
+                    <FieldDescription>
+                      Validity: {daysLabel(template.validityDays)}, as the template decides. Keys: {templateKeysLabel(template)}.
+                    </FieldDescription>
+                  </FieldContent>
+                  <RadioGroupItem value={`adcs:${ca.id}:${template.id}`} id={`${idPrefix}-adcs-${ca.id}-${template.id}`} />
                 </Field>
               </FieldLabel>
             ))}

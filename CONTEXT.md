@@ -103,7 +103,7 @@ _Avoid_: enrollment setting, renewal config
 ### Issuance
 
 **Issuance**:
-One attempt to obtain a Certificate for a Managed Certificate: from an ACME CA it runs DCV and has the CA finalize the order with the CSR, and from a Private CA, with no DCV, the platform has the Issuing CA sign a Certificate for the CSR; either way it ends in a stored Certificate or the recorded cause of its failure. A CA may answer that it will issue later: the Issuance then stays running, pending, until the result arrives or a deadline passes, when it fails as timed out. A Managed Certificate may have many over time, one running at most. Each is of one kind, decided when it begins: its first Issuance (it has no Certificate yet), a Renewal (it has one for its names), or the Issuance of a Name Change (it has one, for other names than it now has).
+One attempt to obtain a Certificate for a Managed Certificate: from an ACME CA it runs DCV and has the CA finalize the order with the CSR, and from a Private CA, with no DCV, the platform has the Issuing CA sign a Certificate for the CSR; from an ADCS CA, with no DCV, an Agent assigned to it submits the CSR under the Certificate Template, and the Issuance waits for the Agent, while none is online for up to 7 days; either way it ends in a stored Certificate or the recorded cause of its failure. A CA may answer that it will issue later: the Issuance then stays running, pending, until the result arrives or a deadline passes, when it fails as timed out. A Managed Certificate may have many over time, one running at most. Each is of one kind, decided when it begins: its first Issuance (it has no Certificate yet), a Renewal (it has one for its names), or the Issuance of a Name Change (it has one, for other names than it now has).
 _Avoid_: order (the ACME protocol's word for part of it), request, job
 
 **Certificate Authority (CA)**:
@@ -123,7 +123,7 @@ An ADCS CA's own template, which decides the validity, key usage and EKUs of wha
 _Avoid_: profile (a Certificate Profile and an Enrollment Profile are the platform's own), template (unqualified)
 
 **Permitted Name Rules**:
-An Issuing CA's exact names and zones (a zone being a name and everything beneath it): the only names it issues for, refused when asked for otherwise. A platform-made Issuing CA carries them as X.509 name constraints, which do not change when the rules later do.
+An Issuing CA's exact names and zones (a zone being a name and everything beneath it): the only names it issues for, refused when asked for otherwise. A platform-made Issuing CA carries them as X.509 name constraints, which do not change when the rules later do. An ADCS CA may have them too, optionally: there only the platform enforces them, at proposal, Name Change and Issuance, never as name constraints, and an ADCS CA without them relies on Approval alone.
 _Avoid_: allowed domains, name policy
 
 **Validity Limits**:

@@ -4,6 +4,7 @@ import { and, asc, eq } from "drizzle-orm";
 import type { Context } from "hono";
 import type { Pool } from "pg";
 import { DEFAULT_ADCS_RELAY, registerAdcsCas, type AdcsRelayConfig } from "./adcs/adcs-ca";
+import { DEFAULT_ADCS_SUBMIT, createAdcsIssuance, type AdcsSubmitConfig } from "./adcs/adcs-issuance";
 import { ACCOUNT_SECURITY_PATHS, createAccountSecurity } from "./tenancy/account-security";
 import { registerAcmeAccounts } from "./issuance/acme/acme-accounts";
 import { DEFAULT_AGENT_GATEWAY, registerAgentGateway, type AgentGatewayConfig } from "./agents/agent-gateway";
@@ -109,6 +110,8 @@ export interface AppDeps {
   dnsRelay?: Partial<DnsRelayConfig>;
   /** How ADCS CA operations wait for the Agents that carry them out: see `AdcsRelayConfig`. */
   adcsRelay?: Partial<AdcsRelayConfig>;
+  /** How requests to ADCS CAs wait for the Agents that submit them: see `AdcsSubmitConfig`. */
+  adcsSubmit?: Partial<AdcsSubmitConfig>;
   /** How Audit Events reach the Organizations' SIEMs; posts with `fetch` and writes syslog over TLS unless given. */
   auditTransport?: AuditTransport;
   /** See `OrganizationChangesDeps.memberRemovalHooks`. */
@@ -335,7 +338,8 @@ export function createApp(deps: AppDeps) {
   const adcsDiscovery = registerAdcsCas({ app, db, requireUser, authorize, unitOfWork, workItems, clock, offlineAfterSeconds: agentGateway.offlineAfterSeconds, config: { ...DEFAULT_ADCS_RELAY, ...deps.adcsRelay } });
   const privateCas = createPrivateCas({ kms: deps.kms, clock, crls, pkiBaseURL });
   const validatorKinds = deps.enrollmentValidators ?? ENROLLMENT_VALIDATOR_KINDS;
-  const platformIssuers = createIssuers({ acme: deps.certificateAuthority, acmeCas, secrets, privateCas });
+  const adcsIssuance = createAdcsIssuance({ db, unitOfWork, workItems, clock, offlineAfterSeconds: agentGateway.offlineAfterSeconds, config: { ...DEFAULT_ADCS_SUBMIT, ...deps.adcsSubmit } });
+  const platformIssuers = createIssuers({ acme: deps.certificateAuthority, acmeCas, secrets, privateCas, adcs: adcsIssuance });
   const issuers = deps.issuers?.(platformIssuers) ?? platformIssuers;
   const certificateRevocations = createRevocations({ db, unitOfWork, issuers, clock });
   const revocations = createDeviceCertificateRevocations({ revocations: certificateRevocations });
@@ -348,6 +352,7 @@ export function createApp(deps: AppDeps) {
   const deviceEnrollment = createDeviceEnrollment({ db, unitOfWork, issuers: enrollmentIssuers, revocations, sharedChallenges, kinds: validatorKinds, validators: enrollmentValidators, transactions: createScepTransactions({ db, clock }), clock });
   const scep = registerScep({ app, db, secrets, issuers: enrollmentIssuers, enrollment: deviceEnrollment, kinds: validatorKinds, clock, config: deps.scep });
   const issuances = createIssuances({ db, unitOfWork, issuers, dcv, clock });
+  adcsIssuance.reportTo(issuances);
   const notifications = createNotifications({
     db,
     unitOfWork,
@@ -415,5 +420,5 @@ export function createApp(deps: AppDeps) {
     }),
   );
 
-  return { app, auth, db, unitOfWork, issuances, renewals, adcsDiscovery, notifications, auditForwarding, crls, enrollmentValidators, deviceCertificatePruning, sharedChallenges, deviceCertificateRevocations: revocations, revocations: certificateRevocations, deviceEnrollment, scep };
+  return { app, auth, db, unitOfWork, issuances, renewals, adcsDiscovery, adcsIssuance, notifications, auditForwarding, crls, enrollmentValidators, deviceCertificatePruning, sharedChallenges, deviceCertificateRevocations: revocations, revocations: certificateRevocations, deviceEnrollment, scep };
 }

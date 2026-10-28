@@ -95,12 +95,21 @@ function historyEvent(e: HistoryEntry, i: number): Event {
 function attemptEvent(a: Issuance): Event {
   const waiting = a.status === "running" && a.awaitingKey;
   const failed = a.status === "failed";
+  // An ADCS CA's request, while it runs: waiting for one of the CA's Agents to be online, or with the one that submits it.
+  const adcs = a.status === "running" ? a.adcs : null;
+  const state = waiting
+    ? "waiting for the Agent's new key"
+    : adcs?.status === "waiting"
+      ? "waiting for an Agent of the ADCS CA to be online"
+      : adcs?.status === "submitted" && adcs.agent
+        ? `submitted to ADCS through the Agent on ${adcs.agent.hostName}`
+        : ATTEMPT_WORDS[a.status];
   return {
     key: a.id,
     at: a.finishedAt ?? a.startedAt,
     category: "issuance",
     icon: failed ? <CircleAlertIcon /> : a.status === "running" ? <LoaderIcon /> : <CheckIcon />,
-    title: `${ISSUANCE_KIND_WORDS[a.kind]} ${waiting ? "waiting for the Agent's new key" : ATTEMPT_WORDS[a.status]}`,
+    title: `${ISSUANCE_KIND_WORDS[a.kind]} ${state}`,
     by: a.requestedBy ? `asked for by ${a.requestedBy.email}` : "by the Renewal scheduler",
     failed,
     body: a.failure && (
@@ -113,6 +122,7 @@ function attemptEvent(a: Issuance): Event {
           ["Started", when(a.startedAt)],
           ["Ended", a.finishedAt ? when(a.finishedAt) : "—"],
           ["Asked for by", a.requestedBy?.email ?? "The Renewal scheduler"],
+          ...(a.adcs?.requestId ? [["ADCS request", a.adcs.requestId] as [string, string]] : []),
         ]
       : undefined,
   };
