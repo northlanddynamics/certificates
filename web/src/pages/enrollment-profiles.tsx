@@ -1005,7 +1005,7 @@ function NewProfileForm({ orgId, onDone }: { orgId: string; onDone: (created: Cr
   const [retentionDays, setRetentionDays] = useState(String(DEFAULT_DEVICE_RETENTION_DAYS));
   const [extendedKeyUsage, setExtendedKeyUsage] = useState<DeviceExtendedKeyUsage[]>(DEFAULT_DEVICE_EXTENDED_KEY_USAGES);
   const [keyUsage, setKeyUsage] = useState<DeviceKeyUsage[]>(DEFAULT_DEVICE_KEY_USAGES);
-  const [chosenKeyTypes, setAllowedKeyTypes] = useState<DeviceKeyType[]>(DEFAULT_DEVICE_KEY_TYPES);
+  const [chosenKeyTypes, setChosenKeyTypes] = useState<DeviceKeyType[]>(DEFAULT_DEVICE_KEY_TYPES);
   const allowedKeyTypes = chosenKeyTypes.filter((type) => keyTypes.includes(type));
   const [validatorKind, setValidatorKind] = useState("");
   const kind = validatorKind || kinds.data?.items[0]?.kind || "";
@@ -1224,7 +1224,7 @@ function NewProfileForm({ orgId, onDone }: { orgId: string; onDone: (created: Cr
       {step === "keys" && (
         <FieldGroup>
           <FieldDescription>A device whose request is for any other kind of key is refused.{adcs && device ? " Only keys the Certificate Template takes can be allowed." : ""}</FieldDescription>
-          <KeyTypeChoices id="profile-keys" values={keyTypes} chosen={allowedKeyTypes} onChange={setAllowedKeyTypes} />
+          <KeyTypeChoices id="profile-keys" values={keyTypes} chosen={allowedKeyTypes} onChange={setChosenKeyTypes} />
         </FieldGroup>
       )}
 

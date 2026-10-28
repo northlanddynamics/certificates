@@ -182,6 +182,14 @@ describe("creating an Enrollment Profile on an ADCS CA", () => {
     expect(tlsOnly.status).toBe(422);
     expect(tlsOnly.body.message ?? tlsOnly.body.error ?? JSON.stringify(tlsOnly.body)).toContain("not offered for devices");
     expect((await createProfile({ ...added, ra: added.directory })).status).toBe(422);
+    // The RA's key is RSA 2048: an RA template that takes none such is refused before ADCS is asked.
+    atAdcs("CorpScepRa").minimumKeySize = 4096;
+    await refresh(added);
+    const bigKeys = await createProfile(added);
+    expect(bigKeys.status).toBe(422);
+    expect(JSON.stringify(bigKeys.body)).toContain("at least 4096 bits");
+    atAdcs("CorpScepRa").minimumKeySize = 2048;
+    await refresh(added);
     expect((await api(acmeOrg, `/adcs-cas/${added.ca.id}/templates/${added.device.id}/hide`, {}, "POST")).status).toBe(200);
     expect((await createProfile(added)).status).toBe(422);
   });
@@ -387,7 +395,40 @@ describe("a device enrolling under a profile on an ADCS CA", () => {
     const shown = await profileOf(profile.id);
     expect(shown.adcs!.templateUnavailable).toContain("may not enroll");
     const failure = failureOf(await scepDevice(h, profile.scepUrl).submit({ subject: "CN=laptop-07" }).catch((err: unknown) => err));
-    expect(failure.failInfoText).toContain("is unavailable");
+    expect(failure.failInfoText).toContain("may not enroll on it");
+  });
+
+  test("is refused once its template is hidden, though the profile was made on it", async () => {
+    const added = await adcsCa();
+    const profile = await readyProfile(added);
+    expect((await api(acmeOrg, `/adcs-cas/${added.ca.id}/templates/${added.device.id}/hide`, {}, "POST")).status).toBe(200);
+    const failure = failureOf(await scepDevice(h, profile.scepUrl).submit({ subject: "CN=laptop-09" }).catch((err: unknown) => err));
+    expect(failure.failInfoText).toContain("hid it");
+  });
+
+  test("submitted before its profile was disabled is refused once ADCS answers, and nothing is stored", async () => {
+    const added = await adcsCa();
+    atAdcs("CorpDevice").managerApproval = false;
+    const profile = await readyProfile(added);
+    const device = scepDevice(h, profile.scepUrl);
+    const pending = await submitPending(device, { subject: "CN=laptop-10" });
+    expect((await api(acmeOrg, `/enrollment-profiles/${profile.id}/disable`, {}, "POST")).status).toBe(200);
+    await added.agent.work();
+    expect(failureOf(await device.check(pending).catch((err: unknown) => err)).failInfoText).toContain("disabled");
+    expect((await api(acmeOrg, `/enrollment-profiles/${profile.id}/device-certificates`)).body.total).toBe(0);
+  });
+
+  test("its Device Certificate is pruned like any other once past the profile's retention", async () => {
+    const added = await adcsCa();
+    atAdcs("CorpDevice").managerApproval = false;
+    const profile = await readyProfile(added, { retentionDays: 0 });
+    const device = scepDevice(h, profile.scepUrl);
+    const pending = await submitPending(device, { subject: "CN=laptop-11" });
+    await added.agent.work();
+    const enrolled = (await device.check(pending)) as Enrolled;
+    h.setNow(new Date(certificateOf(enrolled).notAfter.getTime() + DAY_MS));
+    expect(await h.pruneDeviceCertificates()).toBe(1);
+    expect((await api(acmeOrg, `/enrollment-profiles/${profile.id}/device-certificates`)).body.total).toBe(0);
   });
 
   test("renewing with RenewalReq is answered PENDING too, and issued its replacement", async () => {

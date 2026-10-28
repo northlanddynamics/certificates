@@ -234,6 +234,12 @@ export function createDeviceEnrollment(deps: {
       const found = await waitingFor(tx, request);
       if (!found) return;
       const { waiting, profile, asked, decided } = found;
+      // Disabled while ADCS was deciding: it issues nothing, so what ADCS issued is not handed over.
+      if (!profile.enabled) {
+        const reason = "the Enrollment Profile was disabled while ADCS decided the request, so it issues nothing";
+        await refuse(tx, change, profile, asked, reason, { adcsRequestId: request.adcsRequestId });
+        return transactions.answer(tx, waiting, { refusal: reason });
+      }
       const certificate = new x509.X509Certificate(certificatePem);
       const issuer: DeviceCertificateIssuer = { kind: "adcs", adcsCaId: request.adcsCaId, templateId: request.templateId, requestId: request.adcsRequestId! };
       // Within a savepoint, so that a renewal whose Device Certificate was revoked meanwhile stores nothing and is refused.

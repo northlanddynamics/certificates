@@ -2,7 +2,9 @@
 // so the server's tests can run it.
 import type { AdcsCa, AdcsRequest, AdcsTemplate, Agent } from "./api";
 // The server's own EKUs and config-string pattern, from a module that imports nothing, so the console sorts templates as the API does.
-import { CLIENT_AUTHENTICATION, CONFIG_STRING, SERVER_AUTHENTICATION, TEMPLATE_KEY_LABELS, purposesOf } from "../../../server/src/adcs/adcs-kinds";
+import { CLIENT_AUTHENTICATION, CONFIG_STRING, SERVER_AUTHENTICATION, TEMPLATE_KEY_LABELS, purposesOf, templateKeyAlgorithms } from "../../../server/src/adcs/adcs-kinds";
+// The key the platform makes for an RA, which the server checks an RA template takes.
+import { RA_KEY_TYPE } from "../../../server/src/enrollment/enrollment-profile-kinds";
 
 /** Whether `text` is a config string as the server takes one: the CA's host, a backslash, and the CA's name. */
 export const isConfigString = (text: string) => CONFIG_STRING.test(text.trim());
@@ -34,8 +36,8 @@ export const adcsTlsChoices = (cas: AdcsCa[]) =>
 export const adcsDeviceChoices = (cas: AdcsCa[]) =>
   cas.map((ca) => ({ ca, templates: ca.templates.filter((t) => ca.offered.devices.includes(t.id)) })).filter((choice) => choice.templates.length > 0);
 
-/** The templates of the ADCS CA an Enrollment Profile's RA certificate may be issued under: any available one not hidden, whatever its EKUs. */
-export const adcsRaTemplates = (ca: Pick<AdcsCa, "templates">) => ca.templates.filter((t) => t.available && !t.hidden);
+/** The templates of the ADCS CA an Enrollment Profile's RA certificate may be issued under: any available one not hidden that takes the RA's key, whatever its EKUs. */
+export const adcsRaTemplates = (ca: Pick<AdcsCa, "templates">) => ca.templates.filter((t) => t.available && !t.hidden && templateKeyAlgorithms(t, [RA_KEY_TYPE]).length > 0);
 
 /** Where a profile on an ADCS CA stands with its RA certificate, as a phrase; none once it has one and none is asked for. */
 export function raCertificateState(profile: { raCertificate: unknown; raRequested: boolean }) {

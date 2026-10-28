@@ -47,7 +47,7 @@ import {
 } from "./enrollment-issuer";
 import type { Secrets } from "../platform/crypto/secrets";
 import { sharedChallengesOf, type SharedChallenges } from "./shared-challenge";
-import { raOf, type AdcsRaCertificates } from "./adcs-ra";
+import { newRaKeyPem, raOf, type AdcsRaCertificates } from "./adcs-ra";
 import { templateKeyAlgorithms } from "../adcs/adcs-kinds";
 import type { Actor, UnitOfWork } from "../platform/unit-of-work";
 
@@ -225,9 +225,6 @@ export function registerEnrollmentProfiles(ctx: {
       throw err;
     }
   }
-
-  /** A new RA key, a software RSA key (PKCS #8 PEM), for ADCS to certify. */
-  const newRaKeyPem = () => generateKeyPairSync("rsa", { modulusLength: 2048 }).privateKey.export({ format: "pem", type: "pkcs8" }).toString();
 
   /**
    * The device keys a profile on the issuer allows, as asked (the defaults unless given): on an ADCS CA, each must be one

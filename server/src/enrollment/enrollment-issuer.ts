@@ -3,12 +3,14 @@
 // which signs at once, and one of its ADCS CAs with the Certificate Templates its Device Certificates and its RA
 // certificate are issued under, which an Agent asks and which answers later (adcs-issuance.ts). Creating and changing a
 // profile, issuing its RA certificate and its Device Certificates, serving GetCACert and revoking a Device Certificate
-// reach the CA through here, and tell its kinds apart nowhere else.
+// reach the CA through here. What differs beyond reaching the CA is told apart where it is decided: that an ADCS CA's
+// template decides validity and key usages (enrollment-profiles.ts), and that it answers later, which device enrollment
+// and the RA certificates of ADCS-backed profiles (adcs-ra.ts) wait for.
 import * as x509 from "@peculiar/x509";
 import type { Db, Tx } from "../platform/db/client";
 import type { adcsCa, adcsTemplate } from "../platform/db/schema";
 import type { CertificateIssuer } from "../issuance/issuer";
-import type { EnrollmentIssuerKind } from "./enrollment-profile-kinds";
+import { RA_KEY_TYPE, type EnrollmentIssuerKind } from "./enrollment-profile-kinds";
 import { fingerprintOf } from "../pki/fingerprint";
 import { subjectAltNamesOf } from "../pki/ca-certificates";
 import { enrollmentProfileRefusal, findIssuingCa, issuingRefusal, type IssuingCaOf, type PrivateCas } from "../private-ca/private-ca";
@@ -133,6 +135,22 @@ const dnsNamesOf = (csr: Uint8Array) =>
     .filter((name) => name.type === "dns")
     .map((name) => name.value.toLowerCase().replace(/\.$/, ""));
 
+/** Why nothing is issued to devices under the template now: it is unavailable, hidden, or has no Client Authentication. None while it is offered for devices. */
+function devicesRefusal(ca: AdcsCaRow, template: TemplateRow) {
+  if (offeredFor(template).includes("devices")) return undefined;
+  const why = unavailableReason(template) ?? (template.hidden ? "an Organization Administrator hid it." : "It has no Client Authentication EKU.");
+  return `${templateLabel(ca, template)} is not offered for devices: ${why}`;
+}
+
+/**
+ * Why no RA certificate is issued under the template now: it is unavailable or hidden, or does not take the RA's key.
+ * It need not be offered for TLS or devices: an RA certificate is neither.
+ */
+function raTemplateRefusal(ca: AdcsCaRow, template: TemplateRow) {
+  const refused = templateUnavailableRefusal(ca, template) ?? (template.hidden ? `${templateLabel(ca, template)} is hidden by an Organization Administrator` : templateKeyRefusal(template, RA_KEY_TYPE));
+  return refused ?? undefined;
+}
+
 export interface EnrollmentIssuers {
   /** The Organization's issuer, found; none when it has no such one (or for what cannot be its reference). */
   find(db: Db | Tx, organizationId: string, issuer: EnrollmentIssuer): Promise<FoundEnrollmentIssuer | undefined>;
@@ -205,12 +223,7 @@ export function createEnrollmentIssuers({ privateCas, adcs }: { privateCas: Priv
     },
     profileRefusal(found) {
       if (found.kind === "private_ca") return issuingRefusal(found.of) ?? enrollmentProfileRefusal(found.of.ca);
-      if (!offeredFor(found.template).includes("devices")) {
-        const why = unavailableReason(found.template) ?? (found.template.hidden ? "an Organization Administrator hid it." : "It has no Client Authentication EKU.");
-        return `${templateLabel(found.ca, found.template)} is not offered for devices: ${why}`;
-      }
-      // The RA template need only be available: an RA certificate is neither a TLS nor a device certificate.
-      return templateUnavailableRefusal(found.ca, found.raTemplate);
+      return devicesRefusal(found.ca, found.template) ?? raTemplateRefusal(found.ca, found.raTemplate);
     },
     issueRa: (db, organizationId, issuer, request) => privateCas.issueRa(db, organizationId, issuer.issuingCaId, request),
     issueDevice: (db, organizationId, issuer, request) => privateCas.issueDevice(db, organizationId, issuer.issuingCaId, request),
@@ -220,7 +233,7 @@ export function createEnrollmentIssuers({ privateCas, adcs }: { privateCas: Priv
       if (issuer.kind === "private_ca") return privateCas.deviceRefusal(db, organizationId, issuer.issuingCaId, csr);
       const found = await findAdcs(db, organizationId, issuer);
       if (!found || found.kind !== "adcs") return "the ADCS CA or its Certificate Template is gone";
-      return templateUnavailableRefusal(found.ca, found.template) ?? adcsNamesRefusal(found.ca, dnsNamesOf(csr)) ?? templateKeyRefusal(found.template, keyType) ?? undefined;
+      return devicesRefusal(found.ca, found.template) ?? adcsNamesRefusal(found.ca, dnsNamesOf(csr)) ?? templateKeyRefusal(found.template, keyType) ?? undefined;
     },
     async chainOf(db, organizationId, issuer) {
       if (issuer.kind === "adcs") {

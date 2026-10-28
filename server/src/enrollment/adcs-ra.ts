@@ -11,14 +11,21 @@ import { createCsr } from "ts-scep";
 import type { Db, Tx } from "../platform/db/client";
 import { adcsRequest, enrollmentProfile, secret } from "../platform/db/schema";
 import type { Secrets } from "../platform/crypto/secrets";
-import type { AdcsIssuance } from "../adcs/adcs-issuance";
+import { OPEN_REQUEST_STATUSES, type AdcsIssuance } from "../adcs/adcs-issuance";
 import { enrollmentIssuerOf, type EnrollmentIssuers } from "./enrollment-issuer";
+import { RA_KEY_TYPE } from "./enrollment-profile-kinds";
 import type { Change, UnitOfWork } from "../platform/unit-of-work";
 
 type ProfileRow = typeof enrollmentProfile.$inferSelect;
 
 /** How long after a request for an RA certificate failed it is asked again. */
 export const RA_RETRY_AFTER_MS = 24 * 3600_000;
+
+/** A new RA key (PKCS #8 PEM): a software RSA key, of the type an ADCS CA's RA template is checked to take. */
+export const newRaKeyPem = () =>
+  generateKeyPairSync("rsa", { modulusLength: Number(RA_KEY_TYPE.slice("rsa-".length)) })
+    .privateKey.export({ format: "pem", type: "pkcs8" })
+    .toString();
 
 /** The RA certificate as Audit Events name it. */
 export const raOf = (certificate: x509.X509Certificate) => ({ serial: certificate.serialNumber.toUpperCase(), notAfter: certificate.notAfter.toISOString() });
@@ -66,7 +73,6 @@ export function createAdcsRaCertificates({
   adcs: Pick<AdcsIssuance, "handle">;
   clock: () => Date;
 }): AdcsRaCertificates {
-  const OPEN = ["waiting", "submitted", "pending"] as const;
 
   /** The profile's latest request for an RA certificate. */
   async function latestOf(dbOrTx: Db | Tx, profileId: string) {
@@ -79,7 +85,8 @@ export function createAdcsRaCertificates({
     return latest;
   }
 
-  const requesting = async (dbOrTx: Db | Tx, profileId: string) => (OPEN as readonly string[]).includes((await latestOf(dbOrTx, profileId))?.status ?? "");
+  const isOpen = (status: string | undefined) => (OPEN_REQUEST_STATUSES as readonly string[]).includes(status ?? "");
+  const requesting = async (dbOrTx: Db | Tx, profileId: string) => isOpen((await latestOf(dbOrTx, profileId))?.status);
 
   async function request(tx: Tx, change: Change, profile: ProfileRow) {
     const issuer = enrollmentIssuerOf(profile);
@@ -89,11 +96,11 @@ export function createAdcsRaCertificates({
     if (profile.raCertificatePem === null) {
       keyPem = await secrets.open(tx, profile.organizationId, profile.raKeySecretId);
     } else {
-      keyPem = generateKeyPairSync("rsa", { modulusLength: 2048 }).privateKey.export({ format: "pem", type: "pkcs8" }).toString();
+      keyPem = newRaKeyPem();
       const next = await secrets.create(tx, profile.organizationId, keyPem);
       const previous = profile.nextRaKeySecretId;
       await tx.update(enrollmentProfile).set({ nextRaKeySecretId: next }).where(eq(enrollmentProfile.id, profile.id));
-      if (previous) await tx.delete(secret).where(eq(secret.id, previous));
+      if (previous) await tx.delete(secret).where(and(eq(secret.id, previous), eq(secret.organizationId, profile.organizationId)));
     }
     const csr = createCsr({ subject: `CN=SCEP RA ${profile.publicId}`, privateKey: createPrivateKey(keyPem) });
     const csrPem = new x509.Pkcs10CertificateRequest(new Uint8Array(csr)).toString("pem");
@@ -116,7 +123,7 @@ export function createAdcsRaCertificates({
   async function dropNext(tx: Tx, profile: ProfileRow) {
     if (!profile.nextRaKeySecretId) return;
     await tx.update(enrollmentProfile).set({ nextRaKeySecretId: null }).where(eq(enrollmentProfile.id, profile.id));
-    await tx.delete(secret).where(eq(secret.id, profile.nextRaKeySecretId));
+    await tx.delete(secret).where(and(eq(secret.id, profile.nextRaKeySecretId), eq(secret.organizationId, profile.organizationId)));
   }
 
   adcs.handle("ra", {
@@ -178,7 +185,7 @@ export function createAdcsRaCertificates({
             const profile = await lockProfile(tx, id);
             if (!profile.enabled || (profile.raCertificatePem !== null && !raDue(profile.raCertificatePem, change.occurredAt))) return false;
             const latest = await latestOf(tx, id);
-            if (latest && (OPEN as readonly string[]).includes(latest.status)) return false;
+            if (isOpen(latest?.status)) return false;
             if (latest?.status === "failed" && latest.finishedAt && change.occurredAt.getTime() - latest.finishedAt.getTime() < RA_RETRY_AFTER_MS) return false;
             await request(tx, change, profile);
             return true;

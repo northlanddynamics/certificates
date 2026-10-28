@@ -50,7 +50,8 @@ export interface AdcsOutcomes {
 }
 
 /** The statuses of a request that has not ended. */
-const OPEN: RequestRow["status"][] = ["waiting", "submitted", "pending"];
+export const OPEN_REQUEST_STATUSES: RequestRow["status"][] = ["waiting", "submitted", "pending"];
+const OPEN = OPEN_REQUEST_STATUSES;
 
 /** How long a request may wait for an Agent to submit it before its Issuance fails as "no Agent available". */
 export const NO_AGENT_TIMEOUT_MS = 7 * 24 * 3600_000;

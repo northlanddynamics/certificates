@@ -5,7 +5,7 @@ import { describe, expect, test } from "bun:test";
 import { adcsDeviceChoices, adcsRaTemplates, raCertificateState } from "../../web/src/lib/adcs-ca";
 import type { AdcsCa, AdcsTemplate } from "../../web/src/lib/api";
 
-const template = (id: string, over: Partial<AdcsTemplate> = {}) => ({ id, name: id, displayName: `${id} display`, available: true, hidden: false, ...over }) as AdcsTemplate;
+const template = (id: string, over: Partial<AdcsTemplate> = {}) => ({ id, name: id, displayName: `${id} display`, available: true, hidden: false, keyAlgorithms: ["rsa"], minimumKeySize: 2048, ...over }) as AdcsTemplate;
 const ca = (id: string, templates: AdcsTemplate[], devices: string[]) => ({ id, name: id, templates, offered: { tls: [], devices } }) as unknown as AdcsCa;
 
 describe("the ADCS CAs in the Enrollment Profile dialog", () => {
@@ -15,8 +15,8 @@ describe("the ADCS CAs in the Enrollment Profile dialog", () => {
     expect(adcsDeviceChoices([corp, lab]).map(({ ca, templates }) => [ca.id, templates.map((t) => t.id)])).toEqual([["Corp", ["Device"]]]);
   });
 
-  test("the RA certificate may be issued under any available template that is not hidden, whatever it is offered for", () => {
-    const corp = ca("Corp", [template("Ra"), template("Device"), template("Gone", { available: false }), template("Hidden", { hidden: true })], ["Device"]);
+  test("the RA certificate may be issued under any available template that is not hidden and takes the RA's key, whatever it is offered for", () => {
+    const corp = ca("Corp", [template("Ra"), template("Device"), template("Gone", { available: false }), template("Hidden", { hidden: true }), template("Big", { minimumKeySize: 4096 })], ["Device"]);
     expect(adcsRaTemplates(corp).map((t) => t.id)).toEqual(["Ra", "Device"]);
   });
 });
