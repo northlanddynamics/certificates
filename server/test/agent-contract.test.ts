@@ -36,3 +36,13 @@ test("the contract gives the Agent `adcs.discover` and takes its discovery: the 
   );
   expect(discovery.properties.templates.items.properties.keyAlgorithms.items.enum).toEqual(["rsa", "ecdsa-p256", "ecdsa-p384", "ecdsa-p521"]);
 });
+
+test("the contract gives the Agent `adcs.submit` and takes what ADCS answered: issued, with its request ID and the Certificate", () => {
+  const contract = agentContract(h.app) as any;
+  const poll = contract.paths["/api/agent/poll"].post.responses["200"].content["application/json"].schema;
+  expect(JSON.stringify(poll)).toContain("`adcs.submit`");
+  const result = contract.paths["/api/agent/work-items/{id}/result"].post.requestBody.content["application/json"].schema;
+  const submission = result.properties.submission;
+  expect(submission.required.sort()).toEqual(["certificate", "requestId", "status"]);
+  expect(submission.properties.status.enum ?? [submission.properties.status.const]).toEqual(["issued"]);
+});

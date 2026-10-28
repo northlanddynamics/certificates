@@ -89,7 +89,8 @@ function toProfile(row: ProfileRow, defaultTeam: TeamRef | null): z.infer<typeof
     id: row.id,
     name: row.name,
     description: row.description,
-    issuer: issuerOf(row),
+    // A profile's issuer is an ACME CA or an Issuing CA: the database allows no other.
+    issuer: issuerOf(row) as z.infer<typeof CertificateProfile>["issuer"],
     allowedKeyAlgorithms: row.allowedKeyAlgorithms,
     validityDays: row.validityDays,
     renewalPolicy: policyOf(row),
@@ -153,10 +154,12 @@ export async function requestedThrough(db: Db | Tx, acmeCas: AcmeCas, orgId: str
     const ca = await acmeCas.find(orgId, issuer.acmeCaId);
     if (!ca) throw unusable("the Organization has no such ACME CA");
     if (!(await hasAcmeAccount(db, orgId, ca.id))) throw unusable(noAcmeAccount(ca.name));
-  } else {
+  } else if (issuer.kind === "private_ca") {
     const of = await findIssuingCa(db, orgId, issuer.issuingCaId);
     const refusal = of ? issuingRefusal(of) : "the Organization has no such Issuing CA";
     if (refusal) throw unusable(refusal);
+  } else {
+    throw unusable("its issuer is an ADCS CA, which Certificate Profiles cannot name yet");
   }
   return { profile: { id: row.id, name: row.name }, issuer, validityDays: row.validityDays, renewalPolicy: policyOf(row), defaultTeamId: row.defaultTeamId, nameRules: nameRulesOf(row) };
 }
@@ -227,6 +230,7 @@ export function registerCertificateProfiles(ctx: {
       const refusal = keysRefusal({ label: ca.name });
       return refusal ? new HttpError(422, refusal) : undefined;
     }
+    if (issuer.kind !== "private_ca") return new HttpError(422, "a Certificate Profile cannot name an ADCS CA yet");
     const of = await findIssuingCa(tx, orgId, issuer.issuingCaId);
     if (!of) return new HttpError(422, "the Organization has no such Issuing CA");
     const refusal = issuingRefusal(of) ?? validityRefusal(of, validityDays) ?? keysRefusal({ caKeyAlgorithm: of.ca.keyAlgorithm, label: issuingCaLabel(of) });

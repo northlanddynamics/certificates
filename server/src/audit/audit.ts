@@ -27,6 +27,7 @@ export const AUDIT_ACTIONS = [
   "adcs_ca.discovery_failed",
   "adcs_ca.template_hidden",
   "adcs_ca.template_shown",
+  "adcs_ca.request_submitted",
   "acme_account.created",
   "acme_account.key_replaced",
   "dns_provider.created",

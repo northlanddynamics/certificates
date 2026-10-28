@@ -9,7 +9,7 @@ import type { Authorizer } from "../tenancy/authorization";
 import { commonNameOf } from "../pki/certificate-facts";
 import { KEY_ALGORITHMS, KEY_CUSTODIES } from "../pki/csr";
 import type { Db } from "../platform/db/client";
-import { agent, certificate, certificateProfile, deployment, issuance, issuingCa, managedCertificate, privateCa } from "../platform/db/schema";
+import { adcsCa, adcsTemplate, agent, certificate, certificateProfile, deployment, issuance, issuingCa, managedCertificate, privateCa } from "../platform/db/schema";
 import { HttpError, OrgParam } from "../platform/http";
 import { issuerOf, type Issuer as IssuerOfRow } from "../issuance/issuer";
 import { ISSUANCE_FAILURE_CODES } from "../issuance/issuance-failure";
@@ -22,6 +22,7 @@ import { informationOf } from "../issuance/renewal-information";
 import { Revocation, RevocationRequest, revocationsOf, toRevocation, type RevocationRow } from "../issuance/revocation";
 import { revocationRequestsOf, toRevocationRequest, type RevocationRequestRow } from "../issuance/revocations";
 import type { Actor } from "../platform/unit-of-work";
+import { adcsRequestsOf, type AdcsRequestShown } from "../adcs/adcs-issuance";
 
 export const ManagedCertificateParams = OrgParam.extend({ id: z.string().openapi({ param: { name: "id", in: "path" } }) });
 
@@ -44,6 +45,16 @@ export const Issuance = z.object({
     .object({ handle: z.string(), deadline: z.string() })
     .nullable()
     .openapi({ description: "Set once the CA answered that it would issue later: what it keeps the request by, and when the Issuance fails as `timed_out` if the CA has not answered. Kept once it has ended." }),
+  adcs: z
+    .object({
+      status: z.enum(["waiting", "submitted", "issued", "failed"]).openapi({
+        description: "`waiting`: waiting for an Agent, as no Agent assigned to the ADCS CA is online. `submitted`: an Agent has the request to submit. `issued` or `failed`: how the request ended.",
+      }),
+      agent: z.object({ id: z.string(), hostName: z.string() }).nullable().openapi({ description: "The Agent that has the request, or reported on it last." }),
+      requestId: z.string().nullable().openapi({ description: "ADCS's ID of the request, once an Agent has reported it." }),
+    })
+    .nullable()
+    .openapi({ description: "For an Issuance from an ADCS CA, once its request is made: where the request stands. None for other issuers." }),
 });
 
 export const Certificate = z.object({
@@ -56,7 +67,11 @@ export const Certificate = z.object({
   ca: z.string(),
   acmeCaId: z.string().nullable().openapi({ description: "The ACME CA it was issued from; none for a Certificate from a Private CA." }),
   acmeAccountId: z.string().nullable().openapi({ description: "The ACME account it was issued through; none for a Certificate from a Private CA." }),
-  issuingCaId: z.string().nullable().openapi({ description: "The Issuing CA, of a Private CA, that signed it; none for a Certificate from an ACME CA." }),
+  issuingCaId: z.string().nullable().openapi({ description: "The Issuing CA, of a Private CA, that signed it; none for a Certificate from another kind of CA." }),
+  adcs: z
+    .object({ adcsCaId: z.string(), templateId: z.string(), requestId: z.string() })
+    .nullable()
+    .openapi({ description: "For a Certificate from an ADCS CA: the CA, the Certificate Template it was issued under, and ADCS's ID of the request that issued it." }),
   issuedAt: z.string(),
   hasCsr: z.boolean().openapi({ description: "Whether the CSR it was issued from is kept, and so can be downloaded; not for one issued before the platform kept it." }),
   revocation: Revocation.nullable().openapi({ description: "Set once the CA has been told to revoke it, by whom and why." }),
@@ -124,8 +139,13 @@ const Issuer = z
   .discriminatedUnion("kind", [
     z.object({ kind: z.literal("acme"), acmeCaId: z.string() }),
     z.object({ kind: z.literal("private_ca"), issuingCa: z.object({ id: z.string(), subject: z.string() }), privateCa: z.object({ id: z.string(), name: z.string() }) }),
+    z.object({ kind: z.literal("adcs"), adcsCa: z.object({ id: z.string(), name: z.string() }), template: z.object({ id: z.string(), name: z.string(), displayName: z.string() }) }),
   ])
-  .openapi({ description: "Where its Certificates come from: `acme`, through the Organization's ACME account with the ACME CA `acmeCaId`; `private_ca`, from `issuingCa`, an Issuing CA of the Organization's Private CA `privateCa`, with no DCV." });
+  .openapi({
+    description:
+      "Where its Certificates come from: `acme`, through the Organization's ACME account with the ACME CA `acmeCaId`; `private_ca`, from `issuingCa`, an Issuing CA of the Organization's Private CA `privateCa`, with no DCV; " +
+      "`adcs`, from the Organization's ADCS CA `adcsCa` under its Certificate Template `template`, through an Agent, with no DCV.",
+  });
 
 export const Approval = z.object({
   status: z.enum(APPROVAL_STATUSES).openapi({ description: "`not_required` for one an Organization Administrator created." }),
@@ -173,11 +193,41 @@ export const ManagedCertificate = z.object({
 type ManagedCertificateRow = typeof managedCertificate.$inferSelect;
 
 type IssuingCaShown = { issuingCa: { id: string; subject: string }; privateCa: { id: string; name: string } };
+type TemplateShown = { adcsCa: { id: string; name: string }; template: { id: string; name: string; displayName: string } };
 
-/** The issuer as the API shows it: an Issuing CA by its id and subject, with its Private CA's id and name, so that whoever decides on it sees which CA it is. */
-const issuerShown = (issuer: IssuerOfRow, issuingCas: Map<string, IssuingCaShown>): z.infer<typeof Issuer> =>
-  issuer.kind === "acme" ? issuer : { kind: "private_ca", ...(issuingCas.get(issuer.issuingCaId) ?? { issuingCa: { id: issuer.issuingCaId, subject: "" }, privateCa: { id: "", name: "" } }) };
-export const toIssuance = (row: typeof issuance.$inferSelect) => ({
+/**
+ * The issuer as the API shows it: an Issuing CA by its id and subject, with its Private CA's id and name, and an ADCS CA
+ * by its id and name with its template's, so that whoever decides on it sees which CA (and template) it is.
+ */
+function issuerShown(issuer: IssuerOfRow, issuingCas: Map<string, IssuingCaShown>, templates: Map<string, TemplateShown>): z.infer<typeof Issuer> {
+  switch (issuer.kind) {
+    case "acme":
+      return issuer;
+    case "private_ca":
+      return { kind: "private_ca", ...(issuingCas.get(issuer.issuingCaId) ?? { issuingCa: { id: issuer.issuingCaId, subject: "" }, privateCa: { id: "", name: "" } }) };
+    case "adcs":
+      return { kind: "adcs", ...(templates.get(issuer.templateId) ?? { adcsCa: { id: issuer.adcsCaId, name: "" }, template: { id: issuer.templateId, name: "", displayName: "" } }) };
+  }
+}
+
+/** The ADCS CAs' templates, by id, as `issuerShown` shows them. */
+async function templatesShown(db: Db, templateIds: string[]): Promise<Map<string, TemplateShown>> {
+  if (templateIds.length === 0) return new Map();
+  const rows = await db
+    .select({ adcsCa: { id: adcsCa.id, name: adcsCa.name }, template: { id: adcsTemplate.id, name: adcsTemplate.name, displayName: adcsTemplate.displayName } })
+    .from(adcsTemplate)
+    .innerJoin(adcsCa, eq(adcsCa.id, adcsTemplate.adcsCaId))
+    .where(inArray(adcsTemplate.id, templateIds));
+  return new Map(rows.map((shown) => [shown.template.id, shown]));
+}
+
+/** The Issuances as the API shows them, each with its ADCS request if it has one. */
+export async function issuancesShown(db: Db, rows: (typeof issuance.$inferSelect)[]) {
+  const requests = await adcsRequestsOf(db, rows.map((row) => row.id));
+  return rows.map((row) => toIssuance(row, requests.get(row.id)));
+}
+
+export const toIssuance = (row: typeof issuance.$inferSelect, adcs?: AdcsRequestShown) => ({
   id: row.id,
   kind: row.kind,
   status: row.status,
@@ -188,6 +238,7 @@ export const toIssuance = (row: typeof issuance.$inferSelect) => ({
   certificateId: row.certificateId,
   awaitingKey: row.awaitingKey,
   pending: row.pendingHandle && row.pendingUntil ? { handle: row.pendingHandle, deadline: row.pendingUntil.toISOString() } : null,
+  adcs: adcs ?? null,
 });
 export const toCertificate = (row: typeof certificate.$inferSelect, revocation: RevocationRow | undefined, request: RevocationRequestRow | undefined) => ({
   id: row.id,
@@ -200,6 +251,7 @@ export const toCertificate = (row: typeof certificate.$inferSelect, revocation: 
   acmeCaId: row.acmeCaId,
   acmeAccountId: row.acmeAccountId,
   issuingCaId: row.issuingCaId,
+  adcs: row.adcsCaId && row.adcsTemplateId && row.adcsRequestId ? { adcsCaId: row.adcsCaId, templateId: row.adcsTemplateId, requestId: row.adcsRequestId } : null,
   issuedAt: row.issuedAt.toISOString(),
   hasCsr: row.csr !== null,
   revocation: revocation ? toRevocation(revocation) : null,
@@ -288,6 +340,8 @@ export function createManagedCertificateReader({ db, authorize, clock, agentOffl
               .where(inArray(issuingCa.id, issuingCaIds))
           ).map((shown) => [shown.issuingCa.id, shown]),
     );
+    const templates = await templatesShown(db, [...new Set(rows.flatMap((r) => (r.adcsTemplateId ? [r.adcsTemplateId] : [])))]);
+    const adcsRequests = await adcsRequestsOf(db, latestIssuances.map((i) => i.id));
     const profileIds = [...new Set(rows.flatMap((r) => (r.certificateProfileId ? [r.certificateProfileId] : [])))];
     const profiles = new Map(
       profileIds.length === 0
@@ -332,7 +386,7 @@ export function createManagedCertificateReader({ db, authorize, clock, agentOffl
         keyAlgorithm: row.keyAlgorithm,
         keyCustody: row.keyCustody,
         acmeCaId: row.acmeCaId,
-        issuer: issuerShown(issuerOf(row), issuingCas),
+        issuer: issuerShown(issuerOf(row), issuingCas, templates),
         validityDays: row.validityDays,
         createdAt: row.createdAt.toISOString(),
         archivedAt: row.archivedAt?.toISOString() ?? null,
@@ -368,7 +422,7 @@ export function createManagedCertificateReader({ db, authorize, clock, agentOffl
           // Only while it is still held up: it would renew automatically, and its profile is still disabled.
           blocked: row.renewalBlockedAt && policy.mode === "automatic" && !row.archivedAt && profile && !profile.enabled ? { since: row.renewalBlockedAt.toISOString(), profile: { id: profile.id, name: profile.name } } : null,
         },
-        issuance: latest ? toIssuance(latest) : null,
+        issuance: latest ? toIssuance(latest, adcsRequests.get(latest.id)) : null,
         currentCertificate: current ? toCertificate(current, revocations.get(current.id), revocationRequests.get(current.id)) : null,
         agent: holder ? { id: holder.id, hostName: holder.hostName, status: agentStatus(holder, now, agentOfflineAfterSeconds) } : null,
       };

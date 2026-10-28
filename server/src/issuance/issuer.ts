@@ -1,7 +1,8 @@
 // A Managed Certificate's issuer: which kind of CA its Certificates come from, and that kind's reference. ACME carries
 // the ACME CA (acme-cas.ts), by id, whose ACME Account they are obtained through; a Private CA (private-ca.ts) carries which of its Issuing
 // CAs, and has no DCV. Issuance, Renewal, the asking about renewal windows, Revocation and exports reach the CA through here and never
-// assume ACME: accounts, DCV and ARI are the ACME kind's concern (certificate-authority.ts).
+// assume ACME: accounts, DCV and ARI are the ACME kind's concern (certificate-authority.ts). An ADCS CA (adcs-issuance.ts)
+// carries the CA and the Certificate Template it issues under, has no DCV, and answers later: an Agent submits the CSR.
 import { and, eq, type SQL } from "drizzle-orm";
 import { CertificateAuthorityError, type AcmeCertificateAuthority, type DnsChallengeResponder, type RenewalInfo, type RevocationReason } from "./acme/certificate-authority";
 import type { AcmeCas } from "./acme/acme-cas";
@@ -10,21 +11,28 @@ import { acmeAccount } from "../platform/db/schema";
 import { IssuanceFailure } from "./issuance-failure";
 import { ISSUER_KINDS, type IssuerKind } from "./issuer-kinds";
 import type { PrivateCas } from "../private-ca/private-ca";
+import type { AdcsIssuance } from "../adcs/adcs-issuance";
 import { REVOCATION_REASONS_OF } from "../pki/revocation-reasons";
 import type { Secrets } from "../platform/crypto/secrets";
 import type { Change } from "../platform/unit-of-work";
 
+const ISSUER_KIND_LABELS: Record<IssuerKind, string> = { acme: "an ACME CA", private_ca: "a Private CA", adcs: "an ADCS CA" };
+
 /** A Managed Certificate's issuer, as it is stored: its kind and that kind's reference. */
-export type Issuer = { kind: "acme"; acmeCaId: string } | { kind: "private_ca"; issuingCaId: string };
+export type Issuer = { kind: "acme"; acmeCaId: string } | { kind: "private_ca"; issuingCaId: string } | { kind: "adcs"; adcsCaId: string; templateId: string };
 
 /**
  * The issuer a Certificate came from, as it records it: its Managed Certificate's issuer then, and for ACME the ACME
- * Account it was obtained through, and for a Private CA the Issuing CA that signed it.
+ * Account it was obtained through, for a Private CA the Issuing CA that signed it, and for an ADCS CA the ID ADCS gave
+ * the request that issued it.
  */
-export type CertificateIssuer = { kind: "acme"; acmeCaId: string; acmeAccountId: string } | { kind: "private_ca"; issuingCaId: string };
+export type CertificateIssuer =
+  | { kind: "acme"; acmeCaId: string; acmeAccountId: string }
+  | { kind: "private_ca"; issuingCaId: string }
+  | { kind: "adcs"; adcsCaId: string; templateId: string; requestId: string };
 
-/** The columns that store an issuer, as a Managed Certificate's and a Certificate's rows have them. */
-type IssuerRow = { issuerKind: IssuerKind; acmeCaId: string | null; issuingCaId: string | null };
+/** The columns that store an issuer, as a Managed Certificate's and a Certificate's rows have them; a Certificate Profile's have no ADCS ones yet. */
+type IssuerRow = { issuerKind: IssuerKind; acmeCaId: string | null; issuingCaId: string | null; adcsCaId?: string | null; adcsTemplateId?: string | null };
 
 /** Whichever of an issuer row's references its kind needs; the database checks that it is there. */
 function reference<T>(value: T | null, what: string): T {
@@ -39,31 +47,53 @@ export function issuerOf(row: IssuerRow): Issuer {
       return { kind: "acme", acmeCaId: reference(row.acmeCaId, "ACME CA") };
     case "private_ca":
       return { kind: "private_ca", issuingCaId: reference(row.issuingCaId, "Issuing CA") };
+    case "adcs":
+      return { kind: "adcs", adcsCaId: reference(row.adcsCaId ?? null, "ADCS CA"), templateId: reference(row.adcsTemplateId ?? null, "Certificate Template") };
   }
 }
 
 /** The columns of a Managed Certificate that store `issuer`. */
-export const issuerColumns = (issuer: Issuer) =>
-  issuer.kind === "acme" ? { issuerKind: issuer.kind, acmeCaId: issuer.acmeCaId, issuingCaId: null } : { issuerKind: issuer.kind, acmeCaId: null, issuingCaId: issuer.issuingCaId };
+export const issuerColumns = (issuer: Issuer) => ({
+  issuerKind: issuer.kind,
+  acmeCaId: issuer.kind === "acme" ? issuer.acmeCaId : null,
+  issuingCaId: issuer.kind === "private_ca" ? issuer.issuingCaId : null,
+  adcsCaId: issuer.kind === "adcs" ? issuer.adcsCaId : null,
+  adcsTemplateId: issuer.kind === "adcs" ? issuer.templateId : null,
+});
 
 /** The issuer a Certificate came from, from its row. */
-export function certificateIssuerOf(row: IssuerRow & { acmeAccountId: string | null }): CertificateIssuer {
+export function certificateIssuerOf(row: IssuerRow & { acmeAccountId: string | null; adcsRequestId?: string | null }): CertificateIssuer {
   switch (row.issuerKind) {
     case "acme":
       return { kind: "acme", acmeCaId: reference(row.acmeCaId, "ACME CA"), acmeAccountId: reference(row.acmeAccountId, "ACME account") };
     case "private_ca":
       return { kind: "private_ca", issuingCaId: reference(row.issuingCaId, "Issuing CA") };
+    case "adcs":
+      return { ...(issuerOf(row) as Issuer & { kind: "adcs" }), requestId: reference(row.adcsRequestId ?? null, "ADCS request ID") };
   }
 }
 
 /** The columns of a Certificate that record the issuer it came from. */
-export const certificateIssuerColumns = (issuedBy: CertificateIssuer) =>
-  issuedBy.kind === "acme"
-    ? { issuerKind: issuedBy.kind, acmeCaId: issuedBy.acmeCaId, acmeAccountId: issuedBy.acmeAccountId, issuingCaId: null }
-    : { issuerKind: issuedBy.kind, acmeCaId: null, acmeAccountId: null, issuingCaId: issuedBy.issuingCaId };
+export const certificateIssuerColumns = (issuedBy: CertificateIssuer) => ({
+  ...issuerColumns(issuedBy.kind === "adcs" ? { kind: "adcs", adcsCaId: issuedBy.adcsCaId, templateId: issuedBy.templateId } : issuedBy),
+  acmeAccountId: issuedBy.kind === "acme" ? issuedBy.acmeAccountId : null,
+  adcsRequestId: issuedBy.kind === "adcs" ? issuedBy.requestId : null,
+});
 
-/** What an Audit Event of an Issuance says of its issuer: nothing for ACME, as before there were other kinds; which Issuing CA for a Private CA. */
-export const issuerDetail = (issuer: Issuer | CertificateIssuer) => (issuer.kind === "private_ca" ? { issuer: { kind: issuer.kind, issuingCaId: issuer.issuingCaId } } : {});
+/**
+ * What an Audit Event of an Issuance says of its issuer: nothing for ACME, as before there were other kinds; which Issuing
+ * CA for a Private CA; which ADCS CA and template for an ADCS CA, and the ID ADCS gave the request once it is known.
+ */
+export function issuerDetail(issuer: Issuer | CertificateIssuer) {
+  switch (issuer.kind) {
+    case "acme":
+      return {};
+    case "private_ca":
+      return { issuer: { kind: issuer.kind, issuingCaId: issuer.issuingCaId } };
+    case "adcs":
+      return { issuer: { kind: issuer.kind, adcsCaId: issuer.adcsCaId, templateId: issuer.templateId, ...("requestId" in issuer && { adcsRequestId: issuer.requestId }) } };
+  }
+}
 
 /** What the Audit Event of a Managed Certificate created or proposed says of its issuer: the ACME CA, or which Issuing CA, and the validity it chose (`validityDays` given). */
 export const issuerAuditDetail = (issuer: Issuer, validityDays: number | undefined) => ({
@@ -160,7 +190,7 @@ interface KindOfIssuer<M extends Issuer, C extends CertificateIssuer> {
   roots(db: Db | Tx, organizationId: string, issuedBy: C): Promise<string[]>;
 }
 
-export function createIssuers({ acme, acmeCas, secrets, privateCas }: { acme: AcmeCertificateAuthority; acmeCas: AcmeCas; secrets: Secrets; privateCas: PrivateCas }): Issuers {
+export function createIssuers({ acme, acmeCas, secrets, privateCas, adcs }: { acme: AcmeCertificateAuthority; acmeCas: AcmeCas; secrets: Secrets; privateCas: PrivateCas; adcs: AdcsIssuance }): Issuers {
   /** The Organization's ACME account that `which` selects, and its key; none when it has no such account. */
   async function openAccount(db: Db | Tx, organizationId: string, which: SQL) {
     const [account] = await db
@@ -212,6 +242,17 @@ export function createIssuers({ acme, acmeCas, secrets, privateCas }: { acme: Ac
     roots: (db, organizationId, issuedBy) => privateCas.rootsOf(db, organizationId, issuedBy.issuingCaId),
   };
 
+  // No DCV and no ARI: an Agent submits the CSR under the template, and the Issuance waits for its report. Its Certificates renew by the Renewal Policy alone.
+  const adcsKind: KindOfIssuer<Issuer & { kind: "adcs" }, CertificateIssuer & { kind: "adcs" }> = {
+    issue: (db, organizationId, issuer, request) => adcs.issue(db, organizationId, issuer, request),
+    async revoke() {
+      throw new CertificateAuthorityError("rejected", "a Certificate from an ADCS CA cannot be revoked through the platform yet; revoke it at ADCS");
+    },
+    offersRenewalInfo: false,
+    renewalInfo: async () => null,
+    roots: (db, organizationId, issuedBy) => adcs.roots(db, organizationId, issuedBy.adcsCaId),
+  };
+
   /** The kind an issuer is of: the one place a new kind is told apart. Each kind is only ever given issuers of its own. */
   function kindOf(issuer: { kind: IssuerKind }): KindOfIssuer<Issuer, CertificateIssuer> {
     switch (issuer.kind) {
@@ -219,6 +260,8 @@ export function createIssuers({ acme, acmeCas, secrets, privateCas }: { acme: Ac
         return acmeKind;
       case "private_ca":
         return privateCaKind;
+      case "adcs":
+        return adcsKind;
     }
   }
 
@@ -226,7 +269,7 @@ export function createIssuers({ acme, acmeCas, secrets, privateCas }: { acme: Ac
     issue: (db, organizationId, issuer, request) => kindOf(issuer).issue(db, organizationId, issuer, request),
     async revoke(tx, change, organizationId, issuedBy, requests) {
       const refused = requests.find(({ reason }) => !REVOCATION_REASONS_OF[issuedBy.kind].includes(reason));
-      if (refused) throw new CertificateAuthorityError("rejected", `a Certificate from ${issuedBy.kind === "acme" ? "an ACME CA" : "a Private CA"} cannot be revoked for ${refused.reason}`);
+      if (refused) throw new CertificateAuthorityError("rejected", `a Certificate from ${ISSUER_KIND_LABELS[issuedBy.kind]} cannot be revoked for ${refused.reason}`);
       if (requests.length === 0) return [];
       return kindOf(issuedBy).revoke(tx, change, organizationId, issuedBy, requests);
     },

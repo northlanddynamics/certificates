@@ -1,10 +1,14 @@
-// Seam B for ADCS CAs: the Agent is given `adcs.discover` by a stub platform built from the contract, reaches ADCS through
+// Seam B for ADCS CAs: the Agent is given `adcs.discover` and `adcs.submit` by a stub platform built from the contract, reaches ADCS through
 // the fake ADCS client as it would through MS-WCCE, and reports what it found in the contract's shape. The platform's side of
 // this is in server/test/adcs-cas.test.ts.
 package agent_test
 
 import (
+	"crypto/ecdsa"
+	"crypto/elliptic"
+	"crypto/rand"
 	"crypto/x509"
+	"crypto/x509/pkix"
 	"encoding/pem"
 	"runtime"
 	"strings"
@@ -121,4 +125,86 @@ func assertNothingSecretLogged(t *testing.T, w *world, logs *syncBuffer) {
 	if strings.Contains(logs.String(), "CERTIFICATE") {
 		t.Fatalf("the Agent's log holds a certificate: %s", logs.String())
 	}
+}
+
+func submitItem(id, configString, template, csr string) platformstub.WorkItem {
+	return platformstub.WorkItem{ID: id, Type: "adcs.submit", Payload: map[string]any{"configString": configString, "template": template, "csr": csr}}
+}
+
+// csrFor is a CSR (PEM) for a new key and the name, and the key.
+func csrFor(t *testing.T, name string) (string, *ecdsa.PrivateKey) {
+	t.Helper()
+	key, err := ecdsa.GenerateKey(elliptic.P256(), rand.Reader)
+	if err != nil {
+		t.Fatal(err)
+	}
+	der, err := x509.CreateCertificateRequest(rand.Reader, &x509.CertificateRequest{Subject: pkix.Name{CommonName: name}, DNSNames: []string{name}}, key)
+	if err != nil {
+		t.Fatal(err)
+	}
+	return string(pem.EncodeToMemory(&pem.Block{Type: "CERTIFICATE REQUEST", Bytes: der})), key
+}
+
+func TestASubmissionReportsTheCertificateADCSIssuedAndItsRequestID(t *testing.T) {
+	w, _, logs := adcsWorld(t)
+	csr, key := csrFor(t, "web.corp.example")
+	w.stub.Enqueue(submitItem("a", configString, "CorpWebServer", csr))
+	w.runUntilReported(1)
+
+	r := w.stub.Results()[0]
+	if !r.OK || r.Submission == nil || r.Submission["status"] != "issued" || r.Submission["requestId"] == "" {
+		t.Fatalf("got %+v", r)
+	}
+	block, _ := pem.Decode([]byte(r.Submission["certificate"].(string)))
+	if block == nil {
+		t.Fatalf("the Certificate is not PEM: %v", r.Submission["certificate"])
+	}
+	certificate, err := x509.ParseCertificate(block.Bytes)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if !key.PublicKey.Equal(certificate.PublicKey) || len(certificate.DNSNames) != 1 || certificate.DNSNames[0] != "web.corp.example" {
+		t.Fatalf("the Certificate is not for the CSR's key and names: %v", certificate.DNSNames)
+	}
+	assertNothingSecretLogged(t, w, logs)
+}
+
+func TestASubmissionADCSRefusesIsRejectedAndOneThatCannotReachItIsUnreachable(t *testing.T) {
+	w, fake, logs := adcsWorld(t)
+	csr, _ := csrFor(t, "web.corp.example")
+	w.stub.Enqueue(submitItem("a", configString, "NoSuchTemplate", csr))
+	w.stub.Enqueue(submitItem("b", `ca99.corp.example\Corp Issuing CA`, "CorpWebServer", csr))
+	w.stub.Enqueue(submitItem("c", configString, "CorpWebServer", "not a CSR"))
+	w.runUntilReported(3)
+	fake.SetTemplate(adcs.Template{Name: "CorpWebServer", OID: "1.3.6.1.4.1.311.21.8.1.1", ValidityDays: 365, MinimumKeySize: 2048, KeyAlgorithms: []string{"rsa", "ecdsa-p256"}, SubjectFromRequest: true, Published: true})
+	w.stub.Enqueue(submitItem("d", configString, "CorpWebServer", csr))
+	w.runUntilReported(4)
+
+	results := w.stub.Results()
+	for i, want := range []struct{ kind, error string }{
+		{"rejected", "not supported by this CA: NoSuchTemplate"},
+		{"unreachable", "the RPC server is unavailable at ca99.corp.example"},
+		{"rejected", "carries no CSR"},
+		{"rejected", "access is denied"},
+	} {
+		if r := results[i]; r.OK || r.Kind != want.kind || !strings.Contains(r.Error, want.error) || r.Submission != nil {
+			t.Fatalf("result %d: got %+v, want %s saying %q", i, r, want.kind, want.error)
+		}
+	}
+	assertNothingSecretLogged(t, w, logs)
+}
+
+func TestAnAgentOffWindowsCannotSubmitAndSaysSo(t *testing.T) {
+	if runtime.GOOS == "windows" {
+		t.Skip("the refusal is for an Agent off Windows")
+	}
+	w, logs := relayWorld(t)
+	csr, _ := csrFor(t, "web.corp.example")
+	w.stub.Enqueue(submitItem("a", configString, "CorpWebServer", csr))
+	w.runUntilReported(1)
+	r := w.stub.Results()[0]
+	if r.OK || r.Kind != "rejected" || r.Error != "this Agent cannot reach ADCS: it does not run on Windows" {
+		t.Fatalf("got %+v", r)
+	}
+	assertNothingSecretLogged(t, w, logs)
 }

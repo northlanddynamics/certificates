@@ -13,7 +13,7 @@ const localKmsKey = process.env.LOCAL_KMS_KEY;
 if (!databaseUrl || !secret || !localKmsKey) throw new Error("DATABASE_URL, AUTH_SECRET and LOCAL_KMS_KEY are required");
 
 const pool = new Pool({ connectionString: databaseUrl });
-const { app, auth, db, issuances, revocations, renewals, adcsDiscovery, notifications, auditForwarding, crls, enrollmentValidators, deviceCertificatePruning, sharedChallenges } = createApp({
+const { app, auth, db, issuances, revocations, renewals, adcsDiscovery, adcsIssuance, notifications, auditForwarding, crls, enrollmentValidators, deviceCertificatePruning, sharedChallenges } = createApp({
   pool,
   mailer: new ConsoleMailer(),
   clock: () => new Date(),
@@ -112,6 +112,14 @@ const ADCS_DISCOVERY_PASS_MS = 3_600_000;
 (async function discoverAdcsCas() {
   await adcsDiscovery.discoverDue().catch((err) => console.error("ADCS discovery pass failed", err));
   setTimeout(discoverAdcsCas, ADCS_DISCOVERY_PASS_MS);
+})();
+
+// Requests to ADCS CAs are given to the Agents that came online, given up on Agents that did not report in time, and
+// failed after 7 days with no Agent, once a minute; each pass waits for the one before it.
+const ADCS_REQUEST_PASS_MS = 60_000;
+(async function attendAdcsRequests() {
+  await adcsIssuance.tick().catch((err) => console.error("ADCS request pass failed", err));
+  setTimeout(attendAdcsRequests, ADCS_REQUEST_PASS_MS);
 })();
 
 if (process.env.OPERATOR_EMAIL && process.env.OPERATOR_PASSWORD) {

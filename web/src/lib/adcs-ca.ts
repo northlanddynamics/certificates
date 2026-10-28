@@ -1,8 +1,8 @@
 // What the ADCS CAs page says of a CA, its templates and the Agents it may be assigned. Pure and free of the app's imports,
 // so the server's tests can run it.
-import type { AdcsTemplate, Agent } from "./api";
+import type { AdcsCa, AdcsTemplate, Agent } from "./api";
 // The server's own EKUs and config-string pattern, from a module that imports nothing, so the console sorts templates as the API does.
-import { CLIENT_AUTHENTICATION, CONFIG_STRING, SERVER_AUTHENTICATION, purposesOf } from "../../../server/src/adcs/adcs-kinds";
+import { CLIENT_AUTHENTICATION, CONFIG_STRING, SERVER_AUTHENTICATION, purposesOf, templateKeyAlgorithms } from "../../../server/src/adcs/adcs-kinds";
 
 /** Whether `text` is a config string as the server takes one: the CA's host, a backslash, and the CA's name. */
 export const isConfigString = (text: string) => CONFIG_STRING.test(text.trim());
@@ -25,3 +25,19 @@ export const templatePurposes = (template: Pick<AdcsTemplate, "extendedKeyUsages
 
 /** The Agents an ADCS CA may be assigned, as the server allows: Windows ones that are not revoked, and those it already has. */
 export const assignableAgents = (agents: Agent[], chosen: string[]) => agents.filter((a) => chosen.includes(a.id) || (a.os === "windows" && a.status !== "revoked"));
+
+/** The ADCS CAs as the issuer pickers offer them for TLS: each with those of its templates offered for TLS (available, not hidden, with Server Authentication), and none without any. */
+export const adcsTlsChoices = (cas: AdcsCa[]) =>
+  cas.map((ca) => ({ ca, templates: ca.templates.filter((t) => ca.offered.tls.includes(t.id)) })).filter((choice) => choice.templates.length > 0);
+
+/** Those of `keyAlgorithms` the template takes, as the server judges a CSR's key against it. */
+export const keyAlgorithmsTakenBy = <K extends string>(template: AdcsTemplate, keyAlgorithms: readonly K[]) => templateKeyAlgorithms(template, keyAlgorithms);
+
+const TEMPLATE_KEY_WORDS: Record<string, string> = { rsa: "RSA", "ecdsa-p256": "ECDSA P-256", "ecdsa-p384": "ECDSA P-384", "ecdsa-p521": "ECDSA P-521" };
+
+/** What keys a template takes, in words: its algorithms, RSA with its minimum size. */
+export const templateKeysLabel = (template: Pick<AdcsTemplate, "keyAlgorithms" | "minimumKeySize">) =>
+  template.keyAlgorithms.map((a) => (a === "rsa" ? `RSA of ${template.minimumKeySize} bits or more` : (TEMPLATE_KEY_WORDS[a] ?? a))).join(", ") || "none the platform makes";
+
+/** A template in a few words, with its CA: "<template> · <ADCS CA>". */
+export const adcsTemplateTitle = (caName: string, template: Pick<AdcsTemplate, "displayName" | "name">) => `${template.displayName || template.name} · ${caName}`;

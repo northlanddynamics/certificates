@@ -50,7 +50,7 @@ Each resource's verbs, as of this writing. New ones may be added within version 
 | `member` | `role_changed`, `removed`, `provisioned` |
 | `team` | `created`, `renamed`, `deleted`, `member_added`, `member_removed` |
 | `acme_ca` | `created`, `updated`, `deleted` |
-| `adcs_ca` | `created`, `updated`, `deleted`, `discovered`, `discovery_failed`, `template_hidden`, `template_shown` |
+| `adcs_ca` | `created`, `updated`, `deleted`, `discovered`, `discovery_failed`, `template_hidden`, `template_shown`, `request_submitted` |
 | `acme_account` | `created`, `key_replaced` |
 | `dns_provider` | `created`, `changed`, `secret_replaced`, `tested`, `relay_changed` |
 | `validation_zone` | `created`, `deleted` |
@@ -97,13 +97,15 @@ Each resource's verbs, as of this writing. New ones may be added within version 
 
 A Managed Certificate issued from a Private CA is audited with the same actions as one from an ACME CA. Its `managed_certificate.created` (also when a Deployment creates it) or `managed_certificate.proposed`, `issuance.started`, `issuance.succeeded` and `issuance.failed` (once the Managed Certificate was read) have `detail.issuer`, `{ "kind": "private_ca", "issuingCaId": "..." }`, the Issuing CA it is issued from, and no `acmeCaId`; one from an ACME CA has `acmeCaId`, the ACME CA's id, in its `managed_certificate.created` or `managed_certificate.proposed`, as `acme_account.created` and `acme_account.key_replaced` have the ACME CA of the account. Its `managed_certificate.created` or `managed_certificate.proposed` also has `validityDays` when it chose a validity, and none when it gets the Issuing CA's default. A name change that gives it another validity says so in its `managed_certificate.names_changed`, `name_change.proposed` and `name_change.approved`, as `validityDays: { "from": ..., "to": ... }` (null for the Issuing CA's default); one that keeps its validity has no `validityDays`. Its `certificate.revoked` has `detail.issuer` too, and its `reason` may also be `affiliationChanged` or `privilegeWithdrawn`.
 
+A Managed Certificate issued from an ADCS CA is audited with the same actions too. Its `managed_certificate.created` or `managed_certificate.proposed`, `issuance.started` and `issuance.failed` have `detail.issuer`, `{ "kind": "adcs", "adcsCaId": "...", "templateId": "..." }`, the ADCS CA and the Certificate Template it is issued under, and no `validityDays`: the template decides. Its `issuance.succeeded` has the same with `adcsRequestId`, ADCS's ID of the request that issued the Certificate, which the Issuance's `adcs_ca.request_submitted` names too.
+
 Adding a custom ACME CA records `acme_ca.created`, with its `name`, `directoryUrl` and `tag`, and the `acme_account.created` of its account, in the same change.
 
 `acme_ca.updated` targets a custom ACME CA when an Organization Administrator changes it. Its `detail` has its `name` (the one it has now), and in `changes` a `from` and `to` for each of `name`, `tag` and `contactEmail` (its account's, which the CA is told) that changed. A change that changes nothing is not an event.
 
 `acme_ca.deleted` targets a custom ACME CA an Organization Administrator deleted, with its account and the secrets of both. Its `detail` has its `name`, `directoryUrl` and `tag`, and its `account`'s `id` and `accountUrl`. The account is left as it is at the CA.
 
-`adcs_ca.created` targets the ADCS CA (`adcs_ca`, its id) an Organization Administrator added. Its `detail` has its `name`, `configString` and the `agentIds` assigned to it. It is followed, in the same change, by the `adcs_ca.discovered` of the discovery that adding it ran; a CA that could not be discovered is not added, and is no event.
+`adcs_ca.created` targets the ADCS CA (`adcs_ca`, its id) an Organization Administrator added. Its `detail` has its `name`, `configString`, the `agentIds` assigned to it and its `permittedNames` (`{ "exact": [...], "zones": [...] }`, or null for none). It is followed, in the same change, by the `adcs_ca.discovered` of the discovery that adding it ran; a CA that could not be discovered is not added, and is no event.
 
 `adcs_ca.discovered` targets the ADCS CA an Agent discovered, when it was added, on Refresh by an Organization Administrator, or by the platform's daily discovery (no actor). Its `detail` has the CA's `name`, the `agent` that carried it out (`{ "id": ..., "hostName": ... }`), the `caCertificate` it fetched (`subject` and SHA-256 `fingerprint`), the `cdpUrls` in that certificate, and the CA's `templates` after it, by name: `available` (reported by this discovery, published, enrollable by the Agent's account and supplying the subject from the request) and `unavailable` (including those kept since a discovery stopped reporting them), and `becameAvailable` and `becameUnavailable`, those whose availability this discovery changed (a template new to the platform was not available before).
 
@@ -111,7 +113,9 @@ Adding a custom ACME CA records `acme_ca.created`, with its `name`, `directoryUr
 
 `adcs_ca.template_hidden` and `adcs_ca.template_shown` target the ADCS CA when an Organization Administrator hides one of its Certificate Templates, so that it is offered for nothing, or shows it again. Their `detail` has the CA's `name` and the `template` (`{ "id": ..., "name": ... }`).
 
-`adcs_ca.updated` targets the ADCS CA when an Organization Administrator renames it or changes its Agents. Its `detail` has its `name` (the one it has now), and in `changes` a `from` and `to` for each of `name` and `agentIds` that changed. A change that changes nothing is not an event.
+`adcs_ca.updated` targets the ADCS CA when an Organization Administrator renames it, changes its Agents or its Permitted Name Rules. Its `detail` has its `name` (the one it has now), and in `changes` a `from` and `to` for each of `name`, `agentIds` and `permittedNames` (null for none) that changed. A change that changes nothing is not an event.
+
+`adcs_ca.request_submitted` targets the Managed Certificate whose Issuance an Agent submitted to an ADCS CA, once the Agent has reported what ADCS answered. Its `detail` has the `issuanceId`, the `adcsCa` and `template` (each `{ "id": ..., "name": ... }`), the `agent` that submitted it (`{ "id": ..., "hostName": ... }`), ADCS's `adcsRequestId` and the `disposition` (`issued`). A request ADCS refused, or that no Agent could submit, is no event of its own: the Issuance's `issuance.failed` says why.
 
 `adcs_ca.deleted` targets the ADCS CA an Organization Administrator removed, with its templates. Its `detail` has its `name` and `configString`. Nothing changes at ADCS.
 

@@ -1,6 +1,9 @@
 // A Private CA's permitted name rules: the names it may issue for. An exact name permits that name alone (a wildcard
 // one, that wildcard alone); a zone permits the name and everything beneath it, wildcards included. They are normalised
-// as Managed Certificates' names are (names.ts), and a zone is never a wildcard.
+// as Managed Certificates' names are (names.ts), and a zone is never a wildcard. An ADCS CA may carry them too
+// (adcs-ca.ts), which the platform alone enforces.
+import { z } from "@hono/zod-openapi";
+import { HttpError } from "../platform/http";
 import { normalizeDomain, normalizeName, sameNames } from "../pki/names";
 
 export interface PermittedNames {
@@ -44,3 +47,21 @@ export const namesOutside = (rules: PermittedNames, names: string[]) => names.fi
  * name it permits more than the rule does, which the platform still enforces.
  */
 export const constraintNamesOf = (rules: PermittedNames) => [...new Set([...rules.exact.map((name) => (name.startsWith("*.") ? name.slice(2) : name)), ...rules.zones])];
+
+const MAX_RULES = 100;
+
+/** Permitted name rules as they are given and shown; `description` says whose. */
+export const permittedNamesField = (description: string) =>
+  z
+    .object({
+      exact: z.array(z.string().max(255)).max(MAX_RULES).default([]).openapi({ description: "Names permitted exactly: a DNS name, or a wildcard (`*.` then a DNS name), which permits that wildcard alone." }),
+      zones: z.array(z.string().max(255)).max(MAX_RULES).default([]).openapi({ description: "Zones: each permits the name and every name beneath it, wildcards included. Never a wildcard." }),
+    })
+    .openapi({ description });
+
+/** The rules given, normalised; a 400 when they cannot be rules. */
+export function permittedNamesAsked(rules: PermittedNames): PermittedNames {
+  const normal = normalizePermittedNames(rules);
+  if ("invalid" in normal) throw new HttpError(400, normal.invalid);
+  return normal.rules;
+}

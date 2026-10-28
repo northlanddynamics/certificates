@@ -120,6 +120,8 @@ export interface Harness {
   runCrlScheduler(): Promise<number>;
   /** One pass of the daily ADCS discovery at the harness's clock: discovers again the ADCS CAs last discovered a day ago or more, and returns how many. */
   runAdcsDiscovery(): Promise<number>;
+  /** One pass over the requests to ADCS CAs at the harness's clock: gives waiting ones to online Agents, gives up on Agents too slow to report, fails those 7 days without one. Returns how many it looked at. */
+  runAdcsRequests(): Promise<number>;
   /** The KMS as the platform sees it: `failing` makes every signature it is asked for fail. */
   kms: { failing: boolean };
   /** The SCEP routes' rate limits (see `ScepConfig`), which a test may lower; the platform's defaults again after reset. */
@@ -291,7 +293,7 @@ export async function createHarness(overrides: Partial<AppDeps> = {}, { database
     enrollmentValidators: { test_allow: allowing(true), test_names: allowing(false), test_renewal: allowing(true, true), test_double: validatorDouble.kind(), intune: createIntuneKind({ fetch: intune.fetch }), shared_challenge: sharedChallenge },
     ...overrides,
   };
-  const { app, auth, db, unitOfWork, issuances, revocations: certificateRevocations, renewals, adcsDiscovery, notifications, auditForwarding, crls, enrollmentValidators, deviceCertificatePruning, sharedChallenges, deviceCertificateRevocations, deviceEnrollment, scep: scepRoutes } = createApp(deps);
+  const { app, auth, db, unitOfWork, issuances, revocations: certificateRevocations, renewals, adcsDiscovery, adcsIssuance, notifications, auditForwarding, crls, enrollmentValidators, deviceCertificatePruning, sharedChallenges, deviceCertificateRevocations, deviceEnrollment, scep: scepRoutes } = createApp(deps);
   heldIssuer.reportTo(issuances, certificateRevocations);
   if (migrate) await runMigrations(pool);
   const reset = async () => {
@@ -350,6 +352,7 @@ export async function createHarness(overrides: Partial<AppDeps> = {}, { database
     runRenewalScheduler: () => renewals.tick(),
     runCrlScheduler: () => crls.tick(),
     runAdcsDiscovery: () => adcsDiscovery.discoverDue(),
+    runAdcsRequests: () => adcsIssuance.tick(),
     kms: kmsState,
     scepRateLimit: scep,
     ari,

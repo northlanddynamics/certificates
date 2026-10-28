@@ -5,5 +5,7 @@ export const ISSUER_KINDS = [
   "acme",
   /** One of the Organization's Private CAs, with no DCV. */
   "private_ca",
+  /** One of the Organization's ADCS CAs, under one of its Certificate Templates, reached only through Agents, with no DCV. */
+  "adcs",
 ] as const;
 export type IssuerKind = (typeof ISSUER_KINDS)[number];

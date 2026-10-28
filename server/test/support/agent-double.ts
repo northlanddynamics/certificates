@@ -161,8 +161,9 @@ export class TestAgent {
   private async carryOutAdcs(item: WorkItem) {
     if (!this.adcs) return this.report(item.id, { ok: false, kind: "rejected", error: "this Agent cannot reach ADCS: it does not run on Windows" });
     try {
-      if (item.type !== "adcs.discover") throw new Error(`a work item of a type this Agent does not know: ${item.type}`);
-      await this.report(item.id, { ok: true, discovery: this.adcs.discover(item.payload.configString) });
+      if (item.type === "adcs.discover") await this.report(item.id, { ok: true, discovery: this.adcs.discover(item.payload.configString) });
+      else if (item.type === "adcs.submit") await this.report(item.id, { ok: true, submission: await this.adcs.submit(item.payload.configString, item.payload.template, item.payload.csr) });
+      else throw new Error(`a work item of a type this Agent does not know: ${item.type}`);
     } catch (err) {
       if (!(err instanceof AdcsDoubleError)) throw err;
       await this.report(item.id, { ok: false, kind: err.kind, error: err.message });

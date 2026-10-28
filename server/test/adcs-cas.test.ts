@@ -114,7 +114,7 @@ describe("adding an ADCS CA", () => {
     const events = await auditOf();
     const created = events.find((e) => e.action === "adcs_ca.created")!;
     expect(created.target).toEqual({ type: "adcs_ca", id: ca.id });
-    expect(created.detail).toEqual({ name: "Corp", configString: CONFIG, agentIds: [agent.id] });
+    expect(created.detail).toEqual({ name: "Corp", configString: CONFIG, agentIds: [agent.id], permittedNames: null });
     const discovered = events.find((e) => e.action === "adcs_ca.discovered")!;
     expect(discovered.detail).toMatchObject({
       name: "Corp",

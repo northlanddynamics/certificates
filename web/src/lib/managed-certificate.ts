@@ -2,6 +2,7 @@ import { KEY_ALGORITHM_LABELS, type KeyAlgorithm } from "@/lib/csr-generator";
 import type { AcmeCa, Issuance, Issuer, ManagedCertificate } from "@/lib/api";
 import { acmeCaName } from "@/lib/acme-cas";
 import { issuingCaTitle } from "@/lib/private-ca";
+import { adcsTemplateTitle } from "@/lib/adcs-ca";
 import { expiryTone } from "@/lib/renewal-urgency";
 
 /** A status badge's variant: well, wanting attention soon, at fault, or of no concern. */
@@ -19,6 +20,8 @@ export function status(m: ManagedCertificate, now = new Date()): { label: string
   if (m.approval.status === "rejected") return { label: "Rejected", variant: "destructive" };
   // A Renewal waiting for an Agent that is away is held up until it is back.
   if (m.issuance?.awaitingKey && m.agent?.status === "offline") return { label: "Agent offline", variant: "destructive" };
+  // An ADCS CA's request waits for one of its Agents to be online to submit it.
+  if (m.issuance?.status === "running" && m.issuance.adcs?.status === "waiting") return { label: "Waiting for an Agent", variant: "warning" };
   if (m.issuance?.status === "running") return { label: m.currentCertificate ? "Renewing…" : "Issuing…", variant: "warning" };
   if (m.renewal.blocked) return { label: "Renewal blocked", variant: "destructive" };
   if (m.renewal.failing) return { label: "Renewal failing", variant: "destructive" };
@@ -39,9 +42,13 @@ export const caLabel = (ca: string) => CA_LABELS[ca] ?? ca;
 /** The Certificate Profile it was requested through, by name, and whether it is disabled. */
 export const profileLabel = (profile: NonNullable<ManagedCertificate["profile"]>) => (profile.enabled ? profile.name : `${profile.name} (disabled)`);
 
-/** Where a Managed Certificate is issued from, in a few words: an ACME CA by name (from `acmeCas`, the Organization's), or an Issuing CA with its Private CA. */
+/** Where a Managed Certificate is issued from, in a few words: an ACME CA by name (from `acmeCas`, the Organization's), an Issuing CA with its Private CA, or an ADCS CA's template with the CA. */
 export const issuerLabel = (issuer: Issuer, acmeCas: AcmeCa[] | undefined) =>
-  issuer.kind === "acme" ? acmeCaName(acmeCas, issuer.acmeCaId) : issuingCaTitle(issuer.privateCa.name, issuer.issuingCa.subject);
+  issuer.kind === "acme"
+    ? acmeCaName(acmeCas, issuer.acmeCaId)
+    : issuer.kind === "private_ca"
+      ? issuingCaTitle(issuer.privateCa.name, issuer.issuingCa.subject)
+      : adcsTemplateTitle(issuer.adcsCa.name, issuer.template);
 
 /** What an Issuance attempt was for, as a sentence starts. */
 export const ISSUANCE_KIND_WORDS: Record<Issuance["kind"], string> = {

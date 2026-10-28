@@ -62,3 +62,25 @@ export function purposesOf(t: Pick<TemplateFacts, "extendedKeyUsages">): Templat
 
 /** What the platform offers a template for: what it suits, while it is available and not hidden. */
 export const offeredFor = (t: Kept & Pick<TemplateFacts, "extendedKeyUsages"> & { hidden: boolean }): TemplatePurpose[] => (t.hidden || !isAvailable(t) ? [] : purposesOf(t));
+
+const TEMPLATE_KEY_LABELS: Record<TemplateKeyAlgorithm, string> = { rsa: "RSA", "ecdsa-p256": "ECDSA P-256", "ecdsa-p384": "ECDSA P-384", "ecdsa-p521": "ECDSA P-521" };
+
+/**
+ * Why a template refuses a key of `keyAlgorithm`, as the platform names keys (`rsa-2048`, `ecdsa-p256`, `ml-dsa-65`...),
+ * or none when it takes it. An RSA key must be of a size at least its minimum key size; an ECDSA key's curve must be one it
+ * allows, since a curve is its own size. ADCS takes no ML-DSA key.
+ */
+export function templateKeyRefusal(t: Pick<TemplateFacts, "name" | "minimumKeySize" | "keyAlgorithms">, keyAlgorithm: string): string | null {
+  const rsa = /^rsa-(\d+)$/.exec(keyAlgorithm);
+  const family = rsa ? "rsa" : keyAlgorithm;
+  if (!(t.keyAlgorithms as string[]).includes(family)) {
+    const takes = t.keyAlgorithms.map((a) => TEMPLATE_KEY_LABELS[a]).join(", ") || "no key the platform makes";
+    return `the Certificate Template ${t.name} takes keys of ${takes}, not ${keyAlgorithm}`;
+  }
+  if (rsa && Number(rsa[1]) < t.minimumKeySize) return `the Certificate Template ${t.name} takes RSA keys of at least ${t.minimumKeySize} bits, not ${keyAlgorithm}`;
+  return null;
+}
+
+/** Those of `keyAlgorithms` (as the platform names keys) the template takes. */
+export const templateKeyAlgorithms = <K extends string>(t: Pick<TemplateFacts, "name" | "minimumKeySize" | "keyAlgorithms">, keyAlgorithms: readonly K[]) =>
+  keyAlgorithms.filter((k) => templateKeyRefusal(t, k) === null);

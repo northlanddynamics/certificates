@@ -1,6 +1,6 @@
 // The server's own list of the reasons each kind of issuer takes, from a module that imports only types.
 import { ISSUING_CA_REVOCATION_REASONS, REVOCATION_REASONS_OF, type RevocationReason } from "../../../server/src/pki/revocation-reasons";
-import type { TemplatePurpose } from "../../../server/src/adcs/adcs-kinds";
+import type { TemplateKeyAlgorithm, TemplatePurpose } from "../../../server/src/adcs/adcs-kinds";
 import type { KeyAlgorithm } from "./csr-generator";
 import type { PkiPublication } from "./pki-publication";
 
@@ -94,6 +94,11 @@ export interface Issuance {
   failure: { code: string; message: string } | null;
   /** Whether it waits for the Agent that holds the key to make a new one, as a Renewal of a key an Agent holds begins. */
   awaitingKey: boolean;
+  /**
+   * For an Issuance from an ADCS CA once its request is made: `waiting` for an Agent (none assigned is online), `submitted`
+   * to the Agent that has it, or how it ended; and ADCS's ID of the request once known.
+   */
+  adcs: { status: "waiting" | "submitted" | "issued" | "failed"; agent: { id: string; hostName: string } | null; requestId: string | null } | null;
 }
 export interface Approval {
   status: "not_required" | "pending" | "approved" | "rejected";
@@ -171,7 +176,8 @@ const REVOCATION_REASON_LABELS: Record<RevocationReason, string> = {
 export const revocationReasonsOf = (kind: keyof typeof REVOCATION_REASONS_OF): [string, string][] =>
   (Object.entries(REVOCATION_REASON_LABELS) as [RevocationReason, string][]).filter(([value]) => REVOCATION_REASONS_OF[kind].includes(value));
 /** The reasons a Certificate may be revoked for, as the server takes them from its kind of issuer: a Private CA's when it came from one. */
-export const revocationReasonsFor = (certificate: Pick<Certificate, "issuingCaId">): [string, string][] => revocationReasonsOf(certificate.issuingCaId ? "private_ca" : "acme");
+export const revocationReasonsFor = (certificate: Pick<Certificate, "issuingCaId" | "adcs">): [string, string][] =>
+  revocationReasonsOf(certificate.adcs ? "adcs" : certificate.issuingCaId ? "private_ca" : "acme");
 /** The reasons a platform-made Issuing CA may be revoked for, by the name the server takes, in words. */
 export const issuingCaRevocationReasons = (): [string, string][] => ISSUING_CA_REVOCATION_REASONS.map((value) => [value, REVOCATION_REASON_LABELS[value]]);
 export const revocationReasonLabel = (reason: string) => REVOCATION_REASON_LABELS[reason as RevocationReason] ?? reason;
@@ -271,8 +277,10 @@ export interface Certificate {
   /** The ACME CA and account it was issued through; none for a Certificate from a Private CA. */
   acmeCaId: string | null;
   acmeAccountId: string | null;
-  /** The Issuing CA, of a Private CA, that signed it; none for a Certificate from an ACME CA. */
+  /** The Issuing CA, of a Private CA, that signed it; none for a Certificate from another kind of CA. */
   issuingCaId: string | null;
+  /** For a Certificate from an ADCS CA: the CA, the Certificate Template it was issued under, and ADCS's ID of its request. */
+  adcs: { adcsCaId: string; templateId: string; requestId: string } | null;
   issuedAt: string;
   /** Whether the CSR it was issued from is kept and can be downloaded. */
   hasCsr: boolean;
@@ -302,7 +310,8 @@ export interface CertificateFacts extends Certificate {
 }
 export type Issuer =
   | { kind: "acme"; acmeCaId: string }
-  | { kind: "private_ca"; issuingCa: { id: string; subject: string }; privateCa: { id: string; name: string } };
+  | { kind: "private_ca"; issuingCa: { id: string; subject: string }; privateCa: { id: string; name: string } }
+  | { kind: "adcs"; adcsCa: { id: string; name: string }; template: { id: string; name: string; displayName: string } };
 /** A certificate as an ADCS CA's chain shows it. */
 export interface CertificateSummary {
   subject: string;
@@ -321,7 +330,7 @@ export interface AdcsTemplate {
   extendedKeyUsages: string[];
   validityDays: number;
   minimumKeySize: number;
-  keyAlgorithms: string[];
+  keyAlgorithms: TemplateKeyAlgorithm[];
   managerApproval: boolean;
   subjectFromRequest: boolean;
   enrollable: boolean;
@@ -349,6 +358,8 @@ export interface AdcsCa {
   chain: CertificateSummary[];
   /** The CRL Distribution Point URLs in its CA certificate: ADCS publishes the CRL. */
   cdpUrls: string[];
+  /** Its Permitted Name Rules, which the platform enforces before anything is submitted; none while it relies on Approval alone. */
+  permittedNames: PermittedNames | null;
   templates: AdcsTemplate[];
   /** The ids of the templates offered for TLS and for devices. */
   offered: { tls: string[]; devices: string[] };
@@ -669,7 +680,7 @@ export interface ApiKey {
   createdAt: string;
 }
 /** An issuer as a request names it: an ACME CA by id, or an Issuing CA of one of the Organization's Private CAs by id. */
-export type IssuerRef = { kind: "acme"; acmeCaId: string } | { kind: "private_ca"; issuingCaId: string };
+export type IssuerRef = { kind: "acme"; acmeCaId: string } | { kind: "private_ca"; issuingCaId: string } | { kind: "adcs"; adcsCaId: string; templateId: string };
 export interface NewManagedCertificate {
   names: string[];
   keyAlgorithm: string;
@@ -687,7 +698,8 @@ export interface CertificateProfile {
   id: string;
   name: string;
   description: string;
-  issuer: IssuerRef;
+  /** An ACME CA, or an Issuing CA of one of the Organization's Private CAs: a profile names no ADCS CA yet. */
+  issuer: Exclude<IssuerRef, { kind: "adcs" }>;
   allowedKeyAlgorithms: KeyAlgorithm[];
   /** For a Private CA issuer: the validity it fixes; none for the Issuing CA's default, and always none for an ACME CA. */
   validityDays: number | null;
@@ -972,8 +984,9 @@ export const api = {
   disableCertificateProfile: (orgId: string, id: string) => call<CertificateProfile>(`/api/organizations/${orgId}/certificate-profiles/${id}/disable`, { method: "POST", body: {} }),
   enableCertificateProfile: (orgId: string, id: string) => call<CertificateProfile>(`/api/organizations/${orgId}/certificate-profiles/${id}/enable`, { method: "POST", body: {} }),
   adcsCas: (orgId: string) => call<{ items: AdcsCa[] }>(`/api/organizations/${orgId}/adcs-cas`),
-  createAdcsCa: (orgId: string, body: { name: string; configString: string; agentIds: string[] }) => call<AdcsCa>(`/api/organizations/${orgId}/adcs-cas`, { body }),
-  changeAdcsCa: (orgId: string, id: string, body: { name?: string; agentIds?: string[] }) => call<AdcsCa>(`/api/organizations/${orgId}/adcs-cas/${id}`, { method: "PATCH", body }),
+  createAdcsCa: (orgId: string, body: { name: string; configString: string; agentIds: string[]; permittedNames?: PermittedNames | null }) => call<AdcsCa>(`/api/organizations/${orgId}/adcs-cas`, { body }),
+  changeAdcsCa: (orgId: string, id: string, body: { name?: string; agentIds?: string[]; permittedNames?: PermittedNames | null }) =>
+    call<AdcsCa>(`/api/organizations/${orgId}/adcs-cas/${id}`, { method: "PATCH", body }),
   deleteAdcsCa: (orgId: string, id: string) => call<null>(`/api/organizations/${orgId}/adcs-cas/${id}`, { method: "DELETE" }),
   refreshAdcsCa: (orgId: string, id: string) => call<AdcsCa>(`/api/organizations/${orgId}/adcs-cas/${id}/refresh`, { method: "POST", body: {} }),
   setAdcsTemplateHidden: (orgId: string, id: string, templateId: string, hidden: boolean) =>

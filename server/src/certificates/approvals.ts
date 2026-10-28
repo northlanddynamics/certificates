@@ -12,6 +12,8 @@ import type { Notifications } from "../notifications/notifications";
 import { ManagedCertificate, ManagedCertificateParams, type ManagedCertificateReader } from "./managed-certificate-reader";
 import { PendingNameChange, pendingNameChangesOf, toPendingNameChange } from "./name-change";
 import type { Actor, UnitOfWork } from "../platform/unit-of-work";
+import { issuerOf } from "../issuance/issuer";
+import { adcsIssuerRefusal } from "../adcs/adcs-issuance";
 
 const QueuedNameChange = PendingNameChange.extend({
   managedCertificateId: z.string(),
@@ -89,6 +91,12 @@ export function registerApprovals(ctx: {
     if (mc.approvalStatus !== "pending") throw new HttpError(409, "this Managed Certificate is not awaiting Approval");
 
     await unitOfWork.run(actor, async (tx, change) => {
+      // An ADCS CA's template is approved as well as the names: one no longer offered for TLS, or names its CA's Permitted Name Rules no longer allow, are not.
+      const issuer = issuerOf(mc);
+      if (decision === "approved" && issuer.kind === "adcs") {
+        const refused = await adcsIssuerRefusal(tx, orgId, issuer, { names: mc.names, validityDays: null, keyAlgorithm: mc.keyAlgorithm });
+        if (refused) throw new HttpError(refused.status, refused.message);
+      }
       const decided = await tx
         .update(managedCertificate)
         .set({ approvalStatus: decision, decidedById: actor.id, decidedByEmail: actor.email, decidedAt: change.occurredAt, decisionReason: reason })
@@ -118,7 +126,8 @@ export function registerApprovals(ctx: {
       tags: ["Approval"],
       summary: "Approve a proposed Managed Certificate, which starts its Issuance",
       description: "The proposer need do nothing more. Nobody decides their own proposal, and a decision is final. " +
-        "Refused (422) while the Certificate Profile it is from is disabled, naming the profile; it stays pending, and may be rejected or approved once the profile is enabled again.",
+        "Refused (422) while the Certificate Profile it is from is disabled, naming the profile; it stays pending, and may be rejected or approved once the profile is enabled again. " +
+        "For an ADCS CA, refused (422) too while its Certificate Template is no longer offered for TLS, or the names are outside the CA's Permitted Name Rules as they are now.",
       request: {
         params: ManagedCertificateParams,
         body: { content: { "application/json": { schema: z.object({ reason: z.string().trim().max(1000).optional() }) } } },

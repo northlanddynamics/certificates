@@ -70,10 +70,28 @@ type Template struct {
 	Published bool
 }
 
+// Dispositions of a request, as the platform names them.
+const (
+	// Issued is a request ADCS issued at once.
+	Issued = "issued"
+)
+
+// Submission is what ADCS answered a request with: its disposition, its ID for the request, and for an issued one the
+// Certificate (DER).
+type Submission struct {
+	Status      string
+	RequestID   string
+	Certificate []byte
+}
+
 // Client reaches the ADCS CA a config string (`host\CA Name`) names. Every error is an *Error.
 type Client interface {
 	// Chain is the CA's certificate, then each certificate above it up to its root, DER.
 	Chain(ctx context.Context, configString string) ([][]byte, error)
 	// Discover lists the Certificate Templates the CA publishes, with their facts.
 	Discover(ctx context.Context, configString string) ([]Template, error)
+	// Submit submits a CSR (DER) under the template named, which supplies the subject from the request: the Certificate
+	// carries the CSR's subject and names. ADCS refusing it, the template being one it does not publish or the account may
+	// not enroll on included, is a Rejected error.
+	Submit(ctx context.Context, configString, template string, csr []byte) (Submission, error)
 }

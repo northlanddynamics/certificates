@@ -16,7 +16,7 @@ import { HttpError, errors, json } from "../platform/http";
 import type { UnitOfWork } from "../platform/unit-of-work";
 import type { WorkItems } from "./work-items";
 import { sha256Hex } from "../platform/crypto/sha256";
-import { DiscoveryResult } from "../adcs/adcs-work";
+import { DiscoveryResult, SubmissionResult } from "../adcs/adcs-work";
 
 export interface AgentGatewayConfig {
   /** The newest Agent version the platform knows of; older ones are flagged. */
@@ -69,7 +69,8 @@ const WorkItem = z.object({
       "and `parameters`, the Deployment's parameter values by name (an object of strings, empty when it has none), which the Agent gives the script as environment variables named `DEPLOY_PARAM_` and the name. " +
       "The Agent runs the script only if the SHA-256 of its content is the hash, and reports how it went. " +
       "`adcs.discover` asks the Agent to reach an ADCS CA with MS-WCCE, as its own account, and to report the CA's certificate chain and its Certificate Templates with their facts, as `discovery`: the payload has `configString`, the CA's `host\\CA Name`. " +
-      "An Agent that cannot reach ADCS (one not on Windows) fails it as `rejected`, saying so; one whose CA does not answer fails it as `unreachable`, and the platform asks another. " +
+      "`adcs.submit` asks the Agent to submit a CSR to an ADCS CA with MS-WCCE, as its own account, under a Certificate Template, and to report what ADCS answered as `submission`: the payload has `configString`, `template` (the template's ADCS name) and `csr` (PEM). " +
+      "An Agent that cannot reach ADCS (one not on Windows) fails an ADCS item as `rejected`, saying so; one whose CA does not answer fails it as `unreachable`, and the platform asks another; ADCS refusing the request is `rejected`, with its reason. " +
       "The Agent reports how it went to `POST /api/agent/work-items/{id}/result`.",
   }),
   payload: z.record(z.string(), z.unknown()),
@@ -94,6 +95,7 @@ const WorkResult = z.object({
     .optional()
     .openapi({ description: "For `deployment.run`: how the script went. `ok` is whether it succeeded (exit code 0)." }),
   discovery: DiscoveryResult.optional(),
+  submission: SubmissionResult.optional(),
 });
 
 export function registerAgentGateway(ctx: { app: OpenAPIHono; db: Db; unitOfWork: UnitOfWork; workItems: WorkItems; clock: () => Date; config: AgentGatewayConfig }) {

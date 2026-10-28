@@ -4,7 +4,8 @@
 // fetch its CA certificate and chain and list its Certificate Templates with their facts, and nothing is saved unless one
 // does. Discovery runs again on Refresh and once a day, and refreshes the chain and the templates' facts each time: a
 // template no longer reported is kept, as unavailable, since what names it must keep its issuer, and a discovery that
-// fails is recorded and changes nothing else. An Organization Administrator may hide a template from being offered.
+// fails is recorded and changes nothing else. An Organization Administrator may hide a template from being offered, and
+// may give the CA Permitted Name Rules, which the platform enforces before anything is submitted (adcs-issuance.ts).
 // Everyone in the Organization may see them, their templates and their chains. The platform holds no AD credential and
 // no ADCS key: each Agent acts as its own account.
 import { OpenAPIHono, createRoute, z } from "@hono/zod-openapi";
@@ -20,6 +21,8 @@ import type { Db, Tx } from "../platform/db/client";
 import { adcsCa, adcsCaAgent, adcsTemplate, agent } from "../platform/db/schema";
 import { HttpError, OrgParam, PemResponse, errors, fileNameOf, isForeignKeyViolation, isUniqueViolation, json, pemFile } from "../platform/http";
 import { fingerprintOf } from "../pki/fingerprint";
+import { permittedNamesAsked, permittedNamesField, samePermittedNames, type PermittedNames } from "../private-ca/permitted-names";
+import { adcsPermittedNamesOf } from "./adcs-issuance";
 import type { Actor, Change, UnitOfWork } from "../platform/unit-of-work";
 
 type AdcsCaRow = typeof adcsCa.$inferSelect;
@@ -52,6 +55,17 @@ const AgentIds = z
   .min(1)
   .max(MAX_ADCS_AGENTS)
   .openapi({ description: "Agents of the Organization, on domain-joined Windows hosts, that carry out the CA's operations: any one that is online does." });
+
+const PermittedNamesField = permittedNamesField(
+  "The names the platform lets the CA be asked for, normalised as names are (lower case, no trailing dot); null for none, and it relies on Approval alone. Enforced by the platform before anything is submitted, never as name constraints.",
+);
+
+/** The rules given, normalised: none for null or for no rule at all; a 400 when they cannot be rules. */
+const adcsPermittedNamesAsked = (rules: PermittedNames | null): PermittedNames | null => (!rules || rules.exact.length + rules.zones.length === 0 ? null : permittedNamesAsked(rules));
+
+const permittedNamesColumns = (rules: PermittedNames | null) => ({ permittedExactNames: rules?.exact ?? null, permittedZones: rules?.zones ?? null });
+
+const sameRules = (a: PermittedNames | null, b: PermittedNames | null) => (a === null || b === null ? a === b : samePermittedNames(a, b));
 
 const CertificateShown = z.object({
   subject: z.string(),
@@ -91,6 +105,10 @@ const AdcsCa = z.object({
   caCertificate: CertificateShown.openapi({ description: "The CA's own certificate, as its last discovery fetched it." }),
   chain: z.array(CertificateShown).openapi({ description: "The CA certificate, then each certificate above it up to its root." }),
   cdpUrls: z.array(z.string()).openapi({ description: "The CRL Distribution Point URLs in the CA certificate. ADCS publishes its own CRL; the platform serves none for it." }),
+  permittedNames: z
+    .object({ exact: z.array(z.string()), zones: z.array(z.string()) })
+    .nullable()
+    .openapi({ description: "Its Permitted Name Rules, which the platform enforces at proposal, Name Change and Issuance; none while it has none, and it relies on Approval alone." }),
   templates: z.array(Template).openapi({ description: "Its Certificate Templates, as discovery last found them, by name." }),
   offered: z
     .object({ tls: z.array(z.string()), devices: z.array(z.string()) })
@@ -145,6 +163,7 @@ const toAdcsCa = (row: AdcsCaRow, agentIds: string[], allTemplates: TemplateRow[
     caCertificate: shownCertificate(row.caCertificatePem),
     chain: [row.caCertificatePem, ...row.chainPem].map(shownCertificate),
     cdpUrls: row.cdpUrls,
+    permittedNames: adcsPermittedNamesOf(row),
     templates,
     offered: { tls: offeredForPurpose("tls"), devices: offeredForPurpose("devices") },
     discoveredAt: row.discoveredAt.toISOString(),
@@ -405,7 +424,10 @@ export function registerAdcsCas(ctx: {
         "Organization Administrators only. An online assigned Agent discovers the CA as it is added: it fetches the CA's certificate and chain and lists its Certificate Templates. " +
         "When no assigned Agent can reach the CA it is 502, and when ADCS or the Agent refuses it is 422, each with the Agent's reason; either way nothing is saved. " +
         "Each Agent must be one of the Organization's, not revoked, and on Windows (400). Names and config strings are unique within the Organization (409).",
-      request: { params: OrgParam, body: { content: { "application/json": { schema: z.object({ name: Name, configString: ConfigString, agentIds: AgentIds }) } } } },
+      request: {
+        params: OrgParam,
+        body: { content: { "application/json": { schema: z.object({ name: Name, configString: ConfigString, agentIds: AgentIds, permittedNames: PermittedNamesField.nullable().optional() }) } } },
+      },
       responses: { 201: json(AdcsCa, "Added"), ...errors(400, 401, 403, 404, 409, 422, 502) },
     }),
     async (c) => {
@@ -413,6 +435,7 @@ export function registerAdcsCas(ctx: {
       const body = c.req.valid("json");
       const actor = await requireUser(c);
       await authorize(actor, orgId, { adcsCa: ["create"] });
+      const permittedNames = adcsPermittedNamesAsked(body.permittedNames ?? null);
       await checkAgents(db, orgId, body.agentIds);
       // Refused before an Agent is asked anything, as far as can be told yet.
       const [taken] = await db.select().from(adcsCa).where(and(eq(adcsCa.organizationId, orgId), eq(adcsCa.name, body.name)));
@@ -433,6 +456,7 @@ export function registerAdcsCas(ctx: {
               caCertificatePem: discovered.caCertificatePem,
               chainPem: discovered.chainPem,
               cdpUrls: discovered.cdpUrls,
+              ...permittedNamesColumns(permittedNames),
               discoveredAt: change.occurredAt,
               createdAt: change.occurredAt,
             })
@@ -442,7 +466,7 @@ export function registerAdcsCas(ctx: {
             organizationId: orgId,
             action: "adcs_ca.created",
             target: { type: "adcs_ca", id: row!.id },
-            detail: { name: body.name, configString: body.configString, agentIds: body.agentIds },
+            detail: { name: body.name, configString: body.configString, agentIds: body.agentIds, permittedNames },
           });
           return recordDiscovery(tx, change, row!, discovered);
         });
@@ -475,12 +499,13 @@ export function registerAdcsCas(ctx: {
       method: "patch",
       path: "/api/organizations/{orgId}/adcs-cas/{id}",
       tags: ["ADCS CAs"],
-      summary: "Rename an ADCS CA or change its Agents",
+      summary: "Rename an ADCS CA, change its Agents or its Permitted Name Rules",
       description:
-        "Organization Administrators only. What is given replaces what it had; its config string is fixed. Each Agent must be one of the Organization's, not revoked, and on Windows (400).",
+        "Organization Administrators only. What is given replaces what it had; its config string is fixed. Each Agent must be one of the Organization's, not revoked, and on Windows (400). " +
+        "`permittedNames` null (or with no rule) removes its Permitted Name Rules; new rules bind proposals, Name Changes and Issuances from then on, including those of Managed Certificates already on it.",
       request: {
         params: AdcsCaParams,
-        body: { content: { "application/json": { schema: z.object({ name: Name.optional(), agentIds: AgentIds.optional() }) } } },
+        body: { content: { "application/json": { schema: z.object({ name: Name.optional(), agentIds: AgentIds.optional(), permittedNames: PermittedNamesField.nullable().optional() }) } } },
       },
       responses: { 200: json(AdcsCa, "Changed"), ...errors(400, 401, 403, 404, 409) },
     }),
@@ -489,6 +514,7 @@ export function registerAdcsCas(ctx: {
       const body = c.req.valid("json");
       const actor = await requireUser(c);
       await authorize(actor, orgId, { adcsCa: ["update"] });
+      const permittedNames = body.permittedNames === undefined ? undefined : adcsPermittedNamesAsked(body.permittedNames);
       try {
         const row = await unitOfWork.run(actor, async (tx, change) => {
           const before = await find(tx, orgId, id, true);
@@ -507,6 +533,11 @@ export function registerAdcsCas(ctx: {
             await tx.delete(adcsCaAgent).where(eq(adcsCaAgent.adcsCaId, id));
             await tx.insert(adcsCaAgent).values(sorted.map((agentId) => ({ organizationId: orgId, adcsCaId: id, agentId })));
             changes.agentIds = { from: previousAgentIds, to: sorted };
+          }
+          const previousNames = adcsPermittedNamesOf(before);
+          if (permittedNames !== undefined && !sameRules(previousNames, permittedNames)) {
+            [row] = (await tx.update(adcsCa).set(permittedNamesColumns(permittedNames)).where(eq(adcsCa.id, id)).returning()) as [AdcsCaRow];
+            changes.permittedNames = { from: previousNames, to: permittedNames };
           }
           if (Object.keys(changes).length > 0) {
             await change.audit({ organizationId: orgId, action: "adcs_ca.updated", target: { type: "adcs_ca", id }, detail: { name: row.name, changes } });

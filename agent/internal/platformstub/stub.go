@@ -66,10 +66,12 @@ type Result struct {
 	OK    bool
 	Kind  string
 	Error string
-	// CSR is what an Agent that made a key reported, Run how a Deployment Script went, and Discovery what it found at an ADCS CA.
-	CSR       string
-	Run       *Run
-	Discovery map[string]any
+	// CSR is what an Agent that made a key reported, Run how a Deployment Script went, Discovery what it found at an ADCS
+	// CA, and Submission what ADCS answered a request with.
+	CSR        string
+	Run        *Run
+	Discovery  map[string]any
+	Submission map[string]any
 }
 
 // issued is a credential the stub made, with when it ends.
@@ -483,6 +485,7 @@ func (s *Stub) report(id string, payload map[string]any) (int, any) {
 	result.Error, _ = payload["error"].(string)
 	result.CSR, _ = payload["csr"].(string)
 	result.Discovery, _ = payload["discovery"].(map[string]any)
+	result.Submission, _ = payload["submission"].(map[string]any)
 	if run, ok := payload["run"].(map[string]any); ok {
 		reported := &Run{}
 		reported.StartedAt, _ = run["startedAt"].(string)
