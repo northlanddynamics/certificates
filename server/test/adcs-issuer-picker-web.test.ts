@@ -1,9 +1,9 @@
 // The issuer picker's ADCS CAs, as the new Managed Certificate and Deployment dialogs list them (web/src/lib/adcs-ca.ts).
 // It decides nothing: the server refuses a template not offered for TLS, and a key the template does not take.
 import { describe, expect, test } from "bun:test";
-import { adcsTemplateTitle, adcsTlsChoices, templateKeysLabel } from "../../web/src/lib/adcs-ca";
+import { MANAGER_APPROVAL_NOTE, adcsRequestState, adcsTemplateTitle, adcsTlsChoices, templateApprovalLabel, templateKeysLabel } from "../../web/src/lib/adcs-ca";
 import { templateKeyAlgorithms as keyAlgorithmsTakenBy } from "../src/adcs/adcs-kinds";
-import type { AdcsCa, AdcsTemplate } from "../../web/src/lib/api";
+import type { AdcsCa, AdcsRequest, AdcsTemplate } from "../../web/src/lib/api";
 
 const template = (id: string, over: Partial<AdcsTemplate> = {}) =>
   ({ id, name: id, displayName: `${id} display`, validityDays: 365, minimumKeySize: 2048, keyAlgorithms: ["rsa", "ecdsa-p256"], ...over }) as AdcsTemplate;
@@ -29,5 +29,22 @@ describe("the ADCS CAs in the issuer picker", () => {
   test("a template is named with its CA, by its display name when it has one", () => {
     expect(adcsTemplateTitle("Corp", { name: "CorpWebServer", displayName: "Corp Web Server" })).toBe("Corp Web Server · Corp");
     expect(adcsTemplateTitle("Corp", { name: "CorpWebServer", displayName: "" })).toBe("CorpWebServer · Corp");
+  });
+
+  test("a template that needs CA manager approval says so, in the template table and the picker", () => {
+    expect(templateApprovalLabel(template("Web", { managerApproval: true }))).toBe("Needs CA manager approval");
+    expect(templateApprovalLabel(template("Web", { managerApproval: false }))).toBe("None");
+    expect(MANAGER_APPROVAL_NOTE).toContain("waits at ADCS until a CA manager issues or denies it");
+  });
+});
+
+describe("where an Issuance's request to an ADCS CA stands", () => {
+  const request = (over: Partial<AdcsRequest>): AdcsRequest => ({ status: "waiting", agent: null, requestId: null, pendingUntil: null, ...over });
+  test("waiting for an Agent, submitted through one, or pending at ADCS with its request ID", () => {
+    expect(adcsRequestState(request({}))).toBe("waiting for an Agent of the ADCS CA to be online");
+    expect(adcsRequestState(request({ status: "submitted", agent: { id: "a", hostName: "win-1" } }))).toBe("submitted to ADCS through the Agent on win-1");
+    expect(adcsRequestState(request({ status: "pending", requestId: "101", pendingUntil: "2026-01-08T00:00:00.000Z" }))).toBe("pending at ADCS for a CA manager's approval (request 101)");
+    expect(adcsRequestState(request({ status: "issued", requestId: "101" }))).toBeUndefined();
+    expect(adcsRequestState(null)).toBeUndefined();
   });
 });

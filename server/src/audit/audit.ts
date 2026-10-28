@@ -28,6 +28,8 @@ export const AUDIT_ACTIONS = [
   "adcs_ca.template_hidden",
   "adcs_ca.template_shown",
   "adcs_ca.request_submitted",
+  "adcs_ca.request_pending",
+  "adcs_ca.request_denied",
   "acme_account.created",
   "acme_account.key_replaced",
   "dns_provider.created",

@@ -22,6 +22,8 @@ export function status(m: ManagedCertificate, now = new Date()): { label: string
   if (m.issuance?.awaitingKey && m.agent?.status === "offline") return { label: "Agent offline", variant: "destructive" };
   // An ADCS CA's request waits for one of its Agents to be online to submit it.
   if (m.issuance?.status === "running" && m.issuance.adcs?.status === "waiting") return { label: "Waiting for an Agent", variant: "warning" };
+  // Or waits at ADCS for a CA manager to approve it.
+  if (m.issuance?.status === "running" && m.issuance.adcs?.status === "pending") return { label: "Pending at ADCS", variant: "warning" };
   if (m.issuance?.status === "running") return { label: m.currentCertificate ? "Renewing…" : "Issuing…", variant: "warning" };
   if (m.renewal.blocked) return { label: "Renewal blocked", variant: "destructive" };
   if (m.renewal.failing) return { label: "Renewal failing", variant: "destructive" };

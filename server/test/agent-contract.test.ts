@@ -37,12 +37,13 @@ test("the contract gives the Agent `adcs.discover` and takes its discovery: the 
   expect(discovery.properties.templates.items.properties.keyAlgorithms.items.enum).toEqual(["rsa", "ecdsa-p256", "ecdsa-p384", "ecdsa-p521"]);
 });
 
-test("the contract gives the Agent `adcs.submit` and takes what ADCS answered: issued, with its request ID and the Certificate", () => {
+test("the contract gives the Agent `adcs.submit` and `adcs.check`, and takes what ADCS answered: issued with the Certificate, pending, or denied with its message", () => {
   const contract = agentContract(h.app) as any;
   const poll = contract.paths["/api/agent/poll"].post.responses["200"].content["application/json"].schema;
   expect(JSON.stringify(poll)).toContain("`adcs.submit`");
+  expect(JSON.stringify(poll)).toContain("`adcs.check`");
   const result = contract.paths["/api/agent/work-items/{id}/result"].post.requestBody.content["application/json"].schema;
-  const submission = result.properties.submission;
-  expect(submission.required.sort()).toEqual(["certificate", "requestId", "status"]);
-  expect(submission.properties.status.enum ?? [submission.properties.status.const]).toEqual(["issued"]);
+  const answers = result.properties.submission.oneOf ?? result.properties.submission.anyOf;
+  const byStatus = Object.fromEntries(answers.map((a: any) => [a.properties.status.enum?.[0] ?? a.properties.status.const, a.required.sort()]));
+  expect(byStatus).toEqual({ issued: ["certificate", "requestId", "status"], pending: ["requestId", "status"], denied: ["message", "requestId", "status"] });
 });

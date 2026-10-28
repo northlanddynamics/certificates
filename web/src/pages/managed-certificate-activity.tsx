@@ -8,6 +8,7 @@ import { Label } from "@/components/ui/label";
 import { Skeleton } from "@/components/ui/skeleton";
 import { api, type HistoryEntry, type Issuance } from "@/lib/api";
 import { ISSUANCE_KIND_WORDS } from "@/lib/managed-certificate";
+import { adcsRequestState } from "@/lib/adcs-ca";
 import { managedCertificateKey, useManagedCertificatePage } from "@/lib/use-managed-certificate";
 import { cn } from "@/lib/utils";
 
@@ -95,15 +96,8 @@ function historyEvent(e: HistoryEntry, i: number): Event {
 function attemptEvent(a: Issuance): Event {
   const waiting = a.status === "running" && a.awaitingKey;
   const failed = a.status === "failed";
-  // An ADCS CA's request, while it runs: waiting for one of the CA's Agents to be online, or with the one that submits it.
-  const adcs = a.status === "running" ? a.adcs : null;
-  const state = waiting
-    ? "waiting for the Agent's new key"
-    : adcs?.status === "waiting"
-      ? "waiting for an Agent of the ADCS CA to be online"
-      : adcs?.status === "submitted" && adcs.agent
-        ? `submitted to ADCS through the Agent on ${adcs.agent.hostName}`
-        : ATTEMPT_WORDS[a.status];
+  // An ADCS CA's request, while it runs: waiting for one of the CA's Agents to be online, with the one that submits it, or pending at ADCS.
+  const state = waiting ? "waiting for the Agent's new key" : ((a.status === "running" && adcsRequestState(a.adcs)) || ATTEMPT_WORDS[a.status]);
   return {
     key: a.id,
     at: a.finishedAt ?? a.startedAt,
@@ -112,10 +106,13 @@ function attemptEvent(a: Issuance): Event {
     title: `${ISSUANCE_KIND_WORDS[a.kind]} ${state}`,
     by: a.requestedBy ? `asked for by ${a.requestedBy.email}` : "by the Renewal scheduler",
     failed,
-    body: a.failure && (
+    body: a.failure ? (
       <span>
         {a.failure.message} <span className="font-mono text-xs">({a.failure.code})</span>
       </span>
+    ) : (
+      a.status === "running" &&
+      a.adcs?.pendingUntil && <span>A CA manager has to issue or deny it at ADCS; unless one does by {when(a.adcs.pendingUntil)}, it fails as pending too long.</span>
     ),
     details: failed
       ? [

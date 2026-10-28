@@ -115,7 +115,8 @@ const ADCS_DISCOVERY_PASS_MS = 3_600_000;
 })();
 
 // Requests to ADCS CAs are given to the Agents that came online, given up on Agents that did not report in time, and
-// failed after 7 days with no Agent, once a minute; each pass waits for the one before it.
+// failed after 7 days with no Agent; those ADCS holds pending are checked when due, and failed 7 days after their
+// submission; once a minute, each pass waiting for the one before it.
 const ADCS_REQUEST_PASS_MS = 60_000;
 (async function attendAdcsRequests() {
   await adcsIssuance.tick().catch((err) => console.error("ADCS request pass failed", err));

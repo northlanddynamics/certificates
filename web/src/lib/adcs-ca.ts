@@ -1,6 +1,6 @@
 // What the ADCS CAs page says of a CA, its templates and the Agents it may be assigned. Pure and free of the app's imports,
 // so the server's tests can run it.
-import type { AdcsCa, AdcsTemplate, Agent } from "./api";
+import type { AdcsCa, AdcsRequest, AdcsTemplate, Agent } from "./api";
 // The server's own EKUs and config-string pattern, from a module that imports nothing, so the console sorts templates as the API does.
 import { CLIENT_AUTHENTICATION, CONFIG_STRING, SERVER_AUTHENTICATION, TEMPLATE_KEY_LABELS, purposesOf } from "../../../server/src/adcs/adcs-kinds";
 
@@ -34,6 +34,20 @@ export const adcsTlsChoices = (cas: AdcsCa[]) =>
 /** What keys a template takes, in words: its algorithms, RSA with its minimum size. */
 export const templateKeysLabel = (template: Pick<AdcsTemplate, "keyAlgorithms" | "minimumKeySize">) =>
   template.keyAlgorithms.map((a) => (a === "rsa" ? `RSA of ${template.minimumKeySize} bits or more` : TEMPLATE_KEY_LABELS[a])).join(", ") || "none the platform makes";
+
+/** Whether a request under the template waits at ADCS for a CA manager's approval, in words. */
+export const templateApprovalLabel = (template: Pick<AdcsTemplate, "managerApproval">) => (template.managerApproval ? "Needs CA manager approval" : "None");
+
+/** What a request under a template that needs CA manager approval goes through, for whoever picks it. */
+export const MANAGER_APPROVAL_NOTE = "Needs CA manager approval: each request waits at ADCS until a CA manager issues or denies it, and fails after 7 days.";
+
+/** Where an Issuance's running request to an ADCS CA stands, as a phrase; none when it is not with ADCS or its Agents. */
+export function adcsRequestState(request: AdcsRequest | null) {
+  if (request?.status === "waiting") return "waiting for an Agent of the ADCS CA to be online";
+  if (request?.status === "submitted" && request.agent) return `submitted to ADCS through the Agent on ${request.agent.hostName}`;
+  if (request?.status === "pending") return `pending at ADCS for a CA manager's approval${request.requestId ? ` (request ${request.requestId})` : ""}`;
+  return undefined;
+}
 
 /** A template in a few words, with its CA: "<template> · <ADCS CA>". */
 export const adcsTemplateTitle = (caName: string, template: Pick<AdcsTemplate, "displayName" | "name">) => `${template.displayName || template.name} · ${caName}`;

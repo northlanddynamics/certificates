@@ -50,7 +50,7 @@ Each resource's verbs, as of this writing. New ones may be added within version 
 | `member` | `role_changed`, `removed`, `provisioned` |
 | `team` | `created`, `renamed`, `deleted`, `member_added`, `member_removed` |
 | `acme_ca` | `created`, `updated`, `deleted` |
-| `adcs_ca` | `created`, `updated`, `deleted`, `discovered`, `discovery_failed`, `template_hidden`, `template_shown`, `request_submitted` |
+| `adcs_ca` | `created`, `updated`, `deleted`, `discovered`, `discovery_failed`, `template_hidden`, `template_shown`, `request_submitted`, `request_pending`, `request_denied` |
 | `acme_account` | `created`, `key_replaced` |
 | `dns_provider` | `created`, `changed`, `secret_replaced`, `tested`, `relay_changed` |
 | `validation_zone` | `created`, `deleted` |
@@ -115,7 +115,11 @@ Adding a custom ACME CA records `acme_ca.created`, with its `name`, `directoryUr
 
 `adcs_ca.updated` targets the ADCS CA when an Organization Administrator renames it, changes its Agents or its Permitted Name Rules. Its `detail` has its `name` (the one it has now), and in `changes` a `from` and `to` for each of `name`, `agentIds` and `permittedNames` (null for none) that changed. A change that changes nothing is not an event.
 
-`adcs_ca.request_submitted` targets the Managed Certificate whose Issuance an Agent submitted to an ADCS CA, once the Agent has reported what ADCS answered. Its `detail` has the `issuanceId`, the `adcsCa` and `template` (each `{ "id": ..., "name": ... }`), the `agent` that submitted it (`{ "id": ..., "hostName": ... }`), ADCS's `adcsRequestId` and the `disposition` (`issued`). A request ADCS refused, or that no Agent could submit, is no event of its own: the Issuance's `issuance.failed` says why.
+`adcs_ca.request_submitted` targets the Managed Certificate whose Issuance an Agent submitted to an ADCS CA, once the Agent has reported what ADCS answered. Its `detail` has the `issuanceId`, the `adcsCa` and `template` (each `{ "id": ..., "name": ... }`), the `agent` that submitted it (`{ "id": ..., "hostName": ... }`), ADCS's `adcsRequestId` and the `disposition`: `issued`, `pending` (held for a CA manager's approval) or `denied`. A request ADCS refused, or that no Agent could submit, is no event of its own: the Issuance's `issuance.failed` says why.
+
+`adcs_ca.request_pending` targets the Managed Certificate whose request an ADCS CA holds for a CA manager's approval, when ADCS first answers so; the Agents check it again from then on, and a check that finds it still pending is no event. Its `detail` is that of the `adcs_ca.request_submitted` before it, without `disposition`, with `pendingUntil`, when the Issuance fails as `pending_too_long` if ADCS has neither issued nor denied it (7 days after its submission). When ADCS issues it at last, the Issuance's `issuance.succeeded` names the `adcsRequestId`.
+
+`adcs_ca.request_denied` targets the Managed Certificate whose request an ADCS CA denied, at submission or when an Agent checked it while it was pending. Its `detail` is that of `adcs_ca.request_pending`, without `pendingUntil`, with the `agent` that reported the denial and ADCS's disposition `message`. The Issuance fails as `request_denied`, with the same message.
 
 `adcs_ca.deleted` targets the ADCS CA an Organization Administrator removed, with its templates. Its `detail` has its `name` and `configString`. Nothing changes at ADCS.
 

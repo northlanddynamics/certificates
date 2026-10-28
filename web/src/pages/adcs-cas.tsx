@@ -17,7 +17,7 @@ import { Input } from "@/components/ui/input";
 import { Textarea } from "@/components/ui/textarea";
 import { Table, TableBody, TableCell, TableHead, TableHeader, TableRow } from "@/components/ui/table";
 import { Tooltip, TooltipContent, TooltipTrigger } from "@/components/ui/tooltip";
-import { assignableAgents, ekuLabel, isConfigString, templatePurposes } from "@/lib/adcs-ca";
+import { assignableAgents, ekuLabel, isConfigString, templateApprovalLabel, templatePurposes } from "@/lib/adcs-ca";
 import { api, can, type AdcsCa, type Agent } from "@/lib/api";
 import { splitNames } from "@/lib/csr-names";
 import { permittedNamesLabel } from "@/lib/private-ca";
@@ -208,7 +208,7 @@ function TemplateTable({ orgId, ca, mayManage }: { orgId: string; ca: AdcsCa; ma
                 <TableCell className="whitespace-normal">
                   {t.keyAlgorithms.join(", ")}, at least {t.minimumKeySize} bits
                 </TableCell>
-                <TableCell>{t.managerApproval ? "CA manager" : "None"}</TableCell>
+                <TableCell className="whitespace-normal">{templateApprovalLabel(t)}</TableCell>
                 <TableCell>
                   {t.hidden && <Badge variant="outline">Hidden</Badge>}{" "}
                   {t.unavailableReason === null ? (

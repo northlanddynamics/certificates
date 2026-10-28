@@ -70,6 +70,8 @@ const WorkItem = z.object({
       "The Agent runs the script only if the SHA-256 of its content is the hash, and reports how it went. " +
       "`adcs.discover` asks the Agent to reach an ADCS CA with MS-WCCE, as its own account, and to report the CA's certificate chain and its Certificate Templates with their facts, as `discovery`: the payload has `configString`, the CA's `host\\CA Name`. " +
       "`adcs.submit` asks the Agent to submit a CSR to an ADCS CA with MS-WCCE, as its own account, under a Certificate Template, and to report what ADCS answered as `submission`: the payload has `configString`, `template` (the template's ADCS name) and `csr` (PEM). " +
+      "ADCS may issue it (`issued`), hold it for a CA manager's approval (`pending`) or deny it (`denied`). " +
+      "`adcs.check` asks the Agent to ask an ADCS CA again where a request it held pending stands, and to report it as `submission`, in the same shape: the payload has `configString` and `requestId`, ADCS's ID of the request. " +
       "An Agent that cannot reach ADCS (one not on Windows) fails an ADCS item as `rejected`, saying so; one whose CA does not answer fails it as `unreachable`, and the platform asks another; ADCS refusing the request is `rejected`, with its reason. " +
       "The Agent reports how it went to `POST /api/agent/work-items/{id}/result`.",
   }),

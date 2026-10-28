@@ -3,7 +3,7 @@
 import { z } from "@hono/zod-openapi";
 import { TEMPLATE_KEY_ALGORITHMS } from "./adcs-kinds";
 
-export const ADCS_WORK_TYPES = { discover: "adcs.discover", submit: "adcs.submit" } as const;
+export const ADCS_WORK_TYPES = { discover: "adcs.discover", submit: "adcs.submit", check: "adcs.check" } as const;
 
 /** The longest PEM certificate an Agent may report, and how many certificates a chain may have. */
 const MAX_CERTIFICATE_PEM = 32_768;
@@ -37,11 +37,24 @@ export const DiscoveryResult = z
   .openapi({ description: "For `adcs.discover`: what the Agent found at the ADCS CA." });
 export type DiscoveryResult = z.infer<typeof DiscoveryResult>;
 
+const RequestId = z.string().min(1).max(64).openapi({ description: "ADCS's ID of the request." });
+
 export const SubmissionResult = z
-  .object({
-    status: z.literal("issued").openapi({ description: "`issued`: ADCS issued the Certificate at once." }),
-    requestId: z.string().min(1).max(64).openapi({ description: "ADCS's ID of the request." }),
-    certificate: z.string().max(MAX_CERTIFICATE_PEM).openapi({ description: "The Certificate ADCS issued, PEM." }),
-  })
-  .openapi({ description: "For `adcs.submit`: what ADCS answered the request with." });
+  .discriminatedUnion("status", [
+    z.object({
+      status: z.literal("issued").openapi({ description: "`issued`: ADCS issued the Certificate." }),
+      requestId: RequestId,
+      certificate: z.string().max(MAX_CERTIFICATE_PEM).openapi({ description: "The Certificate ADCS issued, PEM." }),
+    }),
+    z.object({
+      status: z.literal("pending").openapi({ description: "`pending`: ADCS holds the request for a CA manager's approval; the platform asks again with `adcs.check`." }),
+      requestId: RequestId,
+    }),
+    z.object({
+      status: z.literal("denied").openapi({ description: "`denied`: ADCS denied the request, a CA manager or its policy." }),
+      requestId: RequestId,
+      message: z.string().max(1024).openapi({ description: "ADCS's disposition message: why it denied the request." }),
+    }),
+  ])
+  .openapi({ description: "For `adcs.submit` and `adcs.check`: what ADCS answered the request with, or holds it as now." });
 export type SubmissionResult = z.infer<typeof SubmissionResult>;

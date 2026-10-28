@@ -27,8 +27,19 @@ type Lab struct {
 	// SuppliedTemplate is a template set to "Supply in the request" that the account may enroll on, that takes RSA 2048
 	// keys and issues without a CA manager's approval; DirectoryTemplate one that builds its subject from Active Directory.
 	SuppliedTemplate, DirectoryTemplate string
-	// Name is a DNS name the account may have issued under SuppliedTemplate.
+	// ApprovalTemplate is a template like SuppliedTemplate that needs a CA manager's approval.
+	ApprovalTemplate string
+	// Name is a DNS name the account may have issued under SuppliedTemplate and ApprovalTemplate.
 	Name string
+	// Manager is the CA manager, who approves and denies pending requests at the CA, outside the client (on a lab host,
+	// with `certutil -resubmit` and `certutil -deny`).
+	Manager Manager
+}
+
+// Manager is what a CA manager does to a pending request.
+type Manager interface {
+	Approve(requestID string) error
+	Deny(requestID, message string) error
 }
 
 var oid = regexp.MustCompile(`^\d+(\.\d+)+$`)
@@ -127,6 +138,74 @@ func Run(t *testing.T, lab Lab) {
 		if err := certificate.CheckSignatureFrom(ca); err != nil {
 			t.Fatalf("the Certificate is not signed by the CA certificate: %v", err)
 		}
+		checked, err := lab.Client.Check(ctx, lab.ConfigString, submission.RequestID)
+		if err != nil {
+			t.Fatal(err)
+		}
+		if checked.Status != adcs.Issued || checked.RequestID != submission.RequestID || !bytes.Equal(checked.Certificate, submission.Certificate) {
+			t.Fatalf("checking an issued request got %+v, want it issued with the same Certificate", checked)
+		}
+	})
+
+	t.Run("a CSR under a template that needs a CA manager's approval is pending, and checking says so until it is issued", func(t *testing.T) {
+		csr, key := request(t, lab.Name)
+		submission, err := lab.Client.Submit(ctx, lab.ConfigString, lab.ApprovalTemplate, csr)
+		if err != nil {
+			t.Fatal(err)
+		}
+		if submission.Status != adcs.Pending || submission.RequestID == "" || submission.Certificate != nil {
+			t.Fatalf("got %+v, want it pending with a request ID and no Certificate", submission)
+		}
+		checked, err := lab.Client.Check(ctx, lab.ConfigString, submission.RequestID)
+		if err != nil {
+			t.Fatal(err)
+		}
+		if checked.Status != adcs.Pending || checked.RequestID != submission.RequestID {
+			t.Fatalf("checked before approval, got %+v, want it pending", checked)
+		}
+		if err := lab.Manager.Approve(submission.RequestID); err != nil {
+			t.Fatal(err)
+		}
+		checked, err = lab.Client.Check(ctx, lab.ConfigString, submission.RequestID)
+		if err != nil {
+			t.Fatal(err)
+		}
+		if checked.Status != adcs.Issued || checked.RequestID != submission.RequestID {
+			t.Fatalf("checked after approval, got %+v, want it issued", checked)
+		}
+		certificate, err := x509.ParseCertificate(checked.Certificate)
+		if err != nil {
+			t.Fatal(err)
+		}
+		if !key.PublicKey.Equal(certificate.PublicKey) || !slices.Equal(certificate.DNSNames, []string{lab.Name}) {
+			t.Fatalf("the Certificate is not for the CSR's key and names: %v", certificate.DNSNames)
+		}
+	})
+
+	t.Run("a pending request a CA manager denies is denied, with ADCS's disposition message", func(t *testing.T) {
+		csr, _ := request(t, lab.Name)
+		submission, err := lab.Client.Submit(ctx, lab.ConfigString, lab.ApprovalTemplate, csr)
+		if err != nil {
+			t.Fatal(err)
+		}
+		if err := lab.Manager.Deny(submission.RequestID, "not an approved host"); err != nil {
+			t.Fatal(err)
+		}
+		checked, err := lab.Client.Check(ctx, lab.ConfigString, submission.RequestID)
+		if err != nil {
+			t.Fatal(err)
+		}
+		if checked.Status != adcs.Denied || checked.RequestID != submission.RequestID || checked.Message == "" || checked.Certificate != nil {
+			t.Fatalf("got %+v, want it denied with a message and no Certificate", checked)
+		}
+	})
+
+	t.Run("a request the CA does not have is refused", func(t *testing.T) {
+		_, err := lab.Client.Check(ctx, lab.ConfigString, "999999999")
+		var e *adcs.Error
+		if !errors.As(err, &e) || e.Kind != adcs.Rejected || e.Message == "" {
+			t.Fatalf("got %v, want a rejected error", err)
+		}
 	})
 
 	t.Run("a template the CA does not publish is refused", func(t *testing.T) {
@@ -144,7 +223,8 @@ func Run(t *testing.T, lab Lab) {
 			_, chainErr := lab.Client.Chain(ctx, c.configString)
 			_, discoverErr := lab.Client.Discover(ctx, c.configString)
 			_, submitErr := lab.Client.Submit(ctx, c.configString, lab.SuppliedTemplate, csr)
-			for _, err := range []error{chainErr, discoverErr, submitErr} {
+			_, checkErr := lab.Client.Check(ctx, c.configString, "1")
+			for _, err := range []error{chainErr, discoverErr, submitErr, checkErr} {
 				var e *adcs.Error
 				if !errors.As(err, &e) || e.Kind != c.kind || e.Message == "" {
 					t.Fatalf("%s: got %v, want a %s error", c.configString, err, c.kind)

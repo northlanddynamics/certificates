@@ -228,6 +228,8 @@ func (r *runner) handle(ctx context.Context, item platform.WorkItem) error {
 		result = r.discover(ctx, item)
 	case item.Type == workSubmit:
 		result = r.submit(ctx, item)
+	case item.Type == workCheck:
+		result = r.check(ctx, item)
 	default:
 		r.cfg.Log.Warn("ignoring a work item of a type this Agent does not know", "id", item.ID, "type", item.Type)
 		return nil

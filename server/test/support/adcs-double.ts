@@ -1,11 +1,14 @@
 // An Active Directory Certificate Services CA, in memory, for Seam A: what an Agent on a domain-joined Windows host reaches
 // with MS-WCCE, as its gMSA. It holds a CA key and chain (an issuing CA under a root, with a CRL Distribution Point), the
 // templates it publishes with their facts, and which of them the gMSA may enroll on, and it issues what is submitted under a
-// template it publishes and the gMSA may enroll on, with the names the request supplies and the template's validity. The
-// Agent stand-in (agent-double.ts) answers ADCS work items from it. (The Go Agent has its own fake behind the same contract; Seam B.)
+// template it publishes and the gMSA may enroll on, with the names the request supplies and the template's validity. A
+// request under a template that needs CA manager approval, or any while `hold` is set, is held pending until a CA manager
+// approves or denies it (`approve`, `deny`); while `denyWith` is set, every request is denied at once. The Agent stand-in
+// (agent-double.ts) answers ADCS work items from it. (The Go Agent has its own fake behind the same contract; Seam B.)
 import * as x509 from "@peculiar/x509";
 import { webcrypto } from "node:crypto";
 import type { TemplateFacts } from "../../src/adcs/adcs-kinds";
+import type { SubmissionResult } from "../../src/adcs/adcs-work";
 import { CLIENT_AUTHENTICATION, SERVER_AUTHENTICATION } from "../../src/adcs/adcs-kinds";
 
 x509.cryptoProvider.set(webcrypto as unknown as Crypto);
@@ -84,6 +87,9 @@ async function makeCa(subject: string, issuer: { subject: string; keys: CryptoKe
   return { subject, keys, certificate };
 }
 
+/** What ADCS answers a request with, or holds it as, as `adcs.submit` and `adcs.check` report it. */
+type Disposition = SubmissionResult;
+
 export class AdcsDouble {
   /** The templates it publishes and knows of, with their facts. */
   templates: TemplateFacts[] = defaultTemplates();
@@ -97,6 +103,15 @@ export class AdcsDouble {
   now: () => Date = () => new Date();
   /** What it issued, in order: ADCS's request ID, the template's name and the Certificate. */
   readonly issued: { requestId: string; template: string; certificate: x509.X509Certificate }[] = [];
+  /** Holds every request it is submitted pending, for a CA manager, as a template that needs approval does. */
+  hold = false;
+  /** When set, denies every request it is submitted, with this disposition message, as its policy module might. */
+  denyWith: string | null = null;
+  /** The requests it holds pending, by ADCS's request ID, and those it denied, with why. */
+  readonly pending = new Map<string, { template: TemplateFacts; csrPem: string }>();
+  readonly denied = new Map<string, string>();
+  /** How often it was asked where a request stands. */
+  checks = 0;
   private nextRequestId = 100;
 
   private constructor(
@@ -140,16 +155,57 @@ export class AdcsDouble {
 
   /**
    * What `adcs.submit` gets: the CSR (PEM) submitted under the template, issued at once with the names the request supplies,
-   * the template's EKUs and validity (never past the CA's end), signed by its CA certificate. A template it does not publish,
+   * the template's EKUs and validity (never past the CA's end), signed by its CA certificate; held pending under a template
+   * that needs CA manager approval, or while `hold` is set; or denied while `denyWith` is. A template it does not publish,
    * or the gMSA may not enroll on, is refused, as ADCS refuses it.
    */
-  async submit(configString: string, templateName: string, csrPem: string) {
-    const now = this.now();
+  async submit(configString: string, templateName: string, csrPem: string): Promise<Disposition> {
     this.reach(configString);
     const template = this.templates.find((t) => t.name.toLowerCase() === templateName.toLowerCase());
     if (!template?.published) throw new AdcsDoubleError("rejected", `The requested certificate template is not supported by this CA: ${templateName}`);
     if (!template.enrollable) throw new AdcsDoubleError("rejected", `Access is denied: the account may not enroll on ${templateName}`);
     if (!template.subjectFromRequest) throw new AdcsDoubleError("rejected", `${templateName} builds the subject from Active Directory`);
+    const requestId = String(this.nextRequestId++);
+    if (this.denyWith !== null) {
+      this.denied.set(requestId, this.denyWith);
+      return { status: "denied", requestId, message: this.denyWith };
+    }
+    if (this.hold || template.managerApproval) {
+      this.pending.set(requestId, { template, csrPem });
+      return { status: "pending", requestId };
+    }
+    return this.issue(requestId, template, csrPem);
+  }
+
+  /** What `adcs.check` gets: where the request stands now. A request it never had is refused. */
+  async check(configString: string, requestId: string): Promise<Disposition> {
+    this.reach(configString);
+    this.checks++;
+    if (this.pending.has(requestId)) return { status: "pending", requestId };
+    const denial = this.denied.get(requestId);
+    if (denial !== undefined) return { status: "denied", requestId, message: denial };
+    const issued = this.issued.find((i) => i.requestId === requestId);
+    if (!issued) throw new AdcsDoubleError("rejected", `the CA has no request ${requestId}`);
+    return { status: "issued", requestId, certificate: issued.certificate.toString("pem") };
+  }
+
+  /** A CA manager approves the pending request: it is issued. */
+  async approve(requestId: string) {
+    const held = this.pending.get(requestId);
+    if (!held) throw new Error(`no pending request ${requestId}`);
+    this.pending.delete(requestId);
+    await this.issue(requestId, held.template, held.csrPem);
+  }
+
+  /** A CA manager denies the pending request, saying why. */
+  deny(requestId: string, message: string) {
+    if (!this.pending.delete(requestId)) throw new Error(`no pending request ${requestId}`);
+    this.denied.set(requestId, message);
+  }
+
+  /** Issues the request: the CSR's subject and names, the template's EKUs and validity (never past the CA's end). */
+  private async issue(requestId: string, template: TemplateFacts, csrPem: string): Promise<Disposition> {
+    const now = this.now();
     const csr = new x509.Pkcs10CertificateRequest(csrPem);
     // The subject alternative names the request supplies, as it has them.
     const requested = csr.getExtension("2.5.29.17");
@@ -170,8 +226,7 @@ export class AdcsDouble {
         ...(requested ? [requested] : []),
       ],
     });
-    const requestId = String(this.nextRequestId++);
     this.issued.push({ requestId, template: template.name, certificate });
-    return { status: "issued" as const, requestId, certificate: certificate.toString("pem") };
+    return { status: "issued", requestId, certificate: certificate.toString("pem") };
   }
 }
