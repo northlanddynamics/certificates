@@ -22,6 +22,10 @@ export const ISSUANCE_FAILURE_CODES = [
   "no_agent_available",
   /** An ADCS CA: the Certificate Template is no longer available (published, enrollable by the Agents' account, supplying the subject from the request). */
   "template_unavailable",
+  /** An ADCS CA denied the request: a CA manager, or its policy, said no. The message is ADCS's own. */
+  "request_denied",
+  /** An ADCS CA held the request for a CA manager's approval, and it was neither issued nor denied within 7 days of its submission. */
+  "pending_too_long",
   /** The Agent that holds the key did not make a new one: it could not, was revoked first, or sent a CSR that could not be used. */
   "agent_key_failed",
   /** The Managed Certificate was archived while the Issuance waited for its Agent's key. */

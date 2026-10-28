@@ -13,7 +13,7 @@ import { ACME_CA_TAG_LABELS, acmeCaName, useAcmeCas } from "@/lib/acme-cas";
 import { api, type AcmeCa, type IssuerRef } from "@/lib/api";
 import { KEY_ALGORITHM_LABELS, NO_KEY_ALGORITHMS } from "@/lib/csr-generator";
 import { commonNameOf, daysLabel, findIssuingCa, isValidityDays, permittedNamesLabel, validityLabel } from "@/lib/private-ca";
-import { adcsTemplateTitle, adcsTlsChoices, templateKeysLabel } from "@/lib/adcs-ca";
+import { MANAGER_APPROVAL_NOTE, adcsTemplateTitle, adcsTlsChoices, templateKeysLabel } from "@/lib/adcs-ca";
 // The server's own judgement of a key against a template, from a module that imports nothing.
 import { templateKeyAlgorithms } from "../../../server/src/adcs/adcs-kinds";
 
@@ -264,6 +264,7 @@ export function IssuerChoiceFields({ choice, idPrefix, trying }: { choice: Retur
                     <FieldDescription>
                       Validity: {daysLabel(template.validityDays)}, as the template decides. Keys: {templateKeysLabel(template)}.
                     </FieldDescription>
+                    {template.managerApproval && <FieldDescription>{MANAGER_APPROVAL_NOTE}</FieldDescription>}
                   </FieldContent>
                   <RadioGroupItem value={`adcs:${ca.id}:${template.id}`} id={`${idPrefix}-adcs-${ca.id}-${template.id}`} />
                 </Field>

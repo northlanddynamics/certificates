@@ -30,7 +30,7 @@ export interface RunReport {
 /**
  * What an Agent reports of a work item. `kind` is how a DNS Provider or ADCS operation failed, when it did; `csr` is the
  * CSR for the key it made, for `deployment.generate_key`; `run` is how the script went, for `deployment.run`; `discovery`
- * is what it found at an ADCS CA, for `adcs.discover`; `submission` what ADCS answered a request with, for `adcs.submit`.
+ * is what it found at an ADCS CA, for `adcs.discover`; `submission` what ADCS answered a request with, for `adcs.submit` and `adcs.check`.
  */
 export interface WorkResult {
   ok: boolean;

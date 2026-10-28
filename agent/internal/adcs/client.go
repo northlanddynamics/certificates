@@ -72,16 +72,21 @@ type Template struct {
 
 // Dispositions of a request, as the platform names them.
 const (
-	// Issued is a request ADCS issued at once.
+	// Issued is a request ADCS issued.
 	Issued = "issued"
+	// Pending is a request ADCS holds for a CA manager's approval: Check says later where it stands.
+	Pending = "pending"
+	// Denied is a request ADCS denied: a CA manager, or its policy, said no.
+	Denied = "denied"
 )
 
-// Submission is what ADCS answered a request with: its disposition, its ID for the request, and for an issued one the
-// Certificate (DER).
+// Submission is what ADCS answered a request with, or holds it as now: its disposition, its ID for the request, for an
+// issued one the Certificate (DER), and for a denied one ADCS's disposition message.
 type Submission struct {
 	Status      string
 	RequestID   string
 	Certificate []byte
+	Message     string
 }
 
 // Client reaches the ADCS CA a config string (`host\CA Name`) names. Every error is an *Error.
@@ -93,5 +98,9 @@ type Client interface {
 	// Submit submits a CSR (DER) under the template named, which supplies the subject from the request: the Certificate
 	// carries the CSR's subject and names. ADCS refusing it, the template being one it does not publish or the account may
 	// not enroll on included, is a Rejected error.
+	// A template that needs a CA manager's approval has it held Pending, with its request ID.
 	Submit(ctx context.Context, configString, template string, csr []byte) (Submission, error)
+	// Check says where the request of that ID stands now: still Pending, Issued with its Certificate, or Denied. A request
+	// the CA does not have is a Rejected error.
+	Check(ctx context.Context, configString, requestID string) (Submission, error)
 }

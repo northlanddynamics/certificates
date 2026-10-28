@@ -1,4 +1,4 @@
-// Seam B for ADCS CAs: the Agent is given `adcs.discover` and `adcs.submit` by a stub platform built from the contract, reaches ADCS through
+// Seam B for ADCS CAs: the Agent is given `adcs.discover`, `adcs.submit` and `adcs.check` by a stub platform built from the contract, reaches ADCS through
 // the fake ADCS client as it would through MS-WCCE, and reports what it found in the contract's shape. The platform's side of
 // this is in server/test/adcs-cas.test.ts.
 package agent_test
@@ -201,6 +201,105 @@ func TestAnAgentOffWindowsCannotSubmitAndSaysSo(t *testing.T) {
 	w, logs := relayWorld(t)
 	csr, _ := csrFor(t, "web.corp.example")
 	w.stub.Enqueue(submitItem("a", configString, "CorpWebServer", csr))
+	w.runUntilReported(1)
+	r := w.stub.Results()[0]
+	if r.OK || r.Kind != "rejected" || r.Error != "this Agent cannot reach ADCS: it does not run on Windows" {
+		t.Fatalf("got %+v", r)
+	}
+	assertNothingSecretLogged(t, w, logs)
+}
+
+func checkItem(id, configString, requestID string) platformstub.WorkItem {
+	return platformstub.WorkItem{ID: id, Type: "adcs.check", Payload: map[string]any{"configString": configString, "requestId": requestID}}
+}
+
+func TestASubmissionADCSHoldsIsPendingAndACheckReportsItUntilItIsIssued(t *testing.T) {
+	w, fake, logs := adcsWorld(t)
+	fake.HoldRequests(true)
+	csr, key := csrFor(t, "web.corp.example")
+	w.stub.Enqueue(submitItem("a", configString, "CorpWebServer", csr))
+	w.runUntilReported(1)
+	r := w.stub.Results()[0]
+	requestID, _ := r.Submission["requestId"].(string)
+	if !r.OK || r.Submission["status"] != "pending" || requestID == "" || r.Submission["certificate"] != nil {
+		t.Fatalf("got %+v, want it pending with a request ID and no Certificate", r)
+	}
+
+	w.stub.Enqueue(checkItem("b", configString, requestID))
+	w.runUntilReported(2)
+	if r := w.stub.Results()[1]; !r.OK || r.Submission["status"] != "pending" || r.Submission["requestId"] != requestID {
+		t.Fatalf("checked before approval, got %+v", r)
+	}
+
+	if err := fake.Approve(requestID); err != nil {
+		t.Fatal(err)
+	}
+	w.stub.Enqueue(checkItem("c", configString, requestID))
+	w.runUntilReported(3)
+	r = w.stub.Results()[2]
+	if !r.OK || r.Submission["status"] != "issued" || r.Submission["requestId"] != requestID {
+		t.Fatalf("checked after approval, got %+v", r)
+	}
+	block, _ := pem.Decode([]byte(r.Submission["certificate"].(string)))
+	certificate, err := x509.ParseCertificate(block.Bytes)
+	if err != nil || !key.PublicKey.Equal(certificate.PublicKey) {
+		t.Fatalf("the Certificate is not for the CSR's key: %v", err)
+	}
+	assertNothingSecretLogged(t, w, logs)
+}
+
+func TestADeniedRequestIsReportedWithADCSsMessageAtSubmissionAndWhenChecked(t *testing.T) {
+	w, fake, logs := adcsWorld(t)
+	csr, _ := csrFor(t, "web.corp.example")
+	fake.DenyRequests("Denied by Policy Module")
+	w.stub.Enqueue(submitItem("a", configString, "CorpWebServer", csr))
+	w.runUntilReported(1)
+	fake.DenyRequests("")
+	fake.HoldRequests(true)
+	w.stub.Enqueue(submitItem("b", configString, "CorpWebServer", csr))
+	w.runUntilReported(2)
+	held := w.stub.Results()[1].Submission["requestId"].(string)
+	if err := fake.Deny(held, "Denied by CORP\\pki-manager"); err != nil {
+		t.Fatal(err)
+	}
+	w.stub.Enqueue(checkItem("c", configString, held))
+	w.runUntilReported(3)
+
+	results := w.stub.Results()
+	for i, want := range map[int]string{0: "Denied by Policy Module", 2: "Denied by CORP\\pki-manager"} {
+		if r := results[i]; !r.OK || r.Submission["status"] != "denied" || r.Submission["message"] != want || r.Submission["requestId"] == "" || r.Submission["certificate"] != nil {
+			t.Fatalf("result %d: got %+v, want it denied saying %q", i, r, want)
+		}
+	}
+	assertNothingSecretLogged(t, w, logs)
+}
+
+func TestACheckADCSRefusesIsRejectedAndOneThatCannotReachItIsUnreachable(t *testing.T) {
+	w, _, logs := adcsWorld(t)
+	w.stub.Enqueue(checkItem("a", configString, "999"))
+	w.stub.Enqueue(checkItem("b", `ca99.corp.example\Corp Issuing CA`, "101"))
+	w.stub.Enqueue(checkItem("c", configString, ""))
+	w.runUntilReported(3)
+
+	results := w.stub.Results()
+	for i, want := range []struct{ kind, error string }{
+		{"rejected", "the CA has no request 999"},
+		{"unreachable", "the RPC server is unavailable at ca99.corp.example"},
+		{"rejected", "does not name an ADCS CA and a request"},
+	} {
+		if r := results[i]; r.OK || r.Kind != want.kind || !strings.Contains(r.Error, want.error) || r.Submission != nil {
+			t.Fatalf("result %d: got %+v, want %s saying %q", i, r, want.kind, want.error)
+		}
+	}
+	assertNothingSecretLogged(t, w, logs)
+}
+
+func TestAnAgentOffWindowsCannotCheckAndSaysSo(t *testing.T) {
+	if runtime.GOOS == "windows" {
+		t.Skip("the refusal is for an Agent off Windows")
+	}
+	w, logs := relayWorld(t)
+	w.stub.Enqueue(checkItem("a", configString, "101"))
 	w.runUntilReported(1)
 	r := w.stub.Results()[0]
 	if r.OK || r.Kind != "rejected" || r.Error != "this Agent cannot reach ADCS: it does not run on Windows" {

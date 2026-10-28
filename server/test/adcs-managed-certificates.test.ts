@@ -10,7 +10,7 @@ import { randomBytes } from "node:crypto";
 import { PASSWORD, createHarness, type Harness } from "./support/harness";
 import { TestAgent } from "./support/agent-double";
 import { AdcsDouble, AdcsDoubleError, defaultTemplates } from "./support/adcs-double";
-import { NO_AGENT_TIMEOUT_MS } from "../src/adcs/adcs-issuance";
+import { FIRST_CHECK_AFTER_MS, LONGEST_CHECK_WAIT_MS, NO_AGENT_TIMEOUT_MS, PENDING_TIMEOUT_MS } from "../src/adcs/adcs-issuance";
 
 setDefaultTimeout(60_000);
 
@@ -43,6 +43,11 @@ beforeEach(async () => {
   adcs.failure = null;
   adcs.templates = defaultTemplates();
   adcs.issued.length = 0;
+  adcs.hold = false;
+  adcs.denyWith = null;
+  adcs.pending.clear();
+  adcs.denied.clear();
+  adcs.checks = 0;
   current = START;
   adcs.now = () => current;
   operator = await h.createOperator("op@platform.test", PASSWORD);
@@ -484,6 +489,202 @@ describe("the Agents that submit", () => {
     const failed = (await mcOf(created.body.id)).issuance;
     expect(failed).toMatchObject({ status: "failed", failure: { code: "template_unavailable" } });
     expect(failed.failure.message).toContain("The CA no longer reports it.");
+  });
+});
+
+describe("requests pending at ADCS", () => {
+  /** At `at`, the Agents are heard from, the pass over the requests runs, and they carry out what it gave them. */
+  async function passAt(at: Date, ...agents: TestAgent[]) {
+    setNow(at);
+    for (const agent of agents) await agent.poll();
+    await h.runAdcsRequests();
+    for (const agent of agents) await agent.work();
+  }
+  const checksBy = (agent: TestAgent) => agent.executed.filter((i) => i.type === "adcs.check");
+
+  test("a request ADCS holds for a CA manager is pending at ADCS, checked again, and issued once approved", async () => {
+    // The template needs a CA manager's approval, as ADCS reports it.
+    adcs.templates = defaultTemplates().map((t) => (t.name === "CorpWebServer" ? { ...t, managerApproval: true } : t));
+    const { ca, agents, tls } = await adcsCa();
+    expect(ca.templates.find((t) => t.id === tls.id)).toMatchObject({ managerApproval: true });
+    const [agent] = agents as [TestAgent];
+    const created = await create(ca, tls);
+    await work(agent);
+
+    const [requestId] = [...adcs.pending.keys()];
+    const pending = (await mcOf(created.body.id)).issuance;
+    expect(pending).toMatchObject({ status: "running", adcs: { status: "pending", requestId, pendingUntil: after(PENDING_TIMEOUT_MS).toISOString() } });
+    expect(adcs.issued).toHaveLength(0);
+
+    // Not checked before the first wait is over; then checked, and still pending.
+    await passAt(after(FIRST_CHECK_AFTER_MS - 1000), agent);
+    expect(checksBy(agent)).toHaveLength(0);
+    await passAt(after(FIRST_CHECK_AFTER_MS), agent);
+    expect(checksBy(agent)).toHaveLength(1);
+    // The Agent is asked by ADCS's ID of the request, with nothing of the platform's own.
+    expect(checksBy(agent)[0]!.payload).toEqual({ configString: CONFIG, requestId });
+    expect((await mcOf(created.body.id)).issuance).toMatchObject({ status: "running", adcs: { status: "pending" } });
+
+    adcs.approve(requestId!);
+    await passAt(after(FIRST_CHECK_AFTER_MS * 3), agent);
+    const mc = await mcOf(created.body.id);
+    expect(mc.issuance).toMatchObject({ status: "succeeded", adcs: { status: "issued", requestId, pendingUntil: null } });
+    expect(mc.currentCertificate).toMatchObject({ names: ["web.corp.example"], adcs: { requestId } });
+    expect(mc.currentCertificate.fingerprint).toBeString();
+
+    const events = (await auditOf()).filter((e) => e.target?.id === created.body.id);
+    expect(events.find((e) => e.action === "adcs_ca.request_submitted")!.detail).toMatchObject({ adcsRequestId: requestId, disposition: "pending" });
+    expect(events.find((e) => e.action === "adcs_ca.request_pending")!.detail).toEqual({
+      issuanceId: mc.issuance.id,
+      adcsCa: { id: ca.id, name: "Corp" },
+      template: { id: tls.id, name: "CorpWebServer" },
+      agent: { id: agent.id, hostName: expect.stringMatching(/^win-/) },
+      adcsRequestId: requestId,
+      pendingUntil: after(PENDING_TIMEOUT_MS).toISOString(),
+    });
+    expect(events.filter((e) => e.action === "adcs_ca.request_pending")).toHaveLength(1);
+    expect(events.find((e) => e.action === "issuance.succeeded")!.detail.issuer.adcsRequestId).toBe(requestId);
+  });
+
+  test("it is checked on a backoff that grows to once every 15 minutes", async () => {
+    adcs.hold = true;
+    const { ca, agents, tls } = await adcsCa();
+    const [agent] = agents as [TestAgent];
+    await create(ca, tls);
+    await work(agent);
+    // Every minute for two hours, the pass runs: the checks are 1, 2, 4, 8 minutes apart, then 15.
+    const checkedAt: number[] = [];
+    for (let minute = 1; minute <= 120; minute++) {
+      const before = checksBy(agent).length;
+      await passAt(after(minute * 60_000), agent);
+      if (checksBy(agent).length > before) checkedAt.push(minute);
+    }
+    const waits = checkedAt.map((m, i) => m - (checkedAt[i - 1] ?? 0));
+    expect(waits.slice(0, 5)).toEqual([1, 2, 4, 8, 15]);
+    expect(new Set(waits.slice(4))).toEqual(new Set([LONGEST_CHECK_WAIT_MS / 60_000]));
+    expect(adcs.checks).toBe(checkedAt.length);
+  });
+
+  test("a request a CA manager denies fails the Issuance with ADCS's disposition message", async () => {
+    adcs.hold = true;
+    const { ca, agents, tls } = await adcsCa();
+    const [agent] = agents as [TestAgent];
+    const created = await create(ca, tls);
+    await work(agent);
+    const [requestId] = [...adcs.pending.keys()];
+    adcs.deny(requestId!, "Denied by CORP\\pki-manager: not an approved host");
+    await passAt(after(FIRST_CHECK_AFTER_MS), agent);
+
+    const failed = (await mcOf(created.body.id)).issuance;
+    expect(failed).toMatchObject({ status: "failed", failure: { code: "request_denied" }, adcs: { status: "failed", requestId } });
+    expect(failed.failure.message).toBe(`the ADCS CA Corp denied the request (ADCS request ${requestId}): Denied by CORP\\pki-manager: not an approved host`);
+    const denied = (await auditOf()).find((e) => e.action === "adcs_ca.request_denied")!;
+    expect(denied.target).toEqual({ type: "managed_certificate", id: created.body.id });
+    expect(denied.detail).toMatchObject({ adcsRequestId: requestId, agent: { id: agent.id }, message: "Denied by CORP\\pki-manager: not an approved host" });
+    // Nothing more is asked of ADCS for it.
+    await passAt(after(60 * 60_000), agent);
+    expect(checksBy(agent)).toHaveLength(1);
+  });
+
+  test("a request ADCS denies at submission fails at once", async () => {
+    adcs.denyWith = "The request was denied by the policy module";
+    const { ca, agents, tls } = await adcsCa();
+    const created = await create(ca, tls);
+    await work(agents[0]!);
+    const failed = (await mcOf(created.body.id)).issuance;
+    expect(failed).toMatchObject({ status: "failed", failure: { code: "request_denied" }, adcs: { requestId: [...adcs.denied.keys()][0] } });
+    expect(failed.failure.message).toContain("The request was denied by the policy module");
+    const events = await auditOf();
+    expect(events.find((e) => e.action === "adcs_ca.request_submitted")!.detail.disposition).toBe("denied");
+    expect(events.find((e) => e.action === "adcs_ca.request_denied")!.detail.message).toBe("The request was denied by the policy module");
+    expect(events.some((e) => e.action === "adcs_ca.request_pending")).toBe(false);
+  });
+
+  test("a request pending 7 days after its submission fails as pending too long, though it waited for an Agent first", async () => {
+    adcs.hold = true;
+    const { ca, agents, tls } = await adcsCa();
+    const [agent] = agents as [TestAgent];
+    // Two days with no Agent online, then submitted.
+    setNow(after(3600_000));
+    const created = await create(ca, tls);
+    await h.settleIssuances();
+    const submittedAt = after(2 * DAY_MS);
+    await passAt(submittedAt, agent);
+    expect((await mcOf(created.body.id)).issuance.adcs).toMatchObject({ status: "pending", pendingUntil: new Date(submittedAt.getTime() + PENDING_TIMEOUT_MS).toISOString() });
+
+    // Past the 7 days the Issuance first had, it still waits: ADCS holds it.
+    setNow(after(8 * DAY_MS));
+    expect(await h.timeOutIssuances()).toBe(0);
+    await passAt(new Date(submittedAt.getTime() + PENDING_TIMEOUT_MS - 60_000), agent);
+    expect((await mcOf(created.body.id)).issuance.status).toBe("running");
+    await passAt(new Date(submittedAt.getTime() + PENDING_TIMEOUT_MS), agent);
+    const failed = (await mcOf(created.body.id)).issuance;
+    expect(failed).toMatchObject({ status: "failed", failure: { code: "pending_too_long" } });
+    expect(failed.failure.message).toContain("for a CA manager's approval for 7 days");
+    // Approved too late, it is not taken.
+    adcs.approve([...adcs.pending.keys()][0]!);
+    await passAt(new Date(submittedAt.getTime() + PENDING_TIMEOUT_MS + 3600_000), agent);
+    expect((await mcOf(created.body.id)).issuance.status).toBe("failed");
+  });
+
+  test("any online assigned Agent checks it, and one that cannot reach the CA, or does not answer, passes the check on", async () => {
+    adcs.hold = true;
+    const first = await windowsAgent();
+    const second = await windowsAgent();
+    const { ca, tls } = await adcsCa([first, second]);
+    setNow(after(60_000));
+    await first.poll();
+    const created = await create(ca, tls);
+    await work(first);
+    const [requestId] = [...adcs.pending.keys()];
+
+    // The Agent that submitted it is away: the other checks it.
+    await passAt(after(2 * 60_000), second);
+    expect(checksBy(second)).toHaveLength(1);
+    expect(first.received.filter((i) => i.type === "adcs.check")).toHaveLength(0);
+
+    // The next is given to the one heard from last, which cannot reach the CA: the other is asked at once.
+    const cut = await AdcsDouble.create(CONFIG);
+    cut.failure = new AdcsDoubleError("unreachable", "the RPC server is unavailable");
+    second.adcs = cut;
+    setNow(after(4 * 60_000 - 10_000));
+    await first.poll();
+    setNow(after(4 * 60_000));
+    await second.poll();
+    await h.runAdcsRequests();
+    await second.work();
+    expect(checksBy(second)).toHaveLength(2);
+    expect((await mcOf(created.body.id)).issuance.adcs).toMatchObject({ status: "pending", agent: { id: first.id } });
+    await first.work();
+    expect(checksBy(first)).toHaveLength(1);
+
+    // A check not answered in time is asked of another.
+    adcs.approve(requestId!);
+    second.adcs = adcs;
+    first.stalled = true;
+    setNow(after(8 * 60_000 - 10_000));
+    await second.poll();
+    setNow(after(8 * 60_000));
+    await first.poll();
+    await h.runAdcsRequests();
+    await first.work();
+    expect((await mcOf(created.body.id)).issuance.adcs.agent.id).toBe(first.id);
+    await passAt(after(8 * 60_000 + SUBMIT_TIMEOUT_MS), second);
+    expect((await mcOf(created.body.id)).issuance).toMatchObject({ status: "succeeded", adcs: { status: "issued", requestId, agent: { id: second.id } } });
+  });
+
+  test("ADCS refusing to say where it stands fails the Issuance", async () => {
+    adcs.hold = true;
+    const { ca, agents, tls } = await adcsCa();
+    const [agent] = agents as [TestAgent];
+    const created = await create(ca, tls);
+    await work(agent);
+    // ADCS lost the request (it was deleted from its database).
+    adcs.pending.clear();
+    await passAt(after(FIRST_CHECK_AFTER_MS), agent);
+    const failed = (await mcOf(created.body.id)).issuance;
+    expect(failed).toMatchObject({ status: "failed", failure: { code: "ca_rejected" } });
+    expect(failed.failure.message).toContain("the CA has no request");
   });
 });
 

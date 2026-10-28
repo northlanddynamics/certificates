@@ -8,6 +8,7 @@ import (
 	"crypto/x509"
 	"crypto/x509/pkix"
 	"encoding/asn1"
+	"fmt"
 	"math/big"
 	"strconv"
 	"strings"
@@ -18,7 +19,9 @@ import (
 // Fake is an ADCS CA in memory, for tests: an issuing CA under a root, and the templates it publishes. It is reached at
 // its config string; a config string for another host is not reached, and one for another CA on its host is refused, as
 // ADCS answers them. It issues what is submitted under a template it publishes and the account may enroll on, at once,
-// with the request's subject and names and the template's validity.
+// with the request's subject and names and the template's validity; but it holds a request pending under a template that
+// needs a CA manager's approval, or any while HoldRequests is on, until Approve or Deny, and denies every request while
+// DenyRequests is set.
 type Fake struct {
 	ConfigString string
 	mu           sync.Mutex
@@ -29,6 +32,17 @@ type Fake struct {
 	nextRequest  int
 	// failure, when set, is how every operation fails, as a CA that is down or refuses the account does.
 	failure *Error
+	// hold holds every request pending; denial, when set, denies every request with it.
+	hold    bool
+	denial  string
+	pending map[string]pendingRequest
+	decided map[string]Submission
+}
+
+// pendingRequest is a request the fake holds for a CA manager.
+type pendingRequest struct {
+	template Template
+	csr      *x509.CertificateRequest
 }
 
 // CDPURL is the CRL Distribution Point the fake's CA certificate names.
@@ -75,6 +89,8 @@ func NewFake(configString string) (*Fake, error) {
 		caKey:        caKey,
 		ca:           issuing,
 		nextRequest:  100,
+		pending:      map[string]pendingRequest{},
+		decided:      map[string]Submission{},
 		templates: []Template{
 			{Name: "CorpWebServer", OID: "1.3.6.1.4.1.311.21.8.1.1", DisplayName: "Corp Web Server", ExtendedKeyUsages: []string{"1.3.6.1.5.5.7.3.1"}, ValidityDays: 365, MinimumKeySize: 2048, KeyAlgorithms: []string{"rsa", "ecdsa-p256"}, SubjectFromRequest: true, Enrollable: true, Published: true},
 			{Name: "CorpDevice", OID: "1.3.6.1.4.1.311.21.8.1.2", DisplayName: "Corp Device", ExtendedKeyUsages: []string{"1.3.6.1.5.5.7.3.2"}, ValidityDays: 730, MinimumKeySize: 2048, KeyAlgorithms: []string{"rsa"}, ManagerApproval: true, SubjectFromRequest: true, Enrollable: true, Published: true},
@@ -88,6 +104,51 @@ func (f *Fake) Fail(err *Error) {
 	f.mu.Lock()
 	defer f.mu.Unlock()
 	f.failure = err
+}
+
+// HoldRequests makes the fake hold every request submitted from now on pending, as a template that needs a CA manager's
+// approval does; false makes it issue them again.
+func (f *Fake) HoldRequests(hold bool) {
+	f.mu.Lock()
+	defer f.mu.Unlock()
+	f.hold = hold
+}
+
+// DenyRequests makes the fake deny every request submitted from now on, with the message, as its policy module might; ""
+// stops it.
+func (f *Fake) DenyRequests(message string) {
+	f.mu.Lock()
+	defer f.mu.Unlock()
+	f.denial = message
+}
+
+// Approve is a CA manager approving the pending request: it is issued.
+func (f *Fake) Approve(requestID string) error {
+	f.mu.Lock()
+	defer f.mu.Unlock()
+	held, ok := f.pending[requestID]
+	if !ok {
+		return fmt.Errorf("no pending request %s", requestID)
+	}
+	delete(f.pending, requestID)
+	issued, err := f.issue(requestID, held.template, held.csr)
+	if err != nil {
+		return err
+	}
+	f.decided[requestID] = issued
+	return nil
+}
+
+// Deny is a CA manager denying the pending request, saying why.
+func (f *Fake) Deny(requestID, message string) error {
+	f.mu.Lock()
+	defer f.mu.Unlock()
+	if _, ok := f.pending[requestID]; !ok {
+		return fmt.Errorf("no pending request %s", requestID)
+	}
+	delete(f.pending, requestID)
+	f.decided[requestID] = Submission{Status: Denied, RequestID: requestID, Message: message}
+	return nil
 }
 
 func (f *Fake) reach(configString string) error {
@@ -163,13 +224,49 @@ func (f *Fake) Submit(_ context.Context, configString, template string, csrDER [
 	if err := csr.CheckSignature(); err != nil {
 		return Submission{}, Refused("the CSR's signature does not verify: %v", err)
 	}
+	f.nextRequest++
+	requestID := strconv.Itoa(f.nextRequest)
+	switch {
+	case f.denial != "":
+		denied := Submission{Status: Denied, RequestID: requestID, Message: f.denial}
+		f.decided[requestID] = denied
+		return denied, nil
+	case f.hold || found.ManagerApproval:
+		f.pending[requestID] = pendingRequest{template: *found, csr: csr}
+		return Submission{Status: Pending, RequestID: requestID}, nil
+	}
+	issued, err := f.issue(requestID, *found, csr)
+	if err != nil {
+		return Submission{}, err
+	}
+	f.decided[requestID] = issued
+	return issued, nil
+}
+
+func (f *Fake) Check(_ context.Context, configString, requestID string) (Submission, error) {
+	if err := f.reach(configString); err != nil {
+		return Submission{}, err
+	}
+	f.mu.Lock()
+	defer f.mu.Unlock()
+	if _, ok := f.pending[requestID]; ok {
+		return Submission{Status: Pending, RequestID: requestID}, nil
+	}
+	if decided, ok := f.decided[requestID]; ok {
+		return decided, nil
+	}
+	return Submission{}, Refused("the CA has no request %s", requestID)
+}
+
+// issue issues the request (f.mu held): the CSR's subject and names, the template's EKUs and validity, never past the CA's end.
+func (f *Fake) issue(requestID string, template Template, csr *x509.CertificateRequest) (Submission, error) {
 	now := time.Now()
-	notAfter := now.Add(time.Duration(found.ValidityDays) * 24 * time.Hour)
+	notAfter := now.Add(time.Duration(template.ValidityDays) * 24 * time.Hour)
 	if notAfter.After(f.ca.NotAfter) {
 		notAfter = f.ca.NotAfter
 	}
-	ekus := make([]asn1.ObjectIdentifier, 0, len(found.ExtendedKeyUsages))
-	for _, eku := range found.ExtendedKeyUsages {
+	ekus := make([]asn1.ObjectIdentifier, 0, len(template.ExtendedKeyUsages))
+	for _, eku := range template.ExtendedKeyUsages {
 		var oid asn1.ObjectIdentifier
 		for _, part := range strings.Split(eku, ".") {
 			n, _ := strconv.Atoi(part)
@@ -191,6 +288,5 @@ func (f *Fake) Submit(_ context.Context, configString, template string, csrDER [
 	if err != nil {
 		return Submission{}, Refused("the CA could not issue: %v", err)
 	}
-	f.nextRequest++
-	return Submission{Status: Issued, RequestID: strconv.Itoa(f.nextRequest), Certificate: der}, nil
+	return Submission{Status: Issued, RequestID: requestID, Certificate: der}, nil
 }

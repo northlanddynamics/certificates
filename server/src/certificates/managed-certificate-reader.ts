@@ -47,11 +47,13 @@ export const Issuance = z.object({
     .openapi({ description: "Set once the CA answered that it would issue later: what it keeps the request by, and when the Issuance fails as `timed_out` if the CA has not answered. Kept once it has ended." }),
   adcs: z
     .object({
-      status: z.enum(["waiting", "submitted", "issued", "failed"]).openapi({
-        description: "`waiting`: waiting for an Agent, as no Agent assigned to the ADCS CA is online. `submitted`: an Agent has the request to submit. `issued` or `failed`: how the request ended.",
+      status: z.enum(["waiting", "submitted", "pending", "issued", "failed"]).openapi({
+        description:
+          "`waiting`: waiting for an Agent, as no Agent assigned to the ADCS CA is online. `submitted`: an Agent has the request to submit. `pending`: pending at ADCS, which holds it for a CA manager's approval, and an Agent checks it again from time to time. `issued` or `failed`: how the request ended.",
       }),
       agent: z.object({ id: z.string(), hostName: z.string() }).nullable().openapi({ description: "The Agent that has the request, or reported on it last." }),
       requestId: z.string().nullable().openapi({ description: "ADCS's ID of the request, once an Agent has reported it." }),
+      pendingUntil: z.string().nullable().openapi({ description: "While it is `pending`: when the Issuance fails as `pending_too_long` if ADCS has neither issued nor denied it, 7 days after its submission." }),
     })
     .nullable()
     .openapi({ description: "For an Issuance from an ADCS CA, once its request is made: where the request stands. None for other issuers." }),

@@ -164,7 +164,7 @@ type RunReport struct {
 // WorkResult is how a work item went. Kind says how a DNS Provider or ADCS operation failed: "rejected" when the service
 // answered and said no, "unreachable" when it did not answer. Error is for a person to read and holds no secret. CSR is for
 // the key the Agent made (never the key), Run is how a Deployment Script went, Discovery what it found at an ADCS CA, and
-// Submission what ADCS answered a request with.
+// Submission what ADCS answered a request with, or holds it as now.
 type WorkResult struct {
 	OK         bool        `json:"ok"`
 	Kind       string      `json:"kind,omitempty"`
@@ -175,11 +175,13 @@ type WorkResult struct {
 	Submission *Submission `json:"submission,omitempty"`
 }
 
-// Submission is what `adcs.submit` got from ADCS: its disposition ("issued"), its ID of the request, and the Certificate (PEM).
+// Submission is what `adcs.submit` or `adcs.check` got from ADCS: its disposition ("issued", "pending" or "denied"), its
+// ID of the request, for an issued one the Certificate (PEM), and for a denied one ADCS's disposition message.
 type Submission struct {
 	Status      string `json:"status"`
 	RequestID   string `json:"requestId"`
-	Certificate string `json:"certificate"`
+	Certificate string `json:"certificate,omitempty"`
+	Message     string `json:"message,omitempty"`
 }
 
 // Discovery is what `adcs.discover` found: the CA's chain (PEM, the CA certificate first, up to its root) and its templates.

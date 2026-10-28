@@ -96,9 +96,17 @@ export interface Issuance {
   awaitingKey: boolean;
   /**
    * For an Issuance from an ADCS CA once its request is made: `waiting` for an Agent (none assigned is online), `submitted`
-   * to the Agent that has it, or how it ended; and ADCS's ID of the request once known.
+   * to the Agent that has it, `pending` at ADCS for a CA manager's approval (until `pendingUntil`, when it fails as pending
+   * too long), or how it ended; and ADCS's ID of the request once known.
    */
-  adcs: { status: "waiting" | "submitted" | "issued" | "failed"; agent: { id: string; hostName: string } | null; requestId: string | null } | null;
+  adcs: AdcsRequest | null;
+}
+/** Where an Issuance's request to an ADCS CA stands. */
+export interface AdcsRequest {
+  status: "waiting" | "submitted" | "pending" | "issued" | "failed";
+  agent: { id: string; hostName: string } | null;
+  requestId: string | null;
+  pendingUntil: string | null;
 }
 export interface Approval {
   status: "not_required" | "pending" | "approved" | "rejected";

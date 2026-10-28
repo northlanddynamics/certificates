@@ -120,7 +120,11 @@ export interface Harness {
   runCrlScheduler(): Promise<number>;
   /** One pass of the daily ADCS discovery at the harness's clock: discovers again the ADCS CAs last discovered a day ago or more, and returns how many. */
   runAdcsDiscovery(): Promise<number>;
-  /** One pass over the requests to ADCS CAs at the harness's clock: gives waiting ones to online Agents, gives up on Agents too slow to report, fails those 7 days without one. Returns how many it looked at. */
+  /**
+   * One pass over the requests to ADCS CAs at the harness's clock: gives waiting ones to online Agents, gives up on Agents
+   * too slow to report, fails those 7 days without one, has pending ones checked when due and fails those pending 7 days.
+   * Returns how many it looked at.
+   */
   runAdcsRequests(): Promise<number>;
   /** The KMS as the platform sees it: `failing` makes every signature it is asked for fail. */
   kms: { failing: boolean };

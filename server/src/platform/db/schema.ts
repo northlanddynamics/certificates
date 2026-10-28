@@ -1141,17 +1141,25 @@ export const adcsRequest = pgTable(
       .notNull()
       .references(() => issuance.id),
     csr: text("csr").notNull(),
-    status: text("status").$type<"waiting" | "submitted" | "issued" | "failed">().notNull(),
-    /** The Agent that has the work item, and the item, while it is submitted; once it has ended, the Agent that reported last. */
+    /** `pending` once ADCS holds it for a CA manager's approval, until it is issued, denied, or pending too long. */
+    status: text("status").$type<"waiting" | "submitted" | "pending" | "issued" | "failed">().notNull(),
+    /**
+     * The Agent that has the work item, and the item, while it is submitted, or while a pending one is being checked;
+     * otherwise the Agent that reported last.
+     */
     agentId: uuid("agent_id"),
     workItemId: uuid("work_item_id"),
-    /** When the Agent that has it was given it. */
+    /** When the Agent that has it was given it to submit: a pending request is pending too long 7 days after it. */
     submittedAt: timestamp("submitted_at", { withTimezone: true }),
-    /** The Agents that could not reach the CA for it. */
+    /** The Agents that could not reach the CA for it: to submit it, or, while it is pending, for the check now due. */
     triedAgentIds: uuid("tried_agent_ids").array().notNull().default(sql`'{}'`),
     /** ADCS's ID of the request, once an Agent has reported it, and the Certificate (PEM) ADCS issued. */
     adcsRequestId: text("adcs_request_id"),
     certificatePem: text("certificate_pem"),
+    /** While it is pending: how many checks found it still pending (the backoff grows with them), when the next check is due, and when the Agent that has the check now was given it. */
+    checks: integer("checks").notNull().default(0),
+    nextCheckAt: timestamp("next_check_at", { withTimezone: true }),
+    checkGivenAt: timestamp("check_given_at", { withTimezone: true }),
     createdAt: timestamp("created_at", { withTimezone: true }).notNull(),
     finishedAt: timestamp("finished_at", { withTimezone: true }),
   },
@@ -1159,10 +1167,14 @@ export const adcsRequest = pgTable(
     uniqueIndex("adcs_request_issuance_unique").on(t.issuanceId),
     index("adcs_request_open_idx")
       .on(t.status)
-      .where(sql`${t.status} in ('waiting', 'submitted')`),
+      .where(sql`${t.status} in ('waiting', 'submitted', 'pending')`),
     foreignKey({ columns: [t.adcsCaId, t.organizationId], foreignColumns: [adcsCa.id, adcsCa.organizationId] }),
     foreignKey({ columns: [t.templateId, t.adcsCaId], foreignColumns: [adcsTemplate.id, adcsTemplate.adcsCaId] }),
-    check("adcs_request_status", sql`${t.status} in ('waiting', 'submitted', 'issued', 'failed')`),
+    check("adcs_request_status", sql`${t.status} in ('waiting', 'submitted', 'pending', 'issued', 'failed')`),
+    check(
+      "adcs_request_pending",
+      sql`${t.status} <> 'pending' or (${t.adcsRequestId} is not null and ${t.submittedAt} is not null and ${t.nextCheckAt} is not null and (${t.workItemId} is null or (${t.agentId} is not null and ${t.checkGivenAt} is not null)))`,
+    ),
     check("adcs_request_submitted", sql`${t.status} <> 'submitted' or (${t.agentId} is not null and ${t.workItemId} is not null and ${t.submittedAt} is not null)`),
     check("adcs_request_issued", sql`${t.status} <> 'issued' or (${t.adcsRequestId} is not null and ${t.certificatePem} is not null)`),
   ],
