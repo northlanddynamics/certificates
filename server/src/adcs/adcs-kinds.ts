@@ -5,6 +5,9 @@
 export const TEMPLATE_KEY_ALGORITHMS = ["rsa", "ecdsa-p256", "ecdsa-p384", "ecdsa-p521"] as const;
 export type TemplateKeyAlgorithm = (typeof TEMPLATE_KEY_ALGORITHMS)[number];
 
+/** A config string, as ADCS names a CA: its host, a backslash and the CA's name, `host\\CA Name`. */
+export const CONFIG_STRING = /^[^\\\s][^\\]*\\[^\\]*[^\\\s]$/;
+
 /** The EKUs that decide what a Certificate Template is offered for. */
 export const SERVER_AUTHENTICATION = "1.3.6.1.5.5.7.3.1";
 export const CLIENT_AUTHENTICATION = "1.3.6.1.5.5.7.3.2";

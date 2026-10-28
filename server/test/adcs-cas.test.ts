@@ -28,6 +28,7 @@ beforeAll(async () => {
 beforeEach(async () => {
   await h.reset();
   adcs.failure = null;
+  adcs.reportedChain = null;
   operator = await h.createOperator("op@platform.test", PASSWORD);
   acmeOrg = await h.createOrgWithAdmin(operator, "acme", "admin@acme.test");
   globex = await h.createOrgWithAdmin(operator, "globex", "admin@globex.test");
@@ -152,6 +153,23 @@ describe("adding an ADCS CA", () => {
     expect((await api(acmeOrg, "/adcs-cas")).body.items).toEqual([]);
   });
 
+  test("a chain that is not the CA certificate signed up to a root saves nothing", async () => {
+    const agent = await windowsAgent();
+    const [ca, root] = adcs.chainPem;
+    const other = await AdcsDouble.create(CONFIG);
+    for (const [chain, why] of [
+      [[root!, ca!], "is not signed by"],
+      [[ca!], "which is not a root"],
+      [[ca!, other.chainPem[1]!], "is not signed by"],
+    ] as const) {
+      adcs.reportedChain = [...chain];
+      const res = await add([agent]);
+      expect(res.status).toBe(422);
+      expect(res.body.error).toContain(why);
+    }
+    expect((await api(acmeOrg, "/adcs-cas")).body.items).toEqual([]);
+  });
+
   test("an Agent that cannot reach ADCS refuses, saying so", async () => {
     // As an Agent built for another system answers: it reports Windows here only to be assignable.
     const res = await add([await windowsAgent(acmeOrg, null)]);
@@ -236,6 +254,17 @@ describe("assigning Agents", () => {
     // Nothing changed, nothing recorded.
     expect((await api(acmeOrg, `/adcs-cas/${ca.id}`, { name: "Corp Issuing" }, "PATCH")).status).toBe(200);
     expect((await auditOf()).filter((e) => e.action === "adcs_ca.updated")).toHaveLength(1);
+  });
+
+  test("an Agent revoked since it was assigned does not stop a rename", async () => {
+    const kept = await windowsAgent();
+    const gone = await windowsAgent();
+    const ca = await added([kept, gone]);
+    await api(acmeOrg, `/agents/${gone.id}/revoke`, {}, "POST");
+    const renamed = await api(acmeOrg, `/adcs-cas/${ca.id}`, { name: "Corp Issuing", agentIds: [gone.id, kept.id] }, "PATCH");
+    expect(renamed.status).toBe(200);
+    expect(renamed.body.name).toBe("Corp Issuing");
+    expect((await api(acmeOrg, `/adcs-cas/${ca.id}`, { agentIds: [kept.id] }, "PATCH")).body.agentIds).toEqual([kept.id]);
   });
 
   test("changing the Agents is refused for an Agent that cannot be assigned", async () => {

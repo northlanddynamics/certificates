@@ -8,16 +8,15 @@ import { OpenAPIHono, createRoute, z } from "@hono/zod-openapi";
 import * as x509 from "@peculiar/x509";
 import { and, asc, eq, inArray } from "drizzle-orm";
 import type { Context } from "hono";
-import { isAvailable, type TemplateFacts } from "./adcs-kinds";
+import { CONFIG_STRING, isAvailable, type TemplateFacts } from "./adcs-kinds";
 import { ADCS_WORK_TYPES, DiscoveryResult } from "./adcs-work";
 import { NoAgentAnswered, relayToAgents } from "../agents/agent-relay";
 import type { WorkItems } from "../agents/work-items";
 import type { Authorizer } from "../tenancy/authorization";
 import type { Db, Tx } from "../platform/db/client";
 import { adcsCa, adcsCaAgent, adcsTemplate, agent } from "../platform/db/schema";
-import { HttpError, OrgParam, errors, isForeignKeyViolation, isUniqueViolation, json } from "../platform/http";
+import { HttpError, OrgParam, PemResponse, errors, fileNameOf, isForeignKeyViolation, isUniqueViolation, json, pemFile } from "../platform/http";
 import { fingerprintOf } from "../pki/fingerprint";
-import { PemResponse, fileNameOf, pemFile } from "../private-ca/private-ca";
 import type { Actor, Change, UnitOfWork } from "../platform/unit-of-work";
 
 type AdcsCaRow = typeof adcsCa.$inferSelect;
@@ -39,7 +38,7 @@ const ConfigString = z
   .string()
   .trim()
   .max(255)
-  .regex(/^[^\\\s][^\\]*\\[^\\]*[^\\\s]$/, "a config string is the CA's host, a backslash and its name: host\\CA Name")
+  .regex(CONFIG_STRING, "a config string is the CA's host, a backslash and its name: host\\CA Name")
   .openapi({ description: "How ADCS names the CA: its host, a backslash and the CA's name, such as `ca01.corp.example\\Corp Issuing CA`." });
 const AgentIds = z
   .array(z.string())
@@ -139,8 +138,11 @@ interface Discovered {
   by: { id: string; hostName: string };
 }
 
-/** What an Agent reported of a discovery, checked; a 422 that says what is wrong with it when it cannot be what the CA is. */
-function discoveredFrom(by: { id: string; hostName: string }, reported: DiscoveryResult): Discovered {
+/**
+ * What an Agent reported of a discovery, checked; a 422 that says what is wrong with it when it cannot be what the CA is:
+ * the CA certificate, then each certificate above it, each signed by the next, up to a root that signs itself.
+ */
+async function discoveredFrom(by: { id: string; hostName: string }, reported: DiscoveryResult): Promise<Discovered> {
   const refuse = (why: string) => new HttpError(422, `the Agent ${by.hostName} reported a discovery the platform cannot use: ${why}`);
   let chain: x509.X509Certificate[];
   try {
@@ -148,8 +150,12 @@ function discoveredFrom(by: { id: string; hostName: string }, reported: Discover
   } catch {
     throw refuse("a certificate of the chain cannot be read");
   }
-  const constraints = chain[0]!.getExtension(x509.BasicConstraintsExtension);
-  if (!constraints?.ca) throw refuse("its first certificate is not a CA certificate");
+  if (chain.some((certificate) => !certificate.getExtension(x509.BasicConstraintsExtension)?.ca)) throw refuse("a certificate of the chain is not a CA certificate");
+  for (const [i, certificate] of chain.entries()) {
+    const signer = chain[i + 1] ?? certificate;
+    const signed = certificate.issuer === signer.subject && (await certificate.verify({ publicKey: signer.publicKey, signatureOnly: true }).catch(() => false));
+    if (!signed) throw refuse(chain[i + 1] ? `${certificate.subject} is not signed by ${signer.subject}, which follows it` : `the chain ends at ${certificate.subject}, which is not a root`);
+  }
   const names = reported.templates.map((t) => t.name.toLowerCase());
   if (new Set(names).size !== names.length) throw refuse("a template is listed twice");
   const pems = chain.map((certificate) => certificate.toString("pem"));
@@ -394,14 +400,13 @@ export function registerAdcsCas(ctx: {
             [row] = (await tx.update(adcsCa).set({ name: body.name }).where(eq(adcsCa.id, id)).returning()) as [AdcsCaRow];
             changes.name = { from: before.name, to: body.name };
           }
-          if (body.agentIds !== undefined) {
-            await checkAgents(tx, orgId, body.agentIds);
-            const sorted = [...body.agentIds].sort();
-            if (sorted.join() !== previousAgentIds.join()) {
-              await tx.delete(adcsCaAgent).where(eq(adcsCaAgent.adcsCaId, id));
-              await tx.insert(adcsCaAgent).values(sorted.map((agentId) => ({ organizationId: orgId, adcsCaId: id, agentId })));
-              changes.agentIds = { from: previousAgentIds, to: sorted };
-            }
+          const sorted = body.agentIds && [...body.agentIds].sort();
+          // The Agents it has are not checked again: one revoked since does not stop a rename.
+          if (sorted && sorted.join() !== previousAgentIds.join()) {
+            await checkAgents(tx, orgId, sorted);
+            await tx.delete(adcsCaAgent).where(eq(adcsCaAgent.adcsCaId, id));
+            await tx.insert(adcsCaAgent).values(sorted.map((agentId) => ({ organizationId: orgId, adcsCaId: id, agentId })));
+            changes.agentIds = { from: previousAgentIds, to: sorted };
           }
           if (Object.keys(changes).length > 0) {
             await change.audit({ organizationId: orgId, action: "adcs_ca.updated", target: { type: "adcs_ca", id }, detail: { name: row.name, changes } });

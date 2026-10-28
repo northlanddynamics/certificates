@@ -88,6 +88,8 @@ export class AdcsDouble {
   templates: TemplateFacts[] = defaultTemplates();
   /** When set, every operation fails this way, as a CA that is down (`unreachable`) or refuses the gMSA (`rejected`) does. */
   failure: AdcsDoubleError | null = null;
+  /** When set, the chain discovery reports in place of its own, as a misbehaving Agent or CA might. */
+  reportedChain: string[] | null = null;
   /** How often it was asked to discover. */
   discoveries = 0;
 
@@ -122,6 +124,6 @@ export class AdcsDouble {
   discover(configString: string) {
     this.reach(configString);
     this.discoveries++;
-    return { chain: this.chainPem, templates: this.templates.map((t) => ({ ...t })) };
+    return { chain: this.reportedChain ?? this.chainPem, templates: this.templates.map((t) => ({ ...t })) };
   }
 }

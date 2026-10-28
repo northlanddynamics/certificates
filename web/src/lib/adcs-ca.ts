@@ -1,11 +1,11 @@
 // What the ADCS CAs page says of a CA, its templates and the Agents it may be assigned. Pure and free of the app's imports,
 // so the server's tests can run it.
 import type { AdcsTemplate, Agent } from "./api";
-// The server's own EKUs, from a module that imports nothing, so the console sorts templates as the API does.
-import { CLIENT_AUTHENTICATION, SERVER_AUTHENTICATION } from "../../../server/src/adcs/adcs-kinds";
+// The server's own EKUs and config-string pattern, from a module that imports nothing, so the console sorts templates as the API does.
+import { CLIENT_AUTHENTICATION, CONFIG_STRING, SERVER_AUTHENTICATION } from "../../../server/src/adcs/adcs-kinds";
 
 /** Whether `text` is a config string as the server takes one: the CA's host, a backslash, and the CA's name. */
-export const isConfigString = (text: string) => /^[^\\\s][^\\]*\\[^\\]*[^\\\s]$/.test(text.trim());
+export const isConfigString = (text: string) => CONFIG_STRING.test(text.trim());
 
 const EKU_NAMES: Record<string, string> = {
   [SERVER_AUTHENTICATION]: "Server Authentication",

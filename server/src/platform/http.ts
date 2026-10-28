@@ -42,3 +42,12 @@ export const pageOf = <T extends z.ZodType>(item: T) => z.object({ items: z.arra
 
 /** One or more of `values`, comma-separated, for a filter that matches what has any of them. */
 export const anyOf = (values: readonly string[]) => z.string().refine((s) => s.split(",").every((v) => values.includes(v)), `One or more of ${values.join(", ")}, comma-separated.`);
+
+/** A name fit for a downloaded file. */
+export const fileNameOf = (name: string, fallback: string) => name.replace(/[^A-Za-z0-9._-]+/g, "-").toLowerCase() || fallback;
+
+/** A PEM file, as a download. */
+export const pemFile = (c: any, pem: string, fileName: string) => c.body(pem, 200, { "content-type": "application/x-pem-file", "content-disposition": `attachment; filename="${fileName}"` });
+
+/** The responses of a route that downloads a PEM file. */
+export const PemResponse = (description: string) => ({ 200: { description, content: { "application/x-pem-file": { schema: z.string() } } }, ...errors(401, 403, 404) });

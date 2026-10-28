@@ -199,7 +199,7 @@ _Avoid_: job, execution, install log
 ### Automation
 
 **Agent**:
-Software an Organization installs inside its own network that acts for the platform there: generating keys, carrying out Deployments and relaying DNS Provider operations the platform cannot reach directly. Belongs to exactly one Organization and may serve many Deployments.
+Software an Organization installs inside its own network that acts for the platform there: generating keys, carrying out Deployments, relaying DNS Provider operations the platform cannot reach directly, and, on a domain-joined Windows host, carrying out an ADCS CA's operations as its own account. Belongs to exactly one Organization and may serve many Deployments.
 _Avoid_: client, daemon, connector, relay
 
 **Agent Registration**:
