@@ -134,6 +134,7 @@ describe("issuing the first Certificate", () => {
       acmeCaId: "letsencrypt-staging",
       acmeAccountId: account.id,
       issuingCaId: null,
+      adcs: null,
       issuedAt: expect.any(String),
       hasCsr: true,
       revocation: null,
