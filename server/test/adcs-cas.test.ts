@@ -7,7 +7,8 @@ import * as x509 from "@peculiar/x509";
 import { randomBytes } from "node:crypto";
 import { PASSWORD, createHarness, type Harness } from "./support/harness";
 import { TestAgent } from "./support/agent-double";
-import { AdcsDouble, AdcsDoubleError, CDP_URL } from "./support/adcs-double";
+import { AdcsDouble, AdcsDoubleError, CDP_URL, defaultTemplates } from "./support/adcs-double";
+import { CLIENT_AUTHENTICATION as CLIENT_AUTH, SERVER_AUTHENTICATION as SERVER_AUTH } from "../src/adcs/adcs-kinds";
 
 setDefaultTimeout(60_000);
 
@@ -29,6 +30,7 @@ beforeEach(async () => {
   await h.reset();
   adcs.failure = null;
   adcs.reportedChain = null;
+  adcs.templates = defaultTemplates();
   operator = await h.createOperator("op@platform.test", PASSWORD);
   acmeOrg = await h.createOrgWithAdmin(operator, "acme", "admin@acme.test");
   globex = await h.createOrgWithAdmin(operator, "globex", "admin@globex.test");
@@ -119,7 +121,7 @@ describe("adding an ADCS CA", () => {
       agent: { id: agent.id, hostName: expect.stringMatching(/^win-/) },
       caCertificate: { subject: "CN=Corp Issuing CA, DC=corp, DC=example", fingerprint: ca.caCertificate.fingerprint },
       cdpUrls: [CDP_URL],
-      templates: { available: ["CorpWebServer", "CorpDevice"], unavailable: ["Workstation"] },
+      templates: { available: ["CorpDevice", "CorpWebServer"], unavailable: ["Workstation"], becameAvailable: ["CorpDevice", "CorpWebServer"], becameUnavailable: [] },
     });
   });
 
@@ -318,5 +320,225 @@ describe("who may see and manage ADCS CAs", () => {
     expect((await api(globex, `/adcs-cas/${ca.id}`, { name: "Taken" }, "PATCH")).status).toBe(404);
     expect((await api(globex, `/adcs-cas/${ca.id}`, undefined, "DELETE")).status).toBe(404);
     expect((await api(acmeOrg, `/adcs-cas/${ca.id}`)).body.name).toBe("Corp");
+  });
+});
+
+describe("keeping templates current", () => {
+  const refresh = (ca: { id: string }, org: Org = acmeOrg) => api(org, `/adcs-cas/${ca.id}/refresh`, {}, "POST");
+  /** Refreshes while the Agents work. */
+  async function refreshed(agents: TestAgent[], ca: { id: string }) {
+    const stops = await workingAt(agents);
+    try {
+      return await refresh(ca);
+    } finally {
+      for (const stop of stops) await stop();
+    }
+  }
+  /** Starts the Agents working once each has been heard from at the harness's clock, so they are online at it. */
+  async function workingAt(agents: TestAgent[]) {
+    for (const a of agents) await a.work();
+    return agents.map((a) => a.startWorking());
+  }
+  /** Sets the harness's clock this long after where each test starts it. */
+  const later = (ms: number) => h.setNow(new Date(Date.parse("2026-01-01T00:00:00Z") + ms));
+  const byName = (ca: any) => Object.fromEntries(ca.templates.map((t: any) => [t.name, t]));
+
+  test("Refresh discovers the CA again: a template no longer reported is kept as unavailable, and is available again when it comes back", async () => {
+    const agent = await windowsAgent();
+    const ca = await added([agent]);
+    const webServer = byName(ca).CorpWebServer;
+    const original = adcs.templates;
+    adcs.templates = original.filter((t) => t.name !== "CorpWebServer");
+
+    const gone = await refreshed([agent], ca);
+    expect(gone.status).toBe(200);
+    expect(byName(gone.body).CorpWebServer).toMatchObject({ id: webServer.id, available: false, reported: false, unavailableReason: "The CA no longer reports it." });
+    expect(gone.body.templates).toHaveLength(3);
+
+    adcs.templates = original;
+    const back = await refreshed([agent], ca);
+    expect(byName(back.body).CorpWebServer).toMatchObject({ id: webServer.id, available: true, reported: true, unavailableReason: null });
+    expect(agent.executed.map((i) => i.type)).toEqual(["adcs.discover", "adcs.discover", "adcs.discover"]);
+  });
+
+  test("a template no longer published, or no longer enrollable by the gMSA, is unavailable until it is again, and says why", async () => {
+    const agent = await windowsAgent();
+    const ca = await added([agent]);
+    adcs.templates = adcs.templates.map((t) => (t.name === "CorpWebServer" ? { ...t, published: false } : t.name === "CorpDevice" ? { ...t, enrollable: false } : t));
+    const changed = byName((await refreshed([agent], ca)).body);
+    expect(changed.CorpWebServer).toMatchObject({ available: false, unavailableReason: "The CA does not publish it." });
+    expect(changed.CorpDevice).toMatchObject({ available: false, unavailableReason: "The Agents' account may not enroll on it." });
+    // Built from Active Directory: listed, not usable, with the reason.
+    expect(changed.Workstation).toMatchObject({ available: false, unavailableReason: "It builds the subject from Active Directory, not from the request." });
+
+    adcs.templates = defaultTemplates();
+    const back = byName((await refreshed([agent], ca)).body);
+    expect([back.CorpWebServer.available, back.CorpDevice.available]).toEqual([true, true]);
+  });
+
+  test("the discovery names the templates whose availability changed", async () => {
+    const agent = await windowsAgent();
+    const ca = await added([agent]);
+    adcs.templates = adcs.templates.filter((t) => t.name !== "CorpDevice").map((t) => (t.name === "Workstation" ? { ...t, subjectFromRequest: true } : t));
+    await refreshed([agent], ca);
+    const discovered = (await auditOf()).filter((e) => e.action === "adcs_ca.discovered");
+    expect(discovered).toHaveLength(2);
+    expect(discovered.at(-1)!.detail.templates).toEqual({
+      available: ["CorpWebServer", "Workstation"],
+      unavailable: ["CorpDevice"],
+      becameAvailable: ["Workstation"],
+      becameUnavailable: ["CorpDevice"],
+    });
+  });
+
+  test("a renewed CA certificate is picked up by the next discovery", async () => {
+    const agent = await windowsAgent();
+    const ca = await added([agent]);
+    await adcs.renew();
+    later(3600_000);
+    const after = (await refreshed([agent], ca)).body;
+    expect(after.caCertificate.fingerprint).not.toBe(ca.caCertificate.fingerprint);
+    expect(after.caCertificate.subject).toBe(ca.caCertificate.subject);
+    expect(after.chain.map((c: any) => c.fingerprint)).toEqual([after.caCertificate.fingerprint, ca.chain[1].fingerprint]);
+    expect(Date.parse(after.discoveredAt)).toBeGreaterThan(Date.parse(ca.discoveredAt));
+  });
+
+  test("a failed discovery is recorded and shown, and leaves the templates as they were", async () => {
+    const agent = await windowsAgent();
+    const ca = await added([agent]);
+    expect(ca.discoveryFailure).toBeNull();
+    adcs.templates = [];
+    adcs.failure = new AdcsDoubleError("rejected", "access is denied");
+    const res = await refreshed([agent], ca);
+    expect(res.status).toBe(422);
+    expect(res.body.error).toContain("access is denied");
+
+    const shown = (await api(acmeOrg, `/adcs-cas/${ca.id}`)).body;
+    expect(shown.discoveryFailure).toEqual({ at: expect.any(String), error: expect.stringContaining("access is denied") });
+    expect(shown.templates).toEqual(ca.templates);
+    expect(shown.discoveredAt).toBe(ca.discoveredAt);
+    const failed = (await auditOf()).find((e) => e.action === "adcs_ca.discovery_failed")!;
+    expect(failed).toMatchObject({ target: { type: "adcs_ca", id: ca.id }, detail: { name: "Corp", error: expect.stringContaining("access is denied") } });
+
+    // No Agent online is a failure too, and the next discovery that works clears it.
+    later(3600_000);
+    const offline = await refresh(ca);
+    expect(offline.status).toBe(502);
+    expect((await api(acmeOrg, `/adcs-cas/${ca.id}`)).body.discoveryFailure.error).toMatch(/no Agent that is assigned to this ADCS CA is online/);
+    later(2 * 3600_000);
+    adcs.failure = null;
+    adcs.templates = defaultTemplates();
+    expect((await refreshed([agent], ca)).body.discoveryFailure).toBeNull();
+  });
+
+  test("discovery runs once a day for every ADCS CA", async () => {
+    const agent = await windowsAgent();
+    const ca = await added([agent]);
+    const theirs = await windowsAgent(globex);
+    const stopTheirs = theirs.startWorking();
+    const globexCa = (await api(globex, "/adcs-cas", { name: "Globex", configString: CONFIG, agentIds: [theirs.id] })).body;
+    await stopTheirs();
+
+    // Not yet a day since each was discovered.
+    expect(await h.runAdcsDiscovery()).toBe(0);
+    adcs.templates = adcs.templates.filter((t) => t.name !== "CorpWebServer");
+    later(25 * 3600_000);
+    const stops = await workingAt([agent, theirs]);
+    try {
+      expect(await h.runAdcsDiscovery()).toBe(2);
+      expect(await h.runAdcsDiscovery()).toBe(0);
+    } finally {
+      for (const stop of stops) await stop();
+    }
+    expect(byName((await api(acmeOrg, `/adcs-cas/${ca.id}`)).body).CorpWebServer.reported).toBe(false);
+    expect(byName((await api(globex, `/adcs-cas/${globexCa.id}`)).body).CorpWebServer.reported).toBe(false);
+    const event = (await auditOf()).findLast((e) => e.action === "adcs_ca.discovered")!;
+    expect(event.detail.templates.becameUnavailable).toEqual(["CorpWebServer"]);
+  });
+
+  test("a scheduled discovery that fails is recorded, and is tried again the next day", async () => {
+    const agent = await windowsAgent();
+    const ca = await added([agent]);
+    adcs.failure = new AdcsDoubleError("unreachable", "the RPC server is unavailable");
+    later(25 * 3600_000);
+    const [stop] = await workingAt([agent]);
+    try {
+      expect(await h.runAdcsDiscovery()).toBe(1);
+      expect(await h.runAdcsDiscovery()).toBe(0);
+    } finally {
+      await stop!();
+    }
+    const shown = (await api(acmeOrg, `/adcs-cas/${ca.id}`)).body;
+    expect(shown.discoveryFailure.error).toContain("the RPC server is unavailable");
+    expect(shown.templates).toEqual(ca.templates);
+  });
+
+  test("only Organization Administrators may refresh, and only their own Organization's", async () => {
+    const ca = await added([await windowsAgent()]);
+    const cookie = await memberWithRole("member");
+    expect((await h.api(`/api/organizations/${acmeOrg.orgId}/adcs-cas/${ca.id}/refresh`, { cookie, body: {} })).status).toBe(403);
+    expect((await refresh(ca, globex)).status).toBe(404);
+  });
+});
+
+describe("offering templates", () => {
+  test("available, unhidden templates are offered for TLS with Server Authentication and for devices with Client Authentication; one with both for both", async () => {
+    adcs.templates = [
+      ...adcs.templates,
+      { ...adcs.templates[0]!, name: "CorpBoth", oid: "1.3.6.1.4.1.311.21.8.1.4", extendedKeyUsages: [SERVER_AUTH, CLIENT_AUTH] },
+      { ...adcs.templates[0]!, name: "CorpSigning", oid: "1.3.6.1.4.1.311.21.8.1.5", extendedKeyUsages: ["1.3.6.1.5.5.7.3.3"] },
+    ];
+    const ca = await added([await windowsAgent()]);
+    const idOf = (name: string) => ca.templates.find((t: any) => t.name === name).id;
+      expect(ca.offered).toEqual({ tls: [idOf("CorpBoth"), idOf("CorpWebServer")], devices: [idOf("CorpBoth"), idOf("CorpDevice")] });
+      expect(ca.templates.map((t: any) => [t.name, t.offeredFor])).toEqual([
+        ["CorpBoth", ["tls", "devices"]],
+        ["CorpDevice", ["devices"]],
+        ["CorpSigning", []],
+        ["CorpWebServer", ["tls"]],
+        // Unavailable, so offered for nothing.
+        ["Workstation", []],
+      ]);
+  });
+
+  test("an Organization Administrator hides a template, so it is offered for nothing, and shows it again; each is an Audit Event", async () => {
+    const agent = await windowsAgent();
+    const ca = await added([agent]);
+    const template = ca.templates.find((t: any) => t.name === "CorpWebServer");
+    const path = `/adcs-cas/${ca.id}/templates/${template.id}`;
+
+    const hidden = await api(acmeOrg, `${path}/hide`, {}, "POST");
+    expect(hidden.status).toBe(200);
+    expect(hidden.body.templates.find((t: any) => t.id === template.id)).toMatchObject({ hidden: true, available: true, offeredFor: [] });
+    expect(hidden.body.offered.tls).toEqual([]);
+    expect((await api(acmeOrg, `${path}/hide`, {}, "POST")).status).toBe(409);
+
+    // Hidden stays hidden through a discovery.
+    const stop = agent.startWorking();
+    try {
+      expect((await api(acmeOrg, `/adcs-cas/${ca.id}/refresh`, {}, "POST")).body.offered.tls).toEqual([]);
+    } finally {
+      await stop();
+    }
+
+    const shown = await api(acmeOrg, `${path}/show`, {}, "POST");
+    expect(shown.status).toBe(200);
+    expect(shown.body.offered.tls).toEqual([template.id]);
+    expect((await api(acmeOrg, `${path}/show`, {}, "POST")).status).toBe(409);
+
+    const events = await auditOf();
+    for (const action of ["adcs_ca.template_hidden", "adcs_ca.template_shown"]) {
+      expect(events.find((e) => e.action === action)).toMatchObject({ target: { type: "adcs_ca", id: ca.id }, detail: { name: "Corp", template: { id: template.id, name: "CorpWebServer" } } });
+    }
+  });
+
+  test("only Organization Administrators may hide or show, and only their own Organization's templates", async () => {
+    const ca = await added([await windowsAgent()]);
+    const template = ca.templates[0];
+    const cookie = await memberWithRole("member");
+    expect((await h.api(`/api/organizations/${acmeOrg.orgId}/adcs-cas/${ca.id}/templates/${template.id}/hide`, { cookie, body: {} })).status).toBe(403);
+    expect((await api(globex, `/adcs-cas/${ca.id}/templates/${template.id}/hide`, {}, "POST")).status).toBe(404);
+    expect((await api(acmeOrg, `/adcs-cas/${ca.id}/templates/${crypto.randomUUID()}/hide`, {}, "POST")).status).toBe(404);
+    expect((await api(acmeOrg, `/adcs-cas/${ca.id}/templates/not-an-id/hide`, {}, "POST")).status).toBe(404);
   });
 });

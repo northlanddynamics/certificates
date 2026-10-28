@@ -332,7 +332,7 @@ export function createApp(deps: AppDeps) {
   const crls = createCrls({ db, unitOfWork, kms: deps.kms, clock });
   registerPrivateCas({ app, db, requireUser, authorize, unitOfWork, kms: deps.kms, clock, crls, pkiBaseURL, pkiBaseURLConfigured: deps.pkiBaseURL !== undefined });
   registerPkiRoutes({ app, db });
-  registerAdcsCas({ app, db, requireUser, authorize, unitOfWork, workItems, clock, offlineAfterSeconds: agentGateway.offlineAfterSeconds, config: { ...DEFAULT_ADCS_RELAY, ...deps.adcsRelay } });
+  const adcsDiscovery = registerAdcsCas({ app, db, requireUser, authorize, unitOfWork, workItems, clock, offlineAfterSeconds: agentGateway.offlineAfterSeconds, config: { ...DEFAULT_ADCS_RELAY, ...deps.adcsRelay } });
   const privateCas = createPrivateCas({ kms: deps.kms, clock, crls, pkiBaseURL });
   const validatorKinds = deps.enrollmentValidators ?? ENROLLMENT_VALIDATOR_KINDS;
   const platformIssuers = createIssuers({ acme: deps.certificateAuthority, acmeCas, secrets, privateCas });
@@ -415,5 +415,5 @@ export function createApp(deps: AppDeps) {
     }),
   );
 
-  return { app, auth, db, unitOfWork, issuances, renewals, notifications, auditForwarding, crls, enrollmentValidators, deviceCertificatePruning, sharedChallenges, deviceCertificateRevocations: revocations, revocations: certificateRevocations, deviceEnrollment, scep };
+  return { app, auth, db, unitOfWork, issuances, renewals, adcsDiscovery, notifications, auditForwarding, crls, enrollmentValidators, deviceCertificatePruning, sharedChallenges, deviceCertificateRevocations: revocations, revocations: certificateRevocations, deviceEnrollment, scep };
 }

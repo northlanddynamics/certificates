@@ -1,11 +1,12 @@
-import { useQuery } from "@tanstack/react-query";
+import { useMutation, useQuery, useQueryClient } from "@tanstack/react-query";
 import { useParams } from "@tanstack/react-router";
-import { ClipboardCheckIcon, DownloadIcon, NetworkIcon, PlusIcon, ServerIcon } from "lucide-react";
+import { ClipboardCheckIcon, DownloadIcon, NetworkIcon, PlusIcon, RotateCwIcon, ServerIcon } from "lucide-react";
 import { useState, type ReactNode } from "react";
 import { ConfirmDialog } from "@/components/confirm-dialog";
 import { ActionLabel, PageHeader } from "@/components/page-header";
 import { SteppedForm, STEPPED_DIALOG, type Missing } from "@/components/stepped-form";
 import { SummaryRows } from "@/components/summary-rows";
+import { Alert, AlertDescription, AlertTitle } from "@/components/ui/alert";
 import { Badge } from "@/components/ui/badge";
 import { Button } from "@/components/ui/button";
 import { Card, CardAction, CardContent, CardDescription, CardHeader, CardTitle } from "@/components/ui/card";
@@ -15,7 +16,7 @@ import { Field, FieldDescription, FieldError, FieldGroup, FieldLabel, FieldLegen
 import { Input } from "@/components/ui/input";
 import { Table, TableBody, TableCell, TableHead, TableHeader, TableRow } from "@/components/ui/table";
 import { Tooltip, TooltipContent, TooltipTrigger } from "@/components/ui/tooltip";
-import { assignableAgents, ekuLabel, isConfigString, templatePurposes, unavailableReason } from "@/lib/adcs-ca";
+import { assignableAgents, ekuLabel, isConfigString, templatePurposes } from "@/lib/adcs-ca";
 import { api, can, type AdcsCa, type Agent } from "@/lib/api";
 import { useAction } from "@/lib/use-action";
 import { useOrg } from "@/lib/use-org";
@@ -27,7 +28,8 @@ const dateOf = (iso: string) => new Date(iso).toLocaleDateString();
 /**
  * The Organization's ADCS CAs: its Active Directory Certificate Services CAs, which the platform reaches only through the
  * Agents assigned to each. Each shows the chain its last discovery fetched, the CRL Distribution Points of its CA
- * certificate, and the Certificate Templates it publishes.
+ * certificate, and the Certificate Templates it publishes. Discovery runs again on Refresh and once a day; an
+ * Organization Administrator may hide a template so that nobody picks it.
  */
 export function AdcsCasPage() {
   const { orgId } = useParams({ from: ROUTE });
@@ -67,6 +69,9 @@ export function AdcsCasPage() {
 function AdcsCaCard({ orgId, ca, agents, mayManage, mayDelete }: { orgId: string; ca: AdcsCa; agents: Agent[]; mayManage: boolean; mayDelete: boolean }) {
   const [removing, setRemoving] = useState(false);
   const remove = useAction(() => api.deleteAdcsCa(orgId, ca.id), ["adcs-cas"], () => setRemoving(false));
+  const queryClient = useQueryClient();
+  // A failed discovery is recorded on the CA too, so the CA is fetched again either way.
+  const refresh = useMutation({ mutationFn: () => api.refreshAdcsCa(orgId, ca.id), onSettled: () => queryClient.invalidateQueries({ queryKey: ["adcs-cas"] }) });
   const hostOf = (id: string) => agents.find((a) => a.id === id)?.hostName ?? "An Agent";
   return (
     <Card>
@@ -80,6 +85,12 @@ function AdcsCaCard({ orgId, ca, agents, mayManage, mayDelete }: { orgId: string
               Chain
             </a>
           </Button>
+          {mayManage && (
+            <Button variant="outline" size="sm" onClick={() => refresh.mutate()} disabled={refresh.isPending} aria-label={`Refresh the templates of ${ca.name}`}>
+              <RotateCwIcon className={refresh.isPending ? "animate-spin" : undefined} />
+              Refresh
+            </Button>
+          )}
           {mayManage && <AdcsCaDialog orgId={orgId} agents={agents} ca={ca} />}
           {mayDelete && (
             <Button variant="outline" size="sm" onClick={() => setRemoving(true)} aria-label={`Remove ${ca.name}`}>
@@ -89,6 +100,12 @@ function AdcsCaCard({ orgId, ca, agents, mayManage, mayDelete }: { orgId: string
         </CardAction>
       </CardHeader>
       <CardContent className="flex flex-col gap-6">
+        {ca.discoveryFailure && (
+          <Alert variant="destructive">
+            <AlertTitle>The last discovery failed, {new Date(ca.discoveryFailure.at).toLocaleString()}</AlertTitle>
+            <AlertDescription>{ca.discoveryFailure.error} The chain and templates below are from the last discovery that worked.</AlertDescription>
+          </Alert>
+        )}
         <SummaryRows
           rows={[
             { label: "Runs through", value: ca.agentIds.map(hostOf).join(", ") },
@@ -122,7 +139,7 @@ function AdcsCaCard({ orgId, ca, agents, mayManage, mayDelete }: { orgId: string
             { label: "Discovered", value: new Date(ca.discoveredAt).toLocaleString() },
           ]}
         />
-        <TemplateTable ca={ca} />
+        <TemplateTable orgId={orgId} ca={ca} mayManage={mayManage} />
       </CardContent>
       <ConfirmDialog
         open={removing}
@@ -138,57 +155,76 @@ function AdcsCaCard({ orgId, ca, agents, mayManage, mayDelete }: { orgId: string
   );
 }
 
-/** The CA's Certificate Templates and their facts, as its last discovery found them. */
-function TemplateTable({ ca }: { ca: AdcsCa }) {
+/** The CA's Certificate Templates and their facts, as its last discovery found them, with hiding for those who manage it. */
+function TemplateTable({ orgId, ca, mayManage }: { orgId: string; ca: AdcsCa; mayManage: boolean }) {
+  const setHidden = useAction(({ templateId, hidden }: { templateId: string; hidden: boolean }) => api.setAdcsTemplateHidden(orgId, ca.id, templateId, hidden), ["adcs-cas"]);
   if (ca.templates.length === 0) return <p className="text-sm text-muted-foreground">The CA publishes no Certificate Template.</p>;
   return (
-    <Table>
-      <TableHeader>
-        <TableRow>
-          <TableHead>Template</TableHead>
-          <TableHead>For</TableHead>
-          <TableHead>EKUs</TableHead>
-          <TableHead>Validity</TableHead>
-          <TableHead>Keys</TableHead>
-          <TableHead>Approval</TableHead>
-          <TableHead>Status</TableHead>
-        </TableRow>
-      </TableHeader>
-      <TableBody>
-        {ca.templates.map((t) => {
-          const reason = unavailableReason(t);
-          return (
-            <TableRow key={t.id}>
-              <TableCell>
-                <div className="font-medium">{t.displayName || t.name}</div>
-                <div className="font-mono text-xs text-muted-foreground">{t.name}</div>
-              </TableCell>
-              <TableCell>{templatePurposes(t).join(", ") || <span className="text-muted-foreground">Neither</span>}</TableCell>
-              <TableCell className="whitespace-normal">{t.extendedKeyUsages.map(ekuLabel).join(", ")}</TableCell>
-              <TableCell>{t.validityDays} days</TableCell>
-              <TableCell className="whitespace-normal">
-                {t.keyAlgorithms.join(", ")}, at least {t.minimumKeySize} bits
-              </TableCell>
-              <TableCell>{t.managerApproval ? "CA manager" : "None"}</TableCell>
-              <TableCell>
-                {reason === null ? (
-                  <Badge variant="secondary">Available</Badge>
-                ) : (
-                  <Tooltip>
-                    <TooltipTrigger asChild>
-                      <Badge variant="outline" tabIndex={0}>
-                        Unavailable
-                      </Badge>
-                    </TooltipTrigger>
-                    <TooltipContent>{reason}</TooltipContent>
-                  </Tooltip>
+    <>
+      <Table>
+        <TableHeader>
+          <TableRow>
+            <TableHead>Template</TableHead>
+            <TableHead>For</TableHead>
+            <TableHead>EKUs</TableHead>
+            <TableHead>Validity</TableHead>
+            <TableHead>Keys</TableHead>
+            <TableHead>Approval</TableHead>
+            <TableHead>Status</TableHead>
+            {mayManage && <TableHead className="sr-only">Hide</TableHead>}
+          </TableRow>
+        </TableHeader>
+        <TableBody>
+          {ca.templates.map((t) => {
+            const reason = t.unavailableReason;
+            return (
+              <TableRow key={t.id}>
+                <TableCell>
+                  <div className="font-medium">{t.displayName || t.name}</div>
+                  <div className="font-mono text-xs text-muted-foreground">{t.name}</div>
+                </TableCell>
+                <TableCell>{templatePurposes(t).join(", ") || <span className="text-muted-foreground">Neither</span>}</TableCell>
+                <TableCell className="whitespace-normal">{t.extendedKeyUsages.map(ekuLabel).join(", ")}</TableCell>
+                <TableCell>{t.validityDays} days</TableCell>
+                <TableCell className="whitespace-normal">
+                  {t.keyAlgorithms.join(", ")}, at least {t.minimumKeySize} bits
+                </TableCell>
+                <TableCell>{t.managerApproval ? "CA manager" : "None"}</TableCell>
+                <TableCell>
+                  {t.hidden && <Badge variant="outline">Hidden</Badge>}{" "}
+                  {reason === null ? (
+                    <Badge variant="secondary">Available</Badge>
+                  ) : (
+                    <Tooltip>
+                      <TooltipTrigger asChild>
+                        <Badge variant="outline" tabIndex={0}>
+                          Unavailable
+                        </Badge>
+                      </TooltipTrigger>
+                      <TooltipContent>{reason}</TooltipContent>
+                    </Tooltip>
+                  )}
+                </TableCell>
+                {mayManage && (
+                  <TableCell className="text-right">
+                    <Button
+                      variant="ghost"
+                      size="sm"
+                      disabled={setHidden.isPending}
+                      onClick={() => setHidden.mutate({ templateId: t.id, hidden: !t.hidden })}
+                      aria-label={`${t.hidden ? "Show" : "Hide"} ${t.name}`}
+                    >
+                      {t.hidden ? "Show" : "Hide"}
+                    </Button>
+                  </TableCell>
                 )}
-              </TableCell>
-            </TableRow>
-          );
-        })}
-      </TableBody>
-    </Table>
+              </TableRow>
+            );
+          })}
+        </TableBody>
+      </Table>
+      {setHidden.error && <p className="text-sm text-destructive">{setHidden.error.message}</p>}
+    </>
   );
 }
 

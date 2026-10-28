@@ -97,13 +97,18 @@ export class AdcsDouble {
     /** Its config string, `host\CA Name`. */
     readonly configString: string,
     readonly root: { subject: string; keys: CryptoKeyPair; certificate: x509.X509Certificate },
-    readonly ca: { subject: string; keys: CryptoKeyPair; certificate: x509.X509Certificate },
+    public ca: { subject: string; keys: CryptoKeyPair; certificate: x509.X509Certificate },
   ) {}
 
   static async create(configString = "ca01.corp.example\\Corp Issuing CA", now = new Date()) {
     const root = await makeCa("CN=Corp Root CA, DC=corp, DC=example", null, now);
     const ca = await makeCa("CN=Corp Issuing CA, DC=corp, DC=example", root, now, [new x509.CRLDistributionPointsExtension([CDP_URL])]);
     return new AdcsDouble(configString, root, ca);
+  }
+
+  /** Renews its CA certificate, with a new key, under the same root and with the same subject, as ADCS does. */
+  async renew(now = new Date()) {
+    this.ca = await makeCa(this.ca.subject, this.root, now, [new x509.CRLDistributionPointsExtension([CDP_URL])]);
   }
 
   /** The CA certificate, then the root, PEM. */

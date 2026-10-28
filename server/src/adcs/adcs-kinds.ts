@@ -35,5 +35,29 @@ export interface TemplateFacts {
   published: boolean;
 }
 
-/** Whether the platform can issue under the template: it is published, the gMSA may enroll on it, and it takes the subject from the request. */
-export const isAvailable = (t: Pick<TemplateFacts, "published" | "enrollable" | "subjectFromRequest">) => t.published && t.enrollable && t.subjectFromRequest;
+/** A template as the platform keeps it: whether its last discovery reported it at all, as one no longer reported is kept. */
+type Kept = Pick<TemplateFacts, "published" | "enrollable" | "subjectFromRequest"> & { reported?: boolean };
+
+/** Why the platform cannot issue under a template, or none when it can: it must be reported, published, enrollable by the gMSA, and take the subject from the request. */
+export function unavailableReason(t: Kept): string | null {
+  if (t.reported === false) return "The CA no longer reports it.";
+  if (!t.published) return "The CA does not publish it.";
+  if (!t.enrollable) return "The Agents' account may not enroll on it.";
+  if (!t.subjectFromRequest) return "It builds the subject from Active Directory, not from the request.";
+  return null;
+}
+
+/** Whether the platform can issue under the template. */
+export const isAvailable = (t: Kept) => unavailableReason(t) === null;
+
+/** What a template may be offered for: TLS with Server Authentication, devices with Client Authentication. */
+export const TEMPLATE_PURPOSES = ["tls", "devices"] as const;
+export type TemplatePurpose = (typeof TEMPLATE_PURPOSES)[number];
+
+/** What its EKUs suit a template for, whether or not it is offered: both with both. */
+export function purposesOf(t: Pick<TemplateFacts, "extendedKeyUsages">): TemplatePurpose[] {
+  return TEMPLATE_PURPOSES.filter((purpose) => t.extendedKeyUsages.includes(purpose === "tls" ? SERVER_AUTHENTICATION : CLIENT_AUTHENTICATION));
+}
+
+/** What the platform offers a template for: what it suits, while it is available and not hidden. */
+export const offeredFor = (t: Kept & Pick<TemplateFacts, "extendedKeyUsages"> & { hidden: boolean }): TemplatePurpose[] => (t.hidden || !isAvailable(t) ? [] : purposesOf(t));

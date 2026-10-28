@@ -428,6 +428,13 @@
       "when": 1793151180071,
       "tag": "0060_adcs_ca",
       "breakpoints": true
+    },
+    {
+      "idx": 61,
+      "version": "7",
+      "when": 1793156040525,
+      "tag": "0061_adcs_templates_current",
+      "breakpoints": true
     }
   ]
 }

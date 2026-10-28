@@ -2,13 +2,16 @@
 // Agents assigned to each (ADR 0013). An Organization Administrator adds one by its name and config string (`host\CA Name`)
 // and assigns it Windows Agents of the Organization; adding it has an online assigned Agent discover it (`adcs.discover`):
 // fetch its CA certificate and chain and list its Certificate Templates with their facts, and nothing is saved unless one
-// does. Everyone in the Organization may see them, their templates and their chains. The platform holds no AD credential
-// and no ADCS key: each Agent acts as its own account.
+// does. Discovery runs again on Refresh and once a day, and refreshes the chain and the templates' facts each time: a
+// template no longer reported is kept, as unavailable, since what names it must keep its issuer, and a discovery that
+// fails is recorded and changes nothing else. An Organization Administrator may hide a template from being offered.
+// Everyone in the Organization may see them, their templates and their chains. The platform holds no AD credential and
+// no ADCS key: each Agent acts as its own account.
 import { OpenAPIHono, createRoute, z } from "@hono/zod-openapi";
 import * as x509 from "@peculiar/x509";
-import { and, asc, eq, inArray } from "drizzle-orm";
+import { and, asc, eq, inArray, sql } from "drizzle-orm";
 import type { Context } from "hono";
-import { CONFIG_STRING, isAvailable, type TemplateFacts } from "./adcs-kinds";
+import { CONFIG_STRING, TEMPLATE_PURPOSES, isAvailable, offeredFor, unavailableReason, type TemplateFacts } from "./adcs-kinds";
 import { ADCS_WORK_TYPES, DiscoveryResult } from "./adcs-work";
 import { NoAgentAnswered, relayToAgents } from "../agents/agent-relay";
 import type { WorkItems } from "../agents/work-items";
@@ -29,10 +32,14 @@ export interface AdcsRelayConfig {
 
 export const DEFAULT_ADCS_RELAY: AdcsRelayConfig = { attemptTimeoutMs: 60_000 };
 
+/** How long after its last discovery the scheduler discovers an ADCS CA again, whether that one succeeded or failed. */
+export const DISCOVERY_INTERVAL_MS = 24 * 3600_000;
+
 /** The most Agents one ADCS CA may be assigned. */
 export const MAX_ADCS_AGENTS = 20;
 
 const AdcsCaParams = OrgParam.extend({ id: z.string().openapi({ param: { name: "id", in: "path" } }) });
+const TemplateParams = AdcsCaParams.extend({ templateId: z.string().openapi({ param: { name: "templateId", in: "path" } }) });
 const Name = z.string().trim().min(1).max(100);
 const ConfigString = z
   .string()
@@ -67,7 +74,13 @@ const Template = z.object({
   subjectFromRequest: z.boolean().openapi({ description: "Whether it is set to \"Supply in the request\"." }),
   enrollable: z.boolean().openapi({ description: "Whether the Agents' account may enroll on it." }),
   published: z.boolean().openapi({ description: "Whether the CA publishes it." }),
-  available: z.boolean().openapi({ description: "Whether the platform can issue under it: it is published, enrollable and supplies the subject from the request." }),
+  reported: z.boolean().openapi({ description: "Whether the CA's last discovery reported it. One no longer reported is kept, as unavailable, and is available again when it comes back." }),
+  available: z.boolean().openapi({ description: "Whether the platform can issue under it: it is reported, published, enrollable and supplies the subject from the request." }),
+  unavailableReason: z.string().nullable().openapi({ description: "Why the platform cannot issue under it; none while it is available." }),
+  hidden: z.boolean().openapi({ description: "Hidden by an Organization Administrator: offered for nothing, whatever ADCS allows." }),
+  offeredFor: z
+    .array(z.enum(TEMPLATE_PURPOSES))
+    .openapi({ description: "What it is offered for while it is available and not hidden: `tls` with Server Authentication, `devices` with Client Authentication, both with both." }),
 });
 
 const AdcsCa = z.object({
@@ -79,7 +92,14 @@ const AdcsCa = z.object({
   chain: z.array(CertificateShown).openapi({ description: "The CA certificate, then each certificate above it up to its root." }),
   cdpUrls: z.array(z.string()).openapi({ description: "The CRL Distribution Point URLs in the CA certificate. ADCS publishes its own CRL; the platform serves none for it." }),
   templates: z.array(Template).openapi({ description: "Its Certificate Templates, as discovery last found them, by name." }),
-  discoveredAt: z.string(),
+  offered: z
+    .object({ tls: z.array(z.string()), devices: z.array(z.string()) })
+    .openapi({ description: "The ids of the templates offered for TLS and for devices, by name: those available, not hidden, and with Server Authentication or Client Authentication." }),
+  discoveredAt: z.string().openapi({ description: "When a discovery last succeeded: what the chain and the templates are from." }),
+  discoveryFailure: z
+    .object({ at: z.string(), error: z.string() })
+    .nullable()
+    .openapi({ description: "When the latest discovery failed, and why; none once one succeeds. A failed discovery leaves the chain and the templates as they were." }),
   createdAt: z.string(),
 });
 
@@ -107,21 +127,31 @@ const toTemplate = (row: TemplateRow): z.infer<typeof Template> => ({
   subjectFromRequest: row.subjectFromRequest,
   enrollable: row.enrollable,
   published: row.published,
+  reported: row.reported,
   available: isAvailable(row),
+  unavailableReason: unavailableReason(row),
+  hidden: row.hidden,
+  offeredFor: offeredFor(row),
 });
 
-const toAdcsCa = (row: AdcsCaRow, agentIds: string[], templates: TemplateRow[]): z.infer<typeof AdcsCa> => ({
-  id: row.id,
-  name: row.name,
-  configString: row.configString,
-  agentIds,
-  caCertificate: shownCertificate(row.caCertificatePem),
-  chain: [row.caCertificatePem, ...row.chainPem].map(shownCertificate),
-  cdpUrls: row.cdpUrls,
-  templates: templates.filter((t) => t.adcsCaId === row.id).map(toTemplate),
-  discoveredAt: row.discoveredAt.toISOString(),
-  createdAt: row.createdAt.toISOString(),
-});
+const toAdcsCa = (row: AdcsCaRow, agentIds: string[], allTemplates: TemplateRow[]): z.infer<typeof AdcsCa> => {
+  const templates = allTemplates.filter((t) => t.adcsCaId === row.id).map(toTemplate);
+  const offeredForPurpose = (purpose: (typeof TEMPLATE_PURPOSES)[number]) => templates.filter((t) => t.offeredFor.includes(purpose)).map((t) => t.id);
+  return {
+    id: row.id,
+    name: row.name,
+    configString: row.configString,
+    agentIds,
+    caCertificate: shownCertificate(row.caCertificatePem),
+    chain: [row.caCertificatePem, ...row.chainPem].map(shownCertificate),
+    cdpUrls: row.cdpUrls,
+    templates,
+    offered: { tls: offeredForPurpose("tls"), devices: offeredForPurpose("devices") },
+    discoveredAt: row.discoveredAt.toISOString(),
+    discoveryFailure: row.discoveryFailedAt ? { at: row.discoveryFailedAt.toISOString(), error: row.discoveryError ?? "" } : null,
+    createdAt: row.createdAt.toISOString(),
+  };
+};
 
 /** The CRL Distribution Point URLs in a certificate. */
 function cdpUrlsOf(certificate: x509.X509Certificate): string[] {
@@ -254,13 +284,40 @@ export function registerAdcsCas(ctx: {
     return row;
   }
 
-  /** Records what discovery found: the templates replace those the CA had. */
-  async function recordDiscovery(tx: Tx, change: Change, row: AdcsCaRow, discovered: Discovered) {
-    await tx.delete(adcsTemplate).where(eq(adcsTemplate.adcsCaId, row.id));
-    if (discovered.templates.length > 0) {
-      await tx.insert(adcsTemplate).values(discovered.templates.map((t) => ({ ...t, organizationId: row.organizationId, adcsCaId: row.id })));
+  /**
+   * Records what discovery found, on the CA locked by the caller: the chain, and the templates' facts. A template keeps its
+   * id from one discovery to the next (matched by name, as ADCS matches them), and one no longer reported is kept, as not
+   * reported. The Audit Event names the templates whose availability changed. Returns the CA as it is now.
+   */
+  async function recordDiscovery(tx: Tx, change: Change, row: AdcsCaRow, discovered: Discovered): Promise<AdcsCaRow> {
+    const keyOf = (name: string) => name.toLowerCase();
+    const kept = await templatesOf(tx, [row.id]);
+    const wasAvailable = new Map(kept.map((t) => [keyOf(t.name), isAvailable(t)]));
+    const reported = new Map(discovered.templates.map((t) => [keyOf(t.name), t]));
+    for (const t of kept) {
+      const facts = reported.get(keyOf(t.name));
+      if (facts) await tx.update(adcsTemplate).set({ ...facts, reported: true }).where(eq(adcsTemplate.id, t.id));
+      else if (t.reported) await tx.update(adcsTemplate).set({ reported: false }).where(eq(adcsTemplate.id, t.id));
     }
-    const byAvailability = (available: boolean) => discovered.templates.filter((t) => isAvailable(t) === available).map((t) => t.name);
+    const added = discovered.templates.filter((t) => !wasAvailable.has(keyOf(t.name)));
+    if (added.length > 0) {
+      await tx.insert(adcsTemplate).values(added.map((t) => ({ ...t, organizationId: row.organizationId, adcsCaId: row.id })));
+    }
+    const [updated] = (await tx
+      .update(adcsCa)
+      .set({
+        caCertificatePem: discovered.caCertificatePem,
+        chainPem: discovered.chainPem,
+        cdpUrls: discovered.cdpUrls,
+        discoveredAt: change.occurredAt,
+        discoveryFailedAt: null,
+        discoveryError: null,
+      })
+      .where(eq(adcsCa.id, row.id))
+      .returning()) as [AdcsCaRow];
+
+    const now = await templatesOf(tx, [row.id]);
+    const names = (keep: (t: TemplateRow) => boolean) => now.filter(keep).map((t) => t.name);
     const { subject, fingerprint } = shownCertificate(discovered.caCertificatePem);
     await change.audit({
       organizationId: row.organizationId,
@@ -271,8 +328,48 @@ export function registerAdcsCas(ctx: {
         agent: discovered.by,
         caCertificate: { subject, fingerprint },
         cdpUrls: discovered.cdpUrls,
-        templates: { available: byAvailability(true), unavailable: byAvailability(false) },
+        templates: {
+          available: names(isAvailable),
+          unavailable: names((t) => !isAvailable(t)),
+          // A template new to the platform was not available before.
+          becameAvailable: names((t) => isAvailable(t) && !wasAvailable.get(keyOf(t.name))),
+          becameUnavailable: names((t) => !isAvailable(t) && wasAvailable.get(keyOf(t.name)) === true),
+        },
       },
+    });
+    return updated;
+  }
+
+  /**
+   * Discovers an ADCS CA again, through its Agents, and records what was found; `actor` is null for the scheduler's. A
+   * discovery that fails is recorded on the CA, and audited, and leaves its chain and templates as they were; its
+   * HttpError is thrown again. The Agents are asked outside any transaction.
+   */
+  async function rediscover(actor: Actor | null, row: AdcsCaRow): Promise<AdcsCaRow> {
+    const agentIds = (await agentsOf(db, [row.id])).map((a) => a.agentId);
+    let discovered: Discovered;
+    try {
+      discovered = await discover(row.organizationId, agentIds, row.configString);
+    } catch (err) {
+      if (!(err instanceof HttpError)) throw err;
+      await unitOfWork.run(actor, async (tx, change) => {
+        const current = await find(tx, row.organizationId, row.id, true);
+        // Removed meanwhile: nothing to record it on.
+        if (!current) return;
+        await tx.update(adcsCa).set({ discoveryFailedAt: change.occurredAt, discoveryError: err.message }).where(eq(adcsCa.id, row.id));
+        await change.audit({
+          organizationId: row.organizationId,
+          action: "adcs_ca.discovery_failed",
+          target: { type: "adcs_ca", id: row.id },
+          detail: { name: current.name, error: err.message },
+        });
+      });
+      throw err;
+    }
+    return unitOfWork.run(actor, async (tx, change) => {
+      const current = await find(tx, row.organizationId, row.id, true);
+      if (!current) throw new HttpError(404, "ADCS CA not found");
+      return recordDiscovery(tx, change, current, discovered);
     });
   }
 
@@ -343,8 +440,7 @@ export function registerAdcsCas(ctx: {
             target: { type: "adcs_ca", id: row!.id },
             detail: { name: body.name, configString: body.configString, agentIds: body.agentIds },
           });
-          await recordDiscovery(tx, change, row!, discovered);
-          return row!;
+          return recordDiscovery(tx, change, row!, discovered);
         });
         return c.json((await shown(db, [row]))[0]!, 201);
       } catch (err) {
@@ -455,6 +551,78 @@ export function registerAdcsCas(ctx: {
 
   app.openapi(
     createRoute({
+      method: "post",
+      path: "/api/organizations/{orgId}/adcs-cas/{id}/refresh",
+      tags: ["ADCS CAs"],
+      summary: "Discover an ADCS CA again",
+      description:
+        "Organization Administrators only. An online assigned Agent discovers the CA again, as the platform does once a day: its CA certificate and chain are refreshed, and its templates' facts. " +
+        "A template no longer reported is kept, as unavailable, and is available again when it comes back. " +
+        "When no assigned Agent can reach the CA it is 502, and when ADCS or the Agent refuses it is 422, each with the Agent's reason; the failure is recorded on the CA, which otherwise stays as it was.",
+      request: { params: AdcsCaParams },
+      responses: { 200: json(AdcsCa, "Discovered"), ...errors(401, 403, 404, 422, 502) },
+    }),
+    async (c) => {
+      const { orgId, id } = c.req.valid("param");
+      const actor = await requireUser(c);
+      await authorize(actor, orgId, { adcsCa: ["update"] });
+      const row = await find(db, orgId, id);
+      if (!row) throw new HttpError(404, "ADCS CA not found");
+      const discovered = await rediscover(actor, row);
+      return c.json((await shown(db, [discovered]))[0]!, 200);
+    },
+  );
+
+  /** Hides a template from being offered, or shows it again; 409 when it already is. */
+  async function setHidden(c: Context, { orgId, id, templateId }: z.infer<typeof TemplateParams>, hidden: boolean) {
+    const actor = await requireUser(c);
+    await authorize(actor, orgId, { adcsCa: ["update"] });
+    const row = await unitOfWork.run(actor, async (tx, change) => {
+      const row = await find(tx, orgId, id, true);
+      if (!row) throw new HttpError(404, "ADCS CA not found");
+      const [template] = isId(templateId) ? await tx.select().from(adcsTemplate).where(and(eq(adcsTemplate.adcsCaId, id), eq(adcsTemplate.id, templateId))) : [];
+      if (!template) throw new HttpError(404, "Certificate Template not found");
+      if (template.hidden === hidden) throw new HttpError(409, `${template.name} is already ${hidden ? "hidden" : "shown"}`);
+      await tx.update(adcsTemplate).set({ hidden }).where(eq(adcsTemplate.id, template.id));
+      await change.audit({
+        organizationId: orgId,
+        action: hidden ? "adcs_ca.template_hidden" : "adcs_ca.template_shown",
+        target: { type: "adcs_ca", id },
+        detail: { name: row.name, template: { id: template.id, name: template.name } },
+      });
+      return row;
+    });
+    return (await shown(db, [row]))[0]!;
+  }
+
+  app.openapi(
+    createRoute({
+      method: "post",
+      path: "/api/organizations/{orgId}/adcs-cas/{id}/templates/{templateId}/hide",
+      tags: ["ADCS CAs"],
+      summary: "Hide a Certificate Template",
+      description: "Organization Administrators only. Nobody in the Organization can pick it, whatever ADCS allows; discovery keeps it hidden. 409 when it is hidden already.",
+      request: { params: TemplateParams },
+      responses: { 200: json(AdcsCa, "Hidden"), ...errors(401, 403, 404, 409) },
+    }),
+    async (c) => c.json(await setHidden(c, c.req.valid("param"), true), 200),
+  );
+
+  app.openapi(
+    createRoute({
+      method: "post",
+      path: "/api/organizations/{orgId}/adcs-cas/{id}/templates/{templateId}/show",
+      tags: ["ADCS CAs"],
+      summary: "Show a hidden Certificate Template again",
+      description: "Organization Administrators only. It is offered again while it is available. 409 when it is not hidden.",
+      request: { params: TemplateParams },
+      responses: { 200: json(AdcsCa, "Shown"), ...errors(401, 403, 404, 409) },
+    }),
+    async (c) => c.json(await setHidden(c, c.req.valid("param"), false), 200),
+  );
+
+  app.openapi(
+    createRoute({
       method: "get",
       path: "/api/organizations/{orgId}/adcs-cas/{id}/chain",
       tags: ["ADCS CAs"],
@@ -469,4 +637,26 @@ export function registerAdcsCas(ctx: {
       return pemFile(c, [row.caCertificatePem, ...row.chainPem].join("\n"), `${fileNameOf(row.name, "adcs-ca")}.chain.pem`);
     },
   );
+
+  return {
+    /**
+     * One pass of the daily discovery at the clock's time: discovers again each ADCS CA whose last discovery, whether it
+     * succeeded or failed, was a day ago or more, and returns how many it tried. One CA's failure is recorded on it, and
+     * stops no other.
+     */
+    async discoverDue(): Promise<number> {
+      const dayAgo = new Date(clock().getTime() - DISCOVERY_INTERVAL_MS);
+      const due = await db
+        .select()
+        .from(adcsCa)
+        .where(sql`greatest(${adcsCa.discoveredAt}, ${adcsCa.discoveryFailedAt}) <= ${dayAgo}`)
+        .orderBy(asc(adcsCa.discoveredAt));
+      for (const row of due) {
+        await rediscover(null, row).catch((err) => {
+          if (!(err instanceof HttpError)) console.error("could not discover the ADCS CA", row.id, err);
+        });
+      }
+      return due.length;
+    },
+  };
 }

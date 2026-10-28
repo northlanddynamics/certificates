@@ -50,7 +50,7 @@ Each resource's verbs, as of this writing. New ones may be added within version 
 | `member` | `role_changed`, `removed`, `provisioned` |
 | `team` | `created`, `renamed`, `deleted`, `member_added`, `member_removed` |
 | `acme_ca` | `created`, `updated`, `deleted` |
-| `adcs_ca` | `created`, `updated`, `deleted`, `discovered` |
+| `adcs_ca` | `created`, `updated`, `deleted`, `discovered`, `discovery_failed`, `template_hidden`, `template_shown` |
 | `acme_account` | `created`, `key_replaced` |
 | `dns_provider` | `created`, `changed`, `secret_replaced`, `tested`, `relay_changed` |
 | `validation_zone` | `created`, `deleted` |
@@ -105,7 +105,11 @@ Adding a custom ACME CA records `acme_ca.created`, with its `name`, `directoryUr
 
 `adcs_ca.created` targets the ADCS CA (`adcs_ca`, its id) an Organization Administrator added. Its `detail` has its `name`, `configString` and the `agentIds` assigned to it. It is followed, in the same change, by the `adcs_ca.discovered` of the discovery that adding it ran; a CA that could not be discovered is not added, and is no event.
 
-`adcs_ca.discovered` targets the ADCS CA an Agent discovered. Its `detail` has the CA's `name`, the `agent` that carried it out (`{ "id": ..., "hostName": ... }`), the `caCertificate` it fetched (`subject` and SHA-256 `fingerprint`), the `cdpUrls` in that certificate, and the `templates` it found, by name, sorted into `available` (published, enrollable by the Agent's account and supplying the subject from the request) and `unavailable`.
+`adcs_ca.discovered` targets the ADCS CA an Agent discovered, when it was added, on Refresh by an Organization Administrator, or by the platform's daily discovery (no actor). Its `detail` has the CA's `name`, the `agent` that carried it out (`{ "id": ..., "hostName": ... }`), the `caCertificate` it fetched (`subject` and SHA-256 `fingerprint`), the `cdpUrls` in that certificate, and the CA's `templates` after it, by name: `available` (reported by this discovery, published, enrollable by the Agent's account and supplying the subject from the request) and `unavailable` (including those kept since a discovery stopped reporting them), and `becameAvailable` and `becameUnavailable`, those whose availability this discovery changed (a template new to the platform was not available before).
+
+`adcs_ca.discovery_failed` targets the ADCS CA a discovery, on Refresh or the daily one, could not discover: no assigned Agent could reach it, or ADCS or the Agent refused. Its `detail` has the CA's `name` and the `error`. The CA's chain and templates stay as they were.
+
+`adcs_ca.template_hidden` and `adcs_ca.template_shown` target the ADCS CA when an Organization Administrator hides one of its Certificate Templates, so that it is offered for nothing, or shows it again. Their `detail` has the CA's `name` and the `template` (`{ "id": ..., "name": ... }`).
 
 `adcs_ca.updated` targets the ADCS CA when an Organization Administrator renames it or changes its Agents. Its `detail` has its `name` (the one it has now), and in `changes` a `from` and `to` for each of `name` and `agentIds` that changed. A change that changes nothing is not an event.
 
