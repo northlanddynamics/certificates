@@ -9,6 +9,8 @@
 export const ENROLLMENT_ISSUER_KINDS = [
   /** An Issuing CA of one of the Organization's Private CAs. */
   "private_ca",
+  /** One of the Organization's ADCS CAs, under one of its Certificate Templates, reached only through Agents. */
+  "adcs",
 ] as const;
 export type EnrollmentIssuerKind = (typeof ENROLLMENT_ISSUER_KINDS)[number];
 

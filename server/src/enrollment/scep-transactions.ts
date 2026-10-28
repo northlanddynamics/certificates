@@ -3,12 +3,17 @@
 // Each transaction ID is an Enrollment Profile's own. The request that decides a transaction claims it first, so that
 // another request for it, even on another server, waits for that answer rather than deciding it too; a claim left
 // undecided for long (its server stopped) is taken over. A refusal that may not hold next time is released, not kept.
+// A transaction of a profile on an ADCS CA is decided, then pending while an Agent asks ADCS for its Device Certificate
+// (`pending`): it is answered PENDING until that request ends, when it is answered as it ended (`answer`).
 import { and, eq, isNull, lt } from "drizzle-orm";
 import type { Db, Tx } from "../platform/db/client";
 import { deviceCertificate, scepTransaction } from "../platform/db/schema";
 
-/** What a transaction was answered: the PEM of the Device Certificate it was issued, or why it was refused. */
-export type ScepAnswer = { issuedPem: string } | { refusal: string };
+/** What a transaction was answered: the PEM of the Device Certificate it was issued, or why it was refused; or that it waits for ADCS. */
+export type ScepAnswer = { issuedPem: string } | { refusal: string } | { pending: true };
+
+/** What a transaction that waits for ADCS was decided with, which its Device Certificate records once it is issued. */
+export type ScepDecided = NonNullable<typeof scepTransaction.$inferSelect.decided>;
 
 /**
  * A transaction this request claimed and decides; record its answer in the change that issues or refuses it. A claim
@@ -36,7 +41,7 @@ export function createScepTransactions({ db, clock }: { db: Db; clock: () => Dat
 
   async function answerOf(row: Row): Promise<ScepAnswer | undefined> {
     if (row.refusal !== null) return { refusal: row.refusal };
-    if (row.deviceCertificateId === null) return undefined;
+    if (row.deviceCertificateId === null) return row.adcsRequestId === null ? undefined : { pending: true };
     const [issued] = await db.select({ pem: deviceCertificate.certificatePem }).from(deviceCertificate).where(eq(deviceCertificate.id, row.deviceCertificateId));
     return { issuedPem: issued!.pem };
   }
@@ -60,7 +65,15 @@ export function createScepTransactions({ db, clock }: { db: Db; clock: () => Dat
         const [takenOver] = await db
           .update(scepTransaction)
           .set({ claimedAt: now })
-          .where(and(of(profile, transactionId), isNull(scepTransaction.deviceCertificateId), isNull(scepTransaction.refusal), lt(scepTransaction.claimedAt, new Date(now.getTime() - ABANDONED_MS))))
+          .where(
+            and(
+              of(profile, transactionId),
+              isNull(scepTransaction.deviceCertificateId),
+              isNull(scepTransaction.refusal),
+              isNull(scepTransaction.adcsRequestId),
+              lt(scepTransaction.claimedAt, new Date(now.getTime() - ABANDONED_MS)),
+            ),
+          )
           .returning({ id: scepTransaction.id, claimedAt: scepTransaction.claimedAt });
         if (takenOver) return { claim: takenOver };
         const [row] = await db.select().from(scepTransaction).where(of(profile, transactionId));
@@ -87,6 +100,26 @@ export function createScepTransactions({ db, clock }: { db: Db; clock: () => Dat
     /** Records, in the change that refuses it, why the claimed transaction was refused; nothing when the claim was taken over. */
     async refused(tx: Tx, claim: ScepClaim, refusal: string) {
       await tx.update(scepTransaction).set({ refusal }).where(held(claim));
+    },
+
+    /**
+     * Records, in the change that submits it, that the claimed transaction waits for the ADCS request (by its id), and
+     * what it was decided with; throws ScepClaimLost when the claim was taken over.
+     */
+    async pending(tx: Tx, claim: ScepClaim, adcsRequestId: string, decided: ScepDecided) {
+      const recorded = await tx.update(scepTransaction).set({ adcsRequestId, decided }).where(held(claim)).returning({ id: scepTransaction.id });
+      if (recorded.length === 0) throw new ScepClaimLost(`the SCEP transaction claim ${claim.id} was taken over`);
+    },
+
+    /** The transaction that waits for the ADCS request (by its id), locked, while it still waits; none once it is answered. */
+    async waiting(tx: Tx, adcsRequestId: string) {
+      const [row] = await tx.select().from(scepTransaction).where(eq(scepTransaction.adcsRequestId, adcsRequestId)).for("update");
+      return row && row.deviceCertificateId === null && row.refusal === null ? row : undefined;
+    },
+
+    /** Records, in the change that learned it, what the transaction that waited for ADCS (`waiting`) is answered. */
+    async answer(tx: Tx, waiting: Row, answer: { deviceCertificateId: string } | { refusal: string }) {
+      await tx.update(scepTransaction).set(answer).where(eq(scepTransaction.id, waiting.id));
     },
 
     /** Gives the claimed transaction up undecided, so that the device's next request for it is decided afresh. */

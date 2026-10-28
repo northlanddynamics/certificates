@@ -40,6 +40,8 @@ import { Input } from "@/components/ui/input";
 import { Select, SelectContent, SelectItem, SelectTrigger, SelectValue } from "@/components/ui/select";
 import { ActionLabel, PageHeader } from "@/components/page-header";
 import { api, can, type CreatedEnrollmentProfile, type EnrollmentProfile } from "@/lib/api";
+import { adcsDeviceChoices, adcsIssuerTitle, adcsRaTemplates, adcsTemplateTitle, raCertificateState, templateKeysLabel } from "@/lib/adcs-ca";
+import { templateKeyAlgorithms } from "../../../server/src/adcs/adcs-kinds";
 import { useOrg } from "@/lib/use-org";
 import { daysLabel, findIssuingCa, issuingCaTitle, isValidityDays } from "@/lib/private-ca";
 import { useAction } from "@/lib/use-action";
@@ -62,7 +64,7 @@ const KEY_USAGE_LABEL: Record<DeviceKeyUsage, string> = {
   keyAgreement: "Key agreement",
 };
 const STEPS = [
-  { id: "issuer", title: "Issuing CA", icon: LandmarkIcon },
+  { id: "issuer", title: "Issuer", icon: LandmarkIcon },
   { id: "certificate", title: "Certificate", icon: ScrollTextIcon },
   { id: "keys", title: "Device keys", icon: KeyRoundIcon },
   { id: "validator", title: "Enrollment Validator", icon: ShieldCheckIcon },
@@ -82,6 +84,9 @@ const VALIDATOR_DESCRIPTION: Record<string, string> = {
 };
 
 const KEY_TYPE_LABEL: Record<DeviceKeyType, string> = { ...DEVICE_KEY_TYPE_LABELS, [WEAK_DEVICE_KEY_TYPE]: `${DEVICE_KEY_TYPE_LABELS[WEAK_DEVICE_KEY_TYPE]} (weak)` };
+
+/** How long a profile's Device Certificates are valid for, in words: on an ADCS CA, as its template decides. */
+const validityLabel = (validityDays: number | null) => (validityDays === null ? "as long as its Certificate Template decides" : daysLabel(validityDays));
 
 // The server lists every profile; an Organization has a handful.
 const features = tableFeatures({});
@@ -169,17 +174,40 @@ export function EnrollmentProfilesPage() {
 
 /**
  * What a profile issues, and from which Issuing CA; when that one no longer issues (it was retired, say), that the
- * profile refuses every device until it is pointed at an active one.
+ * profile refuses every device until it is pointed at an active one. On an ADCS CA, which template, why it is
+ * unavailable while it is, and where its RA certificate stands until ADCS has issued it.
  */
 function Issues({ profile }: { profile: EnrollmentProfile }) {
+  if (profile.adcs) return <AdcsIssues profile={profile} adcs={profile.adcs} />;
+  return <IssuingCaIssues profile={profile} issuingCaId={profile.issuingCaId!} />;
+}
+
+function AdcsIssues({ profile, adcs }: { profile: EnrollmentProfile; adcs: NonNullable<EnrollmentProfile["adcs"]> }) {
+  const { orgId } = useParams({ from: ROUTE });
+  const adcsCas = useQuery({ queryKey: ["adcs-cas", orgId], queryFn: () => api.adcsCas(orgId) });
+  const title = adcsIssuerTitle(adcsCas.data?.items ?? [], { adcsCaId: adcs.adcsCaId, templateId: adcs.templateId });
+  const raState = raCertificateState(profile);
+  return (
+    <span className="flex flex-col gap-1 text-sm">
+      <span>Device Certificates {validityLabel(null)}</span>
+      {title && <span className="text-xs text-muted-foreground">under {title}</span>}
+      {adcs.templateUnavailable && profile.enabled && (
+        <span className="max-w-72 whitespace-normal text-xs text-destructive">{adcs.templateUnavailable} Every device is refused until ADCS makes it available again; the profile stays enabled.</span>
+      )}
+      {raState && <span className="max-w-72 whitespace-normal text-xs text-muted-foreground">{raState}</span>}
+    </span>
+  );
+}
+
+function IssuingCaIssues({ profile, issuingCaId }: { profile: EnrollmentProfile; issuingCaId: string }) {
   const { orgId } = useParams({ from: ROUTE });
   const privateCas = useQuery({ queryKey: ["private-cas", orgId], queryFn: () => api.privateCas(orgId) });
-  const issuing = findIssuingCa(privateCas.data?.items ?? [], profile.issuingCaId);
+  const issuing = findIssuingCa(privateCas.data?.items ?? [], issuingCaId);
   const issues = privateCas.data?.items.find((ca) => ca.id === profile.privateCaId)?.status === "active" && issuing?.status === "active";
   return (
     <span className="flex flex-col gap-1 text-sm">
       <span>
-        {profile.extendedKeyUsage.map((usage) => EXTENDED_KEY_USAGE_LABEL[usage]).join(", ")} for {daysLabel(profile.validityDays)}
+        {profile.extendedKeyUsage.map((usage) => EXTENDED_KEY_USAGE_LABEL[usage]).join(", ")} for {validityLabel(profile.validityDays)}
       </span>
       {issuing && <span className="text-xs text-muted-foreground">from {issuing.name}</span>}
       {issuing && !issues && profile.enabled && (
@@ -252,15 +280,19 @@ function ProfileActions({ profile }: { profile: EnrollmentProfile }) {
             </DropdownMenuItem>
             <DropdownMenuItem asChild>
               <a href={api.enrollmentProfileCaCertificateUrl(orgId, profile.id, "issuing")} download>
-                Download Issuing CA certificate
+                {profile.adcs ? "Download ADCS CA certificate" : "Download Issuing CA certificate"}
               </a>
             </DropdownMenuItem>
             {(mayUpdate || mayDisable) && <DropdownMenuSeparator />}
-            {mayUpdate && <DropdownMenuItem onSelect={() => setEditing("issuing-ca")}>Change Issuing CA…</DropdownMenuItem>}
+            {mayUpdate && !profile.adcs && <DropdownMenuItem onSelect={() => setEditing("issuing-ca")}>Change Issuing CA…</DropdownMenuItem>}
             {mayUpdate && <DropdownMenuItem onSelect={() => setEditing("retention")}>Retention period…</DropdownMenuItem>}
             {mayUpdate && takesNameRules && <DropdownMenuItem onSelect={() => setEditing("name-rules")}>Name Rules…</DropdownMenuItem>}
             {mayUpdate && <DropdownMenuItem onSelect={() => setEditing("key-types")}>Device keys…</DropdownMenuItem>}
-            {mayUpdate && <DropdownMenuItem onSelect={() => setEditing("rotate-ra")}>Rotate RA certificate…</DropdownMenuItem>}
+            {mayUpdate && (
+              <DropdownMenuItem disabled={profile.raRequested} onSelect={() => setEditing("rotate-ra")}>
+                Rotate RA certificate…
+              </DropdownMenuItem>
+            )}
             {mayUpdate && hasSharedChallenge && (
               <DropdownMenuItem disabled={profile.previousSharedChallenge !== null} onSelect={() => setEditing("rotate-challenge")}>
                 Rotate Shared Challenge…
@@ -282,7 +314,7 @@ function ProfileActions({ profile }: { profile: EnrollmentProfile }) {
           </DialogContent>
         </Dialog>
       )}
-      {mayUpdate && <IssuingCaDialog profile={profile} open={editing === "issuing-ca"} onOpenChange={openOne("issuing-ca")} />}
+      {mayUpdate && !profile.adcs && <IssuingCaDialog profile={profile} open={editing === "issuing-ca"} onOpenChange={openOne("issuing-ca")} />}
       {mayUpdate && <RetentionDialog profile={profile} open={editing === "retention"} onOpenChange={openOne("retention")} />}
       {mayUpdate && takesNameRules && <NameRulesDialog profile={profile} open={editing === "name-rules"} onOpenChange={openOne("name-rules")} />}
       {mayUpdate && <AllowedKeyTypesDialog profile={profile} open={editing === "key-types"} onOpenChange={openOne("key-types")} />}
@@ -510,7 +542,10 @@ function AllowedKeyTypesDialog({ profile, open, onOpenChange }: ProfileDialogPro
   );
 }
 
-/** Has the profile's Issuing CA sign it a new RA certificate for a new key, which devices are given from then on. */
+/**
+ * Has the profile's Issuing CA sign it a new RA certificate for a new key, which devices are given from then on; on an
+ * ADCS CA, has ADCS asked for one, which replaces the current one once it is issued.
+ */
 function RotateRaDialog({ profile, open, onOpenChange }: ProfileDialogProps) {
   const { orgId } = useParams({ from: ROUTE });
   const rotate = useAction(
@@ -518,9 +553,10 @@ function RotateRaDialog({ profile, open, onOpenChange }: ProfileDialogProps) {
     ["enrollment-profiles"],
     () => {
       onOpenChange(false);
-      toast.success(`${profile.name}: the RA certificate was replaced`);
+      toast.success(profile.adcs ? `${profile.name}: ADCS is asked for an RA certificate` : `${profile.name}: the RA certificate was replaced`);
     },
   );
+  const ends = profile.raCertificate ? ` The current one ends ${new Date(profile.raCertificate.notAfter).toLocaleDateString()}.` : "";
   return (
     <ConfirmDialog
       open={open}
@@ -529,7 +565,11 @@ function RotateRaDialog({ profile, open, onOpenChange }: ProfileDialogProps) {
         onOpenChange(next);
       }}
       title={`Rotate the RA certificate of ${profile.name}?`}
-      description={`Its Issuing CA signs a new RA certificate for a new key, which devices are given from now on. The current one ends ${new Date(profile.raCertificate.notAfter).toLocaleDateString()}. A device midway through enrolling with the old one enrolls again.`}
+      description={
+        profile.adcs
+          ? `An Agent asks ADCS for an RA certificate for a new key, under the profile's RA template. The current one serves until it is issued.${ends} A device midway through enrolling with the old one enrolls again.`
+          : `Its Issuing CA signs a new RA certificate for a new key, which devices are given from now on.${ends} A device midway through enrolling with the old one enrolls again.`
+      }
       confirmLabel="Rotate"
       pending={rotate.isPending}
       error={rotate.error}
@@ -816,7 +856,7 @@ function SharedChallengePanel({ profile, challenge, onDone }: { profile: Created
             <span className="text-foreground">Key size</span>: 2048 or more. Apple's default, 1024, is refused unless the profile allows it.
           </li>
           <li>
-            <span className="text-foreground">Automatic profile redistribution</span>: on, so that Macs renew before their certificates end, {daysLabel(profile.validityDays)} after they are issued.
+            <span className="text-foreground">Automatic profile redistribution</span>: on, so that Macs renew before their certificates end, {validityLabel(profile.validityDays)} after they are issued.
           </li>
         </ol>
         <span className="text-muted-foreground">Also deploy the root certificate (from the profile's actions) as a Certificate Library Item, so that Macs trust what they are issued.</span>
@@ -854,7 +894,7 @@ function IntuneSetupPanel({ orgId, profile, onDone }: { orgId: string; profile: 
           </Button>
           <Button size="sm" variant="outline" asChild>
             <a href={api.enrollmentProfileCaCertificateUrl(orgId, profile.id, "issuing")} download>
-              Issuing CA certificate
+              {profile.adcs ? "ADCS CA certificate" : "Issuing CA certificate"}
             </a>
           </Button>
         </div>
@@ -868,9 +908,13 @@ function IntuneSetupPanel({ orgId, profile, onDone }: { orgId: string; profile: 
           rows={[
             { label: "Root Certificate", value: "The trusted certificate profile from step 1" },
             { label: "Key size (bits)", value: profile.allowedKeyTypes.map((t) => KEY_TYPE_LABEL[t]).join(", ") },
-            { label: "Key usage", value: profile.keyUsage.map((u) => KEY_USAGE_LABEL[u]).join(", ") },
-            { label: "Extended key usage", value: profile.extendedKeyUsage.map((u) => EXTENDED_KEY_USAGE_LABEL[u]).join(", ") },
-            { label: "Certificate validity", value: `Ignored: the profile issues for ${daysLabel(profile.validityDays)}` },
+            ...(profile.adcs
+              ? [{ label: "Key usage and extended key usage", value: "Any: the Certificate Template decides them" }]
+              : [
+                  { label: "Key usage", value: profile.keyUsage.map((u) => KEY_USAGE_LABEL[u]).join(", ") },
+                  { label: "Extended key usage", value: profile.extendedKeyUsage.map((u) => EXTENDED_KEY_USAGE_LABEL[u]).join(", ") },
+                ]),
+            { label: "Certificate validity", value: `Ignored: the profile issues ${profile.validityDays === null ? "for as long as its Certificate Template decides" : `for ${daysLabel(profile.validityDays)}`}` },
           ]}
         />
       </section>
@@ -918,10 +962,10 @@ function Choices<T extends string>({ legend, id, values, labels, chosen, onChang
 }
 
 /** The device keys a profile allows, with a warning when a weak one is among them. */
-function KeyTypeChoices({ id, chosen, onChange }: { id: string; chosen: DeviceKeyType[]; onChange: (chosen: DeviceKeyType[]) => void }) {
+function KeyTypeChoices({ id, chosen, onChange, values = DEVICE_KEY_TYPES }: { id: string; chosen: DeviceKeyType[]; onChange: (chosen: DeviceKeyType[]) => void; values?: readonly DeviceKeyType[] }) {
   return (
     <>
-      <Choices legend="Device keys allowed" id={id} values={DEVICE_KEY_TYPES} labels={KEY_TYPE_LABEL} chosen={chosen} onChange={onChange} />
+      <Choices legend="Device keys allowed" id={id} values={values} labels={KEY_TYPE_LABEL} chosen={chosen} onChange={onChange} />
       {chosen.includes(WEAK_DEVICE_KEY_TYPE) && (
         <Alert variant="destructive">
           <TriangleAlertIcon />
@@ -943,14 +987,26 @@ function NewProfileForm({ orgId, onDone }: { orgId: string; onDone: (created: Cr
   const kinds = useQuery({ queryKey: ["enrollment-validator-kinds", orgId], queryFn: () => api.enrollmentValidatorKinds(orgId) });
   // Only an active Issuing CA under an active root issues, and not an ML-DSA one: SCEP clients cannot verify its RA certificate.
   const issuingCas = (privateCas.data?.items ?? []).flatMap((ca) => (ca.status === "active" && !ca.enrollmentProfileRefusal ? ca.issuingCas.filter((i) => i.status === "active").map((i) => ({ id: i.id, title: issuingCaTitle(ca.name, i.subject) })) : []));
+  // An ADCS CA's templates offered for devices, each with its CA; and, once one is chosen, the templates its RA certificate may be issued under.
+  const adcsCas = useQuery({ queryKey: ["adcs-cas", orgId], queryFn: () => api.adcsCas(orgId) });
+  const deviceChoices = adcsDeviceChoices(adcsCas.data?.items ?? []).flatMap(({ ca, templates }) => templates.map((template) => ({ key: `${ca.id}:${template.id}`, ca, template })));
   const [name, setName] = useState("");
+  const [issuerKind, setIssuerKind] = useState<"private_ca" | "adcs">("private_ca");
   const [issuingCaId, setIssuingCaId] = useState("");
+  const [adcsChoice, setAdcsChoice] = useState("");
+  const [raTemplateId, setRaTemplateId] = useState("");
+  const adcs = issuerKind === "adcs";
+  const device = deviceChoices.find((c) => c.key === adcsChoice);
+  const raTemplates = device ? adcsRaTemplates(device.ca) : [];
+  // The device keys a profile may allow: on an ADCS CA, those its template takes.
+  const keyTypes = adcs && device ? templateKeyAlgorithms(device.template, DEVICE_KEY_TYPES) : DEVICE_KEY_TYPES;
   // None until the administrator sets one: the default then follows the validator chosen.
   const [chosenValidityDays, setChosenValidityDays] = useState<string | null>(null);
   const [retentionDays, setRetentionDays] = useState(String(DEFAULT_DEVICE_RETENTION_DAYS));
   const [extendedKeyUsage, setExtendedKeyUsage] = useState<DeviceExtendedKeyUsage[]>(DEFAULT_DEVICE_EXTENDED_KEY_USAGES);
   const [keyUsage, setKeyUsage] = useState<DeviceKeyUsage[]>(DEFAULT_DEVICE_KEY_USAGES);
-  const [allowedKeyTypes, setAllowedKeyTypes] = useState<DeviceKeyType[]>(DEFAULT_DEVICE_KEY_TYPES);
+  const [chosenKeyTypes, setAllowedKeyTypes] = useState<DeviceKeyType[]>(DEFAULT_DEVICE_KEY_TYPES);
+  const allowedKeyTypes = chosenKeyTypes.filter((type) => keyTypes.includes(type));
   const [validatorKind, setValidatorKind] = useState("");
   const kind = validatorKind || kinds.data?.items[0]?.kind || "";
   const [tenantId, setTenantId] = useState("");
@@ -965,7 +1021,15 @@ function NewProfileForm({ orgId, onDone }: { orgId: string; onDone: (created: Cr
   const nameRules = takesNameRules ? rulesOf(nameRulesDraft) : { rules: null };
   const validator = intune ? { kind, settings: { tenantId: tenantId.trim(), appId: appId.trim() }, secret: appSecret } : { kind };
   const create = useAction(
-    () => api.createEnrollmentProfile(orgId, { name: name.trim(), issuingCaId, validityDays: Number(validityDays), retentionDays: Number(retentionDays), keyUsage, extendedKeyUsage, allowedKeyTypes, validator, ...("rules" in nameRules && nameRules.rules && { nameRules: nameRules.rules }) }),
+    () =>
+      api.createEnrollmentProfile(orgId, {
+        name: name.trim(),
+        ...(adcs && device ? { adcs: { adcsCaId: device.ca.id, templateId: device.template.id, raTemplateId } } : { issuingCaId, validityDays: Number(validityDays), keyUsage, extendedKeyUsage }),
+        retentionDays: Number(retentionDays),
+        allowedKeyTypes,
+        validator,
+        ...("rules" in nameRules && nameRules.rules && { nameRules: nameRules.rules }),
+      }),
     ["enrollment-profiles"],
     onDone,
   );
@@ -974,8 +1038,21 @@ function NewProfileForm({ orgId, onDone }: { orgId: string; onDone: (created: Cr
 
   // What each step still needs; Review only shows what was entered.
   const missing: Partial<Record<StepId, Missing>> = {
-    issuer: name.trim() === "" ? { reason: "Give the profile a name.", field: "profile-name" } : issuingCaId === "" ? { reason: "Choose the Issuing CA.", field: "profile-issuing-ca" } : undefined,
-    certificate: !validityOk
+    issuer:
+      name.trim() === ""
+        ? { reason: "Give the profile a name.", field: "profile-name" }
+        : !adcs && issuingCaId === ""
+          ? { reason: "Choose the Issuing CA.", field: "profile-issuing-ca" }
+          : adcs && !device
+            ? { reason: "Choose the Certificate Template devices get theirs under.", field: "profile-adcs-template" }
+            : adcs && !raTemplates.some((t) => t.id === raTemplateId)
+              ? { reason: "Choose the Certificate Template the RA certificate is issued under.", field: "profile-adcs-ra-template" }
+              : undefined,
+    certificate: adcs
+      ? retentionOk
+        ? undefined
+        : { reason: `Give a retention of 0 to ${MAX_DEVICE_RETENTION_DAYS} days.`, field: "profile-retention" }
+      : !validityOk
       ? { reason: `Give a validity of 1 to ${MAX_DEVICE_VALIDITY_DAYS} days.`, field: "profile-validity" }
       : !retentionOk
         ? { reason: `Give a retention of 0 to ${MAX_DEVICE_RETENTION_DAYS} days.`, field: "profile-retention" }
@@ -984,7 +1061,7 @@ function NewProfileForm({ orgId, onDone }: { orgId: string; onDone: (created: Cr
           : extendedKeyUsage.length === 0
             ? { reason: "Choose at least one extended key usage.", field: `profile-eku-${DEVICE_EXTENDED_KEY_USAGE_NAMES[0]}` }
             : undefined,
-    keys: allowedKeyTypes.length > 0 ? undefined : { reason: "Allow at least one kind of device key.", field: `profile-keys-${DEVICE_KEY_TYPES[0]}` },
+    keys: allowedKeyTypes.length > 0 ? undefined : { reason: keyTypes.length === 0 ? "The Certificate Template takes none of the device keys a profile allows." : "Allow at least one kind of device key.", field: `profile-keys-${keyTypes[0] ?? DEVICE_KEY_TYPES[0]}` },
     validator:
       kind === ""
         ? { reason: "Choose how devices are checked.", field: "profile-validator" }
@@ -1012,34 +1089,117 @@ function NewProfileForm({ orgId, onDone }: { orgId: string; onDone: (created: Cr
     >
       {step === "issuer" && (
         <FieldSet>
-          <FieldLegend>Name it and choose its Issuing CA</FieldLegend>
-          <FieldDescription>The platform makes the profile's SCEP RA key, which it keeps, and has the Issuing CA sign its certificate.</FieldDescription>
+          <FieldLegend>Name it and choose where its certificates come from</FieldLegend>
+          <FieldDescription>
+            The platform makes the profile's SCEP RA key, which it keeps, and has the Issuing CA sign its certificate; or, on an ADCS CA, has ADCS issue it through an Agent, after which the profile serves SCEP.
+          </FieldDescription>
           <FieldGroup>
             <Field>
               <FieldLabel htmlFor="profile-name">Name</FieldLabel>
               <Input id="profile-name" autoFocus value={name} onChange={(e) => setName(e.target.value)} placeholder="e.g. Wi-Fi" />
             </Field>
-            <Field>
-              <FieldLabel htmlFor="profile-issuing-ca">Issuing CA</FieldLabel>
-              <Select value={issuingCaId} onValueChange={setIssuingCaId}>
-                <SelectTrigger id="profile-issuing-ca" className="w-full">
-                  <SelectValue placeholder={privateCas.isPending ? "Loading…" : issuingCas.length === 0 ? "No active Issuing CA" : "Choose an Issuing CA"} />
-                </SelectTrigger>
-                <SelectContent>
-                  {issuingCas.map((i) => (
-                    <SelectItem key={i.id} value={i.id}>
-                      {i.title}
-                    </SelectItem>
+            {deviceChoices.length > 0 && (
+              <Field>
+                <FieldTitle id="profile-issuer-kind-label">Issuer</FieldTitle>
+                <RadioGroup aria-labelledby="profile-issuer-kind-label" value={issuerKind} onValueChange={(kind) => setIssuerKind(kind as typeof issuerKind)} className="grid gap-2 sm:grid-cols-2">
+                  {(
+                    [
+                      ["private_ca", "Issuing CA", "One of your Private CAs signs at once."],
+                      ["adcs", "ADCS CA", "ADCS issues under a Certificate Template, through an Agent: devices are answered PENDING until it has."],
+                    ] as const
+                  ).map(([value, title, description]) => (
+                    <FieldLabel key={value} htmlFor={`profile-issuer-kind-${value}`}>
+                      <Field orientation="horizontal">
+                        <FieldContent>
+                          <FieldTitle>{title}</FieldTitle>
+                          <FieldDescription>{description}</FieldDescription>
+                        </FieldContent>
+                        <RadioGroupItem value={value} id={`profile-issuer-kind-${value}`} />
+                      </Field>
+                    </FieldLabel>
                   ))}
-                </SelectContent>
-              </Select>
-              <FieldDescription>Only an active Issuing CA under an active root can be chosen, and not an ML-DSA one: SCEP clients cannot verify the RA certificate it would sign.</FieldDescription>
-            </Field>
+                </RadioGroup>
+              </Field>
+            )}
+            {adcs ? (
+              <>
+                <Field>
+                  <FieldLabel htmlFor="profile-adcs-template">Certificate Template for devices</FieldLabel>
+                  <Select
+                    value={adcsChoice}
+                    onValueChange={(key) => {
+                      setAdcsChoice(key);
+                      setRaTemplateId("");
+                    }}
+                  >
+                    <SelectTrigger id="profile-adcs-template" className="w-full">
+                      <SelectValue placeholder="Choose a Certificate Template" />
+                    </SelectTrigger>
+                    <SelectContent>
+                      {deviceChoices.map((c) => (
+                        <SelectItem key={c.key} value={c.key}>
+                          {adcsTemplateTitle(c.ca.name, c.template)}
+                        </SelectItem>
+                      ))}
+                    </SelectContent>
+                  </Select>
+                  <FieldDescription>
+                    {device
+                      ? `It decides the validity and key usages of what devices get, and takes keys of ${templateKeysLabel(device.template)}.`
+                      : "Those offered for devices: available, not hidden, with Client Authentication."}
+                  </FieldDescription>
+                </Field>
+                <Field>
+                  <FieldLabel htmlFor="profile-adcs-ra-template">Certificate Template for the RA certificate</FieldLabel>
+                  <Select value={raTemplateId} onValueChange={setRaTemplateId} disabled={!device}>
+                    <SelectTrigger id="profile-adcs-ra-template" className="w-full">
+                      <SelectValue placeholder={device ? "Choose a Certificate Template" : "Choose the template for devices first"} />
+                    </SelectTrigger>
+                    <SelectContent>
+                      {raTemplates.map((t) => (
+                        <SelectItem key={t.id} value={t.id}>
+                          {adcsTemplateTitle(device!.ca.name, t)}
+                        </SelectItem>
+                      ))}
+                    </SelectContent>
+                  </Select>
+                  <FieldDescription>Any available template of the same ADCS CA, such as one for SCEP RA certificates: SCEP clients see an RA certificate that chains to your ADCS CA. It is renewed through ADCS when a third of its life is left.</FieldDescription>
+                </Field>
+              </>
+            ) : (
+              <Field>
+                <FieldLabel htmlFor="profile-issuing-ca">Issuing CA</FieldLabel>
+                <Select value={issuingCaId} onValueChange={setIssuingCaId}>
+                  <SelectTrigger id="profile-issuing-ca" className="w-full">
+                    <SelectValue placeholder={privateCas.isPending ? "Loading…" : issuingCas.length === 0 ? "No active Issuing CA" : "Choose an Issuing CA"} />
+                  </SelectTrigger>
+                  <SelectContent>
+                    {issuingCas.map((i) => (
+                      <SelectItem key={i.id} value={i.id}>
+                        {i.title}
+                      </SelectItem>
+                    ))}
+                  </SelectContent>
+                </Select>
+                <FieldDescription>Only an active Issuing CA under an active root can be chosen, and not an ML-DSA one: SCEP clients cannot verify the RA certificate it would sign.</FieldDescription>
+              </Field>
+            )}
           </FieldGroup>
         </FieldSet>
       )}
 
-      {step === "certificate" && (
+      {step === "certificate" && adcs && (
+        <FieldGroup>
+          <FieldDescription>The Certificate Template decides the validity, key usage and extended key usages of what devices get.</FieldDescription>
+          <Field data-invalid={!retentionOk}>
+            <FieldLabel htmlFor="profile-retention">Retention (days)</FieldLabel>
+            <Input id="profile-retention" inputMode="numeric" autoFocus value={retentionDays} onChange={(e) => setRetentionDays(e.target.value)} aria-invalid={!retentionOk} />
+            <FieldDescription>How long after it ends a Device Certificate is kept before it is deleted; its Audit Events are kept.</FieldDescription>
+          </Field>
+        </FieldGroup>
+      )}
+
+      {step === "certificate" && !adcs && (
         <FieldGroup>
           <Field data-invalid={!validityOk}>
             <FieldLabel htmlFor="profile-validity">Validity (days)</FieldLabel>
@@ -1063,8 +1223,8 @@ function NewProfileForm({ orgId, onDone }: { orgId: string; onDone: (created: Cr
 
       {step === "keys" && (
         <FieldGroup>
-          <FieldDescription>A device whose request is for any other kind of key is refused.</FieldDescription>
-          <KeyTypeChoices id="profile-keys" chosen={allowedKeyTypes} onChange={setAllowedKeyTypes} />
+          <FieldDescription>A device whose request is for any other kind of key is refused.{adcs && device ? " Only keys the Certificate Template takes can be allowed." : ""}</FieldDescription>
+          <KeyTypeChoices id="profile-keys" values={keyTypes} chosen={allowedKeyTypes} onChange={setAllowedKeyTypes} />
         </FieldGroup>
       )}
 
@@ -1148,11 +1308,20 @@ function NewProfileForm({ orgId, onDone }: { orgId: string; onDone: (created: Cr
             <SummaryRows
               rows={[
                 { label: "Name", value: name.trim() },
-                { label: "Issuing CA", value: issuingCas.find((i) => i.id === issuingCaId)?.title ?? "" },
-                { label: "Validity", value: daysLabel(Number(validityDays)) },
-                { label: "Retention", value: `${daysLabel(Number(retentionDays))} after it ends` },
-                { label: "Extended key usage", value: extendedKeyUsage.map((u) => EXTENDED_KEY_USAGE_LABEL[u]).join(", ") },
-                { label: "Key usage", value: keyUsage.map((u) => KEY_USAGE_LABEL[u]).join(", ") },
+                ...(adcs && device
+                  ? [
+                      { label: "Certificate Template", value: adcsTemplateTitle(device.ca.name, device.template) },
+                      { label: "RA certificate template", value: adcsTemplateTitle(device.ca.name, raTemplates.find((t) => t.id === raTemplateId) ?? { name: "", displayName: "" }) },
+                      { label: "Validity and key usages", value: "As the Certificate Template decides" },
+                      { label: "Retention", value: `${daysLabel(Number(retentionDays))} after it ends` },
+                    ]
+                  : [
+                      { label: "Issuing CA", value: issuingCas.find((i) => i.id === issuingCaId)?.title ?? "" },
+                      { label: "Validity", value: daysLabel(Number(validityDays)) },
+                      { label: "Retention", value: `${daysLabel(Number(retentionDays))} after it ends` },
+                      { label: "Extended key usage", value: extendedKeyUsage.map((u) => EXTENDED_KEY_USAGE_LABEL[u]).join(", ") },
+                      { label: "Key usage", value: keyUsage.map((u) => KEY_USAGE_LABEL[u]).join(", ") },
+                    ]),
                 { label: "Device keys", value: allowedKeyTypes.map((t) => KEY_TYPE_LABEL[t]).join(", ") },
                 { label: "Validator", value: validatorLabel(kind) },
                 ...(intune ? [{ label: "Entra tenant", value: tenantId.trim() }, { label: "Entra app", value: appId.trim() }] : []),

@@ -13,7 +13,7 @@ const localKmsKey = process.env.LOCAL_KMS_KEY;
 if (!databaseUrl || !secret || !localKmsKey) throw new Error("DATABASE_URL, AUTH_SECRET and LOCAL_KMS_KEY are required");
 
 const pool = new Pool({ connectionString: databaseUrl });
-const { app, auth, db, issuances, revocations, renewals, adcsDiscovery, adcsIssuance, notifications, auditForwarding, crls, enrollmentValidators, deviceCertificatePruning, sharedChallenges } = createApp({
+const { app, auth, db, issuances, revocations, renewals, adcsDiscovery, adcsIssuance, adcsRaCertificates, notifications, auditForwarding, crls, enrollmentValidators, deviceCertificatePruning, sharedChallenges } = createApp({
   pool,
   mailer: new ConsoleMailer(),
   clock: () => new Date(),
@@ -121,6 +121,14 @@ const ADCS_REQUEST_PASS_MS = 60_000;
 (async function attendAdcsRequests() {
   await adcsIssuance.tick().catch((err) => console.error("ADCS request pass failed", err));
   setTimeout(attendAdcsRequests, ADCS_REQUEST_PASS_MS);
+})();
+
+// The RA certificates of Enrollment Profiles on an ADCS CA are asked of ADCS when they have a third of their life left,
+// or when a profile has none yet and its last request failed a day ago; once an hour, each pass waiting for the one before it.
+const ADCS_RA_PASS_MS = 3_600_000;
+(async function renewAdcsRaCertificates() {
+  await adcsRaCertificates.renewDue().catch((err) => console.error("ADCS RA certificate pass failed", err));
+  setTimeout(renewAdcsRaCertificates, ADCS_RA_PASS_MS);
 })();
 
 if (process.env.OPERATOR_EMAIL && process.env.OPERATOR_PASSWORD) {

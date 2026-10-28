@@ -1,10 +1,11 @@
 // An Organization's Enrollment Profiles: templates under which devices obtain Device Certificates in bulk from one of its
-// Private CAs' Issuing CAs, with no Approval and no Owners. A profile fixes its issuer (enrollment-issuer.ts), the
+// Private CAs' Issuing CAs, or from one of its ADCS CAs under a Certificate Template, with no Approval and no Owners. A profile fixes its issuer (enrollment-issuer.ts), the
 // validity, key usage and extended key usages of what it issues and the device keys it certifies, and names the Enrollment Validator
 // (enrollment-validator.ts) that decides each request: its kind, its settings and its write-only secret. A profile whose
 // validator does not vouch for names may carry name rules (name-rules.ts) instead. Devices enroll at its SCEP URL (scep.ts), under an opaque public
 // id. The platform makes each profile an RA: a software RSA key, held as a Secret, and a certificate the Issuing CA signs
-// for it, which open SCEP requests and sign SCEP responses (ADR 0007). Only Organization Administrators see or change them.
+// for it, which open SCEP requests and sign SCEP responses (ADR 0007); on an ADCS CA, ADCS issues the RA certificate
+// under the profile's RA template, through an Agent, later (adcs-ra.ts). Only Organization Administrators see or change them.
 import { OpenAPIHono, createRoute, z } from "@hono/zod-openapi";
 import * as x509 from "@peculiar/x509";
 import { and, asc, eq } from "drizzle-orm";
@@ -23,6 +24,7 @@ import {
   DEFAULT_DEVICE_KEY_TYPES,
   DEVICE_KEY_TYPES,
   DEVICE_KEY_USAGES,
+  type DeviceKeyType,
   MAX_DEVICE_RETENTION_DAYS,
   MAX_DEVICE_VALIDITY_DAYS,
 } from "./enrollment-profile-kinds";
@@ -45,11 +47,13 @@ import {
 } from "./enrollment-issuer";
 import type { Secrets } from "../platform/crypto/secrets";
 import { sharedChallengesOf, type SharedChallenges } from "./shared-challenge";
+import { raOf, type AdcsRaCertificates } from "./adcs-ra";
+import { templateKeyAlgorithms } from "../adcs/adcs-kinds";
 import type { Actor, UnitOfWork } from "../platform/unit-of-work";
 
 type ProfileRow = typeof enrollmentProfile.$inferSelect;
 
-/** How long an RA certificate is valid for, in days, though never past its Issuing CA's end. */
+/** How long an RA certificate is valid for, in days, though never past its Issuing CA's end; on an ADCS CA its RA template decides. */
 const RA_VALIDITY_DAYS = 730;
 
 const ProfileParams = OrgParam.extend({ id: z.string().openapi({ param: { name: "id", in: "path" } }) });
@@ -72,10 +76,19 @@ export const EnrollmentProfile = z.object({
   name: z.string(),
   publicId: z.string().openapi({ description: "The opaque id its SCEP URL is under, which says nothing else about it or the Organization." }),
   scepUrl: z.string().openapi({ description: "Where devices enroll over SCEP: paste it into the device management platform's SCEP profile." }),
-  caFingerprint: z.string().openapi({ description: "The SHA-256 fingerprint (lower-case hex) of the CA certificate GetCACert serves, its Issuing CA's, which a SCEP profile can be told to expect." }),
-  issuingCaId: z.string(),
-  privateCaId: z.string(),
-  validityDays: z.number().int().openapi({ description: "How long its Device Certificates are valid for, though never past the Issuing CA's end." }),
+  caFingerprint: z.string().openapi({ description: "The SHA-256 fingerprint (lower-case hex) of the CA certificate GetCACert serves, its Issuing CA's or its ADCS CA's, which a SCEP profile can be told to expect." }),
+  issuingCaId: z.string().nullable().openapi({ description: "Its Issuing CA; none on an ADCS CA." }),
+  privateCaId: z.string().nullable(),
+  adcs: z
+    .object({
+      adcsCaId: z.string(),
+      templateId: z.string().openapi({ description: "The Certificate Template its Device Certificates are issued under." }),
+      raTemplateId: z.string().openapi({ description: "The Certificate Template its RA certificate is issued under." }),
+      templateUnavailable: z.string().nullable().openapi({ description: "Why ADCS issues nothing under one of its templates now, while it does not; the profile stays enabled, and its requests are refused until then." }),
+    })
+    .nullable()
+    .openapi({ description: "Its ADCS CA and Certificate Templates; none on an Issuing CA." }),
+  validityDays: z.number().int().nullable().openapi({ description: "How long its Device Certificates are valid for, though never past the Issuing CA's end; none on an ADCS CA, whose template decides." }),
   keyUsage: z.array(z.enum(DEVICE_KEY_USAGES)),
   extendedKeyUsage: z.array(z.enum(DEVICE_EXTENDED_KEY_USAGE_NAMES)),
   allowedKeyTypes: z.array(z.enum(DEVICE_KEY_TYPES)).openapi({ description: "The device keys it certifies; a request for another is refused." }),
@@ -91,7 +104,11 @@ export const EnrollmentProfile = z.object({
     .object({ id: z.string(), expiresAt: z.string() })
     .nullable()
     .openapi({ description: "The Shared Challenge it held before its last rotation, by id, which devices may still present until `expiresAt` unless it is retired first. None when there is none still valid." }),
-  raCertificate: z.object({ subject: z.string(), serial: z.string(), notAfter: z.string() }).openapi({ description: "The RA certificate devices encrypt their requests to, which signs the platform's answers." }),
+  raCertificate: z
+    .object({ subject: z.string(), serial: z.string(), notAfter: z.string() })
+    .nullable()
+    .openapi({ description: "The RA certificate devices encrypt their requests to, which signs the platform's answers. None on an ADCS CA until ADCS first issues it: until then the profile serves no SCEP." }),
+  raRequested: z.boolean().openapi({ description: "Whether ADCS is being asked for its RA certificate, the first or one to replace it; always false on an Issuing CA." }),
   enabled: z.boolean().openapi({ description: "Whether it takes enrollment requests; a disabled profile refuses every one, and keeps the Device Certificates it issued." }),
   retentionDays: z.number().int().openapi({ description: "How many days after it ends a Device Certificate it issued is pruned; its Audit Events are kept." }),
   createdAt: z.string(),
@@ -107,9 +124,9 @@ const CreatedEnrollmentProfile = EnrollmentProfile.extend({
 /** The SCEP URL of the profile with this public id, on the platform's base URL. */
 export const scepUrlOf = (baseURL: string, publicId: string) => `${baseURL.replace(/\/+$/, "")}/scep/${publicId}`;
 
-function toProfile(row: ProfileRow, issuer: FoundEnrollmentIssuer, baseURL: string, now: Date): z.infer<typeof EnrollmentProfile> {
-  const ra = new x509.X509Certificate(row.raCertificatePem);
-  const { caFingerprint, issuingCaId, privateCaId } = enrollmentIssuerFields(issuer);
+function toProfile(row: ProfileRow, issuer: FoundEnrollmentIssuer, baseURL: string, now: Date, raRequested: boolean): z.infer<typeof EnrollmentProfile> {
+  const ra = row.raCertificatePem === null ? null : new x509.X509Certificate(row.raCertificatePem);
+  const { caFingerprint, issuingCaId, privateCaId, adcs } = enrollmentIssuerFields(issuer);
   return {
     id: row.id,
     name: row.name,
@@ -118,6 +135,7 @@ function toProfile(row: ProfileRow, issuer: FoundEnrollmentIssuer, baseURL: stri
     caFingerprint,
     issuingCaId,
     privateCaId,
+    adcs,
     validityDays: row.validityDays,
     keyUsage: row.keyUsage,
     extendedKeyUsage: row.extendedKeyUsage,
@@ -125,7 +143,8 @@ function toProfile(row: ProfileRow, issuer: FoundEnrollmentIssuer, baseURL: stri
     validator: { kind: row.validatorKind, settings: row.validatorSettings, hasSecret: row.validatorSecretId !== null },
     nameRules: row.nameRules,
     ...sharedChallengesOf(row, now),
-    raCertificate: { subject: ra.subject, serial: ra.serialNumber.toUpperCase(), notAfter: ra.notAfter.toISOString() },
+    raCertificate: ra && { subject: ra.subject, serial: ra.serialNumber.toUpperCase(), notAfter: ra.notAfter.toISOString() },
+    raRequested,
     enabled: row.enabled,
     retentionDays: row.retentionDays,
     createdAt: row.createdAt.toISOString(),
@@ -153,19 +172,24 @@ export function registerEnrollmentProfiles(ctx: {
   kinds: EnrollmentValidators;
   validators: EnrollmentValidatorRuns;
   sharedChallenges: SharedChallenges;
+  /** The RA certificates ADCS issues, for profiles on an ADCS CA. */
+  raCertificates: AdcsRaCertificates;
   /** Where the platform is served, which SCEP URLs are under. */
   baseURL: string;
   clock: () => Date;
 }) {
-  const { app, db, requireUser, authorize, unitOfWork, secrets, issuers, kinds, validators, sharedChallenges, baseURL, clock } = ctx;
+  const { app, db, requireUser, authorize, unitOfWork, secrets, issuers, kinds, validators, sharedChallenges, raCertificates, baseURL, clock } = ctx;
 
   /** The profile's issuer, found. */
   const issuerOfProfile = async (row: ProfileRow) => (await issuers.find(db, row.organizationId, enrollmentIssuerOf(row)))!;
 
+  /** The profile as the API shows it, with its issuer found. */
+  const shown = async (row: ProfileRow, issuer: FoundEnrollmentIssuer) => toProfile(row, issuer, baseURL, clock(), issuer.kind === "adcs" && (await raCertificates.requesting(db, row.id)));
+
   /** The Organization's issuer `issuer`, which must take an Enrollment Profile; a 422 otherwise. */
   async function issuerTaking(orgId: string, issuer: EnrollmentIssuer) {
     const found = await issuers.find(db, orgId, issuer);
-    if (!found) throw new HttpError(422, "the Organization has no such Issuing CA");
+    if (!found) throw new HttpError(422, issuer.kind === "adcs" ? "the Organization has no such ADCS CA, or it has no such Certificate Template" : "the Organization has no such Issuing CA");
     const refusal = issuers.profileRefusal(found);
     if (refusal) throw new HttpError(422, refusal);
     return { issuer, found };
@@ -187,7 +211,7 @@ export function registerEnrollmentProfiles(ctx: {
    * A new RA for the profile with this public id: a software RSA key (PKCS #8 PEM) and a certificate the issuer's CA
    * issues for it. A 422 when that CA does not issue.
    */
-  async function makeRa(orgId: string, issuer: EnrollmentIssuer, publicId: string) {
+  async function makeRa(orgId: string, issuer: EnrollmentIssuer & { kind: "private_ca" }, publicId: string) {
     const key = generateKeyPairSync("rsa", { modulusLength: 2048 });
     try {
       const certificate = await issuers.issueRa(db, orgId, issuer, {
@@ -202,8 +226,21 @@ export function registerEnrollmentProfiles(ctx: {
     }
   }
 
-  /** The RA certificate as Audit Events name it. */
-  const raOf = (certificate: x509.X509Certificate) => ({ serial: certificate.serialNumber.toUpperCase(), notAfter: certificate.notAfter.toISOString() });
+  /** A new RA key, a software RSA key (PKCS #8 PEM), for ADCS to certify. */
+  const newRaKeyPem = () => generateKeyPairSync("rsa", { modulusLength: 2048 }).privateKey.export({ format: "pem", type: "pkcs8" }).toString();
+
+  /**
+   * The device keys a profile on the issuer allows, as asked (the defaults unless given): on an ADCS CA, each must be one
+   * its template takes (422), and of the defaults only those are. A 422 when that leaves none.
+   */
+  function allowedKeyTypesOn(found: FoundEnrollmentIssuer, asked: DeviceKeyType[] | undefined): DeviceKeyType[] {
+    if (found.kind !== "adcs") return asked ?? DEFAULT_DEVICE_KEY_TYPES;
+    const taken = templateKeyAlgorithms(found.template, asked ?? DEFAULT_DEVICE_KEY_TYPES);
+    const refused = (asked ?? []).filter((type) => !taken.includes(type));
+    if (refused.length > 0) throw new HttpError(422, `the Certificate Template ${found.template.name} does not take ${refused.join(", ")}`);
+    if (taken.length === 0) throw new HttpError(422, `the Certificate Template ${found.template.name} takes none of the device keys a profile allows`);
+    return taken;
+  }
 
   app.openapi(
     createRoute({
@@ -238,7 +275,7 @@ export function registerEnrollmentProfiles(ctx: {
       const { orgId } = c.req.valid("param");
       await authorize(await requireUser(c), orgId, { enrollmentProfile: ["read"] });
       const rows = await db.select().from(enrollmentProfile).where(eq(enrollmentProfile.organizationId, orgId)).orderBy(asc(enrollmentProfile.createdAt), asc(enrollmentProfile.id));
-      const items = await Promise.all(rows.map(async (row) => toProfile(row, await issuerOfProfile(row), baseURL, clock())));
+      const items = await Promise.all(rows.map(async (row) => shown(row, await issuerOfProfile(row))));
       return c.json({ items }, 200);
     },
   );
@@ -248,9 +285,13 @@ export function registerEnrollmentProfiles(ctx: {
       method: "post",
       path: "/api/organizations/{orgId}/enrollment-profiles",
       tags: ["Enrollment Profiles"],
-      summary: "Create an Enrollment Profile on an Issuing CA",
+      summary: "Create an Enrollment Profile on an Issuing CA or an ADCS CA",
       description:
-        "`issuingCaId` must be an active Issuing CA of one of the Organization's Private CAs, under an active root (422 otherwise). `validator.kind` must be one the platform runs (`.../enrollment-validator-kinds`; 422 otherwise), with the `settings` its kind takes and, when it takes one, its `secret`, which is stored as a Secret and never shown (400 otherwise). " +
+        "`issuingCaId` must be an active Issuing CA of one of the Organization's Private CAs, under an active root (422 otherwise). " +
+        "Or, in its place, `adcs` names one of the Organization's ADCS CAs (`adcsCaId`), the Certificate Template its Device Certificates are issued under (`templateId`), which must be offered for devices (available, not hidden, with Client Authentication), and the one its RA certificate is issued under (`raTemplateId`), which must be available (422 otherwise). " +
+        "The template decides the validity, key usage and extended key usages of what it issues, so a profile on an ADCS CA takes no `validityDays`, `keyUsage` or `extendedKeyUsage` (400), and its `allowedKeyTypes` must be keys the template takes (422; those of the defaults it takes unless given). " +
+        "ADCS issues its RA certificate through an Agent, later: it serves SCEP only once that is issued (`raCertificate`). A device's request it allows is submitted to ADCS and answered PENDING until ADCS issues it, denies it, or holds it 7 days. Exactly one of `issuingCaId` and `adcs` (400). " +
+        "`validator.kind` must be one the platform runs (`.../enrollment-validator-kinds`; 422 otherwise), with the `settings` its kind takes and, when it takes one, its `secret`, which is stored as a Secret and never shown (400 otherwise). " +
         "A profile whose validator does not vouch for names may carry `nameRules`, which a device's names must keep; without them it issues the names a device asks for, within the Issuing CA's permitted name rules. One whose validator vouches for names must have none (422 otherwise). " +
         "When its validator's kind uses a Shared Challenge, the platform makes one and returns it, as `sharedChallenge.challenge`, in this response only: it keeps only its hash, so it is never shown again. Every device presents it as its CSR's challengePassword. " +
         "Device Certificates are valid for `validityDays` (365 unless given, or 90 when its validator's kind uses a Shared Challenge, since nothing revokes those automatically), never past the Issuing CA's end, with `keyUsage` (digitalSignature and keyEncipherment unless given) and `extendedKeyUsage` (clientAuth unless given), " +
@@ -265,11 +306,12 @@ export function registerEnrollmentProfiles(ctx: {
             "application/json": {
               schema: z.object({
                 name: z.string().trim().min(1).max(100),
-                issuingCaId: z.string(),
+                issuingCaId: z.string().optional(),
+                adcs: z.object({ adcsCaId: z.string(), templateId: z.string(), raTemplateId: z.string() }).optional(),
                 validityDays: z.number().int().min(1).max(MAX_DEVICE_VALIDITY_DAYS).optional(),
-                keyUsage: nonEmptyUnique(z.enum(DEVICE_KEY_USAGES)).default(DEFAULT_DEVICE_KEY_USAGES),
-                extendedKeyUsage: nonEmptyUnique(z.enum(DEVICE_EXTENDED_KEY_USAGE_NAMES)).default(DEFAULT_DEVICE_EXTENDED_KEY_USAGES),
-                allowedKeyTypes: nonEmptyUnique(z.enum(DEVICE_KEY_TYPES)).default(DEFAULT_DEVICE_KEY_TYPES),
+                keyUsage: nonEmptyUnique(z.enum(DEVICE_KEY_USAGES)).optional(),
+                extendedKeyUsage: nonEmptyUnique(z.enum(DEVICE_EXTENDED_KEY_USAGE_NAMES)).optional(),
+                allowedKeyTypes: nonEmptyUnique(z.enum(DEVICE_KEY_TYPES)).optional(),
                 validator: z.object({ kind: z.string(), settings: z.record(z.string(), z.unknown()).default({}), secret: z.string().optional() }),
                 nameRules: NameRules.optional(),
                 retentionDays: RetentionDays.default(DEFAULT_DEVICE_RETENTION_DAYS),
@@ -292,7 +334,13 @@ export function registerEnrollmentProfiles(ctx: {
       if (!kind.secret && body.validator.secret !== undefined) throw new HttpError(400, `validator.secret: an Enrollment Validator of the kind ${body.validator.kind} takes none`);
       const validatorSecret = kind.secret ? refuse("validator.secret", kind.secret, body.validator.secret) : undefined;
       if (kind.vouchesForNames && body.nameRules) throw new HttpError(422, `an Enrollment Validator of the kind ${body.validator.kind} vouches for the names a device asks for, so the profile takes no name rules`);
+      if ((body.issuingCaId === undefined) === (body.adcs === undefined)) throw new HttpError(400, "give exactly one of issuingCaId and adcs");
+      if (body.adcs) {
+        const chosen = (["validityDays", "keyUsage", "extendedKeyUsage"] as const).filter((field) => body[field] !== undefined);
+        if (chosen.length > 0) throw new HttpError(400, `${chosen.join(", ")}: a profile on an ADCS CA takes none, since its Certificate Template decides them`);
+      }
       const { issuer, found } = await issuerTaking(orgId, enrollmentIssuerAsked(body));
+      const allowedKeyTypes = allowedKeyTypesOn(found, body.allowedKeyTypes);
 
       const taken = () => new HttpError(409, `the Organization already has an Enrollment Profile named ${body.name}`);
       const [named] = await db
@@ -302,10 +350,13 @@ export function registerEnrollmentProfiles(ctx: {
       if (named) throw taken();
 
       const publicId = randomBytes(16).toString("hex");
-      const ra = await makeRa(orgId, issuer, publicId);
+      // On an ADCS CA, only the key is made now: its certificate is asked of ADCS on the change that creates the profile.
+      const ra = issuer.kind === "private_ca" ? await makeRa(orgId, issuer, publicId) : { certificate: null, privateKeyPem: newRaKeyPem() };
       const raCertificate = ra.certificate;
       const shared = kind.usesSharedChallenge ? sharedChallenges.issue() : undefined;
-      const validityDays = body.validityDays ?? (shared ? DEFAULT_SHARED_CHALLENGE_VALIDITY_DAYS : DEFAULT_DEVICE_VALIDITY_DAYS);
+      const validityDays = issuer.kind === "adcs" ? null : (body.validityDays ?? (shared ? DEFAULT_SHARED_CHALLENGE_VALIDITY_DAYS : DEFAULT_DEVICE_VALIDITY_DAYS));
+      const keyUsage = issuer.kind === "adcs" ? [] : (body.keyUsage ?? DEFAULT_DEVICE_KEY_USAGES);
+      const extendedKeyUsage = issuer.kind === "adcs" ? [] : (body.extendedKeyUsage ?? DEFAULT_DEVICE_EXTENDED_KEY_USAGES);
 
       try {
         const row = await unitOfWork.run(actor, async (tx, change) => {
@@ -319,16 +370,16 @@ export function registerEnrollmentProfiles(ctx: {
               publicId,
               ...enrollmentIssuerColumns(issuer),
               validityDays,
-              keyUsage: body.keyUsage,
-              extendedKeyUsage: body.extendedKeyUsage,
-              allowedKeyTypes: body.allowedKeyTypes,
+              keyUsage,
+              extendedKeyUsage,
+              allowedKeyTypes,
               validatorKind: body.validator.kind,
               validatorSettings: settings,
               validatorSecretId,
               nameRules: body.nameRules ?? null,
               ...shared?.held,
               retentionDays: body.retentionDays,
-              raCertificatePem: raCertificate.toString("pem"),
+              raCertificatePem: raCertificate?.toString("pem") ?? null,
               raKeySecretId,
             })
             .returning();
@@ -338,21 +389,22 @@ export function registerEnrollmentProfiles(ctx: {
             target: { type: "enrollment_profile", id: row!.id },
             detail: {
               name: body.name,
-              issuingCa: enrollmentIssuerDetail(found),
+              ...enrollmentIssuerDetail(found),
               validityDays,
-              keyUsage: body.keyUsage,
-              extendedKeyUsage: body.extendedKeyUsage,
-              allowedKeyTypes: body.allowedKeyTypes,
+              keyUsage,
+              extendedKeyUsage,
+              allowedKeyTypes,
               validator: { kind: body.validator.kind, settings },
               nameRules: body.nameRules ?? null,
               ...(shared && { sharedChallenge: { id: shared.shown.id } }),
               retentionDays: body.retentionDays,
-              raCertificate: raOf(raCertificate),
+              raCertificate: raCertificate && raOf(raCertificate),
             },
           });
+          if (issuer.kind === "adcs") await raCertificates.request(tx, change, row!);
           return row!;
         });
-        return c.json({ ...toProfile(row, found, baseURL, clock()), sharedChallenge: shared?.shown ?? null }, 201);
+        return c.json({ ...(await shown(row, found)), sharedChallenge: shared?.shown ?? null }, 201);
       } catch (err) {
         if (isUniqueViolation(err)) throw taken();
         throw err;
@@ -372,7 +424,7 @@ export function registerEnrollmentProfiles(ctx: {
       const { orgId, id } = c.req.valid("param");
       await authorize(await requireUser(c), orgId, { enrollmentProfile: ["read"] });
       const { row, issuer } = await findProfile(orgId, id);
-      return c.json(toProfile(row, issuer, baseURL, clock()), 200);
+      return c.json(await shown(row, issuer), 200);
     },
   );
 
@@ -436,7 +488,7 @@ export function registerEnrollmentProfiles(ctx: {
    */
   async function locked(tx: Tx, read: ProfileRow) {
     const [row] = await tx.select().from(enrollmentProfile).where(eq(enrollmentProfile.id, read.id)).for("update");
-    const changed = (["enabled", "issuerKind", "issuingCaId", "retentionDays", "raCertificatePem"] as const).some((field) => row![field] !== read[field]);
+    const changed = (["enabled", "issuerKind", "issuingCaId", "adcsCaId", "retentionDays", "raCertificatePem"] as const).some((field) => row![field] !== read[field]);
     if (changed) throw new HttpError(409, "the Enrollment Profile was changed meanwhile; ask again");
     return row!;
   }
@@ -466,7 +518,7 @@ export function registerEnrollmentProfiles(ctx: {
         await change.audit({ organizationId: orgId, action: "enrollment_profile.disabled", target: { type: "enrollment_profile", id }, detail: { name: current.name } });
         return row!;
       });
-      return c.json(toProfile(row, issuer, baseURL, clock()), 200);
+      return c.json(await shown(row, issuer), 200);
     },
   );
 
@@ -477,11 +529,11 @@ export function registerEnrollmentProfiles(ctx: {
       tags: ["Enrollment Profiles"],
       summary: "Point an Enrollment Profile at another Issuing CA, or change its retention period, name rules or allowed device keys",
       description:
-        "`issuingCaId` must be an active Issuing CA of one of the Organization's Private CAs, under an active root (422 otherwise): the way on once the profile's Issuing CA is retired, which refuses enrollment until then. " +
+        "`issuingCaId` must be an active Issuing CA of one of the Organization's Private CAs, under an active root (422 otherwise): the way on once the profile's Issuing CA is retired, which refuses enrollment until then. A profile on an ADCS CA is not pointed elsewhere (422): create another. " +
         "The new Issuing CA signs a new RA certificate for a new RA key, which `GetCACert` serves from then on with the new chain, so redeploy the trusted certificate profile in the device management platform when the root changes. " +
         "Device Certificates already issued stay their Issuing CA's, on its CRL once revoked. `retentionDays` is how many days after it ends a Device Certificate is pruned. " +
         "`nameRules` replaces the name rules of a profile whose validator does not vouch for names, from its next request on, and null removes them, so that it issues the names a device asks for within its Issuing CA's permitted name rules; a profile whose validator vouches for names takes none (422). " +
-        "`allowedKeyTypes` replaces the device keys it certifies, from its next request on; Device Certificates already issued stay. " +
+        "`allowedKeyTypes` replaces the device keys it certifies, from its next request on (on an ADCS CA, each must be one its template takes; 422); Device Certificates already issued stay. " +
         "What is not given is left as it is; a change that changes nothing is not audited. Only Organization Administrators may.",
       request: {
         params: ProfileParams,
@@ -495,15 +547,17 @@ export function registerEnrollmentProfiles(ctx: {
       const actor = await requireUser(c);
       await authorize(actor, orgId, { enrollmentProfile: ["update"] });
       const found = await findProfile(orgId, id);
-      const asked = body.issuingCaId === undefined ? undefined : enrollmentIssuerAsked({ issuingCaId: body.issuingCaId });
+      if (body.issuingCaId !== undefined && found.issuer.kind === "adcs") throw new HttpError(422, "a profile on an ADCS CA cannot be pointed at an Issuing CA: create another");
+      const asked = body.issuingCaId === undefined ? undefined : { kind: "private_ca" as const, issuingCaId: body.issuingCaId };
       const repointing = asked !== undefined && enrollmentIssuerKey(asked) !== enrollmentIssuerKey(enrollmentIssuerOf(found.row));
       // The issuer it is pointed at and the RA that one issued, when it is pointed at another.
       let to: { issuer: EnrollmentIssuer; found: FoundEnrollmentIssuer; ra: Awaited<ReturnType<typeof makeRa>> } | undefined;
       if (repointing) {
         const taking = await issuerTaking(orgId, asked);
         // Issued before the change, as when a profile is created: the KMS is not asked inside a transaction.
-        to = { ...taking, ra: await makeRa(orgId, taking.issuer, found.row.publicId) };
+        to = { ...taking, ra: await makeRa(orgId, asked, found.row.publicId) };
       }
+      if (body.allowedKeyTypes) allowedKeyTypesOn(found.issuer, body.allowedKeyTypes);
       const retaining = body.retentionDays !== undefined && body.retentionDays !== found.row.retentionDays;
       if (body.nameRules) {
         const kind = kindOf(kinds, found.row.validatorKind);
@@ -512,7 +566,7 @@ export function registerEnrollmentProfiles(ctx: {
       }
       const changingNameRules = body.nameRules !== undefined && !isDeepStrictEqual(body.nameRules, found.row.nameRules);
       const changingKeyTypes = body.allowedKeyTypes !== undefined && !isDeepStrictEqual(body.allowedKeyTypes, found.row.allowedKeyTypes);
-      if (!to && !retaining && !changingNameRules && !changingKeyTypes) return c.json(toProfile(found.row, found.issuer, baseURL, clock()), 200);
+      if (!to && !retaining && !changingNameRules && !changingKeyTypes) return c.json(await shown(found.row, found.issuer), 200);
 
       const row = await unitOfWork.run(actor, async (tx, change) => {
         const current = await locked(tx, found.row);
@@ -529,7 +583,7 @@ export function registerEnrollmentProfiles(ctx: {
           detail: {
             name: current.name,
             changes: {
-              ...(to && { issuingCa: { from: enrollmentIssuerDetail(found.issuer), to: enrollmentIssuerDetail(to.found) } }),
+              ...(to && { issuingCa: { from: enrollmentIssuerDetail(found.issuer).issuingCa, to: enrollmentIssuerDetail(to.found).issuingCa } }),
               ...(retaining && { retentionDays: { from: current.retentionDays, to: body.retentionDays } }),
               ...(changingNameRules && { nameRules: { from: current.nameRules, to: body.nameRules } }),
               ...(changingKeyTypes && { allowedKeyTypes: { from: current.allowedKeyTypes, to: body.allowedKeyTypes } }),
@@ -539,7 +593,7 @@ export function registerEnrollmentProfiles(ctx: {
         });
         return row!;
       });
-      return c.json(toProfile(row, to?.found ?? found.issuer, baseURL, clock()), 200);
+      return c.json(await shown(row, to?.found ?? found.issuer), 200);
     },
   );
 
@@ -551,7 +605,9 @@ export function registerEnrollmentProfiles(ctx: {
       summary: "Replace an Enrollment Profile's RA certificate and key, before the certificate ends",
       description:
         "The profile's Issuing CA signs a new RA certificate for a new RA key, valid for two years but never past the Issuing CA's end (422 when the Issuing CA does not issue). " +
-        "`GetCACert` serves it from then on; a request encrypted to the old RA certificate is no longer opened, and its device enrolls again. Only Organization Administrators may.",
+        "`GetCACert` serves it from then on; a request encrypted to the old RA certificate is no longer opened, and its device enrolls again. " +
+        "On an ADCS CA, ADCS is asked, through an Agent, for an RA certificate for a new key under the profile's RA template (`raRequested`), or for its first one again when it has none: the current RA certificate and key serve until it is issued, and are replaced then (409 while one is asked for already; 422 when the RA template is unavailable). The platform asks by itself once a third of the RA certificate's life is left. " +
+        "Only Organization Administrators may.",
       request: { params: ProfileParams },
       responses: { 200: json(EnrollmentProfile, "Rotated"), ...errors(401, 403, 404, 409, 422) },
     }),
@@ -562,7 +618,17 @@ export function registerEnrollmentProfiles(ctx: {
       const found = await findProfile(orgId, id);
       const refusal = issuers.profileRefusal(found.issuer);
       if (refusal) throw new HttpError(422, refusal);
-      const ra = await makeRa(orgId, enrollmentIssuerOf(found.row), found.row.publicId);
+      const issuer = enrollmentIssuerOf(found.row);
+      if (issuer.kind === "adcs") {
+        const row = await unitOfWork.run(actor, async (tx, change) => {
+          const current = await locked(tx, found.row);
+          if (await raCertificates.requesting(tx, id)) throw new HttpError(409, "ADCS is being asked for the profile's RA certificate already");
+          await raCertificates.request(tx, change, current);
+          return current;
+        });
+        return c.json(await shown(row, found.issuer), 200);
+      }
+      const ra = await makeRa(orgId, issuer, found.row.publicId);
       const row = await unitOfWork.run(actor, async (tx, change) => {
         const current = await locked(tx, found.row);
         await secrets.replace(tx, orgId, current.raKeySecretId, ra.privateKeyPem);
@@ -571,11 +637,11 @@ export function registerEnrollmentProfiles(ctx: {
           organizationId: orgId,
           action: "enrollment_profile.ra_rotated",
           target: { type: "enrollment_profile", id },
-          detail: { name: current.name, from: raOf(new x509.X509Certificate(current.raCertificatePem)), to: raOf(ra.certificate) },
+          detail: { name: current.name, from: raOf(new x509.X509Certificate(current.raCertificatePem!)), to: raOf(ra.certificate) },
         });
         return row!;
       });
-      return c.json(toProfile(row, found.issuer, baseURL, clock()), 200);
+      return c.json(await shown(row, found.issuer), 200);
     },
   );
 
@@ -597,8 +663,8 @@ export function registerEnrollmentProfiles(ctx: {
       const actor = await requireUser(c);
       await authorize(actor, orgId, { enrollmentProfile: ["update"] });
       const found = await findProfile(orgId, id);
-      const { row, shown } = await sharedChallenges.rotate(actor, found.row, previousExpiresAt);
-      return c.json({ ...toProfile(row, found.issuer, baseURL, clock()), sharedChallenge: shown }, 200);
+      const { row, shown: shownChallenge } = await sharedChallenges.rotate(actor, found.row, previousExpiresAt);
+      return c.json({ ...(await shown(row, found.issuer)), sharedChallenge: shownChallenge }, 200);
     },
   );
 
@@ -619,7 +685,7 @@ export function registerEnrollmentProfiles(ctx: {
       await authorize(actor, orgId, { enrollmentProfile: ["update"] });
       const found = await findProfile(orgId, id);
       const row = await sharedChallenges.retire(actor, found.row);
-      return c.json(toProfile(row, found.issuer, baseURL, clock()), 200);
+      return c.json(await shown(row, found.issuer), 200);
     },
   );
 }

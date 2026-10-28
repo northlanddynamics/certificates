@@ -622,8 +622,15 @@ export const enrollmentProfile = pgTable(
     issuerKind: text("issuer_kind").$type<EnrollmentIssuerKind>().notNull().default("private_ca"),
     /** The Private CA kind's reference: the Issuing CA, of one of the Organization's Private CAs. */
     issuingCaId: uuid("issuing_ca_id"),
-    /** How long its Device Certificates are valid for, in days, though never past the Issuing CA's end. */
-    validityDays: integer("validity_days").notNull(),
+    /**
+     * The ADCS kind's reference: the Organization's ADCS CA, the Certificate Template of it its Device Certificates are
+     * issued under, and the one its RA certificate is.
+     */
+    adcsCaId: uuid("adcs_ca_id"),
+    adcsTemplateId: uuid("adcs_template_id"),
+    adcsRaTemplateId: uuid("adcs_ra_template_id"),
+    /** How long its Device Certificates are valid for, in days, though never past the Issuing CA's end; none on an ADCS CA, whose template decides. */
+    validityDays: integer("validity_days"),
     keyUsage: text("key_usage").array().$type<DeviceKeyUsage[]>().notNull(),
     extendedKeyUsage: text("extended_key_usage").array().$type<DeviceExtendedKeyUsage[]>().notNull(),
     allowedKeyTypes: text("allowed_key_types").array().$type<DeviceKeyType[]>().notNull(),
@@ -643,9 +650,14 @@ export const enrollmentProfile = pgTable(
     previousSharedChallengeId: uuid("previous_shared_challenge_id"),
     previousSharedChallengeHash: text("previous_shared_challenge_hash"),
     previousSharedChallengeExpiresAt: timestamp("previous_shared_challenge_expires_at", { withTimezone: true }),
-    /** Its RA certificate (PEM), and the Secret holding the RA's private key (PKCS #8 PEM). */
-    raCertificatePem: text("ra_certificate_pem").notNull(),
+    /**
+     * Its RA certificate (PEM), and the Secret holding the RA's private key (PKCS #8 PEM). On an ADCS CA it has no RA
+     * certificate until ADCS first issues one for the key, and serves no SCEP until then.
+     */
+    raCertificatePem: text("ra_certificate_pem"),
     raKeySecretId: uuid("ra_key_secret_id").notNull(),
+    /** On an ADCS CA, the Secret holding the key of the RA certificate that replaces the current one, while ADCS is asked for it. */
+    nextRaKeySecretId: uuid("next_ra_key_secret_id"),
     /** Whether it takes enrollment requests; a disabled profile refuses every one, and keeps what it issued. It is never enabled again. */
     enabled: boolean("enabled").notNull().default(true),
     /** How many days after its notAfter a Device Certificate it issued is pruned (device-certificate-pruning.ts). */
@@ -656,12 +668,19 @@ export const enrollmentProfile = pgTable(
     unique("enrollment_profile_organization_name_unique").on(t.organizationId, t.name),
     unique("enrollment_profile_public_id_unique").on(t.publicId),
     foreignKey({ columns: [t.issuingCaId, t.organizationId], foreignColumns: [issuingCa.id, issuingCa.organizationId] }),
+    foreignKey({ columns: [t.adcsCaId, t.organizationId], foreignColumns: [adcsCa.id, adcsCa.organizationId] }),
+    foreignKey({ columns: [t.adcsTemplateId, t.adcsCaId], foreignColumns: [adcsTemplate.id, adcsTemplate.adcsCaId] }),
+    foreignKey({ columns: [t.adcsRaTemplateId, t.adcsCaId], foreignColumns: [adcsTemplate.id, adcsTemplate.adcsCaId] }),
     foreignKey({ columns: [t.raKeySecretId, t.organizationId], foreignColumns: [secret.id, secret.organizationId] }),
+    foreignKey({ columns: [t.nextRaKeySecretId, t.organizationId], foreignColumns: [secret.id, secret.organizationId] }),
     foreignKey({ columns: [t.validatorSecretId, t.organizationId], foreignColumns: [secret.id, secret.organizationId] }),
     // Lets other tables reference a profile together with its Organization, so none can point at another's.
     unique("enrollment_profile_id_organization_unique").on(t.id, t.organizationId),
-    check("enrollment_profile_issuer_kind", sql`(${t.issuerKind} = 'private_ca' and ${t.issuingCaId} is not null)`),
-    check("enrollment_profile_validity", sql`${t.validityDays} >= 1`),
+    check(
+      "enrollment_profile_issuer_kind",
+      sql`(${t.issuerKind} = 'private_ca' and ${t.issuingCaId} is not null and ${t.adcsCaId} is null and ${t.adcsTemplateId} is null and ${t.adcsRaTemplateId} is null and ${t.raCertificatePem} is not null and ${t.nextRaKeySecretId} is null) or (${t.issuerKind} = 'adcs' and ${t.adcsCaId} is not null and ${t.adcsTemplateId} is not null and ${t.adcsRaTemplateId} is not null and ${t.issuingCaId} is null)`,
+    ),
+    check("enrollment_profile_validity", sql`(${t.issuerKind} = 'adcs') = (${t.validityDays} is null) and (${t.validityDays} is null or ${t.validityDays} >= 1)`),
     check("enrollment_profile_retention", sql`${t.retentionDays} >= 0`),
     check("enrollment_profile_shared_challenge", sql`(${t.sharedChallengeId} is null) = (${t.sharedChallengeHash} is null)`),
     check(
@@ -758,6 +777,10 @@ export const deviceCertificate = pgTable(
     /** The issuer (enrollment-issuer.ts) it came from, its profile's then: its kind, and for a Private CA the Issuing CA that signed it, whose CRL lists it once revoked. */
     issuerKind: text("issuer_kind").$type<EnrollmentIssuerKind>().notNull().default("private_ca"),
     issuingCaId: uuid("issuing_ca_id"),
+    /** For an ADCS CA: the CA, the Certificate Template it was issued under, and ADCS's ID of the request that issued it. */
+    adcsCaId: uuid("adcs_ca_id"),
+    adcsTemplateId: uuid("adcs_template_id"),
+    adcsRequestId: text("adcs_request_id"),
     /** Its serial number, upper-case hex, and the SHA-256 of its DER, lower-case hex. */
     serial: text("serial").notNull(),
     fingerprint: text("fingerprint").notNull(),
@@ -783,6 +806,8 @@ export const deviceCertificate = pgTable(
   (t) => [
     foreignKey({ columns: [t.enrollmentProfileId, t.organizationId], foreignColumns: [enrollmentProfile.id, enrollmentProfile.organizationId] }),
     foreignKey({ columns: [t.issuingCaId, t.organizationId], foreignColumns: [issuingCa.id, issuingCa.organizationId] }),
+    foreignKey({ columns: [t.adcsCaId, t.organizationId], foreignColumns: [adcsCa.id, adcsCa.organizationId] }),
+    foreignKey({ columns: [t.adcsTemplateId, t.adcsCaId], foreignColumns: [adcsTemplate.id, adcsTemplate.adcsCaId] }),
     unique("device_certificate_organization_fingerprint_unique").on(t.organizationId, t.fingerprint),
     index("device_certificate_profile_idx").on(t.enrollmentProfileId, t.createdAt),
     index("device_certificate_serial_idx").on(t.organizationId, t.serial),
@@ -791,7 +816,10 @@ export const deviceCertificate = pgTable(
     // What the weak-key filter looks for (WEAK_DEVICE_KEY_TYPE), a few among many.
     index("device_certificate_weak_key_idx").on(t.enrollmentProfileId).where(sql`${t.keyType} = 'rsa-1024'`),
     index("device_certificate_revoked_idx").on(t.issuingCaId).where(sql`${t.revokedAt} is not null`),
-    check("device_certificate_issuer_kind", sql`(${t.issuerKind} = 'private_ca' and ${t.issuingCaId} is not null)`),
+    check(
+      "device_certificate_issuer_kind",
+      sql`(${t.issuerKind} = 'private_ca' and ${t.issuingCaId} is not null and ${t.adcsCaId} is null and ${t.adcsTemplateId} is null and ${t.adcsRequestId} is null) or (${t.issuerKind} = 'adcs' and ${t.adcsCaId} is not null and ${t.adcsTemplateId} is not null and ${t.adcsRequestId} is not null and ${t.issuingCaId} is null)`,
+    ),
     check("device_certificate_revocation", sql`(${t.revokedAt} is null) = (${t.revocationReason} is null)`),
     check("device_certificate_revocation_reason", sql`${t.revocationReason} in ('unspecified', 'keyCompromise', 'affiliationChanged', 'superseded', 'cessationOfOperation', 'privilegeWithdrawn')`),
   ],
@@ -860,11 +888,19 @@ export const scepTransaction = pgTable(
     /** What it was answered: the Device Certificate it was issued, or why it was refused; neither while it is decided. */
     deviceCertificateId: uuid("device_certificate_id").references(() => deviceCertificate.id, { onDelete: "cascade" }),
     refusal: text("refusal"),
+    /**
+     * For a profile on an ADCS CA, the request (`adcs_request`) its CSR was submitted as once it was decided: it is
+     * pending until that request ends, and answered then. What it was decided with, which its Device Certificate records.
+     */
+    adcsRequestId: uuid("adcs_request_id").references(() => adcsRequest.id),
+    decided: jsonb("decided").$type<{ keyType: DeviceKeyType; sharedChallengeId: string | null; renewalOf: { id: string; serial: string } | null }>(),
   },
   (t) => [
     foreignKey({ columns: [t.enrollmentProfileId, t.organizationId], foreignColumns: [enrollmentProfile.id, enrollmentProfile.organizationId] }),
     unique("scep_transaction_profile_transaction_unique").on(t.enrollmentProfileId, t.transactionId),
+    uniqueIndex("scep_transaction_adcs_request_unique").on(t.adcsRequestId),
     check("scep_transaction_answer", sql`${t.deviceCertificateId} is null or ${t.refusal} is null`),
+    check("scep_transaction_adcs_request", sql`(${t.adcsRequestId} is null) = (${t.decided} is null)`),
   ],
 );
 
@@ -1128,7 +1164,8 @@ export const adcsTemplate = pgTable(
 );
 
 /**
- * A request to an ADCS CA for an Issuance (adcs-issuance.ts): the CSR an Agent submits under the template, as `adcs.submit`,
+ * A request to an ADCS CA (adcs-issuance.ts), for an Issuance, or for an Enrollment Profile: a device's, whose SCEP
+ * transaction waits for it, or the profile's RA certificate. The CSR an Agent submits under the template, as `adcs.submit`,
  * to one online assigned Agent at a time. It `waiting`s while no assigned Agent is online, is `submitted` while one has the
  * work item, and ends `issued` (with ADCS's request ID and the Certificate) or `failed`. An Agent that cannot reach the CA
  * is recorded in `triedAgentIds`, and another is given it.
@@ -1142,9 +1179,11 @@ export const adcsRequest = pgTable(
       .references(() => organization.id),
     adcsCaId: uuid("adcs_ca_id").notNull(),
     templateId: uuid("template_id").notNull(),
-    issuanceId: uuid("issuance_id")
-      .notNull()
-      .references(() => issuance.id),
+    /** What it is for: an Issuance's Certificate, a device's Device Certificate, or an Enrollment Profile's RA certificate. */
+    purpose: text("purpose").$type<"issuance" | "device" | "ra">().notNull().default("issuance"),
+    issuanceId: uuid("issuance_id").references(() => issuance.id),
+    /** The Enrollment Profile a device's or an RA certificate's request is for. */
+    enrollmentProfileId: uuid("enrollment_profile_id"),
     csr: text("csr").notNull(),
     /** `pending` once ADCS holds it for a CA manager's approval, until it is issued, denied, or pending too long. */
     status: text("status").$type<"waiting" | "submitted" | "pending" | "issued" | "failed">().notNull(),
@@ -1175,6 +1214,9 @@ export const adcsRequest = pgTable(
       .where(sql`${t.status} in ('waiting', 'submitted', 'pending')`),
     foreignKey({ columns: [t.adcsCaId, t.organizationId], foreignColumns: [adcsCa.id, adcsCa.organizationId] }),
     foreignKey({ columns: [t.templateId, t.adcsCaId], foreignColumns: [adcsTemplate.id, adcsTemplate.adcsCaId] }),
+    foreignKey({ columns: [t.enrollmentProfileId, t.organizationId], foreignColumns: [enrollmentProfile.id, enrollmentProfile.organizationId] }),
+    index("adcs_request_enrollment_profile_idx").on(t.enrollmentProfileId, t.createdAt),
+    check("adcs_request_purpose", sql`(${t.purpose} = 'issuance' and ${t.issuanceId} is not null and ${t.enrollmentProfileId} is null) or (${t.purpose} in ('device', 'ra') and ${t.enrollmentProfileId} is not null and ${t.issuanceId} is null)`),
     check("adcs_request_status", sql`${t.status} in ('waiting', 'submitted', 'pending', 'issued', 'failed')`),
     check(
       "adcs_request_pending",

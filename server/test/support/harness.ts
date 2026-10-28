@@ -126,6 +126,8 @@ export interface Harness {
    * Returns how many it looked at.
    */
   runAdcsRequests(): Promise<number>;
+  /** One pass of asking ADCS for the RA certificates of Enrollment Profiles on an ADCS CA that are due, at the harness's clock. Returns how many it asked for. */
+  renewAdcsRaCertificates(): Promise<number>;
   /** The KMS as the platform sees it: `failing` makes every signature it is asked for fail. */
   kms: { failing: boolean };
   /** The SCEP routes' rate limits (see `ScepConfig`), which a test may lower; the platform's defaults again after reset. */
@@ -297,7 +299,7 @@ export async function createHarness(overrides: Partial<AppDeps> = {}, { database
     enrollmentValidators: { test_allow: allowing(true), test_names: allowing(false), test_renewal: allowing(true, true), test_double: validatorDouble.kind(), intune: createIntuneKind({ fetch: intune.fetch }), shared_challenge: sharedChallenge },
     ...overrides,
   };
-  const { app, auth, db, unitOfWork, issuances, revocations: certificateRevocations, renewals, adcsDiscovery, adcsIssuance, notifications, auditForwarding, crls, enrollmentValidators, deviceCertificatePruning, sharedChallenges, deviceCertificateRevocations, deviceEnrollment, scep: scepRoutes } = createApp(deps);
+  const { app, auth, db, unitOfWork, issuances, revocations: certificateRevocations, renewals, adcsDiscovery, adcsIssuance, adcsRaCertificates, notifications, auditForwarding, crls, enrollmentValidators, deviceCertificatePruning, sharedChallenges, deviceCertificateRevocations, deviceEnrollment, scep: scepRoutes } = createApp(deps);
   heldIssuer.reportTo(issuances, certificateRevocations);
   if (migrate) await runMigrations(pool);
   const reset = async () => {
@@ -357,6 +359,7 @@ export async function createHarness(overrides: Partial<AppDeps> = {}, { database
     runCrlScheduler: () => crls.tick(),
     runAdcsDiscovery: () => adcsDiscovery.discoverDue(),
     runAdcsRequests: () => adcsIssuance.tick(),
+    renewAdcsRaCertificates: () => adcsRaCertificates.renewDue(),
     kms: kmsState,
     scepRateLimit: scep,
     ari,

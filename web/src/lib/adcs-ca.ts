@@ -30,6 +30,22 @@ export const assignableAgents = (agents: Agent[], chosen: string[]) => agents.fi
 export const adcsTlsChoices = (cas: AdcsCa[]) =>
   cas.map((ca) => ({ ca, templates: ca.templates.filter((t) => ca.offered.tls.includes(t.id)) })).filter((choice) => choice.templates.length > 0);
 
+/** The ADCS CAs as an Enrollment Profile's issuer picker offers them: each with those of its templates offered for devices (with Client Authentication), and none without any. */
+export const adcsDeviceChoices = (cas: AdcsCa[]) =>
+  cas.map((ca) => ({ ca, templates: ca.templates.filter((t) => ca.offered.devices.includes(t.id)) })).filter((choice) => choice.templates.length > 0);
+
+/** The templates of the ADCS CA an Enrollment Profile's RA certificate may be issued under: any available one not hidden, whatever its EKUs. */
+export const adcsRaTemplates = (ca: Pick<AdcsCa, "templates">) => ca.templates.filter((t) => t.available && !t.hidden);
+
+/** Where a profile on an ADCS CA stands with its RA certificate, as a phrase; none once it has one and none is asked for. */
+export function raCertificateState(profile: { raCertificate: unknown; raRequested: boolean }) {
+  if (profile.raCertificate === null)
+    return profile.raRequested
+      ? "Waiting for ADCS to issue its RA certificate, through an Agent: it serves no SCEP until then."
+      : "ADCS did not issue its RA certificate, so it serves no SCEP: ask for it again with Rotate RA certificate, or wait for the daily retry.";
+  return profile.raRequested ? "A new RA certificate is asked of ADCS; the current one serves until it is issued." : undefined;
+}
+
 
 /** What keys a template takes, in words: its algorithms, RSA with its minimum size. */
 export const templateKeysLabel = (template: Pick<AdcsTemplate, "keyAlgorithms" | "minimumKeySize">) =>

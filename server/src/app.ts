@@ -29,6 +29,7 @@ import { createDeviceCertificateRevocations } from "./enrollment/device-certific
 import { registerDeviceCertificates } from "./enrollment/device-certificates";
 import { createDeviceCertificatePruning } from "./enrollment/device-certificate-pruning";
 import { createDeviceEnrollment } from "./enrollment/device-enrollment";
+import { createAdcsRaCertificates } from "./enrollment/adcs-ra";
 import { createEnrollmentIssuers } from "./enrollment/enrollment-issuer";
 import { createSharedChallenges } from "./enrollment/shared-challenge";
 import { registerEnrollmentProfiles } from "./enrollment/enrollment-profiles";
@@ -348,11 +349,12 @@ export function createApp(deps: AppDeps) {
   const revocations = createDeviceCertificateRevocations({ revocations: certificateRevocations });
   const enrollmentValidators = createEnrollmentValidatorRuns({ db, unitOfWork, secrets, revocations, kinds: validatorKinds, clock });
   const sharedChallenges = createSharedChallenges({ db, unitOfWork, clock });
-  const enrollmentIssuers = createEnrollmentIssuers({ privateCas });
-  registerEnrollmentProfiles({ app, db, requireUser, authorize, unitOfWork, secrets, issuers: enrollmentIssuers, kinds: validatorKinds, validators: enrollmentValidators, sharedChallenges, baseURL: deps.baseURL, clock });
+  const enrollmentIssuers = createEnrollmentIssuers({ privateCas, adcs: adcsIssuance });
+  const adcsRaCertificates = createAdcsRaCertificates({ db, unitOfWork, secrets, issuers: enrollmentIssuers, adcs: adcsIssuance, clock });
+  registerEnrollmentProfiles({ app, db, requireUser, authorize, unitOfWork, secrets, issuers: enrollmentIssuers, kinds: validatorKinds, validators: enrollmentValidators, sharedChallenges, raCertificates: adcsRaCertificates, baseURL: deps.baseURL, clock });
   registerDeviceCertificates({ app, db, requireUser, authorize, unitOfWork, revocations, clock });
   const deviceCertificatePruning = createDeviceCertificatePruning({ db, unitOfWork, clock });
-  const deviceEnrollment = createDeviceEnrollment({ db, unitOfWork, issuers: enrollmentIssuers, revocations, sharedChallenges, kinds: validatorKinds, validators: enrollmentValidators, transactions: createScepTransactions({ db, clock }), clock });
+  const deviceEnrollment = createDeviceEnrollment({ db, unitOfWork, issuers: enrollmentIssuers, revocations, sharedChallenges, kinds: validatorKinds, validators: enrollmentValidators, transactions: createScepTransactions({ db, clock }), adcs: adcsIssuance, clock });
   const scep = registerScep({ app, db, secrets, issuers: enrollmentIssuers, enrollment: deviceEnrollment, kinds: validatorKinds, clock, config: deps.scep });
   const issuances = createIssuances({ db, unitOfWork, issuers, dcv, clock });
   adcsIssuance.reportTo(issuances);
@@ -423,5 +425,5 @@ export function createApp(deps: AppDeps) {
     }),
   );
 
-  return { app, auth, db, unitOfWork, issuances, renewals, adcsDiscovery, adcsIssuance, notifications, auditForwarding, crls, enrollmentValidators, deviceCertificatePruning, sharedChallenges, deviceCertificateRevocations: revocations, revocations: certificateRevocations, deviceEnrollment, scep };
+  return { app, auth, db, unitOfWork, issuances, renewals, adcsDiscovery, adcsIssuance, adcsRaCertificates, notifications, auditForwarding, crls, enrollmentValidators, deviceCertificatePruning, sharedChallenges, deviceCertificateRevocations: revocations, revocations: certificateRevocations, deviceEnrollment, scep };
 }

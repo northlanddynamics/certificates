@@ -439,7 +439,7 @@ export interface NewPrivateCa {
   permittedNames: PermittedNames;
   validity: PrivateCaValidity;
 }
-/** A template under which devices enroll over SCEP for Device Certificates from an Issuing CA. */
+/** A template under which devices enroll over SCEP for Device Certificates from an Issuing CA, or from an ADCS CA under a Certificate Template. */
 export interface EnrollmentProfile {
   id: string;
   name: string;
@@ -449,9 +449,13 @@ export interface EnrollmentProfile {
   scepUrl: string;
   /** The SHA-256 fingerprint (lower-case hex) of the CA certificate GetCACert serves, which a SCEP profile can be told to expect. */
   caFingerprint: string;
-  issuingCaId: string;
-  privateCaId: string;
-  validityDays: number;
+  /** Its Issuing CA and that CA's Private CA; none on an ADCS CA. */
+  issuingCaId: string | null;
+  privateCaId: string | null;
+  /** Its ADCS CA, the template its Device Certificates are issued under and the one its RA certificate is, and why one of them is unavailable while it is; none on an Issuing CA. */
+  adcs: { adcsCaId: string; templateId: string; raTemplateId: string; templateUnavailable: string | null } | null;
+  /** None on an ADCS CA, whose template decides. */
+  validityDays: number | null;
   keyUsage: DeviceKeyUsage[];
   extendedKeyUsage: DeviceExtendedKeyUsage[];
   allowedKeyTypes: DeviceKeyType[];
@@ -463,7 +467,10 @@ export interface EnrollmentProfile {
   sharedChallenge: { id: string } | null;
   /** The Shared Challenge it held before its last rotation, which devices may still present until `expiresAt`; none when there is none still valid. */
   previousSharedChallenge: { id: string; expiresAt: string } | null;
-  raCertificate: { subject: string; serial: string; notAfter: string };
+  /** None on an ADCS CA until ADCS first issues it: until then the profile serves no SCEP. */
+  raCertificate: { subject: string; serial: string; notAfter: string } | null;
+  /** Whether ADCS is being asked for its RA certificate, the first or one to replace it. */
+  raRequested: boolean;
   /** Whether it takes enrollment requests; a disabled profile refuses every one, and is never enabled again. */
   enabled: boolean;
   /** How many days after it ends a Device Certificate it issued is pruned. */
@@ -486,7 +493,7 @@ export interface DeviceCertificate {
   keyType: DeviceKeyType;
   /** The Shared Challenge its request presented, its profile's current or previous one; none for a renewal, or when the profile uses none. */
   sharedChallenge: { id: string } | null;
-  /** The Issuing CA's subject. */
+  /** The subject of the CA that issued it: its Issuing CA, or its ADCS CA. */
   issuer: string;
   notBefore: string;
   notAfter: string;
@@ -499,10 +506,13 @@ export const DEVICE_CERTIFICATE_STATUSES = ["active", "expired", "revoked"] as c
 export type DeviceCertificateStatus = (typeof DEVICE_CERTIFICATE_STATUSES)[number];
 export interface NewEnrollmentProfile {
   name: string;
-  issuingCaId: string;
-  validityDays: number;
-  keyUsage: DeviceKeyUsage[];
-  extendedKeyUsage: DeviceExtendedKeyUsage[];
+  /** Its Issuing CA, or, in its place, `adcs`. */
+  issuingCaId?: string;
+  adcs?: { adcsCaId: string; templateId: string; raTemplateId: string };
+  /** These three only on an Issuing CA: on an ADCS CA the template decides them. */
+  validityDays?: number;
+  keyUsage?: DeviceKeyUsage[];
+  extendedKeyUsage?: DeviceExtendedKeyUsage[];
   allowedKeyTypes: DeviceKeyType[];
   validator: { kind: string; settings?: Record<string, unknown>; secret?: string };
   nameRules?: NameRules;

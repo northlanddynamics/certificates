@@ -9,20 +9,27 @@
 // left pending; a refusal is an Audit Event. Each request belongs to a transaction, which is answered the same each
 // time it is asked again (scep-transactions.ts). The validator is told the outcome afterwards, in the background
 // (enrollment-validators.ts).
+//
+// A profile on an ADCS CA cannot issue at once: once a request is decided, an Agent submits its CSR to ADCS under the
+// profile's template (adcs-issuance.ts) and the device is answered PENDING, as it is each time it asks again, until ADCS
+// issues it, denies it or holds it too long. What ADCS answered is recorded then, on the change that learned it: the
+// Device Certificate stored and the transaction answered with it, or the transaction refused, as above.
 import { createPublicKey } from "node:crypto";
 import * as x509 from "@peculiar/x509";
 import { and, eq } from "drizzle-orm";
 import { subjectAltNamesOf } from "../pki/ca-certificates";
 import type { Db, Tx } from "../platform/db/client";
-import { deviceCertificate, type enrollmentProfile } from "../platform/db/schema";
+import { deviceCertificate, enrollmentProfile } from "../platform/db/schema";
 import type { DeviceCertificateRevocations } from "./device-certificate-revocation";
 import { DEVICE_EXTENDED_KEY_USAGES, DEVICE_KEY_TYPES, type DeviceKeyType } from "./enrollment-profile-kinds";
 import { describeValidatorError, kindOf, type EnrollmentValidator, type EnrollmentValidators } from "./enrollment-validator";
 import type { EnrollmentValidatorRuns } from "./enrollment-validators";
 import { IssuanceFailure } from "../issuance/issuance-failure";
-import { enrollmentIssuerColumns, enrollmentIssuerOf, type EnrollmentIssuers } from "./enrollment-issuer";
+import { deviceIssuerColumns, enrollmentIssuerOf, type DeviceCertificateIssuer, type EnrollmentIssuers } from "./enrollment-issuer";
 import { nameRulesRefusal } from "./name-rules";
-import type { ScepAnswer, ScepClaim, ScepTransactions } from "./scep-transactions";
+import type { ScepAnswer, ScepClaim, ScepDecided, ScepTransactions } from "./scep-transactions";
+import type { AdcsIssuance, AdcsRequestRow } from "../adcs/adcs-issuance";
+import { CertificateAuthorityError } from "../issuance/acme/certificate-authority";
 import type { SharedChallenges } from "./shared-challenge";
 import type { Change, UnitOfWork } from "../platform/unit-of-work";
 import { fingerprintOf } from "../pki/fingerprint";
@@ -51,13 +58,15 @@ export interface DeviceEnrollmentRequest {
 
 /**
  * What a device is answered: its Device Certificate, with the certificates above it up to the root (PEM, the Issuing
- * CA's first), or why it is refused, or that the transaction is still being decided by another request for it.
+ * CA's first), or why it is refused, or that the transaction is still being decided by another request for it, or that
+ * it waits for ADCS (PENDING).
  */
-export type DeviceEnrollmentAnswer = { issued: { certificatePem: string; chainPem: string[] } } | { refused: string } | { deciding: true };
+export type DeviceEnrollmentAnswer = { issued: { certificatePem: string; chainPem: string[] } } | { refused: string } | { deciding: true } | { pending: true };
 
 export interface DeviceEnrollment {
   /**
-   * Answers the request under the profile: its Device Certificate, or why not, with an `enrollment.refused` Audit Event.
+   * Answers the request under the profile: its Device Certificate, or why not, with an `enrollment.refused` Audit Event;
+   * on an ADCS CA, once it is allowed, that it is pending.
    * A transaction the profile has answered before is answered the same again; one another request is deciding is
    * answered `deciding`. Throws only when the request could not be decided at all, which the next request for its
    * transaction decides afresh.
@@ -79,6 +88,9 @@ function describeKey(key: ReturnType<typeof createPublicKey>, type: DeviceKeyTyp
   return `a ${key.asymmetricKeyDetails?.modulusLength}-bit RSA key${type ? ` (${type})` : ""}`;
 }
 
+/** The CSR (DER) as PEM, as an Agent submits it to ADCS. */
+const csrPemOf = (csr: Uint8Array) => new x509.Pkcs10CertificateRequest(new Uint8Array(csr)).toString("pem");
+
 /** The public key of the CSR (DER). */
 const publicKeyOf = (csr: Uint8Array) => createPublicKey({ key: Buffer.from(new x509.Pkcs10CertificateRequest(new Uint8Array(csr)).publicKey.rawData), format: "der", type: "spki" });
 
@@ -91,9 +103,11 @@ export function createDeviceEnrollment(deps: {
   kinds: EnrollmentValidators;
   validators: EnrollmentValidatorRuns;
   transactions: ScepTransactions;
+  /** Where an Agent's answer from ADCS to a device's request comes back. */
+  adcs: Pick<AdcsIssuance, "handle">;
   clock: () => Date;
 }): DeviceEnrollment {
-  const { db, unitOfWork, issuers, revocations, sharedChallenges, kinds, validators, transactions, clock } = deps;
+  const { db, unitOfWork, issuers, revocations, sharedChallenges, kinds, validators, transactions, adcs, clock } = deps;
 
   /**
    * Why the profile does not take this renewal, if it does not; otherwise the Device Certificate it renews, which
@@ -122,10 +136,126 @@ export function createDeviceEnrollment(deps: {
     if (!superseded) throw new RevokedMeanwhile();
   }
 
-  /** A recorded answer, as the device is sent it: its Device Certificate with the chain the profile's issuer has now, or the refusal. */
-  const answered = async (profile: ProfileRow, answer: ScepAnswer): Promise<DeviceEnrollmentAnswer> =>
-    "issuedPem" in answer ? { issued: { certificatePem: answer.issuedPem, chainPem: await issuers.chainOf(db, profile.organizationId, enrollmentIssuerOf(profile)) } } : { refused: answer.refusal };
-  const decidedOf = (request: DeviceEnrollmentRequest) => ({ csr: request.csr, transactionId: request.transactionId });
+  /** A recorded answer, as the device is sent it: its Device Certificate with the chain the profile's issuer has now, or the refusal, or that it is pending. */
+  async function answered(profile: ProfileRow, answer: ScepAnswer): Promise<DeviceEnrollmentAnswer> {
+    if ("pending" in answer) return { pending: true };
+    if ("refusal" in answer) return { refused: answer.refusal };
+    return { issued: { certificatePem: answer.issuedPem, chainPem: await issuers.chainOf(db, profile.organizationId, enrollmentIssuerOf(profile)) } };
+  }
+  const decidedOf = (request: Pick<DeviceEnrollmentRequest, "csr" | "transactionId">) => ({ csr: request.csr, transactionId: request.transactionId });
+
+  /**
+   * Stores the Device Certificate the issuer issued for a decided request, with its Audit Event, and has its validator
+   * told, on the change; for a renewal, the Device Certificate it renews is revoked as superseded first (RevokedMeanwhile
+   * when it was revoked since). Returns its id.
+   */
+  async function store(
+    tx: Tx,
+    change: Change,
+    profile: ProfileRow,
+    issued: { certificate: x509.X509Certificate; issuer: DeviceCertificateIssuer },
+    decided: ScepDecided & { csr: Uint8Array; transactionId: string },
+  ) {
+    const { certificate, issuer } = issued;
+    const kind = kindOf(kinds, profile.validatorKind);
+    const serial = certificate.serialNumber.toUpperCase();
+    const subjectAltNames = subjectAltNamesOf(certificate);
+    const deviceId = kind?.deviceIdOf(subjectAltNames) ?? null;
+    const [row] = await tx
+      .insert(deviceCertificate)
+      .values({
+        organizationId: profile.organizationId,
+        enrollmentProfileId: profile.id,
+        ...deviceIssuerColumns(issuer),
+        serial,
+        fingerprint: fingerprintOf(certificate.rawData),
+        subject: certificate.subject,
+        subjectAltNames,
+        notBefore: certificate.notBefore,
+        notAfter: certificate.notAfter,
+        certificatePem: certificate.toString("pem"),
+        deviceId,
+        keyType: decided.keyType,
+        sharedChallengeId: decided.sharedChallengeId,
+        transactionId: decided.transactionId,
+        createdAt: change.occurredAt,
+      })
+      .returning({ id: deviceCertificate.id });
+    await change.audit({
+      organizationId: profile.organizationId,
+      action: "device_certificate.issued",
+      target: { type: "device_certificate", id: row!.id },
+      detail: {
+        enrollmentProfile: { id: profile.id, name: profile.name },
+        serial,
+        subject: certificate.subject,
+        subjectAltNames,
+        deviceId,
+        keyType: decided.keyType,
+        sharedChallenge: decided.sharedChallengeId === null ? null : { id: decided.sharedChallengeId },
+        notAfter: certificate.notAfter.toISOString(),
+        transactionId: decided.transactionId,
+        ...(issuer.kind === "adcs" && { adcsCa: { id: issuer.adcsCaId }, template: { id: issuer.templateId }, adcsRequestId: issuer.requestId }),
+      },
+    });
+    if (decided.renewalOf) {
+      await supersede(tx, change, profile, decided.renewalOf, serial).catch((err: unknown) => {
+        // ADCS revokes through an Agent: when none can be asked now, the replacement is kept, and the one it renews is not yet revoked.
+        if (issuer.kind === "adcs" && err instanceof CertificateAuthorityError) return console.error("could not have ADCS revoke a renewed Device Certificate:", err.message);
+        throw err;
+      });
+    }
+    await validators.tellIssued(tx, change, profile, decidedOf(decided), { pem: certificate.toString("pem"), serial, notAfter: certificate.notAfter, issuer: certificate.issuer });
+    return row!.id;
+  }
+
+  /** Refuses a decided request on the change: its Audit Event, its validator told when it was asked, and its transaction's answer. */
+  async function refuse(tx: Tx, change: Change, profile: ProfileRow, request: Pick<DeviceEnrollmentRequest, "csr" | "transactionId">, reason: string, extra: Record<string, unknown> = {}) {
+    await change.audit({
+      organizationId: profile.organizationId,
+      action: "enrollment.refused",
+      target: { type: "enrollment_profile", id: profile.id },
+      detail: { enrollmentProfile: { id: profile.id, name: profile.name }, reason, validator: { kind: profile.validatorKind }, transactionId: request.transactionId, ...extra },
+    });
+    await validators.tellFailed(tx, change, profile, decidedOf(request), reason);
+  }
+
+  /** What a device's request to ADCS left waiting: its transaction and profile, locked, while the transaction still waits. */
+  async function waitingFor(tx: Tx, request: AdcsRequestRow) {
+    const waiting = await transactions.waiting(tx, request.id);
+    if (!waiting) return undefined;
+    const [profile] = await tx.select().from(enrollmentProfile).where(eq(enrollmentProfile.id, request.enrollmentProfileId!));
+    const asked = { csr: new Uint8Array(new x509.Pkcs10CertificateRequest(request.csr).rawData), transactionId: waiting.transactionId };
+    return { waiting, profile: profile!, asked, decided: waiting.decided! };
+  }
+
+  adcs.handle("device", {
+    async issued(tx, change, request, certificatePem) {
+      const found = await waitingFor(tx, request);
+      if (!found) return;
+      const { waiting, profile, asked, decided } = found;
+      const certificate = new x509.X509Certificate(certificatePem);
+      const issuer: DeviceCertificateIssuer = { kind: "adcs", adcsCaId: request.adcsCaId, templateId: request.templateId, requestId: request.adcsRequestId! };
+      // Within a savepoint, so that a renewal whose Device Certificate was revoked meanwhile stores nothing and is refused.
+      const stored = await tx
+        .transaction(async (inner) => store(inner, change, profile, { certificate, issuer }, { ...decided, ...asked }))
+        .catch((err: unknown) => {
+          if (err instanceof RevokedMeanwhile) return undefined;
+          throw err;
+        });
+      if (stored) return transactions.answer(tx, waiting, { deviceCertificateId: stored });
+      const reason = `the Device Certificate the RenewalReq is signed with (${decided.renewalOf!.serial}) is revoked`;
+      await refuse(tx, change, profile, asked, reason, { adcsRequestId: request.adcsRequestId });
+      await transactions.answer(tx, waiting, { refusal: reason });
+    },
+    async failed(tx, change, request, failure) {
+      const found = await waitingFor(tx, request);
+      if (!found) return;
+      const { waiting, profile, asked } = found;
+      await refuse(tx, change, profile, asked, failure.message, { adcsRequestId: request.adcsRequestId });
+      await transactions.answer(tx, waiting, { refusal: failure.message });
+    },
+  });
 
   /**
    * Decides a request under the profile and, when it is allowed, issues and stores its Device Certificate, recording it
@@ -136,7 +266,7 @@ export function createDeviceEnrollment(deps: {
     profile: ProfileRow,
     request: DeviceEnrollmentRequest,
     claim: ScepClaim,
-  ): Promise<{ issued: { certificatePem: string; chainPem: string[] } } | { reason: string; validatorAsked: boolean; retryable: boolean }> {
+  ): Promise<{ issued: { certificatePem: string; chainPem: string[] } } | { pending: true } | { reason: string; validatorAsked: boolean; retryable: boolean }> {
     const refused = (reason: string, validatorAsked = false, retryable = false) => ({ reason, validatorAsked, retryable });
     if (!profile.enabled) return refused("the Enrollment Profile is disabled, so it issues nothing");
     const kind = kindOf(kinds, profile.validatorKind);
@@ -165,7 +295,7 @@ export function createDeviceEnrollment(deps: {
       if (broken) return refused(broken);
     }
     const issuer = enrollmentIssuerOf(profile);
-    const caRefusal = await issuers.deviceRefusal(db, profile.organizationId, issuer, request.csr);
+    const caRefusal = await issuers.deviceRefusal(db, profile.organizationId, issuer, request.csr, keyType);
     if (caRefusal) return refused(caRefusal);
     let validator: EnrollmentValidator;
     try {
@@ -184,12 +314,27 @@ export function createDeviceEnrollment(deps: {
       },
     );
     if (!decision.allowed) return refused(decision.reason, true, retryable);
+    const decided: ScepDecided = { keyType, sharedChallengeId, renewalOf: renewalOf ?? null };
+
+    if (issuer.kind === "adcs") {
+      // Submitted through an Agent, and answered once ADCS has: the transaction waits for it.
+      try {
+        await unitOfWork.run(null, async (tx, change) => {
+          const requestId = await issuers.requestFromAdcs(tx, change, profile.organizationId, issuer, { purpose: "device", csrPem: csrPemOf(request.csr), enrollmentProfileId: profile.id });
+          await transactions.pending(tx, claim, requestId, decided);
+        });
+      } catch (err) {
+        console.error("could not submit a device's request to ADCS", err);
+        return refused("the platform could not submit the request to ADCS; enroll again", true, true);
+      }
+      return { pending: true };
+    }
 
     let issued: Awaited<ReturnType<EnrollmentIssuers["issueDevice"]>>;
     try {
       issued = await issuers.issueDevice(db, profile.organizationId, issuer, {
         csr: request.csr,
-        validityDays: profile.validityDays,
+        validityDays: profile.validityDays!,
         keyUsage: profile.keyUsage,
         extendedKeyUsages: profile.extendedKeyUsage.map((name) => DEVICE_EXTENDED_KEY_USAGES[name]),
       });
@@ -200,50 +345,10 @@ export function createDeviceEnrollment(deps: {
       return refused("the platform could not issue the Device Certificate; enroll again", true, true);
     }
     const { certificate } = issued;
-    const serial = certificate.serialNumber.toUpperCase();
-    const subjectAltNames = subjectAltNamesOf(certificate);
-    const deviceId = kind?.deviceIdOf(subjectAltNames) ?? null;
     try {
       await unitOfWork.run(null, async (tx, change) => {
-        const [row] = await tx
-          .insert(deviceCertificate)
-          .values({
-            organizationId: profile.organizationId,
-            enrollmentProfileId: profile.id,
-            ...enrollmentIssuerColumns(issuer),
-            serial,
-            fingerprint: fingerprintOf(certificate.rawData),
-            subject: certificate.subject,
-            subjectAltNames,
-            notBefore: certificate.notBefore,
-            notAfter: certificate.notAfter,
-            certificatePem: certificate.toString("pem"),
-            deviceId,
-            keyType,
-            sharedChallengeId,
-            transactionId: request.transactionId,
-            createdAt: change.occurredAt,
-          })
-          .returning({ id: deviceCertificate.id });
-        await change.audit({
-          organizationId: profile.organizationId,
-          action: "device_certificate.issued",
-          target: { type: "device_certificate", id: row!.id },
-          detail: {
-            enrollmentProfile: { id: profile.id, name: profile.name },
-            serial,
-            subject: certificate.subject,
-            subjectAltNames,
-            deviceId,
-            keyType,
-            sharedChallenge: sharedChallengeId === null ? null : { id: sharedChallengeId },
-            notAfter: certificate.notAfter.toISOString(),
-            transactionId: request.transactionId,
-          },
-        });
-        if (renewalOf) await supersede(tx, change, profile, renewalOf, serial);
-        await transactions.issued(tx, claim, row!.id);
-        await validators.tellIssued(tx, change, profile, decidedOf(request), { pem: certificate.toString("pem"), serial, notAfter: certificate.notAfter, issuer: certificate.issuer });
+        const id = await store(tx, change, profile, { certificate, issuer }, { ...decided, ...decidedOf(request) });
+        await transactions.issued(tx, claim, id);
       });
     } catch (err) {
       // Signed but not stored: it is answered as refused, so no device holds a Device Certificate the platform does not know of.
@@ -262,7 +367,7 @@ export function createDeviceEnrollment(deps: {
       const { claim } = claimed;
       try {
         const outcome = await decide(profile, request, claim);
-        if ("issued" in outcome) return outcome;
+        if ("issued" in outcome || "pending" in outcome) return outcome;
         const { reason, validatorAsked, retryable } = outcome;
         await unitOfWork.run(null, async (tx, change) => {
           await change.audit({

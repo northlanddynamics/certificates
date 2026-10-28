@@ -3,6 +3,7 @@
 // server and searched there, by subject, subject alternative name, serial or the device ID its Enrollment Validator
 // knows the device by, and filtered by status. Each can be looked at and its certificate downloaded, and revoked, which
 // puts it on its Issuing CA's CRL in the same change (device-certificate-revocation.ts).
+import * as x509 from "@peculiar/x509";
 import { OpenAPIHono, createRoute, z } from "@hono/zod-openapi";
 import { and, desc, eq, gt, isNotNull, isNull, lte, or, sql, type SQL } from "drizzle-orm";
 import type { Authorizer } from "../tenancy/authorization";
@@ -82,7 +83,8 @@ function inStatus(status: DeviceCertificateStatus, now: Date): SQL {
   return and(isNull(deviceCertificate.revokedAt), status === "active" ? gt(deviceCertificate.notAfter, now) : lte(deviceCertificate.notAfter, now))!;
 }
 
-type Row = { certificate: typeof deviceCertificate.$inferSelect; issuer: string; revocationRequest: RevocationRequestRow | null };
+/** A Device Certificate with the subject of the Issuing CA that signed it; none for one from an ADCS CA, which names its issuer itself. */
+type Row = { certificate: typeof deviceCertificate.$inferSelect; issuer: string | null; revocationRequest: RevocationRequestRow | null };
 
 /** The Device Certificate as the API shows it; its status as `inStatus` finds it. */
 function toDeviceCertificate({ certificate: row, issuer, revocationRequest: request }: Row, now: Date): z.infer<typeof DeviceCertificate> {
@@ -95,7 +97,7 @@ function toDeviceCertificate({ certificate: row, issuer, revocationRequest: requ
     deviceId: row.deviceId,
     keyType: row.keyType,
     sharedChallenge: row.sharedChallengeId === null ? null : { id: row.sharedChallengeId },
-    issuer,
+    issuer: issuer ?? new x509.X509Certificate(row.certificatePem).issuer,
     notBefore: row.notBefore.toISOString(),
     notAfter: row.notAfter.toISOString(),
     status: row.revokedAt ? "revoked" : row.notAfter <= now ? "expired" : "active",
@@ -137,7 +139,7 @@ export function registerDeviceCertificates(ctx: {
       ? await db
           .select(selection)
           .from(deviceCertificate)
-          .innerJoin(issuingCa, eq(issuingCa.id, deviceCertificate.issuingCaId))
+          .leftJoin(issuingCa, eq(issuingCa.id, deviceCertificate.issuingCaId))
           .leftJoin(revocationRequest, eq(revocationRequest.deviceCertificateId, deviceCertificate.id))
           .where(and(ofProfile(orgId, id), eq(deviceCertificate.id, certificateId)))
       : [];
@@ -169,7 +171,7 @@ export function registerDeviceCertificates(ctx: {
         db
           .select(selection)
           .from(deviceCertificate)
-          .innerJoin(issuingCa, eq(issuingCa.id, deviceCertificate.issuingCaId))
+          .leftJoin(issuingCa, eq(issuingCa.id, deviceCertificate.issuingCaId))
           .leftJoin(revocationRequest, eq(revocationRequest.deviceCertificateId, deviceCertificate.id))
           .where(where)
           .orderBy(desc(deviceCertificate.createdAt), desc(deviceCertificate.id))
