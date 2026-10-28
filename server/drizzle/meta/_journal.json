@@ -421,6 +421,13 @@
       "when": 1793145791362,
       "tag": "0059_enrollment_issuer_kind",
       "breakpoints": true
+    },
+    {
+      "idx": 60,
+      "version": "7",
+      "when": 1793151180071,
+      "tag": "0060_adcs_ca",
+      "breakpoints": true
     }
   ]
 }

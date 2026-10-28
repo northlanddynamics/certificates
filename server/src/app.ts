@@ -3,6 +3,7 @@ import { Scalar } from "@scalar/hono-api-reference";
 import { and, asc, eq } from "drizzle-orm";
 import type { Context } from "hono";
 import type { Pool } from "pg";
+import { DEFAULT_ADCS_RELAY, registerAdcsCas, type AdcsRelayConfig } from "./adcs/adcs-ca";
 import { ACCOUNT_SECURITY_PATHS, createAccountSecurity } from "./tenancy/account-security";
 import { registerAcmeAccounts } from "./issuance/acme/acme-accounts";
 import { DEFAULT_AGENT_GATEWAY, registerAgentGateway, type AgentGatewayConfig } from "./agents/agent-gateway";
@@ -106,6 +107,8 @@ export interface AppDeps {
   agentGateway?: Partial<AgentGatewayConfig>;
   /** How DNS Provider operations relayed by Agents wait for them: see `DnsRelayConfig`. */
   dnsRelay?: Partial<DnsRelayConfig>;
+  /** How ADCS CA operations wait for the Agents that carry them out: see `AdcsRelayConfig`. */
+  adcsRelay?: Partial<AdcsRelayConfig>;
   /** How Audit Events reach the Organizations' SIEMs; posts with `fetch` and writes syslog over TLS unless given. */
   auditTransport?: AuditTransport;
   /** See `OrganizationChangesDeps.memberRemovalHooks`. */
@@ -329,6 +332,7 @@ export function createApp(deps: AppDeps) {
   const crls = createCrls({ db, unitOfWork, kms: deps.kms, clock });
   registerPrivateCas({ app, db, requireUser, authorize, unitOfWork, kms: deps.kms, clock, crls, pkiBaseURL, pkiBaseURLConfigured: deps.pkiBaseURL !== undefined });
   registerPkiRoutes({ app, db });
+  registerAdcsCas({ app, db, requireUser, authorize, unitOfWork, workItems, clock, offlineAfterSeconds: agentGateway.offlineAfterSeconds, config: { ...DEFAULT_ADCS_RELAY, ...deps.adcsRelay } });
   const privateCas = createPrivateCas({ kms: deps.kms, clock, crls, pkiBaseURL });
   const validatorKinds = deps.enrollmentValidators ?? ENROLLMENT_VALIDATOR_KINDS;
   const platformIssuers = createIssuers({ acme: deps.certificateAuthority, acmeCas, secrets, privateCas });

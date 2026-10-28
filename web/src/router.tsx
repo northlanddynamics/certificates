@@ -8,6 +8,7 @@ import { AccountSecurityPage } from "./pages/account-security";
 import { AcmeAccountsPage } from "./pages/acme-accounts";
 import { PrivateCaGuidePage } from "./pages/private-ca-guide";
 import { PrivateCasPage } from "./pages/private-cas";
+import { AdcsCasPage } from "./pages/adcs-cas";
 import { DeviceCertificatesPage } from "./pages/device-certificates";
 import { EnrollmentGuidePage } from "./pages/enrollment-guide";
 import { EnrollmentProfilesPage } from "./pages/enrollment-profiles";
@@ -162,6 +163,12 @@ const privateCasRoute = createRoute({
   component: PrivateCasPage,
 });
 
+const adcsCasRoute = createRoute({
+  getParentRoute: () => appRoute,
+  path: "/organizations/$orgId/adcs-cas",
+  component: AdcsCasPage,
+});
+
 const privateCaGuideRoute = createRoute({
   getParentRoute: () => appRoute,
   path: "/organizations/$orgId/private-cas/guide",
@@ -314,7 +321,7 @@ const routeTree = rootRoute.addChildren([
       certificateNotificationsRoute,
       certificateUnknownTabRoute,
     ]),
-    membersRoute, teamsRoute, apiKeysRoute, agentsRoute, agentGuideRoute, deploymentsRoute, deploymentScriptsRoute, deploymentScriptGuideRoute, acmeAccountsRoute, acmeAccountGuideRoute, privateCasRoute, privateCaGuideRoute, certificateProfilesRoute, enrollmentProfilesRoute, enrollmentGuideRoute, deviceCertificatesRoute, dnsProvidersRoute, dnsProviderGuideRoute, dcvRoute, dcvGuideRoute, notificationChannelsRoute, auditLogRoute, auditForwardingRoute, signInSettingsRoute,
+    membersRoute, teamsRoute, apiKeysRoute, agentsRoute, agentGuideRoute, deploymentsRoute, deploymentScriptsRoute, deploymentScriptGuideRoute, acmeAccountsRoute, acmeAccountGuideRoute, privateCasRoute, privateCaGuideRoute, adcsCasRoute, certificateProfilesRoute, enrollmentProfilesRoute, enrollmentGuideRoute, deviceCertificatesRoute, dnsProvidersRoute, dnsProviderGuideRoute, dcvRoute, dcvGuideRoute, notificationChannelsRoute, auditLogRoute, auditForwardingRoute, signInSettingsRoute,
     loginPolicyRedirectRoute, ssoConnectionsRedirectRoute, csrToolsRoute, viewerRoute,
     accountSecurityRoute,
     platformOrganizationsRoute,

@@ -161,15 +161,37 @@ type RunReport struct {
 	OutputTruncated bool   `json:"outputTruncated"`
 }
 
-// WorkResult is how a work item went. Kind says how a DNS Provider operation failed: "rejected" when the DNS service answered
-// and said no, "unreachable" when it did not answer. Error is for a person to read and holds no secret. CSR is for the key the
-// Agent made (never the key), and Run is how a Deployment Script went.
+// WorkResult is how a work item went. Kind says how a DNS Provider or ADCS operation failed: "rejected" when the service
+// answered and said no, "unreachable" when it did not answer. Error is for a person to read and holds no secret. CSR is for
+// the key the Agent made (never the key), Run is how a Deployment Script went, and Discovery what it found at an ADCS CA.
 type WorkResult struct {
-	OK    bool       `json:"ok"`
-	Kind  string     `json:"kind,omitempty"`
-	Error string     `json:"error,omitempty"`
-	CSR   string     `json:"csr,omitempty"`
-	Run   *RunReport `json:"run,omitempty"`
+	OK        bool       `json:"ok"`
+	Kind      string     `json:"kind,omitempty"`
+	Error     string     `json:"error,omitempty"`
+	CSR       string     `json:"csr,omitempty"`
+	Run       *RunReport `json:"run,omitempty"`
+	Discovery *Discovery `json:"discovery,omitempty"`
+}
+
+// Discovery is what `adcs.discover` found: the CA's chain (PEM, the CA certificate first, up to its root) and its templates.
+type Discovery struct {
+	Chain     []string   `json:"chain"`
+	Templates []Template `json:"templates"`
+}
+
+// Template is a Certificate Template's facts, as the platform takes them.
+type Template struct {
+	Name               string   `json:"name"`
+	OID                string   `json:"oid"`
+	DisplayName        string   `json:"displayName"`
+	ExtendedKeyUsages  []string `json:"extendedKeyUsages"`
+	ValidityDays       int      `json:"validityDays"`
+	MinimumKeySize     int      `json:"minimumKeySize"`
+	KeyAlgorithms      []string `json:"keyAlgorithms"`
+	ManagerApproval    bool     `json:"managerApproval"`
+	SubjectFromRequest bool     `json:"subjectFromRequest"`
+	Enrollable         bool     `json:"enrollable"`
+	Published          bool     `json:"published"`
 }
 
 type workResultResponse struct {

@@ -18,7 +18,7 @@ import { publicationOf, type Crls } from "./crl";
 import { KEY_ALGORITHMS, certificateKeyAlgorithmsOn, isMlDsa, mixedChainReason, type KeyAlgorithm, type SigningKeyAlgorithm } from "../pki/csr";
 import type { Db, Tx } from "../platform/db/client";
 import { issuingCa, privateCa } from "../platform/db/schema";
-import { HttpError, OrgParam, errors, isUniqueViolation, json } from "../platform/http";
+import { HttpError, OrgParam, PemResponse, errors, fileNameOf, isUniqueViolation, json, pemFile } from "../platform/http";
 import { IssuanceFailure } from "../issuance/issuance-failure";
 import type { Issuer } from "../issuance/issuer";
 import type { Kms } from "../platform/crypto/kms";
@@ -451,18 +451,11 @@ const awaitingSignature = (organizationId: string, privateCaId: string, subject:
 /** The SHA-256 fingerprint of a CA certificate, lower-case hex, and its serial, as Audit Events name it. */
 const identityOf = async (certificate: x509.X509Certificate) => ({ serial: certificate.serialNumber, fingerprint: Buffer.from(await certificate.getThumbprint("SHA-256")).toString("hex") });
 
-/** A name fit for a downloaded file. */
-const fileNameOf = (name: string, fallback: string) => name.replace(/[^A-Za-z0-9._-]+/g, "-").toLowerCase() || fallback;
-
-const pemFile = (c: any, pem: string, fileName: string) => c.body(pem, 200, { "content-type": "application/x-pem-file", "content-disposition": `attachment; filename="${fileName}"` });
-
 /** Where relying parties fetch what the Private CAs publish, which every Certificate they sign names and which cannot change for those already signed. */
 const Publication = z.object({
   baseUrl: z.string().openapi({ description: "The PKI base URL: CRLs and CA certificates are served under its `/pki`. It should be plain HTTP, reachable by every relying party." }),
   configured: z.boolean().openapi({ description: "Whether the platform's operator set it (`PKI_BASE_URL`); when not, it is the address the API is served at." }),
 });
-
-const PemResponse = (description: string) => ({ 200: { description, content: { "application/x-pem-file": { schema: z.string() } } }, ...errors(401, 403, 404) });
 
 export function registerPrivateCas(ctx: {
   app: OpenAPIHono;

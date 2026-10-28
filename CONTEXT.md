@@ -107,12 +107,20 @@ One attempt to obtain a Certificate for a Managed Certificate: from an ACME CA i
 _Avoid_: order (the ACME protocol's word for part of it), request, job
 
 **Certificate Authority (CA)**:
-A pluggable issuer from which the platform obtains Certificates: an ACME CA, which demands DCV, or one of the Organization's Private CAs, which does not.
+A pluggable issuer from which the platform obtains Certificates: an ACME CA, which demands DCV, one of the Organization's Private CAs, which does not, or one of its ADCS CAs.
 _Avoid_: issuer, provider
 
 **Private CA**:
 An Organization's own Certificate Authority, used for internal TLS and device enrollment: a root and one or more Issuing CAs under it, whose keys the platform holds only in a KMS and never sees. A Managed Certificate can be issued from one of its Issuing CAs instead of from an ACME CA, with no DCV; whatever must trust its Certificates needs its root, once for all its Issuing CAs.
 _Avoid_: internal CA, enterprise CA
+
+**ADCS CA**:
+An Organization's Active Directory Certificate Services CA, which the platform issues from and revokes at, always through Agents assigned to it, and never directly. It holds no key of the platform's and serves no CRL of the platform's. A Managed Certificate or an Enrollment Profile on one names it and one of its Certificate Templates. Only Windows Agents of its Organization can be assigned, each reaching ADCS as its own account; it is added only if one of them reaches it, and named by its config string (`host\CA Name`), which is fixed once it is added.
+_Avoid_: Microsoft CA, AD CA, enterprise CA
+
+**Certificate Template**:
+An ADCS CA's own template, which decides the validity, key usage and EKUs of what it issues. The platform discovers templates and offers only those it can use: published, enrollable by the Agents' account, and taking the subject from the request.
+_Avoid_: profile (a Certificate Profile and an Enrollment Profile are the platform's own), template (unqualified)
 
 **Permitted Name Rules**:
 An Issuing CA's exact names and zones (a zone being a name and everything beneath it): the only names it issues for, refused when asked for otherwise. A platform-made Issuing CA carries them as X.509 name constraints, which do not change when the rules later do.
@@ -191,7 +199,7 @@ _Avoid_: job, execution, install log
 ### Automation
 
 **Agent**:
-Software an Organization installs inside its own network that acts for the platform there: generating keys, carrying out Deployments and relaying DNS Provider operations the platform cannot reach directly. Belongs to exactly one Organization and may serve many Deployments.
+Software an Organization installs inside its own network that acts for the platform there: generating keys, carrying out Deployments, relaying DNS Provider operations the platform cannot reach directly, and, on a domain-joined Windows host, carrying out an ADCS CA's operations as its own account. Belongs to exactly one Organization and may serve many Deployments.
 _Avoid_: client, daemon, connector, relay
 
 **Agent Registration**:

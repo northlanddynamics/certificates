@@ -13,7 +13,7 @@ export const APPROVER_ROLE = "approver";
 export const MEMBER_ROLE = "member";
 
 // Every permission there is. The organization, member, invitation and team resources are the ones Better Auth's
-// organization plugin checks itself; `audit`, `acmeAccount`, `dnsProvider`, `validationZone`, `dcvRule`, `managedCertificate`, `approval`, `agent`, `deploymentScript`, `deployment`, `notificationChannel`, `auditForwarder`, `loginPolicy`, `ssoConnection`, `privateCa`, `enrollmentProfile`, `deviceCertificate`, `certificateProfile` and `apiKey` are ours (the last is the plugin's too).
+// organization plugin checks itself; `audit`, `acmeAccount`, `dnsProvider`, `validationZone`, `dcvRule`, `managedCertificate`, `approval`, `agent`, `deploymentScript`, `deployment`, `notificationChannel`, `auditForwarder`, `loginPolicy`, `ssoConnection`, `privateCa`, `adcsCa`, `enrollmentProfile`, `deviceCertificate`, `certificateProfile` and `apiKey` are ours (the last is the plugin's too).
 const statements = {
   organization: ["update", "delete"],
   member: ["create", "update", "delete"],
@@ -63,6 +63,10 @@ const statements = {
   // Private CAs: the Organization's own CAs. Everyone may `read` them, to see which exist and download their chains, so
   // as to propose against the right one; only Organization Administrators `create`, `update`, `retire` or `revoke` one.
   privateCa: ["read", "create", "update", "retire", "revoke"],
+  // ADCS CAs: the Organization's Active Directory Certificate Services CAs, reached through its Agents. Everyone may `read`
+  // them, to see which exist, their templates and their chains; only Organization Administrators `create`, `update` (which
+  // covers assigning Agents) or `delete` one.
+  adcsCa: ["read", "create", "update", "delete"],
   // Enrollment Profiles: what devices enroll under, from the Private CAs, with no Approval and no Owners, so only
   // Organization Administrators hold any of this. `read` sees them, their SCEP URLs and CA certificates; `create`,
   // `update` and `disable` configure them.
@@ -87,8 +91,8 @@ export const ac = createAccessControl(statements);
 // to decide knowingly while a Member sees only their own.
 export const orgRoles = {
   [ORG_ADMIN_ROLE]: ac.newRole(statements),
-  [APPROVER_ROLE]: ac.newRole({ managedCertificate: ["read", "propose", "download"], approval: ["read", "decide"], notificationChannel: ["read"], privateCa: ["read"], certificateProfile: ["read"] }),
-  [MEMBER_ROLE]: ac.newRole({ managedCertificate: ["propose", "download"], notificationChannel: ["read"], privateCa: ["read"], certificateProfile: ["read"] }),
+  [APPROVER_ROLE]: ac.newRole({ managedCertificate: ["read", "propose", "download"], approval: ["read", "decide"], notificationChannel: ["read"], privateCa: ["read"], adcsCa: ["read"], certificateProfile: ["read"] }),
+  [MEMBER_ROLE]: ac.newRole({ managedCertificate: ["propose", "download"], notificationChannel: ["read"], privateCa: ["read"], adcsCa: ["read"], certificateProfile: ["read"] }),
 };
 
 const roleOf = (name: string) => (Object.hasOwn(orgRoles, name) ? orgRoles[name as keyof typeof orgRoles] : undefined);

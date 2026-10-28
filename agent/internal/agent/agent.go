@@ -13,6 +13,7 @@ import (
 	"sync"
 	"time"
 
+	"certificate-platform/agent/internal/adcs"
 	"certificate-platform/agent/internal/credential"
 	"certificate-platform/agent/internal/dnsrelay"
 	"certificate-platform/agent/internal/platform"
@@ -56,6 +57,8 @@ type Config struct {
 	OS, Arch string
 	// ScriptTimeout stops a Deployment Script that has not ended; ten minutes when zero.
 	ScriptTimeout time.Duration
+	// ADCS is how the Agent reaches ADCS CAs; the host's own (adcs.Native) when nil.
+	ADCS adcs.Client
 }
 
 func (c *Config) defaults() {
@@ -221,6 +224,8 @@ func (r *runner) handle(ctx context.Context, item platform.WorkItem) error {
 		result = r.generateKey(item)
 	case item.Type == workRun:
 		result = r.runDeployment(ctx, item)
+	case item.Type == workDiscover:
+		result = r.discover(ctx, item)
 	default:
 		r.cfg.Log.Warn("ignoring a work item of a type this Agent does not know", "id", item.ID, "type", item.Type)
 		return nil

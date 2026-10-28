@@ -16,6 +16,7 @@ import { HttpError, errors, json } from "../platform/http";
 import type { UnitOfWork } from "../platform/unit-of-work";
 import type { WorkItems } from "./work-items";
 import { sha256Hex } from "../platform/crypto/sha256";
+import { DiscoveryResult } from "../adcs/adcs-work";
 
 export interface AgentGatewayConfig {
   /** The newest Agent version the platform knows of; older ones are flagged. */
@@ -67,6 +68,8 @@ const WorkItem = z.object({
       "`deployment.run` gives the Agent a Certificate and a Deployment Script to run for it: the payload has `deploymentId`, `managedCertificateId`, `trigger`, `names`, the `certificate` (`id`, `fingerprint`, `notAfter`, `chainPem`: the leaf then the intermediates), the `script` (`name`, `interpreter`, `version`, `hash`, `content`) " +
       "and `parameters`, the Deployment's parameter values by name (an object of strings, empty when it has none), which the Agent gives the script as environment variables named `DEPLOY_PARAM_` and the name. " +
       "The Agent runs the script only if the SHA-256 of its content is the hash, and reports how it went. " +
+      "`adcs.discover` asks the Agent to reach an ADCS CA with MS-WCCE, as its own account, and to report the CA's certificate chain and its Certificate Templates with their facts, as `discovery`: the payload has `configString`, the CA's `host\\CA Name`. " +
+      "An Agent that cannot reach ADCS (one not on Windows) fails it as `rejected`, saying so; one whose CA does not answer fails it as `unreachable`, and the platform asks another. " +
       "The Agent reports how it went to `POST /api/agent/work-items/{id}/result`.",
   }),
   payload: z.record(z.string(), z.unknown()),
@@ -74,7 +77,10 @@ const WorkItem = z.object({
 const WorkItemParams = z.object({ id: z.string().openapi({ param: { name: "id", in: "path" } }) });
 const WorkResult = z.object({
   ok: z.boolean(),
-  kind: z.enum(["rejected", "unreachable"]).optional().openapi({ description: "When a DNS Provider operation failed: `rejected` if the DNS service answered and said no, `unreachable` if it did not answer." }),
+  kind: z
+    .enum(["rejected", "unreachable"])
+    .optional()
+    .openapi({ description: "When a DNS Provider or ADCS operation failed: `rejected` if the DNS service or ADCS answered and said no, `unreachable` if it did not answer." }),
   error: z.string().max(1000).optional().openapi({ description: "What went wrong, for a person to read. It must not contain the credentials." }),
   csr: z.string().max(MAX_CSR_LENGTH).optional().openapi({ description: "For `deployment.generate_key`: a PEM CSR for the key the Agent made, for the names and key algorithm it was given. The key is never sent." }),
   run: z
@@ -87,6 +93,7 @@ const WorkResult = z.object({
     })
     .optional()
     .openapi({ description: "For `deployment.run`: how the script went. `ok` is whether it succeeded (exit code 0)." }),
+  discovery: DiscoveryResult.optional(),
 });
 
 export function registerAgentGateway(ctx: { app: OpenAPIHono; db: Db; unitOfWork: UnitOfWork; workItems: WorkItems; clock: () => Date; config: AgentGatewayConfig }) {
