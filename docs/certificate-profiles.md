@@ -11,9 +11,9 @@ The rule behind them is recorded in [ADR 0012](adr/0012-certificate-profiles-cop
 **New profile** on the Certificate Profiles page (`POST /api/organizations/{orgId}/certificate-profiles`) takes:
 
 - **Name** and **Description**: the name is unique within the Organization, and the description is what members read when they choose a profile, so say what it is for.
-- **Issuer**: one ACME CA or one Issuing CA, which requesters never choose. An ACME CA the Organization has no ACME Account with, or an Issuing CA that is not active, is refused, so that a profile can issue from the moment it is saved.
-- **Key algorithms**: some of those the issuer takes. With one, the CSR Generator is set to it for the requester; with several, the requester chooses among them.
-- **Validity**: for a Private CA only, at most its Issuing CA's maximum, or its default when none is given. An ACME CA decides its own.
+- **Issuer**: one ACME CA, one Issuing CA, or one ADCS CA and one of its Certificate Templates, which requesters never choose. An ACME CA the Organization has no ACME Account with, an Issuing CA that is not active, or an ADCS template not offered for TLS (unavailable, hidden, or without Server Authentication) is refused, so that a profile can issue from the moment it is saved.
+- **Key algorithms**: some of those the issuer takes (for an ADCS template, those its key algorithms and minimum key size allow). With one, the CSR Generator is set to it for the requester; with several, the requester chooses among them.
+- **Validity**: for a Private CA only, at most its Issuing CA's maximum, or its default when none is given. An ACME CA decides its own, and so does an ADCS CA's Certificate Template; giving one for either is refused (400).
 - **Starting Renewal Policy**: what each Managed Certificate made from it starts with, automatic 30 days before expiry unless given. Its Owners may change it afterwards, as on any Managed Certificate.
 - **Co-Owner Team** (optional): a Team made an Owner of each Managed Certificate, together with the requester, so that it is still looked after when they leave.
 - **Name rules** (optional): exact names and zones (a zone allows the name and everything beneath it), at most how many names, and whether wildcards are allowed. They narrow the issuer's limits and never widen them: an Issuing CA's Permitted Name Rules and ACME DCV still apply afterwards. A profile without name rules takes any name its issuer does.
@@ -32,9 +32,11 @@ The request is refused (422):
 
 - for a CSR whose key algorithm the profile does not allow;
 - for a non-administrator's names outside the profile's name rules, naming the names that are;
-- for a profile that is disabled, or whose issuer is no longer usable (an Issuing CA that is not active, or an ACME CA the Organization has no ACME Account with), for everyone, until an Organization Administrator points it elsewhere or enables it.
+- for a profile that is disabled, or whose issuer is no longer usable (an Issuing CA that is not active, an ACME CA the Organization has no ACME Account with, or an ADCS template that is unavailable), for everyone, until an Organization Administrator points it elsewhere or enables it.
 
-The issuer's own checks then run as for any Managed Certificate. A non-administrator's request is always a Proposal, which an Approver decides as any other; the Approval queue shows the profile it came from. There is no pre-approval. An Organization Administrator's request is created outright, and they are held only to the issuer's limits, not to the profile's name rules.
+A profile on an ADCS CA whose Certificate Template has become unavailable (no longer published or reported by the CA, or no longer enrollable by the Agents' account) says why, as `templateUnavailable`, in the list and when read, and the web shows a warning. It is not disabled: Issuances of Managed Certificates made from it fail as `template_unavailable` meanwhile, and once discovery reports the template available again, requests and Issuances work again with nothing reconfigured.
+
+The issuer's own checks then run as for any Managed Certificate: for an ADCS CA, its Permitted Name Rules and the template's key requirements, after the profile's name rules. A non-administrator's request is always a Proposal, which an Approver decides as any other; the Approval queue shows the profile it came from. There is no pre-approval. An Organization Administrator's request is created outright, and they are held only to the issuer's limits, not to the profile's name rules.
 
 The requester becomes an Owner, and so does the profile's co-Owner Team, with any Owners named in the request. Once it is approved they may renew it, replace its CSR, revoke it and change its Owners. Its details page shows the profile it was made from.
 

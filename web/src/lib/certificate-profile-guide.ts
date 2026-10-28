@@ -11,7 +11,7 @@ export const CERTIFICATE_PROFILE_GUIDE: GuideSection[] = [
   {
     title: "Setting one up",
     paragraphs: [
-      "A profile picks the CA that issues, the key types a requester may use and, for a Private CA, how long certificates last. It sets the starting Renewal Policy, and can make a Team a co-Owner of each certificate, so someone still looks after it when the requester leaves.",
+      "A profile picks the CA that issues, the key types a requester may use and, for a Private CA, how long certificates last; an ADCS CA's Certificate Template decides that itself. It sets the starting Renewal Policy, and can make a Team a co-Owner of each certificate, so someone still looks after it when the requester leaves.",
       "Its name rules say which names, and how many, a request may have. They can only narrow what the CA allows, never widen it.",
       "Each Managed Certificate keeps the settings it was made with, so editing a profile only changes later requests. Name rules are always checked as they are now.",
     ],

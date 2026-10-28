@@ -16,6 +16,7 @@ import { RadioGroup, RadioGroupItem } from "@/components/ui/radio-group";
 import { Textarea } from "@/components/ui/textarea";
 import { ActionLabel } from "@/components/page-header";
 import { acmeCaName } from "@/lib/acme-cas";
+import { adcsIssuerTitle } from "@/lib/adcs-ca";
 import { api, can, ownerFromKey, ownerKey, type CertificateProfile, type ManagedCertificate, type Me } from "@/lib/api";
 import { KEY_ALGORITHM_LABELS, type KeyAlgorithm } from "@/lib/csr-generator";
 import { nameProblems, splitNames } from "@/lib/csr-names";
@@ -382,10 +383,12 @@ function NewManagedCertificateForm({
   );
 }
 
-/** Where a profile issues from, in words: the ACME CA by name, the Issuing CA by name where the caller may read the Private CAs. */
+/** Where a profile issues from, in words: the ACME CA by name, the Issuing CA or ADCS template by name where the caller may read them. */
 function profileIssuerTitle(profile: CertificateProfile, choice: ReturnType<typeof useIssuerChoice>) {
   const { issuer } = profile;
-  return issuer.kind === "acme" ? acmeCaName(choice.acmeCas, issuer.acmeCaId) : (findIssuingCa(choice.activeCas, issuer.issuingCaId)?.name ?? "A Private CA of the Organization");
+  if (issuer.kind === "acme") return acmeCaName(choice.acmeCas, issuer.acmeCaId);
+  if (issuer.kind === "adcs") return adcsIssuerTitle(choice.adcsChoices.map(({ ca }) => ca), issuer) ?? "An ADCS CA of the Organization";
+  return findIssuingCa(choice.activeCas, issuer.issuingCaId)?.name ?? "A Private CA of the Organization";
 }
 
 /** A profile's name rules in words, saying when the caller is not held to them; none for no profile, or one without rules. */
@@ -395,8 +398,9 @@ function profileRulesText(profile: CertificateProfile | undefined, direct: boole
   return direct ? `${rules} As an Organization Administrator, you are held only to the CA's limits.` : rules;
 }
 
-/** The validity a profile fixes, in words; none for an ACME CA, which decides its own. */
-const profileValidityText = (profile: CertificateProfile) => (profile.issuer.kind === "acme" ? null : chosenValidityLabel(profile.validityDays));
+/** The validity a profile fixes, in words; none for an ACME CA, which decides its own, and an ADCS template's own. */
+const profileValidityText = (profile: CertificateProfile) =>
+  profile.issuer.kind === "acme" ? null : profile.issuer.kind === "adcs" ? "As the Certificate Template decides" : chosenValidityLabel(profile.validityDays);
 
 function Summary({
   profile,
