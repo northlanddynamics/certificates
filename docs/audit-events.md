@@ -60,7 +60,7 @@ Each resource's verbs, as of this writing. New ones may be added within version 
 | `certificate_profile` | `created`, `updated`, `disabled`, `enabled` |
 | `certificate_profile_settings` | `changed` |
 | `private_ca` | `created`, `issuing_ca_added`, `csr_signed`, `updated`, `retired`, `revoked`, `crl_published` |
-| `enrollment_profile` | `created`, `updated`, `disabled`, `ra_rotated`, `shared_challenge_rotated`, `shared_challenge_retired` |
+| `enrollment_profile` | `created`, `updated`, `disabled`, `ra_rotated`, `ra_requested`, `ra_issued`, `ra_request_failed`, `shared_challenge_rotated`, `shared_challenge_retired` |
 | `enrollment_validator` | `tested` |
 | `enrollment` | `refused` |
 | `device_certificate` | `issued`, `revoked`, `revocation_requested`, `revocation_failed`, `pruned` |
