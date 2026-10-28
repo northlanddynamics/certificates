@@ -139,7 +139,7 @@ function Fact({ label, children }: { label: string; children: ReactNode }) {
   );
 }
 
-/** One Certificate's full facts: what it is, who issued it and how, its chain, and its revocation if any. */
+/** One Certificate's full facts: what it is, who issued it and how, where its CRL is, its chain, and its revocation if any. */
 function CertificateSheet({ org, m, certificateId, isCurrent, onClose }: { org: Me["organizations"][number]; m: ManagedCertificate; certificateId?: string; isCurrent: boolean; onClose: () => void }) {
   const facts = useCertificateFacts(org.id, m.id, certificateId);
   const acmeCas = useAcmeCas(org.id).data?.items;
@@ -199,6 +199,15 @@ function CertificateSheet({ org, m, certificateId, isCurrent, onClose }: { org: 
               {c.acmeAccount && (
                 <Fact label="ACME Account">
                   {acmeCaName(acmeCas, c.acmeAccount.acmeCaId)} <span className="font-mono text-xs text-muted-foreground">{c.acmeAccount.id}</span>
+                </Fact>
+              )}
+              {c.crlDistributionPoints.length > 0 && (
+                <Fact label="CRL Distribution Points">
+                  <ul className="flex flex-col gap-0.5 font-mono text-xs break-all">
+                    {c.crlDistributionPoints.map((url) => (
+                      <li key={url}>{url}</li>
+                    ))}
+                  </ul>
                 </Fact>
               )}
               <Fact label="Chain">

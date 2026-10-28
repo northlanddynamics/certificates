@@ -103,4 +103,9 @@ type Client interface {
 	// Check says where the request of that ID stands now: still Pending, Issued with its Certificate, or Denied. A request
 	// the CA does not have is a Rejected error.
 	Check(ctx context.Context, configString, requestID string) (Submission, error)
+	// Revoke has the CA revoke the Certificate it issued of that serial number (lower-case hex without leading zeros, as
+	// big.Int's Text(16) writes it) for the RFC 5280 CRLReason code, which ADCS takes as its own; it is on the CA's next
+	// CRL. A Certificate it revoked already stays revoked, and is no error. One the CA does not have is a Rejected error,
+	// as is the account not being allowed to manage certificates.
+	Revoke(ctx context.Context, configString, serialNumber string, reason int) error
 }

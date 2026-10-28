@@ -20,6 +20,7 @@ import type { Authorizer } from "../tenancy/authorization";
 import type { Db, Tx } from "../platform/db/client";
 import { adcsCa, adcsCaAgent, adcsTemplate, agent } from "../platform/db/schema";
 import { HttpError, OrgParam, PemResponse, errors, fileNameOf, isForeignKeyViolation, isUniqueViolation, json, pemFile } from "../platform/http";
+import { cdpUrlsOf } from "../pki/certificate-facts";
 import { fingerprintOf } from "../pki/fingerprint";
 import { permittedNamesAsked, permittedNamesField, samePermittedNames, type PermittedNames } from "../private-ca/permitted-names";
 import { adcsPermittedNamesOf } from "./adcs-issuance";
@@ -171,12 +172,6 @@ const toAdcsCa = (row: AdcsCaRow, agentIds: string[], allTemplates: TemplateRow[
     createdAt: row.createdAt.toISOString(),
   };
 };
-
-/** The CRL Distribution Point URLs in a certificate. */
-function cdpUrlsOf(certificate: x509.X509Certificate): string[] {
-  const extension = certificate.getExtension(x509.CRLDistributionPointsExtension);
-  return (extension?.distributionPoints ?? []).flatMap((point) => point.distributionPoint?.fullName?.flatMap((name) => (name.uniformResourceIdentifier ? [name.uniformResourceIdentifier] : [])) ?? []);
-}
 
 /** A discovery as the platform keeps it: the CA certificate, the certificates above it, its CDP URLs and the templates. */
 interface Discovered {

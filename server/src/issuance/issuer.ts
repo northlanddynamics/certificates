@@ -2,7 +2,8 @@
 // the ACME CA (acme-cas.ts), by id, whose ACME Account they are obtained through; a Private CA (private-ca.ts) carries which of its Issuing
 // CAs, and has no DCV. Issuance, Renewal, the asking about renewal windows, Revocation and exports reach the CA through here and never
 // assume ACME: accounts, DCV and ARI are the ACME kind's concern (certificate-authority.ts). An ADCS CA (adcs-issuance.ts)
-// carries the CA and the Certificate Template it issues under, has no DCV, and answers later: an Agent submits the CSR.
+// carries the CA and the Certificate Template it issues under, has no DCV, and answers later: an Agent submits the CSR,
+// and revokes (adcs-revocation.ts).
 import { and, eq, type SQL } from "drizzle-orm";
 import { CertificateAuthorityError, type AcmeCertificateAuthority, type DnsChallengeResponder, type RenewalInfo, type RevocationReason } from "./acme/certificate-authority";
 import type { AcmeCas } from "./acme/acme-cas";
@@ -12,6 +13,7 @@ import { IssuanceFailure } from "./issuance-failure";
 import { ISSUER_KINDS, type IssuerKind } from "./issuer-kinds";
 import type { PrivateCas } from "../private-ca/private-ca";
 import type { AdcsIssuance } from "../adcs/adcs-issuance";
+import type { AdcsRevocation } from "../adcs/adcs-revocation";
 import { REVOCATION_REASONS_OF } from "../pki/revocation-reasons";
 import type { Secrets } from "../platform/crypto/secrets";
 import type { Change } from "../platform/unit-of-work";
@@ -190,7 +192,21 @@ interface KindOfIssuer<M extends Issuer, C extends CertificateIssuer> {
   roots(db: Db | Tx, organizationId: string, issuedBy: C): Promise<string[]>;
 }
 
-export function createIssuers({ acme, acmeCas, secrets, privateCas, adcs }: { acme: AcmeCertificateAuthority; acmeCas: AcmeCas; secrets: Secrets; privateCas: PrivateCas; adcs: AdcsIssuance }): Issuers {
+export function createIssuers({
+  acme,
+  acmeCas,
+  secrets,
+  privateCas,
+  adcs,
+  adcsRevocation,
+}: {
+  acme: AcmeCertificateAuthority;
+  acmeCas: AcmeCas;
+  secrets: Secrets;
+  privateCas: PrivateCas;
+  adcs: AdcsIssuance;
+  adcsRevocation: AdcsRevocation;
+}): Issuers {
   /** The Organization's ACME account that `which` selects, and its key; none when it has no such account. */
   async function openAccount(db: Db | Tx, organizationId: string, which: SQL) {
     const [account] = await db
@@ -245,9 +261,8 @@ export function createIssuers({ acme, acmeCas, secrets, privateCas, adcs }: { ac
   // No DCV and no ARI: an Agent submits the CSR under the template, and the Issuance waits for its report. Its Certificates renew by the Renewal Policy alone.
   const adcsKind: KindOfIssuer<Issuer & { kind: "adcs" }, CertificateIssuer & { kind: "adcs" }> = {
     issue: (db, organizationId, issuer, request) => adcs.issue(db, organizationId, issuer, request),
-    async revoke() {
-      throw new CertificateAuthorityError("rejected", "a Certificate from an ADCS CA cannot be revoked through the platform yet; revoke it at ADCS");
-    },
+    // An Agent asks ADCS to revoke, and the Revocation is recorded once it reports that ADCS has.
+    revoke: (tx, change, organizationId, issuedBy, requests) => adcsRevocation.revoke(tx, change, organizationId, issuedBy.adcsCaId, requests),
     offersRenewalInfo: false,
     renewalInfo: async () => null,
     roots: (db, organizationId, issuedBy) => adcs.roots(db, organizationId, issuedBy.adcsCaId),

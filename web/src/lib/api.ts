@@ -312,6 +312,8 @@ export interface CertificateFacts extends Certificate {
   /** The leaf's key, such as "ECDSA P-256" or "ML-DSA-65". */
   keyAlgorithm: string;
   signatureAlgorithm: string;
+  /** The CRL Distribution Point URLs in the leaf: where its CA publishes the CRL clients check it against. */
+  crlDistributionPoints: string[];
   /** The leaf and the intermediates the CA served, leaf first. */
   chain: ChainCertificate[];
   acmeAccount: { id: string; acmeCaId: string } | null;

@@ -47,3 +47,14 @@ test("the contract gives the Agent `adcs.submit` and `adcs.check`, and takes wha
   const byStatus = Object.fromEntries(answers.map((a: any) => [a.properties.status.enum?.[0] ?? a.properties.status.const, a.required.sort()]));
   expect(byStatus).toEqual({ issued: ["certificate", "requestId", "status"], pending: ["requestId", "status"], denied: ["message", "requestId", "status"] });
 });
+
+test("the contract gives the Agent `adcs.revoke` with the serial number and RFC 5280 reason code, and takes that ADCS revoked it", () => {
+  const contract = agentContract(h.app) as any;
+  const poll = contract.paths["/api/agent/poll"].post.responses["200"].content["application/json"].schema;
+  expect(JSON.stringify(poll)).toContain("`adcs.revoke`");
+  expect(JSON.stringify(poll)).toContain("`serialNumber`");
+  const result = contract.paths["/api/agent/work-items/{id}/result"].post.requestBody.content["application/json"].schema;
+  expect(result.properties.revocation.required).toEqual(["status"]);
+  expect(result.properties.revocation.properties.status.enum ?? [result.properties.revocation.properties.status.const]).toEqual(["revoked"]);
+  expect(result.properties.kind.enum).toEqual(["rejected", "unreachable"]);
+});

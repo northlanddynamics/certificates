@@ -36,10 +36,13 @@ type Lab struct {
 	Manager Manager
 }
 
-// Manager is what a CA manager does to a pending request.
+// Manager is what a CA manager does to a pending request, and sees of a revoked Certificate (on a lab host, with
+// `certutil -view`).
 type Manager interface {
 	Approve(requestID string) error
 	Deny(requestID, message string) error
+	// RevocationReason is the CRLReason code the Certificate of that serial number (hex) is revoked for; false when it is not revoked.
+	RevocationReason(serialNumber string) (int, bool, error)
 }
 
 var oid = regexp.MustCompile(`^\d+(\.\d+)+$`)
@@ -200,6 +203,39 @@ func Run(t *testing.T, lab Lab) {
 		}
 	})
 
+	t.Run("a Certificate the CA issued is revoked for the RFC 5280 reason code, and revoking it again changes nothing", func(t *testing.T) {
+		csr, _ := request(t, lab.Name)
+		submission, err := lab.Client.Submit(ctx, lab.ConfigString, lab.SuppliedTemplate, csr)
+		if err != nil {
+			t.Fatal(err)
+		}
+		certificate, err := x509.ParseCertificate(submission.Certificate)
+		if err != nil {
+			t.Fatal(err)
+		}
+		serial := certificate.SerialNumber.Text(16)
+		if _, revoked, err := lab.Manager.RevocationReason(serial); err != nil || revoked {
+			t.Fatalf("revoked before it was asked: %v", err)
+		}
+		if err := lab.Client.Revoke(ctx, lab.ConfigString, serial, 1); err != nil {
+			t.Fatal(err)
+		}
+		if reason, revoked, err := lab.Manager.RevocationReason(serial); err != nil || !revoked || reason != 1 {
+			t.Fatalf("got reason %d, revoked %v, %v; want it revoked for keyCompromise (1)", reason, revoked, err)
+		}
+		if err := lab.Client.Revoke(ctx, lab.ConfigString, serial, 1); err != nil {
+			t.Fatalf("revoking it again: %v", err)
+		}
+	})
+
+	t.Run("a Certificate the CA does not have is refused revocation", func(t *testing.T) {
+		err := lab.Client.Revoke(ctx, lab.ConfigString, "0123456789abcdef0123", 0)
+		var e *adcs.Error
+		if !errors.As(err, &e) || e.Kind != adcs.Rejected || e.Message == "" {
+			t.Fatalf("got %v, want a rejected error", err)
+		}
+	})
+
 	t.Run("a request the CA does not have is refused", func(t *testing.T) {
 		_, err := lab.Client.Check(ctx, lab.ConfigString, "999999999")
 		var e *adcs.Error
@@ -224,7 +260,8 @@ func Run(t *testing.T, lab Lab) {
 			_, discoverErr := lab.Client.Discover(ctx, c.configString)
 			_, submitErr := lab.Client.Submit(ctx, c.configString, lab.SuppliedTemplate, csr)
 			_, checkErr := lab.Client.Check(ctx, c.configString, "1")
-			for _, err := range []error{chainErr, discoverErr, submitErr, checkErr} {
+			revokeErr := lab.Client.Revoke(ctx, c.configString, "01", 0)
+			for _, err := range []error{chainErr, discoverErr, submitErr, checkErr, revokeErr} {
 				var e *adcs.Error
 				if !errors.As(err, &e) || e.Kind != c.kind || e.Message == "" {
 					t.Fatalf("%s: got %v, want a %s error", c.configString, err, c.kind)

@@ -1,6 +1,6 @@
 // The RFC 5280 reasons a Certificate may be revoked for, and which of them each kind of issuer (issuer-kinds.ts) offers:
 // an ACME CA takes the four ACME allows a subscriber, a Private CA those and the two an Organization's own PKI needs,
-// and neither offers certificateHold; cACompromise is only for revoking an Issuing CA. The web imports these too, so
+// an ADCS CA those but privilegeWithdrawn, and none offers certificateHold; cACompromise is only for revoking an Issuing CA. The web imports these too, so
 // that what it offers is what the API accepts; this module imports only types, so either side can. A new reason is an
 // entry here, which the database checks on `certificate_revocation` and `issuing_ca` (schema.ts) must list too, as far
 // as each takes it.
@@ -22,8 +22,8 @@ export type RevocationReason = keyof typeof REVOCATION_REASONS;
 export const REVOCATION_REASONS_OF: Record<IssuerKind, readonly RevocationReason[]> = {
   acme: ["unspecified", "keyCompromise", "superseded", "cessationOfOperation"],
   private_ca: ["unspecified", "keyCompromise", "affiliationChanged", "superseded", "cessationOfOperation", "privilegeWithdrawn"],
-  // Revoking at an ADCS CA is not built yet: none is offered.
-  adcs: [],
+  // ADCS takes the RFC 5280 code as its own reason, one to one; it has no privilegeWithdrawn, and certificateHold is not offered.
+  adcs: ["unspecified", "keyCompromise", "affiliationChanged", "superseded", "cessationOfOperation"],
 };
 
 /**

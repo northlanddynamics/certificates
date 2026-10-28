@@ -3,8 +3,8 @@
 // templates it publishes with their facts, and which of them the gMSA may enroll on, and it issues what is submitted under a
 // template it publishes and the gMSA may enroll on, with the names the request supplies and the template's validity. A
 // request under a template that needs CA manager approval, or any while `hold` is set, is held pending until a CA manager
-// approves or denies it (`approve`, `deny`); while `denyWith` is set, every request is denied at once. The Agent stand-in
-// (agent-double.ts) answers ADCS work items from it. (The Go Agent has its own fake behind the same contract; Seam B.)
+// approves or denies it (`approve`, `deny`); while `denyWith` is set, every request is denied at once. It revokes what it
+// issued (`revoke`), and keeps what it revoked. The Agent stand-in (agent-double.ts) answers ADCS work items from it. (The Go Agent has its own fake behind the same contract; Seam B.)
 import * as x509 from "@peculiar/x509";
 import { webcrypto } from "node:crypto";
 import type { TemplateFacts } from "../../src/adcs/adcs-kinds";
@@ -112,6 +112,8 @@ export class AdcsDouble {
   readonly denied = new Map<string, string>();
   /** How often it was asked where a request stands. */
   checks = 0;
+  /** The Certificates it revoked: the RFC 5280 reason code, by serial number (lower-case hex). */
+  readonly revoked = new Map<string, number>();
   private nextRequestId = 100;
 
   private constructor(
@@ -187,6 +189,17 @@ export class AdcsDouble {
     const issued = this.issued.find((i) => i.requestId === requestId);
     if (!issued) throw new AdcsDoubleError("rejected", `the CA has no request ${requestId}`);
     return { status: "issued", requestId, certificate: issued.certificate.toString("pem") };
+  }
+
+  /**
+   * What `adcs.revoke` gets: the Certificate of that serial number (hex) revoked for the RFC 5280 reason code, as ADCS
+   * puts it on its next CRL. One it already revoked stays revoked, under the reason first given; one it did not issue is refused.
+   */
+  async revoke(configString: string, serialNumber: string, reason: number) {
+    this.reach(configString);
+    const serial = serialNumber.toLowerCase();
+    if (!this.issued.some((i) => i.certificate.serialNumber.toLowerCase() === serial)) throw new AdcsDoubleError("rejected", `the CA has no certificate with serial number ${serialNumber}`);
+    if (!this.revoked.has(serial)) this.revoked.set(serial, reason);
   }
 
   /** A CA manager approves the pending request: it is issued. */

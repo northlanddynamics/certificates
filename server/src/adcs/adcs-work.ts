@@ -3,7 +3,7 @@
 import { z } from "@hono/zod-openapi";
 import { TEMPLATE_KEY_ALGORITHMS } from "./adcs-kinds";
 
-export const ADCS_WORK_TYPES = { discover: "adcs.discover", submit: "adcs.submit", check: "adcs.check" } as const;
+export const ADCS_WORK_TYPES = { discover: "adcs.discover", submit: "adcs.submit", check: "adcs.check", revoke: "adcs.revoke" } as const;
 
 /** The longest PEM certificate an Agent may report, and how many certificates a chain may have. */
 const MAX_CERTIFICATE_PEM = 32_768;
@@ -58,3 +58,8 @@ export const SubmissionResult = z
   ])
   .openapi({ description: "For `adcs.submit` and `adcs.check`: what ADCS answered the request with, or holds it as now." });
 export type SubmissionResult = z.infer<typeof SubmissionResult>;
+
+export const RevocationResult = z
+  .object({ status: z.literal("revoked").openapi({ description: "`revoked`: ADCS revoked the Certificate, or had already." }) })
+  .openapi({ description: "For `adcs.revoke`: that ADCS revoked the Certificate. A refusal or a CA that does not answer is reported as a failure, `rejected` or `unreachable`." });
+export type RevocationResult = z.infer<typeof RevocationResult>;
