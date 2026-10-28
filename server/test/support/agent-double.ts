@@ -164,6 +164,10 @@ export class TestAgent {
       if (item.type === "adcs.discover") await this.report(item.id, { ok: true, discovery: this.adcs.discover(item.payload.configString) });
       else if (item.type === "adcs.submit") await this.report(item.id, { ok: true, submission: await this.adcs.submit(item.payload.configString, item.payload.template, item.payload.csr) });
       else if (item.type === "adcs.check") await this.report(item.id, { ok: true, submission: await this.adcs.check(item.payload.configString, item.payload.requestId) });
+      else if (item.type === "adcs.revoke") {
+        await this.adcs.revoke(item.payload.configString, item.payload.serialNumber, item.payload.reason);
+        await this.report(item.id, { ok: true, revocation: { status: "revoked" } });
+      }
       else throw new Error(`a work item of a type this Agent does not know: ${item.type}`);
     } catch (err) {
       if (!(err instanceof AdcsDoubleError)) throw err;

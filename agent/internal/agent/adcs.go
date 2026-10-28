@@ -8,21 +8,25 @@ import (
 	"certificate-platform/agent/internal/platform"
 )
 
-// The work item types by which the platform has the Agent discover an ADCS CA, submit a request to it, and check where a
-// pending one stands, as its own account.
+// The work item types by which the platform has the Agent discover an ADCS CA, submit a request to it, check where a
+// pending one stands, and revoke a Certificate it issued, as its own account.
 const (
 	workDiscover = "adcs.discover"
 	workSubmit   = "adcs.submit"
 	workCheck    = "adcs.check"
+	workRevoke   = "adcs.revoke"
 )
 
 // adcsWork is what an ADCS work item carries. It holds no secret: the Agent reaches ADCS as itself. Template and CSR (PEM)
-// are for a submission; RequestID, ADCS's ID of a request, for a check.
+// are for a submission; RequestID, ADCS's ID of a request, for a check; SerialNumber (hex) and Reason, the RFC 5280
+// CRLReason code, for a revocation.
 type adcsWork struct {
 	ConfigString string `json:"configString"`
 	Template     string `json:"template"`
 	CSR          string `json:"csr"`
 	RequestID    string `json:"requestId"`
+	SerialNumber string `json:"serialNumber"`
+	Reason       *int   `json:"reason"`
 }
 
 // adcsClient is how the Agent reaches ADCS: the one it was given, or the host's.
@@ -111,6 +115,23 @@ func (r *runner) check(ctx context.Context, item platform.WorkItem) platform.Wor
 	}
 	r.cfg.Log.Info("checked a request at an ADCS CA", "id", item.ID, "configString", work.ConfigString, "requestId", work.RequestID, "status", submission.Status)
 	return answered(submission)
+}
+
+// revoke has the CA revoke the Certificate for the reason, and reports once it has.
+func (r *runner) revoke(ctx context.Context, item platform.WorkItem) platform.WorkResult {
+	var work adcsWork
+	if err := decode(item, &work); err != nil || work.ConfigString == "" || work.SerialNumber == "" || work.Reason == nil {
+		return r.adcsFailed(item, adcs.Refused("the work item does not name an ADCS CA, a serial number and a reason"))
+	}
+	client, err := r.adcsClient()
+	if err != nil {
+		return r.adcsFailed(item, err)
+	}
+	if err := client.Revoke(ctx, work.ConfigString, work.SerialNumber, *work.Reason); err != nil {
+		return r.adcsFailed(item, err)
+	}
+	r.cfg.Log.Info("revoked a Certificate at an ADCS CA", "id", item.ID, "configString", work.ConfigString, "serialNumber", work.SerialNumber, "reason", *work.Reason)
+	return platform.WorkResult{OK: true, Revocation: &platform.Revocation{Status: "revoked"}}
 }
 
 // answered is what ADCS answered as the platform takes it: the Certificate (PEM) only when it issued, its message (which

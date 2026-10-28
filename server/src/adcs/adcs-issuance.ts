@@ -136,6 +136,17 @@ export async function adcsRequestsOf(db: Db, issuanceIds: string[]): Promise<Map
   );
 }
 
+/** The Agents assigned to the CA, most recently heard from first, with whether each is online now. */
+export async function assignedAgentsOf(tx: Tx, adcsCaId: string, now: Date, offlineAfterSeconds: number) {
+  const rows = await tx
+    .select({ id: agent.id, hostName: agent.hostName, revokedAt: agent.revokedAt, lastContactAt: agent.lastContactAt })
+    .from(adcsCaAgent)
+    .innerJoin(agent, eq(agent.id, adcsCaAgent.agentId))
+    .where(eq(adcsCaAgent.adcsCaId, adcsCaId))
+    .orderBy(desc(agent.lastContactAt), asc(agent.id));
+  return rows.map((a) => ({ ...a, online: !a.revokedAt && now.getTime() - a.lastContactAt.getTime() <= offlineAfterSeconds * 1000 }));
+}
+
 export interface AdcsIssuance {
   /**
    * Checks what can be checked before ADCS sees the request, then records it and gives it to an online assigned Agent
@@ -190,16 +201,7 @@ export function createAdcsIssuance({
     return { chainPem: chain.map(pemOf).join(""), ca: ca.name, issuedBy: { kind: "adcs", adcsCaId: ca.id, templateId: row.templateId, requestId: row.adcsRequestId! } };
   }
 
-  /** The Agents assigned to the CA, most recently heard from first, with whether each is online now. */
-  async function assignedAgents(tx: Tx, adcsCaId: string, now: Date) {
-    const rows = await tx
-      .select({ id: agent.id, hostName: agent.hostName, revokedAt: agent.revokedAt, lastContactAt: agent.lastContactAt })
-      .from(adcsCaAgent)
-      .innerJoin(agent, eq(agent.id, adcsCaAgent.agentId))
-      .where(eq(adcsCaAgent.adcsCaId, adcsCaId))
-      .orderBy(desc(agent.lastContactAt), asc(agent.id));
-    return rows.map((a) => ({ ...a, online: !a.revokedAt && now.getTime() - a.lastContactAt.getTime() <= offlineAfterSeconds * 1000 }));
-  }
+  const assignedAgents = (tx: Tx, adcsCaId: string, now: Date) => assignedAgentsOf(tx, adcsCaId, now, offlineAfterSeconds);
 
   /**
    * Gives the request (locked by the caller) to an online assigned Agent it has not been tried on, as `adcs.submit`; or,

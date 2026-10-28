@@ -21,7 +21,7 @@ import (
 // ADCS answers them. It issues what is submitted under a template it publishes and the account may enroll on, at once,
 // with the request's subject and names and the template's validity; but it holds a request pending under a template that
 // needs a CA manager's approval, or any while HoldRequests is on, until Approve or Deny, and denies every request while
-// DenyRequests is set.
+// DenyRequests is set. It revokes what it issued.
 type Fake struct {
 	ConfigString string
 	mu           sync.Mutex
@@ -37,6 +37,9 @@ type Fake struct {
 	denial  string
 	pending map[string]pendingRequest
 	decided map[string]Submission
+	// issued are the serial numbers (hex) of what it issued; revoked, the reason code of each it revoked.
+	issued  map[string]bool
+	revoked map[string]int
 }
 
 // pendingRequest is a request the fake holds for a CA manager.
@@ -91,6 +94,8 @@ func NewFake(configString string) (*Fake, error) {
 		nextRequest:  100,
 		pending:      map[string]pendingRequest{},
 		decided:      map[string]Submission{},
+		issued:       map[string]bool{},
+		revoked:      map[string]int{},
 		templates: []Template{
 			{Name: "CorpWebServer", OID: "1.3.6.1.4.1.311.21.8.1.1", DisplayName: "Corp Web Server", ExtendedKeyUsages: []string{"1.3.6.1.5.5.7.3.1"}, ValidityDays: 365, MinimumKeySize: 2048, KeyAlgorithms: []string{"rsa", "ecdsa-p256"}, SubjectFromRequest: true, Enrollable: true, Published: true},
 			{Name: "CorpDevice", OID: "1.3.6.1.4.1.311.21.8.1.2", DisplayName: "Corp Device", ExtendedKeyUsages: []string{"1.3.6.1.5.5.7.3.2"}, ValidityDays: 730, MinimumKeySize: 2048, KeyAlgorithms: []string{"rsa"}, ManagerApproval: true, SubjectFromRequest: true, Enrollable: true, Published: true},
@@ -259,6 +264,31 @@ func (f *Fake) Check(_ context.Context, configString, requestID string) (Submiss
 	return Submission{}, Refused("the CA has no request %s", requestID)
 }
 
+// Revoke revokes a Certificate it issued, for the reason first given.
+func (f *Fake) Revoke(_ context.Context, configString, serialNumber string, reason int) error {
+	if err := f.reach(configString); err != nil {
+		return err
+	}
+	f.mu.Lock()
+	defer f.mu.Unlock()
+	serial := strings.ToLower(strings.TrimLeft(serialNumber, "0"))
+	if !f.issued[serial] {
+		return Refused("the CA has no certificate with serial number %s", serialNumber)
+	}
+	if _, already := f.revoked[serial]; !already {
+		f.revoked[serial] = reason
+	}
+	return nil
+}
+
+// RevocationReason is the reason code the Certificate of that serial number (hex) is revoked for, as a CA manager sees it.
+func (f *Fake) RevocationReason(serialNumber string) (int, bool, error) {
+	f.mu.Lock()
+	defer f.mu.Unlock()
+	reason, revoked := f.revoked[strings.ToLower(strings.TrimLeft(serialNumber, "0"))]
+	return reason, revoked, nil
+}
+
 // issue issues the request (f.mu held): the CSR's subject and names, the template's EKUs and validity, never past the CA's end.
 func (f *Fake) issue(requestID string, template Template, csr *x509.CertificateRequest) (Submission, error) {
 	now := time.Now()
@@ -289,5 +319,6 @@ func (f *Fake) issue(requestID string, template Template, csr *x509.CertificateR
 	if err != nil {
 		return Submission{}, Refused("the CA could not issue: %v", err)
 	}
+	f.issued[serial.Text(16)] = true
 	return Submission{Status: Issued, RequestID: requestID, Certificate: der}, nil
 }

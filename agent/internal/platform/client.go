@@ -163,8 +163,8 @@ type RunReport struct {
 
 // WorkResult is how a work item went. Kind says how a DNS Provider or ADCS operation failed: "rejected" when the service
 // answered and said no, "unreachable" when it did not answer. Error is for a person to read and holds no secret. CSR is for
-// the key the Agent made (never the key), Run is how a Deployment Script went, Discovery what it found at an ADCS CA, and
-// Submission what ADCS answered a request with, or holds it as now.
+// the key the Agent made (never the key), Run is how a Deployment Script went, Discovery what it found at an ADCS CA,
+// Submission what ADCS answered a request with, or holds it as now, and Revocation that ADCS revoked a Certificate.
 type WorkResult struct {
 	OK         bool        `json:"ok"`
 	Kind       string      `json:"kind,omitempty"`
@@ -173,6 +173,12 @@ type WorkResult struct {
 	Run        *RunReport  `json:"run,omitempty"`
 	Discovery  *Discovery  `json:"discovery,omitempty"`
 	Submission *Submission `json:"submission,omitempty"`
+	Revocation *Revocation `json:"revocation,omitempty"`
+}
+
+// Revocation is what `adcs.revoke` reports once ADCS has revoked the Certificate: Status "revoked".
+type Revocation struct {
+	Status string `json:"status"`
 }
 
 // Submission is what `adcs.submit` or `adcs.check` got from ADCS: its disposition ("issued", "pending" or "denied"), its

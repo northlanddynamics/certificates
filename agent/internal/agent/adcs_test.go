@@ -1,6 +1,6 @@
-// Seam B for ADCS CAs: the Agent is given `adcs.discover`, `adcs.submit` and `adcs.check` by a stub platform built from the contract, reaches ADCS through
-// the fake ADCS client as it would through MS-WCCE, and reports what it found in the contract's shape. The platform's side of
-// this is in server/test/adcs-cas.test.ts.
+// Seam B for ADCS CAs: the Agent is given `adcs.discover`, `adcs.submit`, `adcs.check` and `adcs.revoke` by a stub platform
+// built from the contract, reaches ADCS through the fake ADCS client as it would through MS-WCCE, and reports what it found
+// in the contract's shape. The platform's side of this is in server/test/adcs-cas.test.ts and adcs-revocation.test.ts.
 package agent_test
 
 import (
@@ -300,6 +300,76 @@ func TestAnAgentOffWindowsCannotCheckAndSaysSo(t *testing.T) {
 	}
 	w, logs := relayWorld(t)
 	w.stub.Enqueue(checkItem("a", configString, "101"))
+	w.runUntilReported(1)
+	r := w.stub.Results()[0]
+	if r.OK || r.Kind != "rejected" || r.Error != "this Agent cannot reach ADCS: it does not run on Windows" {
+		t.Fatalf("got %+v", r)
+	}
+	assertNothingSecretLogged(t, w, logs)
+}
+
+func revokeItem(id, configString, serialNumber string, reason int) platformstub.WorkItem {
+	return platformstub.WorkItem{ID: id, Type: "adcs.revoke", Payload: map[string]any{"configString": configString, "serialNumber": serialNumber, "reason": reason}}
+}
+
+// issuedSerial is the serial number (hex) of a Certificate the fake issued for a new key.
+func issuedSerial(t *testing.T, w *world) string {
+	t.Helper()
+	csr, _ := csrFor(t, "web.corp.example")
+	w.stub.Enqueue(submitItem("issue", configString, "CorpWebServer", csr))
+	w.runUntilReported(1)
+	block, _ := pem.Decode([]byte(w.stub.Results()[0].Submission["certificate"].(string)))
+	certificate, err := x509.ParseCertificate(block.Bytes)
+	if err != nil {
+		t.Fatal(err)
+	}
+	return certificate.SerialNumber.Text(16)
+}
+
+func TestARevocationIsReportedOnceADCSHasRevokedTheCertificateForTheReasonGiven(t *testing.T) {
+	w, fake, logs := adcsWorld(t)
+	serial := issuedSerial(t, w)
+	w.stub.Enqueue(revokeItem("a", configString, serial, 4))
+	w.runUntilReported(2)
+
+	r := w.stub.Results()[1]
+	if !r.OK || r.Revocation == nil || r.Revocation["status"] != "revoked" {
+		t.Fatalf("got %+v", r)
+	}
+	if reason, revoked, _ := fake.RevocationReason(serial); !revoked || reason != 4 {
+		t.Fatalf("ADCS has it revoked %v for %d, want superseded (4)", revoked, reason)
+	}
+	assertNothingSecretLogged(t, w, logs)
+}
+
+func TestARevocationADCSRefusesIsRejectedAndOneThatCannotReachItIsUnreachable(t *testing.T) {
+	w, _, logs := adcsWorld(t)
+	w.stub.Enqueue(revokeItem("a", configString, "0abc", 1))
+	w.stub.Enqueue(revokeItem("b", `ca99.corp.example\Corp Issuing CA`, "0abc", 1))
+	w.stub.Enqueue(platformstub.WorkItem{ID: "c", Type: "adcs.revoke", Payload: map[string]any{"configString": configString, "serialNumber": "0abc"}})
+	w.stub.Enqueue(revokeItem("d", configString, "", 1))
+	w.runUntilReported(4)
+
+	results := w.stub.Results()
+	for i, want := range []struct{ kind, error string }{
+		{"rejected", "the CA has no certificate with serial number 0abc"},
+		{"unreachable", "the RPC server is unavailable at ca99.corp.example"},
+		{"rejected", "does not name an ADCS CA, a serial number and a reason"},
+		{"rejected", "does not name an ADCS CA, a serial number and a reason"},
+	} {
+		if r := results[i]; r.OK || r.Kind != want.kind || !strings.Contains(r.Error, want.error) || r.Revocation != nil {
+			t.Fatalf("result %d: got %+v, want %s saying %q", i, r, want.kind, want.error)
+		}
+	}
+	assertNothingSecretLogged(t, w, logs)
+}
+
+func TestAnAgentOffWindowsCannotRevokeAndSaysSo(t *testing.T) {
+	if runtime.GOOS == "windows" {
+		t.Skip("the refusal is for an Agent off Windows")
+	}
+	w, logs := relayWorld(t)
+	w.stub.Enqueue(revokeItem("a", configString, "0abc", 1))
 	w.runUntilReported(1)
 	r := w.stub.Results()[0]
 	if r.OK || r.Kind != "rejected" || r.Error != "this Agent cannot reach ADCS: it does not run on Windows" {

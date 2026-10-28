@@ -7,7 +7,7 @@ import type { Db, Tx } from "../platform/db/client";
 import { agent, workItem } from "../platform/db/schema";
 import { HttpError } from "../platform/http";
 import type { Change, UnitOfWork } from "../platform/unit-of-work";
-import type { DiscoveryResult, SubmissionResult } from "../adcs/adcs-work";
+import type { DiscoveryResult, RevocationResult, SubmissionResult } from "../adcs/adcs-work";
 
 export const WORK_ITEM_STATUSES = ["pending", "delivered", "succeeded", "failed", "expired"] as const;
 /**
@@ -30,7 +30,8 @@ export interface RunReport {
 /**
  * What an Agent reports of a work item. `kind` is how a DNS Provider or ADCS operation failed, when it did; `csr` is the
  * CSR for the key it made, for `deployment.generate_key`; `run` is how the script went, for `deployment.run`; `discovery`
- * is what it found at an ADCS CA, for `adcs.discover`; `submission` what ADCS answered a request with, for `adcs.submit` and `adcs.check`.
+ * is what it found at an ADCS CA, for `adcs.discover`; `submission` what ADCS answered a request with, for `adcs.submit` and `adcs.check`; `revocation` that ADCS revoked a
+ * Certificate, for `adcs.revoke`.
  */
 export interface WorkResult {
   ok: boolean;
@@ -40,6 +41,7 @@ export interface WorkResult {
   run?: RunReport;
   discovery?: DiscoveryResult;
   submission?: SubmissionResult;
+  revocation?: RevocationResult;
 }
 
 /** A work item as an Agent is given it. */

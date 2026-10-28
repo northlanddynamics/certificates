@@ -96,6 +96,9 @@ export const CertificateFacts = Certificate.extend({
   issuer: z.string().openapi({ description: "The distinguished name of the CA certificate that signed it." }),
   keyAlgorithm: z.string().openapi({ description: "The leaf's key, such as `ECDSA P-256`, `RSA 2048` or `ML-DSA-65`." }),
   signatureAlgorithm: z.string().openapi({ description: "How the CA signed it, such as `ECDSA with SHA-256` or `ML-DSA-65`." }),
+  crlDistributionPoints: z
+    .array(z.string())
+    .openapi({ description: "The CRL Distribution Point URLs in the leaf, where its CA publishes the CRL that clients check it against; an ADCS CA publishes its own." }),
   chain: z.array(ChainCertificate).openapi({ description: "The leaf and the intermediates the CA served, leaf first." }),
   acmeAccount: z
     .object({ id: z.string(), acmeCaId: z.string() })

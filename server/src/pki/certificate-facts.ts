@@ -1,6 +1,6 @@
 // What a stored Certificate says about itself, read from the chain the CA served: its subject and issuer, its key, how
-// it is signed, and each certificate of the chain, leaf first. A stored Certificate never changes, so these are
-// read from it when asked for rather than stored beside it.
+// it is signed, where its CA publishes its CRL, and each certificate of the chain, leaf first. A stored Certificate never
+// changes, so these are read from it when asked for rather than stored beside it.
 import * as x509 from "@peculiar/x509";
 import { webcrypto } from "node:crypto";
 import { fingerprintOf } from "./fingerprint";
@@ -24,6 +24,12 @@ function signatureAlgorithmOf(cert: x509.X509Certificate) {
   return algorithm.hash ? `${scheme} with ${algorithm.hash.name}` : scheme;
 }
 
+/** The CRL Distribution Point URLs in a certificate. */
+export function cdpUrlsOf(certificate: x509.X509Certificate): string[] {
+  const extension = certificate.getExtension(x509.CRLDistributionPointsExtension);
+  return (extension?.distributionPoints ?? []).flatMap((point) => point.distributionPoint?.fullName?.flatMap((name) => (name.uniformResourceIdentifier ? [name.uniformResourceIdentifier] : [])) ?? []);
+}
+
 export function certificateFacts(chainPem: string) {
   const chain = (chainPem.match(/-----BEGIN CERTIFICATE-----[^-]+-----END CERTIFICATE-----/g) ?? []).map((pem) => new x509.X509Certificate(pem));
   const [leaf] = chain;
@@ -33,6 +39,7 @@ export function certificateFacts(chainPem: string) {
     issuer: leaf.issuer,
     keyAlgorithm: keyAlgorithmOf(leaf),
     signatureAlgorithm: signatureAlgorithmOf(leaf),
+    crlDistributionPoints: cdpUrlsOf(leaf),
     chain: chain.map((cert) => ({
       subject: cert.subject,
       issuer: cert.issuer,
