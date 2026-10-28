@@ -192,7 +192,7 @@
                           },
                           "type": {
                             "type": "string",
-                            "description": "What the Agent is asked to do; an Agent ignores a type it does not know. `dns.present`, `dns.cleanup` and `dns.test` are DNS Provider operations the Agent relays: the payload has `provider` (`type`, its `settings` and its `secret`, the credentials, which the Agent uses for this operation only) and, but for `dns.test`, the TXT `record` (`name`, `value`). `deployment.generate_key` asks the Agent to make a private key for a Managed Certificate in a store only its service account can read, and to report a CSR for it (never the key): the payload has `deploymentId`, `managedCertificateId`, `names` and `keyAlgorithm`: `ecdsa-p256`, `ecdsa-p384`, `rsa-2048`, `rsa-3072`, `rsa-4096`, or `ml-dsa-44`, `ml-dsa-65`, `ml-dsa-87` (pure ML-DSA with an empty context, as RFC 9881 has it in X.509). An Agent that does not make the algorithm fails the item with a reason. `deployment.run` gives the Agent a Certificate and a Deployment Script to run for it: the payload has `deploymentId`, `managedCertificateId`, `trigger`, `names`, the `certificate` (`id`, `fingerprint`, `notAfter`, `chainPem`: the leaf then the intermediates), the `script` (`name`, `interpreter`, `version`, `hash`, `content`) and `parameters`, the Deployment's parameter values by name (an object of strings, empty when it has none), which the Agent gives the script as environment variables named `DEPLOY_PARAM_` and the name. The Agent runs the script only if the SHA-256 of its content is the hash, and reports how it went. The Agent reports how it went to `POST /api/agent/work-items/{id}/result`."
+                            "description": "What the Agent is asked to do; an Agent ignores a type it does not know. `dns.present`, `dns.cleanup` and `dns.test` are DNS Provider operations the Agent relays: the payload has `provider` (`type`, its `settings` and its `secret`, the credentials, which the Agent uses for this operation only) and, but for `dns.test`, the TXT `record` (`name`, `value`). `deployment.generate_key` asks the Agent to make a private key for a Managed Certificate in a store only its service account can read, and to report a CSR for it (never the key): the payload has `deploymentId`, `managedCertificateId`, `names` and `keyAlgorithm`: `ecdsa-p256`, `ecdsa-p384`, `rsa-2048`, `rsa-3072`, `rsa-4096`, or `ml-dsa-44`, `ml-dsa-65`, `ml-dsa-87` (pure ML-DSA with an empty context, as RFC 9881 has it in X.509). An Agent that does not make the algorithm fails the item with a reason. `deployment.run` gives the Agent a Certificate and a Deployment Script to run for it: the payload has `deploymentId`, `managedCertificateId`, `trigger`, `names`, the `certificate` (`id`, `fingerprint`, `notAfter`, `chainPem`: the leaf then the intermediates), the `script` (`name`, `interpreter`, `version`, `hash`, `content`) and `parameters`, the Deployment's parameter values by name (an object of strings, empty when it has none), which the Agent gives the script as environment variables named `DEPLOY_PARAM_` and the name. The Agent runs the script only if the SHA-256 of its content is the hash, and reports how it went. `adcs.discover` asks the Agent to reach an ADCS CA with MS-WCCE, as its own account, and to report the CA's certificate chain and its Certificate Templates with their facts, as `discovery`: the payload has `configString`, the CA's `host\\CA Name`. An Agent that cannot reach ADCS (one not on Windows) fails it as `rejected`, saying so; one whose CA does not answer fails it as `unreachable`, and the platform asks another. The Agent reports how it went to `POST /api/agent/work-items/{id}/result`."
                           },
                           "payload": {
                             "type": "object",
@@ -294,7 +294,7 @@
                       "rejected",
                       "unreachable"
                     ],
-                    "description": "When a DNS Provider operation failed: `rejected` if the DNS service answered and said no, `unreachable` if it did not answer."
+                    "description": "When a DNS Provider or ADCS operation failed: `rejected` if the DNS service or ADCS answered and said no, `unreachable` if it did not answer."
                   },
                   "error": {
                     "type": "string",
@@ -339,6 +339,116 @@
                       "outputTruncated"
                     ],
                     "description": "For `deployment.run`: how the script went. `ok` is whether it succeeded (exit code 0)."
+                  },
+                  "discovery": {
+                    "type": "object",
+                    "properties": {
+                      "chain": {
+                        "type": "array",
+                        "items": {
+                          "type": "string",
+                          "maxLength": 32768
+                        },
+                        "minItems": 1,
+                        "maxItems": 10,
+                        "description": "The CA certificate (PEM), then each certificate above it up to its root, the one that signs it first."
+                      },
+                      "templates": {
+                        "type": "array",
+                        "items": {
+                          "type": "object",
+                          "properties": {
+                            "name": {
+                              "type": "string",
+                              "minLength": 1,
+                              "maxLength": 255,
+                              "description": "Its ADCS name (common name), which requests name it by."
+                            },
+                            "oid": {
+                              "type": "string",
+                              "maxLength": 255,
+                              "pattern": "^\\d+(\\.\\d+)+$"
+                            },
+                            "displayName": {
+                              "type": "string",
+                              "maxLength": 255
+                            },
+                            "extendedKeyUsages": {
+                              "type": "array",
+                              "items": {
+                                "type": "string",
+                                "maxLength": 255,
+                                "pattern": "^\\d+(\\.\\d+)+$"
+                              },
+                              "maxItems": 50,
+                              "description": "Its EKUs, as OIDs."
+                            },
+                            "validityDays": {
+                              "type": "integer",
+                              "minimum": 1,
+                              "maximum": 36500,
+                              "description": "How long what it issues is valid for, in days."
+                            },
+                            "minimumKeySize": {
+                              "type": "integer",
+                              "minimum": 0,
+                              "maximum": 16384,
+                              "description": "The smallest key it takes, in bits."
+                            },
+                            "keyAlgorithms": {
+                              "type": "array",
+                              "items": {
+                                "type": "string",
+                                "enum": [
+                                  "rsa",
+                                  "ecdsa-p256",
+                                  "ecdsa-p384",
+                                  "ecdsa-p521"
+                                ]
+                              },
+                              "maxItems": 4,
+                              "description": "The key algorithms it allows."
+                            },
+                            "managerApproval": {
+                              "type": "boolean",
+                              "description": "Whether a request under it waits for a CA manager's approval."
+                            },
+                            "subjectFromRequest": {
+                              "type": "boolean",
+                              "description": "Whether it is set to \"Supply in the request\", rather than building the subject from Active Directory."
+                            },
+                            "enrollable": {
+                              "type": "boolean",
+                              "description": "Whether the Agent's account may enroll on it."
+                            },
+                            "published": {
+                              "type": "boolean",
+                              "description": "Whether the CA publishes it."
+                            }
+                          },
+                          "required": [
+                            "name",
+                            "oid",
+                            "displayName",
+                            "extendedKeyUsages",
+                            "validityDays",
+                            "minimumKeySize",
+                            "keyAlgorithms",
+                            "managerApproval",
+                            "subjectFromRequest",
+                            "enrollable",
+                            "published"
+                          ]
+                        },
+                        "maxItems": 500,
+                        "description": "Each Certificate Template the CA publishes, with its facts."
+                      }
+                    },
+                    "required": [
+                      "chain",
+                      "templates"
+                    ],
+                    "description": "For `adcs.discover`: what the Agent found at the ADCS CA."
                   }
                 },
                 "required": [

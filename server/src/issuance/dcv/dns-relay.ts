@@ -1,10 +1,9 @@
 // Relayed DNS Providers: a DNS Provider whose operations an Agent of the Organization carries out, beside DNS the hosted
 // platform cannot reach. To a caller it is a `DnsProvider` like any other (dns-provider.ts); behind it, each operation is
-// a work item for one online relay Agent, which runs the same provider code (the Agent has its own implementation of each
-// kind) and reports what happened. Any online relay Agent will do: one that is offline is passed over, and one that takes
-// an item and does not answer in time is given up on for the next. The provider's credentials are put into the work item
+// a work item for one online relay Agent (agent-relay.ts), which runs the same provider code (the Agent has its own
+// implementation of each kind) and reports what happened. The provider's credentials are put into the work item
 // only when the Agent is given it (work-items.ts), and the platform reads them for nothing else when the provider is relayed.
-import { and, asc, desc, eq, inArray } from "drizzle-orm";
+import { and, asc, eq, inArray } from "drizzle-orm";
 import type { Db, Tx } from "../../platform/db/client";
 import { agent, dnsProvider, dnsProviderRelayAgent } from "../../platform/db/schema";
 import { DnsProviderError, type DnsProvider, type TxtRecord } from "./dns-provider";
@@ -12,6 +11,7 @@ import { DNS_PROVIDER_KINDS } from "./dns-provider-kinds";
 import { HttpError } from "../../platform/http";
 import type { Secrets } from "../../platform/crypto/secrets";
 import { PreparationError, type WorkItems } from "../../agents/work-items";
+import { NoAgentAnswered, relayToAgents } from "../../agents/agent-relay";
 
 export interface DnsRelayConfig {
   /** How long one Agent has to report on an operation before another online one is tried. */
@@ -46,13 +46,6 @@ export interface DnsRelay {
 
 const UUID = /^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/i;
 
-function ago(ms: number): string {
-  const minutes = Math.round(ms / 60_000);
-  if (minutes < 1) return `${Math.max(Math.round(ms / 1000), 0)} seconds`;
-  if (minutes < 120) return `${minutes} minutes`;
-  return minutes < 48 * 60 ? `${Math.round(minutes / 60)} hours` : `${Math.round(minutes / 1440)} days`;
-}
-
 export function createDnsRelay(ctx: { db: Db; workItems: WorkItems; secrets: Secrets; clock: () => Date; offlineAfterSeconds: number; config: DnsRelayConfig }): DnsRelay {
   const { db, workItems, secrets, clock, offlineAfterSeconds, config } = ctx;
 
@@ -71,32 +64,15 @@ export function createDnsRelay(ctx: { db: Db; workItems: WorkItems; secrets: Sec
   for (const type of Object.values(DNS_WORK_TYPES)) workItems.register(type, materialize);
 
   async function run(organizationId: string, providerId: string, agentIds: string[], type: DnsWorkType, record?: TxtRecord): Promise<void> {
-    const tried = new Map<string, string>();
-    for (;;) {
-      const agents = await db
-        .select()
-        .from(agent)
-        .where(and(eq(agent.organizationId, organizationId), inArray(agent.id, agentIds)))
-        .orderBy(desc(agent.lastContactAt), asc(agent.id));
-      const now = clock();
-      const online = (a: (typeof agents)[number]) => !a.revokedAt && now.getTime() - a.lastContactAt.getTime() <= offlineAfterSeconds * 1000;
-      const next = agents.find((a) => online(a) && !tried.has(a.id));
-      if (!next) {
-        if (tried.size > 0) {
-          throw new DnsProviderError("unreachable", `no Agent that relays this DNS Provider answered in time (${[...tried.values()].join("; ")})`);
-        }
-        const states = agents.map((a) => `${a.hostName} (${a.revokedAt ? "revoked" : `last contact ${ago(now.getTime() - a.lastContactAt.getTime())} ago`})`);
-        throw new DnsProviderError("unreachable", `no Agent that relays this DNS Provider is online${states.length > 0 ? `: ${states.join(", ")}` : ""}`);
-      }
-      const id = await workItems.enqueue(organizationId, next.id, type, { providerId, ...(record ? { record } : {}) });
-      const outcome = await workItems.outcome(id, config.attemptTimeoutMs);
-      if (outcome === "expired") {
-        tried.set(next.id, `${next.hostName} did not answer within ${config.attemptTimeoutMs / 1000} seconds`);
-        continue;
-      }
-      if (outcome.ok) return;
-      throw new DnsProviderError(outcome.kind ?? "rejected", `Agent ${next.hostName} reported: ${outcome.error ?? "the operation failed"}`);
-    }
+    const relayed = await relayToAgents(
+      { db, workItems, clock, offlineAfterSeconds, attemptTimeoutMs: config.attemptTimeoutMs },
+      { organizationId, agentIds, type, payload: { providerId, ...(record ? { record } : {}) }, role: "relays this DNS Provider" },
+    ).catch((err) => {
+      if (err instanceof NoAgentAnswered) throw new DnsProviderError("unreachable", err.message);
+      throw err;
+    });
+    if (relayed.result.ok) return;
+    throw new DnsProviderError(relayed.result.kind ?? "rejected", `Agent ${relayed.agent.hostName} reported: ${relayed.result.error ?? "the operation failed"}`);
   }
 
   return {

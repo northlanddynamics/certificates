@@ -302,6 +302,48 @@ export interface CertificateFacts extends Certificate {
 export type Issuer =
   | { kind: "acme"; acmeCaId: string }
   | { kind: "private_ca"; issuingCa: { id: string; subject: string }; privateCa: { id: string; name: string } };
+/** A certificate as an ADCS CA's chain shows it. */
+export interface CertificateSummary {
+  subject: string;
+  issuer: string;
+  notBefore: string;
+  notAfter: string;
+  fingerprint: string;
+}
+/** A Certificate Template of an ADCS CA, with the facts its last discovery found. */
+export interface AdcsTemplate {
+  id: string;
+  name: string;
+  oid: string;
+  displayName: string;
+  /** Its EKUs, as OIDs. */
+  extendedKeyUsages: string[];
+  validityDays: number;
+  minimumKeySize: number;
+  keyAlgorithms: string[];
+  managerApproval: boolean;
+  subjectFromRequest: boolean;
+  enrollable: boolean;
+  published: boolean;
+  /** Whether the platform can issue under it: published, enrollable and supplying the subject from the request. */
+  available: boolean;
+}
+/** An Organization's Active Directory Certificate Services CA, reached only through the Agents assigned to it. */
+export interface AdcsCa {
+  id: string;
+  name: string;
+  /** `host\CA Name`. */
+  configString: string;
+  agentIds: string[];
+  caCertificate: CertificateSummary;
+  /** The CA certificate, then each above it up to the root. */
+  chain: CertificateSummary[];
+  /** The CRL Distribution Point URLs in its CA certificate: ADCS publishes the CRL. */
+  cdpUrls: string[];
+  templates: AdcsTemplate[];
+  discoveredAt: string;
+  createdAt: string;
+}
 /** An Organization's own CA, whose keys are in the KMS: a root and the Issuing CAs under it. */
 export interface PrivateCa {
   id: string;
@@ -915,6 +957,11 @@ export const api = {
   certificateProfile: (orgId: string, id: string) => call<CertificateProfile & ProfileDisableCounts>(`/api/organizations/${orgId}/certificate-profiles/${id}`),
   disableCertificateProfile: (orgId: string, id: string) => call<CertificateProfile>(`/api/organizations/${orgId}/certificate-profiles/${id}/disable`, { method: "POST", body: {} }),
   enableCertificateProfile: (orgId: string, id: string) => call<CertificateProfile>(`/api/organizations/${orgId}/certificate-profiles/${id}/enable`, { method: "POST", body: {} }),
+  adcsCas: (orgId: string) => call<{ items: AdcsCa[] }>(`/api/organizations/${orgId}/adcs-cas`),
+  createAdcsCa: (orgId: string, body: { name: string; configString: string; agentIds: string[] }) => call<AdcsCa>(`/api/organizations/${orgId}/adcs-cas`, { body }),
+  changeAdcsCa: (orgId: string, id: string, body: { name?: string; agentIds?: string[] }) => call<AdcsCa>(`/api/organizations/${orgId}/adcs-cas/${id}`, { method: "PATCH", body }),
+  deleteAdcsCa: (orgId: string, id: string) => call<null>(`/api/organizations/${orgId}/adcs-cas/${id}`, { method: "DELETE" }),
+  adcsCaChainUrl: (orgId: string, id: string) => `/api/organizations/${orgId}/adcs-cas/${id}/chain`,
   createPrivateCa: (orgId: string, body: NewPrivateCa) => call<PrivateCa>(`/api/organizations/${orgId}/private-cas`, { body }),
   addIssuingCa: (orgId: string, id: string, body: NewIssuingCa) => call<IssuingCa>(`/api/organizations/${orgId}/private-cas/${id}/issuing-cas`, { body }),
   updateIssuingCa: (orgId: string, id: string, issuingCaId: string, body: { permittedNames?: PermittedNames; validity?: PrivateCaValidity }) =>

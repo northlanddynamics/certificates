@@ -116,8 +116,8 @@ describe("what the caller may do", () => {
 
     // Approvers and Members hold only what is granted them on purpose (see permissions.ts).
     const permissionsOf = async (cookie: string) => (await h.api("/api/me", { cookie })).body.organizations[0].permissions;
-    expect(await permissionsOf(memberCookie)).toEqual({ managedCertificate: ["propose", "download"], notificationChannel: ["read"], privateCa: ["read"], certificateProfile: ["read"] });
-    expect(await permissionsOf(approverCookie)).toEqual({ managedCertificate: ["read", "propose", "download"], approval: ["read", "decide"], notificationChannel: ["read"], privateCa: ["read"], certificateProfile: ["read"] });
+    expect(await permissionsOf(memberCookie)).toEqual({ managedCertificate: ["propose", "download"], notificationChannel: ["read"], privateCa: ["read"], adcsCa: ["read"], certificateProfile: ["read"] });
+    expect(await permissionsOf(approverCookie)).toEqual({ managedCertificate: ["read", "propose", "download"], approval: ["read", "decide"], notificationChannel: ["read"], privateCa: ["read"], adcsCa: ["read"], certificateProfile: ["read"] });
   });
 });
 
@@ -559,7 +559,7 @@ describe("authorization", () => {
   });
 
   test("an Organization Administrator holds every declared permission; Approvers and Members only those granted them; Better Auth's own role names none", () => {
-    const granted: Record<string, string[]> = { approver: ["managedCertificate.read", "managedCertificate.propose", "managedCertificate.download", "approval.read", "approval.decide", "notificationChannel.read", "privateCa.read", "certificateProfile.read"], member: ["managedCertificate.propose", "managedCertificate.download", "notificationChannel.read", "privateCa.read", "certificateProfile.read"] };
+    const granted: Record<string, string[]> = { approver: ["managedCertificate.read", "managedCertificate.propose", "managedCertificate.download", "approval.read", "approval.decide", "notificationChannel.read", "privateCa.read", "adcsCa.read", "certificateProfile.read"], member: ["managedCertificate.propose", "managedCertificate.download", "notificationChannel.read", "privateCa.read", "adcsCa.read", "certificateProfile.read"] };
     const declared = declaredPermissions();
     // The permissions the platform's own routes and Better Auth's endpoints ask about stay declared.
     expect(declared.invitation).toContain("create");

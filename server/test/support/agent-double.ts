@@ -7,6 +7,7 @@ import { DnsProviderError } from "../../src/issuance/dcv/dns-provider";
 import { DNS_PROVIDER_KINDS } from "../../src/issuance/dcv/dns-provider-kinds";
 import { isMlDsa, type KeyAlgorithm } from "../../src/pki/key-algorithms";
 import type { Harness } from "./harness";
+import { AdcsDoubleError, type AdcsDouble } from "./adcs-double";
 
 /** The headers of a call that carries `credential`. */
 export const asBearer = (credential: string) => ({ authorization: `Bearer ${credential}` });
@@ -76,6 +77,8 @@ export class TestAgent {
   corruptScripts = false;
   /** What the script it "runs" does. */
   scriptOutcome: ScriptOutcome = { exitCode: 0, output: "installed" };
+  /** The ADCS it reaches, as a domain-joined Windows host does; none, and it answers ADCS work items as an Agent off Windows does. */
+  adcs: AdcsDouble | null = null;
 
   private constructor(
     private readonly h: Harness,
@@ -118,8 +121,9 @@ export class TestAgent {
   }
 
   /**
-   * Polls once and carries out the DNS Provider work items it is given, as the Agent does: with the provider code the
-   * platform itself runs (the Agent proper is Go, which has its own; Seam B), and reports how each went.
+   * Polls once and carries out the work items it is given, as the Agent does: DNS Provider operations with the provider
+   * code the platform itself runs, ADCS operations against its ADCS double (the Agent proper is Go, which has its own;
+   * Seam B), and reports how each went.
    */
   async work(): Promise<WorkItem[]> {
     const polled = await this.poll();
@@ -137,6 +141,7 @@ export class TestAgent {
   private async carryOut(item: WorkItem) {
     if (item.type === "deployment.generate_key") return this.generateKey(item);
     if (item.type === "deployment.run") return this.runDeployment(item);
+    if (item.type.startsWith("adcs.")) return this.carryOutAdcs(item);
     const { provider, record } = item.payload;
     try {
       const kind = DNS_PROVIDER_KINDS[provider.type as keyof typeof DNS_PROVIDER_KINDS];
@@ -148,6 +153,18 @@ export class TestAgent {
       await this.report(item.id, { ok: true });
     } catch (err) {
       if (!(err instanceof DnsProviderError)) throw err;
+      await this.report(item.id, { ok: false, kind: err.kind, error: err.message });
+    }
+  }
+
+  /** Carries out an ADCS operation against its ADCS, as the Agent does with MS-WCCE, and reports how it went. */
+  private async carryOutAdcs(item: WorkItem) {
+    if (!this.adcs) return this.report(item.id, { ok: false, kind: "rejected", error: "this Agent cannot reach ADCS: it does not run on Windows" });
+    try {
+      if (item.type !== "adcs.discover") throw new Error(`a work item of a type this Agent does not know: ${item.type}`);
+      await this.report(item.id, { ok: true, discovery: this.adcs.discover(item.payload.configString) });
+    } catch (err) {
+      if (!(err instanceof AdcsDoubleError)) throw err;
       await this.report(item.id, { ok: false, kind: err.kind, error: err.message });
     }
   }

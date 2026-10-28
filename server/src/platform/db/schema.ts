@@ -15,6 +15,7 @@ import type { IssuingCaStatus, PrivateCaKind, PrivateCaStatus } from "../../priv
 import type { DeviceExtendedKeyUsage, DeviceKeyType, DeviceKeyUsage, EnrollmentIssuerKind } from "../../enrollment/enrollment-profile-kinds";
 import type { NameRules } from "../../enrollment/name-rules";
 import type { AgentArch, AgentOs } from "../../agents/agent-kinds";
+import type { TemplateKeyAlgorithm } from "../../adcs/adcs-kinds";
 import type { ApprovalStatus } from "../../certificates/approval";
 import type { NameChangeStatus } from "../../certificates/name-change";
 import type { NoticeEvent, NotificationChannelKind } from "../../notifications/notification-kinds";
@@ -1010,6 +1011,82 @@ export const dnsProviderRelayAgent = pgTable(
     foreignKey({ columns: [t.dnsProviderId, t.organizationId], foreignColumns: [dnsProvider.id, dnsProvider.organizationId] }),
     foreignKey({ columns: [t.agentId, t.organizationId], foreignColumns: [agent.id, agent.organizationId] }),
     index("dns_provider_relay_agent_agent_idx").on(t.agentId),
+  ],
+);
+
+/**
+ * An Organization's Active Directory Certificate Services CA (adcs-ca.ts), which the platform reaches only through the
+ * Agents assigned to it (`adcs_ca_agent`). It holds no key and no credential: only what discovery last fetched, its CA
+ * certificate and chain and the CRL Distribution Point URLs of its CA certificate, and its templates (`adcs_template`).
+ */
+export const adcsCa = pgTable(
+  "adcs_ca",
+  {
+    id: uuid("id").primaryKey().defaultRandom(),
+    organizationId: text("organization_id")
+      .notNull()
+      .references(() => organization.id),
+    name: text("name").notNull(),
+    /** How ADCS names it, `host\CA Name`. Fixed once added. */
+    configString: text("config_string").notNull(),
+    /** The CA certificate (PEM), then its issuers up to the root (PEM, the one that signs it first). */
+    caCertificatePem: text("ca_certificate_pem").notNull(),
+    chainPem: text("chain_pem").array().notNull(),
+    cdpUrls: text("cdp_urls").array().notNull(),
+    discoveredAt: timestamp("discovered_at", { withTimezone: true }).notNull(),
+    createdAt: timestamp("created_at", { withTimezone: true }).notNull(),
+  },
+  (t) => [
+    unique("adcs_ca_organization_name_unique").on(t.organizationId, t.name),
+    unique("adcs_ca_organization_config_string_unique").on(t.organizationId, t.configString),
+    // Lets other tables reference an ADCS CA together with its Organization, so none can point at another's.
+    unique("adcs_ca_id_organization_unique").on(t.id, t.organizationId),
+  ],
+);
+
+/** An Agent of the ADCS CA's Organization that carries out its operations. */
+export const adcsCaAgent = pgTable(
+  "adcs_ca_agent",
+  {
+    organizationId: text("organization_id")
+      .notNull()
+      .references(() => organization.id),
+    adcsCaId: uuid("adcs_ca_id").notNull(),
+    agentId: uuid("agent_id").notNull(),
+  },
+  (t) => [
+    primaryKey({ columns: [t.adcsCaId, t.agentId] }),
+    foreignKey({ columns: [t.adcsCaId, t.organizationId], foreignColumns: [adcsCa.id, adcsCa.organizationId] }).onDelete("cascade"),
+    foreignKey({ columns: [t.agentId, t.organizationId], foreignColumns: [agent.id, agent.organizationId] }),
+    index("adcs_ca_agent_agent_idx").on(t.agentId),
+  ],
+);
+
+/** A Certificate Template of an ADCS CA, with the facts discovery last reported of it. */
+export const adcsTemplate = pgTable(
+  "adcs_template",
+  {
+    id: uuid("id").primaryKey().defaultRandom(),
+    organizationId: text("organization_id")
+      .notNull()
+      .references(() => organization.id),
+    adcsCaId: uuid("adcs_ca_id").notNull(),
+    name: text("name").notNull(),
+    oid: text("oid").notNull(),
+    displayName: text("display_name").notNull(),
+    extendedKeyUsages: text("extended_key_usages").array().notNull(),
+    validityDays: integer("validity_days").notNull(),
+    minimumKeySize: integer("minimum_key_size").notNull(),
+    keyAlgorithms: text("key_algorithms").array().$type<TemplateKeyAlgorithm[]>().notNull(),
+    managerApproval: boolean("manager_approval").notNull(),
+    subjectFromRequest: boolean("subject_from_request").notNull(),
+    enrollable: boolean("enrollable").notNull(),
+    published: boolean("published").notNull(),
+  },
+  (t) => [
+    unique("adcs_template_ca_name_unique").on(t.adcsCaId, t.name),
+    foreignKey({ columns: [t.adcsCaId, t.organizationId], foreignColumns: [adcsCa.id, adcsCa.organizationId] }).onDelete("cascade"),
+    unique("adcs_template_id_organization_unique").on(t.id, t.organizationId),
   ],
 );
 

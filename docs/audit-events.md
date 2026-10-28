@@ -50,6 +50,7 @@ Each resource's verbs, as of this writing. New ones may be added within version 
 | `member` | `role_changed`, `removed`, `provisioned` |
 | `team` | `created`, `renamed`, `deleted`, `member_added`, `member_removed` |
 | `acme_ca` | `created`, `updated`, `deleted` |
+| `adcs_ca` | `created`, `updated`, `deleted`, `discovered` |
 | `acme_account` | `created`, `key_replaced` |
 | `dns_provider` | `created`, `changed`, `secret_replaced`, `tested`, `relay_changed` |
 | `validation_zone` | `created`, `deleted` |
@@ -101,6 +102,14 @@ Adding a custom ACME CA records `acme_ca.created`, with its `name`, `directoryUr
 `acme_ca.updated` targets a custom ACME CA when an Organization Administrator changes it. Its `detail` has its `name` (the one it has now), and in `changes` a `from` and `to` for each of `name`, `tag` and `contactEmail` (its account's, which the CA is told) that changed. A change that changes nothing is not an event.
 
 `acme_ca.deleted` targets a custom ACME CA an Organization Administrator deleted, with its account and the secrets of both. Its `detail` has its `name`, `directoryUrl` and `tag`, and its `account`'s `id` and `accountUrl`. The account is left as it is at the CA.
+
+`adcs_ca.created` targets the ADCS CA (`adcs_ca`, its id) an Organization Administrator added. Its `detail` has its `name`, `configString` and the `agentIds` assigned to it. It is followed, in the same change, by the `adcs_ca.discovered` of the discovery that adding it ran; a CA that could not be discovered is not added, and is no event.
+
+`adcs_ca.discovered` targets the ADCS CA an Agent discovered. Its `detail` has the CA's `name`, the `agent` that carried it out (`{ "id": ..., "hostName": ... }`), the `caCertificate` it fetched (`subject` and SHA-256 `fingerprint`), the `cdpUrls` in that certificate, and the `templates` it found, by name, sorted into `available` (published, enrollable by the Agent's account and supplying the subject from the request) and `unavailable`.
+
+`adcs_ca.updated` targets the ADCS CA when an Organization Administrator renames it or changes its Agents. Its `detail` has its `name` (the one it has now), and in `changes` a `from` and `to` for each of `name` and `agentIds` that changed. A change that changes nothing is not an event.
+
+`adcs_ca.deleted` targets the ADCS CA an Organization Administrator removed, with its templates. Its `detail` has its `name` and `configString`. Nothing changes at ADCS.
 
 `managed_certificate.issuer_changed` targets the Managed Certificate when an Organization Administrator repoints it from one Issuing CA to another, as in rolling an Issuing CA over. Its `detail` has its `names`, and `from` and `to`, each `{ "kind": "private_ca", "issuingCaId": "..." }`. Repointing it to the Issuing CA it is on already is not an event.
 
