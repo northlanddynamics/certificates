@@ -1,4 +1,4 @@
-import { BadgeCheckIcon, FileBadgeIcon, BellIcon, BuildingIcon, PlugIcon, ScrollTextIcon, SendIcon, BotIcon, GlobeIcon, LandmarkIcon, FileKey2Icon, FileSearchIcon, FileTerminalIcon, KeyRoundIcon, LogInIcon, RocketIcon, SearchCheckIcon, ServerCogIcon, ShieldCheckIcon, ShieldEllipsisIcon, ShieldUserIcon, TabletSmartphoneIcon, UserRoundIcon, UsersIcon, type LucideIcon } from "lucide-react";
+import { BadgeCheckIcon, LayoutDashboardIcon, FileBadgeIcon, BellIcon, BuildingIcon, PlugIcon, ScrollTextIcon, SendIcon, BotIcon, GlobeIcon, LandmarkIcon, FileKey2Icon, FileSearchIcon, FileTerminalIcon, KeyRoundIcon, LogInIcon, RocketIcon, SearchCheckIcon, ServerCogIcon, ShieldCheckIcon, ShieldEllipsisIcon, ShieldUserIcon, TabletSmartphoneIcon, UserRoundIcon, UsersIcon, type LucideIcon } from "lucide-react";
 import { can, type Me } from "@/lib/api";
 
 type Org = Me["organizations"][number];
@@ -29,6 +29,8 @@ export const isNavSection = (entry: NavItem | NavSection): entry is NavSection =
 export function organizationNavGroups(org: Org): NavGroup[] {
   const base = `/organizations/${org.id}`;
   const groups: NavGroup[] = [
+    // Open to everyone: it shows each caller what they see in the inventory.
+    { items: [{ title: "Dashboard", url: `${base}/dashboard`, icon: LayoutDashboardIcon }] },
     { label: "Inventory", items: [{ title: "Managed Certificates", url: `${base}/certificates`, icon: ShieldCheckIcon }] },
     // Run in the browser and asking the platform for nothing, so there is no permission to check.
     {

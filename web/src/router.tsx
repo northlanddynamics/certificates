@@ -16,6 +16,7 @@ import { CertificateProfilesPage } from "./pages/certificate-profiles";
 import { AgentsPage } from "./pages/agents";
 import { ApiKeysPage } from "./pages/api-keys";
 import { CertificatesPage } from "./pages/certificates";
+import { DashboardPage } from "./pages/dashboard";
 import { CsrToolsPage } from "./pages/csr-tools";
 import { ViewerPage } from "./pages/viewer";
 import { DeploymentScriptGuidePage } from "./pages/deployment-script-guide";
@@ -68,6 +69,8 @@ const publicRoute = createRoute({
 const appRoute = createRoute({ getParentRoute: () => rootRoute, id: "app", component: AppShell });
 
 const homeRoute = createRoute({ getParentRoute: () => appRoute, path: "/", component: HomePage });
+
+const dashboardRoute = createRoute({ getParentRoute: () => appRoute, path: "/organizations/$orgId/dashboard", component: DashboardPage });
 // `redirect` is the page a signed-out visitor asked for, to go back to once signed in (checked by `safeRedirect`).
 const signInRoute = createRoute({
   getParentRoute: () => publicRoute,
@@ -84,8 +87,13 @@ export const acceptInvitationRoute = createRoute({
 const certificatesRoute = createRoute({
   getParentRoute: () => appRoute,
   path: "/organizations/$orgId/certificates",
-  // `q` is the search of the inventory, kept in the address so that it survives Back and can be shared.
-  validateSearch: (search: Record<string, unknown>): { q?: string } => (typeof search.q === "string" && search.q !== "" ? { q: search.q } : {}),
+  // `q` is the search of the inventory, kept in the address so that it survives Back and can be shared; `status` (the
+  // Status facets it opens with, comma-separated) and `tab` let another page, such as the Dashboard, link to a narrowed list.
+  validateSearch: (search: Record<string, unknown>): { q?: string; status?: string; tab?: "approval" } => ({
+    ...(typeof search.q === "string" && search.q !== "" && { q: search.q }),
+    ...(typeof search.status === "string" && search.status !== "" && { status: search.status }),
+    ...(search.tab === "approval" && { tab: "approval" as const }),
+  }),
   component: CertificatesPage,
 });
 
@@ -312,6 +320,7 @@ const routeTree = rootRoute.addChildren([
   publicRoute.addChildren([signInRoute, acceptInvitationRoute]),
   appRoute.addChildren([
     homeRoute,
+    dashboardRoute,
     certificatesRoute,
     managedCertificateGuideRoute,
     certificateRoute.addChildren([

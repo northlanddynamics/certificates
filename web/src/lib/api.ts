@@ -137,6 +137,17 @@ export interface InventoryFilters {
   /** Any of these. */
   keyAlgorithm?: string[];
 }
+/** What needs doing across the Managed Certificates the caller sees, as the Dashboard shows it. */
+export interface Dashboard {
+  /** How many match each of the inventory's filters of the same name; `managed` is all of them. Archived ones are left out. */
+  counts: { managed: number; expiringSoon: number; renewalFailing: number; agentOffline: number; pendingApproval: number };
+  /** Those needing someone now, the never-issued first, then the soonest to end; `total` is how many there are in all. */
+  attention: { items: ManagedCertificate[]; total: number };
+  /** The weeks ahead from now, each with how many Certificates end in it, by Renewal Policy. */
+  expiry: { start: string; automatic: number; manual: number }[];
+  /** How many are issued from each CA, the most first: an ACME CA by `id`, a Private CA or ADCS CA by `name` too. */
+  issuers: { kind: Issuer["kind"]; id: string; name: string | null; count: number }[];
+}
 /** One page of a list the server pages; `total` is how many there are in all. */
 export interface Page<T> {
   items: T[];
@@ -902,6 +913,7 @@ export const api = {
   issuances: (orgId: string, id: string) => call<{ items: Issuance[] }>(`/api/organizations/${orgId}/managed-certificates/${id}/issuances`),
   createManagedCertificate: (orgId: string, body: NewManagedCertificate) =>
     call<ManagedCertificate>(`/api/organizations/${orgId}/managed-certificates`, { body }),
+  dashboard: (orgId: string) => call<Dashboard>(`/api/organizations/${orgId}/dashboard`),
   approvalQueue: (orgId: string) => call<{ items: ManagedCertificate[]; nameChanges: QueuedNameChange[] }>(`/api/organizations/${orgId}/approvals`),
   approve: (orgId: string, id: string, reason?: string) =>
     call<ManagedCertificate>(`/api/organizations/${orgId}/managed-certificates/${id}/approve`, { body: { reason } }),

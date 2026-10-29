@@ -144,9 +144,10 @@ const ROUTE = "/app/organizations/$orgId/certificates";
 export function ManagedCertificates({ org }: { org: Org }) {
   const queryClient = useQueryClient();
   const navigate = useNavigate({ from: "/organizations/$orgId/certificates" });
-  const q = useSearch({ from: ROUTE }).q ?? "";
+  const { q = "", status: opened, tab } = useSearch({ from: ROUTE });
   const [typed, setTyped] = useState(q);
-  const [facets, setFacets] = useState<Facets>(NO_FACETS);
+  // A link may open it narrowed by Status facets; those it does not know are ignored.
+  const [facets, setFacets] = useState<Facets>(() => ({ ...NO_FACETS, status: (opened ?? "").split(",").filter((name) => STATUS_FACETS.some(([value]) => value === name)) }));
   const [pagination, setPagination] = useState<PaginationState>({ pageIndex: 0, pageSize: 25 });
   const search = (next: string) => navigate({ search: (prev) => ({ ...prev, q: next || undefined }), replace: true });
   // The address follows the box once typing pauses, and a new search starts again from the first page.
@@ -271,7 +272,7 @@ export function ManagedCertificates({ org }: { org: Org }) {
   // Only those who may decide see what is waiting.
   if (!mayApprove) return certificates;
   return (
-    <Tabs defaultValue="certificates" className="gap-4">
+    <Tabs defaultValue={tab ?? "certificates"} className="gap-4">
       <TabsList>
         <TabsTrigger value="certificates">Certificates</TabsTrigger>
         <TabsTrigger value="approval">

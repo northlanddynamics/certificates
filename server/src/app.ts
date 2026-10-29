@@ -45,6 +45,7 @@ import { createIssuances } from "./issuance/issuance";
 import { createIssuers, type Issuers } from "./issuance/issuer";
 import type { Kms } from "./platform/crypto/kms";
 import { registerApprovals } from "./certificates/approvals";
+import { registerDashboard } from "./certificates/dashboard";
 import { registerArchiveRoutes } from "./certificates/archive-routes";
 import { registerHistory } from "./certificates/history";
 import { registerIssuerRoutes } from "./issuance/issuer-routes";
@@ -397,6 +398,7 @@ export function createApp(deps: AppDeps) {
   const renewals = createRenewalScheduler({ db, unitOfWork, issuances, issuers, notifications, clock });
   registerNameChangeRoutes({ app, requireUser, authorize, unitOfWork, issuances, reader, notifications });
   registerApprovals({ app, db, requireUser, authorize, unitOfWork, issuances, reader, notifications });
+  registerDashboard({ app, db, requireUser, authorize, reader, clock, agentOfflineAfterSeconds: agentGateway.offlineAfterSeconds });
   registerArchiveRoutes({ app, requireUser, authorize, unitOfWork, issuances, reader });
   registerIssuerRoutes({ app, requireUser, authorize, unitOfWork, reader });
   registerProfileDetachRoutes({ app, requireUser, authorize, unitOfWork, reader });
