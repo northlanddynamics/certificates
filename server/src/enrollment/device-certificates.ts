@@ -11,7 +11,8 @@ import { CertificateAuthorityError } from "../issuance/acme/certificate-authorit
 import type { Db } from "../platform/db/client";
 import { deviceCertificate, enrollmentProfile, issuingCa, revocationRequest } from "../platform/db/schema";
 import type { DeviceCertificateRevocations } from "./device-certificate-revocation";
-import { DEVICE_KEY_TYPES, WEAK_DEVICE_KEY_TYPE } from "./enrollment-profile-kinds";
+import { DEVICE_KEY_TYPES, ENROLLMENT_ISSUER_KINDS, WEAK_DEVICE_KEY_TYPE } from "./enrollment-profile-kinds";
+import { cdpUrlsOf } from "../pki/certificate-facts";
 import { HttpError, OrgParam, PageQuery, errors, json, pageOf } from "../platform/http";
 import { REVOCATION_REASONS_OF } from "../pki/revocation-reasons";
 import type { Actor, UnitOfWork } from "../platform/unit-of-work";
@@ -35,7 +36,9 @@ export const DeviceCertificate = z.object({
     .object({ id: z.string() })
     .nullable()
     .openapi({ description: "The Shared Challenge its request presented, by id, which tells whether it was issued under its profile's current or previous one; none for a renewal, or when its profile's validator's kind uses none." }),
-  issuer: z.string().openapi({ description: "The Issuing CA's subject." }),
+  issuer: z.string().openapi({ description: "The subject of the CA that issued it: its Issuing CA, or its ADCS CA." }),
+  issuerKind: z.enum(ENROLLMENT_ISSUER_KINDS).openapi({ description: "The kind of CA that issued it, which decides the reasons it may be revoked for: a Private CA's Issuing CA, or an ADCS CA (which takes no `privilegeWithdrawn`)." }),
+  crlDistributionPoints: z.array(z.string()).openapi({ description: "The CRL Distribution Point URLs, read from its own extension: where relying parties look for it once revoked." }),
   notBefore: z.string(),
   notAfter: z.string(),
   status: z.enum(DEVICE_CERTIFICATE_STATUSES).openapi({ description: "`revoked` once revoked, whenever it ends; otherwise `expired` once it has ended, and `active` until then." }),
@@ -88,6 +91,7 @@ type Row = { certificate: typeof deviceCertificate.$inferSelect; issuer: string 
 
 /** The Device Certificate as the API shows it; its status as `inStatus` finds it. */
 function toDeviceCertificate({ certificate: row, issuer, revocationRequest: request }: Row, now: Date): z.infer<typeof DeviceCertificate> {
+  const leaf = new x509.X509Certificate(row.certificatePem);
   return {
     id: row.id,
     enrollmentProfileId: row.enrollmentProfileId,
@@ -97,7 +101,9 @@ function toDeviceCertificate({ certificate: row, issuer, revocationRequest: requ
     deviceId: row.deviceId,
     keyType: row.keyType,
     sharedChallenge: row.sharedChallengeId === null ? null : { id: row.sharedChallengeId },
-    issuer: issuer ?? new x509.X509Certificate(row.certificatePem).issuer,
+    issuer: issuer ?? leaf.issuer,
+    issuerKind: row.issuerKind,
+    crlDistributionPoints: cdpUrlsOf(leaf),
     notBefore: row.notBefore.toISOString(),
     notAfter: row.notAfter.toISOString(),
     status: row.revokedAt ? "revoked" : row.notAfter <= now ? "expired" : "active",
@@ -226,7 +232,7 @@ export function registerDeviceCertificates(ctx: {
       description:
         "The CRL is reissued in the same change, so the Revocation is recorded, audited and published together, or not at all (502 when the KMS did not answer to sign the CRL, 422 when it refused; ask again). " +
         "A CA that confirms later (reached through an Agent) is answered 202: the Device Certificate shows its `revocationRequest` as `pending` until the CA confirms, when the Revocation is recorded and audited, or until it fails with the cause. " +
-        "The reasons a Private CA offers are taken; a revoked Device Certificate, or one whose revocation is pending, cannot be revoked again (409). Only Organization Administrators may.",
+        "The reasons a Private CA offers are taken, but `privilegeWithdrawn` not from an ADCS CA (422, see `issuerKind`); a revoked Device Certificate, or one whose revocation is pending, cannot be revoked again (409). Only Organization Administrators may.",
       request: {
         params: CertificateParams,
         body: { content: { "application/json": { schema: z.object({ reason: DeviceRevocationReason }) } } },

@@ -13,7 +13,7 @@ const localKmsKey = process.env.LOCAL_KMS_KEY;
 if (!databaseUrl || !secret || !localKmsKey) throw new Error("DATABASE_URL, AUTH_SECRET and LOCAL_KMS_KEY are required");
 
 const pool = new Pool({ connectionString: databaseUrl });
-const { app, auth, db, issuances, revocations, renewals, adcsDiscovery, adcsIssuance, adcsRaCertificates, notifications, auditForwarding, crls, enrollmentValidators, deviceCertificatePruning, sharedChallenges } = createApp({
+const { app, auth, db, issuances, revocations, renewals, adcsDiscovery, adcsIssuance, adcsRaCertificates, notifications, auditForwarding, crls, enrollmentValidators, deviceCertificatePruning, sharedChallenges, deviceEnrollment } = createApp({
   pool,
   mailer: new ConsoleMailer(),
   clock: () => new Date(),
@@ -89,6 +89,14 @@ const REVOCATION_FEED_PASS_MS = 60_000;
 (async function pullRevocationFeeds() {
   await enrollmentValidators.pollFeeds().catch((err) => console.error("revocation feed pass failed", err));
   setTimeout(pullRevocationFeeds, REVOCATION_FEED_PASS_MS);
+})();
+
+// Device Certificates a renewal replaced and whose CA has yet to revoke them as superseded (an ADCS CA that could not be
+// asked, or whose revocation failed a day ago) are asked again every quarter of an hour; each pass waits for the one before it.
+const SUPERSEDE_PASS_MS = 15 * 60_000;
+(async function supersedeRenewed() {
+  await deviceEnrollment.supersedeRenewed().catch((err) => console.error("superseded Device Certificate pass failed", err));
+  setTimeout(supersedeRenewed, SUPERSEDE_PASS_MS);
 })();
 
 // Device Certificates past their Enrollment Profile's retention period are pruned once an hour; each pass waits for the one before it.

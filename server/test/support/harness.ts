@@ -163,6 +163,8 @@ export interface Harness {
   deliverEnrollmentNotifications(): Promise<number>;
   /** One pass of pulling Enrollment Validators' revocation feeds that are due, at the harness's clock. Returns how many feeds were pulled. */
   pollRevocationFeeds(): Promise<number>;
+  /** One pass of asking again to revoke, as superseded, the renewed Device Certificates still owed it, at the harness's clock. Returns how many were asked. */
+  supersedeRenewed(): Promise<number>;
   /** One pass of pruning Device Certificates past their Enrollment Profile's retention period, at the harness's clock. Returns how many were deleted. */
   pruneDeviceCertificates(): Promise<number>;
   /** One pass of clearing previous Shared Challenges that have expired, at the harness's clock. Returns how many were cleared. */
@@ -387,6 +389,7 @@ export async function createHarness(overrides: Partial<AppDeps> = {}, { database
     intune,
     deliverEnrollmentNotifications: () => enrollmentValidators.deliver(),
     pollRevocationFeeds: () => enrollmentValidators.pollFeeds(),
+    supersedeRenewed: () => deviceEnrollment.supersedeRenewed(),
     pruneDeviceCertificates: () => deviceCertificatePruning.prune(),
     expireSharedChallenges: () => sharedChallenges.expire(),
     setNow: (d) => {

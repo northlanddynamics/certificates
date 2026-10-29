@@ -495,6 +495,10 @@ export interface DeviceCertificate {
   sharedChallenge: { id: string } | null;
   /** The subject of the CA that issued it: its Issuing CA, or its ADCS CA. */
   issuer: string;
+  /** The kind of CA that issued it, which decides the reasons it may be revoked for. */
+  issuerKind: "private_ca" | "adcs";
+  /** The CRL Distribution Point URLs from its own extension. */
+  crlDistributionPoints: string[];
   notBefore: string;
   notAfter: string;
   status: DeviceCertificateStatus;
