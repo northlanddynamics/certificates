@@ -1,0 +1,3 @@
+ALTER TABLE "device_certificate" ADD COLUMN "superseded_by" text;--> statement-breakpoint
+ALTER TABLE "enrollment_validator_revocation_request" ADD COLUMN "asked_at" timestamp with time zone;--> statement-breakpoint
+CREATE INDEX "device_certificate_superseded_idx" ON "device_certificate" USING btree ("not_after") WHERE "device_certificate"."superseded_by" is not null and "device_certificate"."revoked_at" is null;

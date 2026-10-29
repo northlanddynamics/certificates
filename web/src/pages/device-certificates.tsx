@@ -216,6 +216,18 @@ function CertificateDetails({ org, certificate, profile }: { org: Me["organizati
     ["Enrolled", new Date(certificate.createdAt).toLocaleString()],
     ...(certificate.revocation ? ([["Revoked", `${new Date(certificate.revocation.revokedAt).toLocaleString()}: ${revocationReasonLabel(certificate.revocation.reason)}`]] as [string, string][]) : []),
     ...(certificate.revocationRequest ? ([["Revocation", requestedLine(certificate.revocationRequest)]] as [string, string][]) : []),
+    ...(certificate.crlDistributionPoints.length > 0
+      ? ([
+          [
+            "CRL Distribution Points",
+            <ul className="flex flex-col gap-0.5 font-mono text-xs break-all">
+              {certificate.crlDistributionPoints.map((url) => (
+                <li key={url}>{url}</li>
+              ))}
+            </ul>,
+          ],
+        ] as [string, React.ReactNode][])
+      : []),
   ];
   return (
     <div className="flex flex-col gap-4">
@@ -240,7 +252,7 @@ function CertificateDetails({ org, certificate, profile }: { org: Me["organizati
   );
 }
 
-/** Revokes a Device Certificate with an RFC 5280 reason, for those who may; it is on its Issuing CA's CRL once this succeeds. */
+/** Revokes a Device Certificate with an RFC 5280 reason, for those who may: on its Issuing CA's CRL once this succeeds, or once its ADCS CA confirms. */
 function RevokeDialog({ org, certificate }: { org: Me["organizations"][number]; certificate: DeviceCertificate }) {
   const queryClient = useQueryClient();
   const [open, setOpen] = useState(false);
@@ -277,7 +289,7 @@ function RevokeDialog({ org, certificate }: { org: Me["organizations"][number]; 
         <DialogHeader>
           <DialogTitle>Revoke this Device Certificate?</DialogTitle>
           <DialogDescription>
-            {certificate.subject}, serial <span className="break-all font-mono">{certificate.serial}</span>. It is on its Issuing CA&apos;s CRL at once; a revocation cannot be undone.
+            {certificate.subject}, serial <span className="break-all font-mono">{certificate.serial}</span>. {certificate.issuerKind === "adcs" ? "An Agent asks its ADCS CA to revoke it, which publishes its own CRL" : "It is on its Issuing CA's CRL at once"}; a revocation cannot be undone.
           </DialogDescription>
         </DialogHeader>
         <Field>
@@ -287,7 +299,7 @@ function RevokeDialog({ org, certificate }: { org: Me["organizations"][number]; 
               <SelectValue placeholder="Choose a reason (RFC 5280)" />
             </SelectTrigger>
             <SelectContent>
-              {revocationReasonsOf("private_ca").map(([value, text]) => (
+              {revocationReasonsOf(certificate.issuerKind).map(([value, text]) => (
                 <SelectItem key={value} value={value}>
                   {text}
                 </SelectItem>

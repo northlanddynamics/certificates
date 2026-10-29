@@ -5,10 +5,11 @@
 // profile's name rules when it has them and its Issuing CA's Permitted Name Rules, and the Enrollment Validator must
 // allow it; then the profile's issuer issues a Device Certificate (enrollment-issuer.ts), which is stored with its Audit
 // Event in one Unit of Work, and for a renewal that Unit of Work also revokes the Device Certificate it was signed with
-// as superseded (device-certificate-revocation.ts). A request is answered with its Device Certificate or refused, never
-// left pending; a refusal is an Audit Event. Each request belongs to a transaction, which is answered the same each
-// time it is asked again (scep-transactions.ts). The validator is told the outcome afterwards, in the background
-// (enrollment-validators.ts).
+// as superseded (device-certificate-revocation.ts), which renews nothing from then on; an ADCS CA confirms that later,
+// and one it could not be asked of, or that failed, is asked again by its own pass. A request is answered with its
+// Device Certificate or refused, never left pending; a refusal is an Audit Event. Each request belongs to a transaction,
+// which is answered the same each time it is asked again (scep-transactions.ts). The validator is told the outcome
+// afterwards, in the background (enrollment-validators.ts).
 //
 // A profile on an ADCS CA cannot issue at once: once a request is decided, an Agent submits its CSR to ADCS under the
 // profile's template (adcs-issuance.ts) and the device is answered PENDING, as it is each time it asks again, until ADCS
@@ -16,10 +17,10 @@
 // Device Certificate stored and the transaction answered with it, or the transaction refused, as above.
 import { createPublicKey } from "node:crypto";
 import * as x509 from "@peculiar/x509";
-import { and, eq } from "drizzle-orm";
+import { and, eq, gt, isNotNull, isNull } from "drizzle-orm";
 import { subjectAltNamesOf } from "../pki/ca-certificates";
 import type { Db, Tx } from "../platform/db/client";
-import { deviceCertificate, enrollmentProfile } from "../platform/db/schema";
+import { deviceCertificate, enrollmentProfile, revocationRequest } from "../platform/db/schema";
 import type { DeviceCertificateRevocations } from "./device-certificate-revocation";
 import { DEVICE_EXTENDED_KEY_USAGES, DEVICE_KEY_TYPES, type DeviceKeyType } from "./enrollment-profile-kinds";
 import { describeValidatorError, kindOf, type EnrollmentValidator, type EnrollmentValidators } from "./enrollment-validator";
@@ -74,7 +75,16 @@ export interface DeviceEnrollment {
   enroll(profile: ProfileRow, request: DeviceEnrollmentRequest): Promise<DeviceEnrollmentAnswer>;
   /** What the profile answered the transaction, when it has: as `enroll` would answer it again. None when it has no such transaction. */
   answerOf(profile: ProfileRow, transactionId: string): Promise<DeviceEnrollmentAnswer | undefined>;
+  /**
+   * One pass at the clock's time: asks again to revoke as `superseded` each unexpired Device Certificate a renewal
+   * replaced that is not revoked, when its CA could not be asked when the replacement was stored, or a day after its
+   * revocation failed. Each in its own change. Returns how many it asked.
+   */
+  supersedeRenewed(): Promise<number>;
 }
+
+/** How long after a renewed Device Certificate's revocation failed it is asked again. */
+export const SUPERSEDE_RETRY_MS = 86_400_000;
 
 /** The device key's type as a profile names it, such as "rsa-2048"; none for a key no profile can allow. */
 function keyTypeOf(key: ReturnType<typeof createPublicKey>): DeviceKeyType | undefined {
@@ -117,23 +127,50 @@ export function createDeviceEnrollment(deps: {
     if (!kindOf(kinds, profile.validatorKind)?.allowsRenewal) return { refusal: "RenewalReq is not supported: enroll again with PKCSReq" };
     const fingerprint = fingerprintOf(signedWith);
     const [current] = await db
-      .select({ id: deviceCertificate.id, serial: deviceCertificate.serial, revokedAt: deviceCertificate.revokedAt, notAfter: deviceCertificate.notAfter })
+      .select({
+        id: deviceCertificate.id,
+        serial: deviceCertificate.serial,
+        revokedAt: deviceCertificate.revokedAt,
+        notAfter: deviceCertificate.notAfter,
+        supersededBy: deviceCertificate.supersededBy,
+      })
       .from(deviceCertificate)
       .where(and(eq(deviceCertificate.enrollmentProfileId, profile.id), eq(deviceCertificate.fingerprint, fingerprint)));
     if (!current) return { refusal: "the RenewalReq is not signed with a Device Certificate of this Enrollment Profile" };
     if (current.revokedAt) return { refusal: `the Device Certificate the RenewalReq is signed with (${current.serial}) is revoked` };
     if (current.notAfter <= clock()) return { refusal: `the Device Certificate the RenewalReq is signed with (${current.serial}) has expired` };
+    if (current.supersededBy) return { refusal: `the Device Certificate the RenewalReq is signed with (${current.serial}) was already renewed, by ${current.supersededBy}: renew with that one` };
     return { renewalOf: current };
   }
 
   /**
-   * Revokes the Device Certificate a renewal replaced as `superseded`, on the change that stores its replacement, with
-   * its Issuing CA's CRL: a renewed device holds one valid certificate. Revoked since it was checked (by an administrator,
+   * Marks the Device Certificate a renewal replaced as superseded by its replacement and revokes it as `superseded`, on
+   * the change that stores the replacement, with its Issuing CA's CRL: a renewed device holds one valid certificate. An
+   * ADCS CA revokes it once an Agent reports that it did; one that cannot be asked now is asked again by
+   * `supersedeRenewed`, as is one whose revocation fails. Revoked or renewed since it was checked (by an administrator,
    * the feed, or another renewal signed with it), it is not renewed, so that no Revocation is undone by a replacement.
    */
   async function supersede(tx: Tx, change: Change, profile: ProfileRow, renewed: Renewed, replacementSerial: string) {
-    const [superseded] = await revocations.revoke(tx, change, profile.organizationId, [{ id: renewed.id, reason: "superseded", by: { renewal: { serial: replacementSerial } } }]);
-    if (!superseded) throw new RevokedMeanwhile();
+    const marked = await tx
+      .update(deviceCertificate)
+      .set({ supersededBy: replacementSerial })
+      .where(and(eq(deviceCertificate.id, renewed.id), isNull(deviceCertificate.supersededBy)))
+      .returning({ issuerKind: deviceCertificate.issuerKind });
+    if (marked.length === 0) throw new RevokedMeanwhile();
+    const asked = { id: renewed.id, reason: "superseded" as const, by: { renewal: { serial: replacementSerial } } };
+    if (marked[0]!.issuerKind !== "adcs") {
+      const [superseded] = await revocations.revoke(tx, change, profile.organizationId, [asked]);
+      if (!superseded) throw new RevokedMeanwhile();
+      return;
+    }
+    // ADCS revokes through an Agent, and refuses before anything is written when none can be asked now: the replacement
+    // is kept then, and the one it renews asked again later (`supersedeRenewed`).
+    const answered = await revocations.revoke(tx, change, profile.organizationId, [asked]).catch((err: unknown) => {
+      if (!(err instanceof CertificateAuthorityError)) throw err;
+      console.error("could not have ADCS revoke a renewed Device Certificate now; it is asked again later:", err.message);
+      return undefined;
+    });
+    if (answered && !answered[0]) throw new RevokedMeanwhile();
   }
 
   /** A recorded answer, as the device is sent it: its Device Certificate with the chain the profile's issuer has now, or the refusal, or that it is pending. */
@@ -198,13 +235,7 @@ export function createDeviceEnrollment(deps: {
         ...(issuer.kind === "adcs" && { adcsCa: { id: issuer.adcsCaId }, template: { id: issuer.templateId }, adcsRequestId: issuer.requestId }),
       },
     });
-    if (decided.renewalOf) {
-      await supersede(tx, change, profile, decided.renewalOf, serial).catch((err: unknown) => {
-        // ADCS revokes through an Agent: when none can be asked now, the replacement is kept, and the one it renews is not yet revoked.
-        if (issuer.kind === "adcs" && err instanceof CertificateAuthorityError) return console.error("could not have ADCS revoke a renewed Device Certificate:", err.message);
-        throw err;
-      });
-    }
+    if (decided.renewalOf) await supersede(tx, change, profile, decided.renewalOf, serial);
     await validators.tellIssued(tx, change, profile, decidedOf(decided), { pem: certificate.toString("pem"), serial, notAfter: certificate.notAfter, issuer: certificate.issuer });
     return row!.id;
   }
@@ -392,6 +423,27 @@ export function createDeviceEnrollment(deps: {
         await transactions.release(db, claim).catch(() => {});
         throw err;
       }
+    },
+
+    async supersedeRenewed() {
+      const now = clock();
+      const owed = await db
+        .select({ id: deviceCertificate.id, organizationId: deviceCertificate.organizationId, supersededBy: deviceCertificate.supersededBy, request: { status: revocationRequest.status, finishedAt: revocationRequest.finishedAt } })
+        .from(deviceCertificate)
+        .leftJoin(revocationRequest, eq(revocationRequest.deviceCertificateId, deviceCertificate.id))
+        .where(and(isNotNull(deviceCertificate.supersededBy), isNull(deviceCertificate.revokedAt), gt(deviceCertificate.notAfter, now)));
+      let asked = 0;
+      for (const { id, organizationId, supersededBy, request } of owed) {
+        if (request?.status === "pending") continue;
+        if (request?.status === "failed" && request.finishedAt!.getTime() + SUPERSEDE_RETRY_MS > now.getTime()) continue;
+        try {
+          const [outcome] = await unitOfWork.run(null, (tx, change) => revocations.revoke(tx, change, organizationId, [{ id, reason: "superseded", by: { renewal: { serial: supersededBy! } } }]));
+          if (outcome) asked++;
+        } catch (err) {
+          console.error("could not revoke a renewed Device Certificate as superseded; it is asked again later:", err instanceof Error ? err.message : err);
+        }
+      }
+      return asked;
     },
 
     async answerOf(profile, transactionId) {

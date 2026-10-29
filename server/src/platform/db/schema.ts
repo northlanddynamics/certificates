@@ -801,6 +801,11 @@ export const deviceCertificate = pgTable(
     /** When it was revoked and why, which puts it on its Issuing CA's CRL until it expires; none while it is not. */
     revokedAt: timestamp("revoked_at", { withTimezone: true }),
     revocationReason: text("revocation_reason").$type<RevocationReason>(),
+    /**
+     * The serial of the Device Certificate a RenewalReq signed with it was issued, which supersedes it: from then on it
+     * renews nothing, and is owed its Revocation as `superseded` until it is revoked (device-enrollment.ts).
+     */
+    supersededBy: text("superseded_by"),
     createdAt: timestamp("created_at", { withTimezone: true }).notNull().defaultNow(),
   },
   (t) => [
@@ -816,6 +821,8 @@ export const deviceCertificate = pgTable(
     // What the weak-key filter looks for (WEAK_DEVICE_KEY_TYPE), a few among many.
     index("device_certificate_weak_key_idx").on(t.enrollmentProfileId).where(sql`${t.keyType} = 'rsa-1024'`),
     index("device_certificate_revoked_idx").on(t.issuingCaId).where(sql`${t.revokedAt} is not null`),
+    // What the pass that asks again to revoke renewed ones looks for (device-enrollment.ts), a few among many.
+    index("device_certificate_superseded_idx").on(t.notAfter).where(sql`${t.supersededBy} is not null and ${t.revokedAt} is null`),
     check(
       "device_certificate_issuer_kind",
       sql`(${t.issuerKind} = 'private_ca' and ${t.issuingCaId} is not null and ${t.adcsCaId} is null and ${t.adcsTemplateId} is null and ${t.adcsRequestId} is null) or (${t.issuerKind} = 'adcs' and ${t.adcsCaId} is not null and ${t.adcsTemplateId} is not null and ${t.adcsRequestId} is not null and ${t.issuingCaId} is null)`,
@@ -955,6 +962,11 @@ export const enrollmentValidatorRevocationRequest = pgTable(
     issuer: text("issuer"),
     reason: text("reason").$type<RevocationReason>().notNull(),
     attempts: integer("attempts").notNull().default(0),
+    /**
+     * When a CA that confirms later (an ADCS CA, through an Agent) was asked to revoke a Device Certificate it matches:
+     * it is answered once that CA has, and asked again if it failed. None while it has yet to be asked, or is to be asked again.
+     */
+    askedAt: timestamp("asked_at", { withTimezone: true }),
     /** When it was pulled, and where among what that pull handed over: the order its outcomes are told in. */
     pulledAt: timestamp("pulled_at", { withTimezone: true }).notNull(),
     position: integer("position").notNull(),
