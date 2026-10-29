@@ -187,6 +187,9 @@ describe("an Enrollment Validator's revocation feed on a profile on an ADCS CA",
 
     expect(await h.pollRevocationFeeds()).toBe(1);
     expect(await deviceCertificate(profile, serialOf(retired))).toMatchObject({ status: "active", revocationRequest: { status: "pending", reason: "cessationOfOperation" } });
+    const [requested] = await auditOf("device_certificate.revocation_requested");
+    expect(requested!.actor.id).toBeNull();
+    expect(requested!.detail).toMatchObject({ serial: serialOf(retired), reason: "cessationOfOperation", by: { enrollmentValidator: { kind: "test_double" } } });
     expect(await told()).toEqual([]);
     // Passes while ADCS has yet to answer neither ask again nor answer the feed.
     at(MINUTE_MS);
@@ -276,6 +279,8 @@ describe("a RenewalReq on a profile on an ADCS CA", () => {
     await agent.work();
     const replacement = (await device.check(renewal)) as Enrolled;
     expect(await deviceCertificate(profile, serialOf(current))).toMatchObject({ status: "active", revocationRequest: { status: "pending", reason: "superseded" } });
+    const [requested] = await auditOf("device_certificate.revocation_requested");
+    expect(requested!.detail).toMatchObject({ serial: serialOf(current), reason: "superseded", by: { renewal: { serial: serialOf(replacement) } } });
 
     const [item] = await agent.work();
     expect(item).toMatchObject({ type: "adcs.revoke", payload: { serialNumber: BigInt(`0x${serialOf(current)}`).toString(16), reason: 4 } });

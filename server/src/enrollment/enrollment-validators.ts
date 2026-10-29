@@ -9,12 +9,12 @@
 // and issuer among the Device Certificates of the profiles that share the feed, revoked with its Issuing CA's CRL
 // published in the same change (device-certificate-revocation.ts), and its outcome told back the same way. One from an
 // ADCS CA is revoked only once an Agent reports that ADCS did, so it is kept until then and told on the pass after; a
-// refusal is tried again as a change that rolls back is, up to the same count. Profiles that share a feed may hold different
-// secrets (one rotated, one not yet), so the feed is pulled and told with the first whose validator works.
+// refusal is tried again as a change that rolls back is, up to the same count. Profiles that share a feed may hold
+// different secrets (one rotated, one not yet), so the feed is pulled and told with the first whose validator works.
 //
 // Of an error a validator throws, only what describeValidatorError allows is shown, kept or logged.
 import * as x509 from "@peculiar/x509";
-import { and, asc, eq, inArray, lte, sql } from "drizzle-orm";
+import { and, asc, eq, inArray, isNotNull, isNull, lte, sql } from "drizzle-orm";
 import type { Db, Tx } from "../platform/db/client";
 import { deviceCertificate, enrollmentProfile, enrollmentValidatorFeed, enrollmentValidatorMessage, enrollmentValidatorRevocationRequest, issuingCa, revocationRequest } from "../platform/db/schema";
 import type { DeviceCertificateRevocations } from "./device-certificate-revocation";
@@ -32,6 +32,7 @@ import {
 } from "./enrollment-validator";
 import type { Secrets } from "../platform/crypto/secrets";
 import type { Change, UnitOfWork } from "../platform/unit-of-work";
+import { CertificateAuthorityError } from "../issuance/acme/certificate-authority";
 
 type ProfileRow = typeof enrollmentProfile.$inferSelect;
 type MessageRow = typeof enrollmentValidatorMessage.$inferSelect;
@@ -187,6 +188,8 @@ export function createEnrollmentValidatorRuns(deps: { db: Db; unitOfWork: UnitOf
   const ofFeed = <T extends { organizationId: any; validatorKind: any; source: any }>(table: T, feed: Feed) =>
     and(eq(table.organizationId, feed.organizationId), eq(table.validatorKind, feed.kindName), eq(table.source, feed.source));
   type StoredRequest = typeof enrollmentValidatorRevocationRequest.$inferSelect;
+  /** A stored request with what the feed is told of it. */
+  type Answered = { request: StoredRequest; outcome: RevocationOutcome };
 
   /** The Device Certificates of the feed's profiles the request asks for, by serial and issuer, oldest first, with where their Revocation stands. */
   async function matching(tx: Tx, feed: Feed, request: StoredRequest) {
@@ -217,7 +220,7 @@ export function createEnrollmentValidatorRuns(deps: { db: Db; unitOfWork: UnitOf
   }
 
   /** Queues telling the feed the outcomes, and forgets the requests they answer: on the change's transaction. */
-  async function answer(tx: Tx, change: Change, feed: Feed, answered: { request: StoredRequest; outcome: RevocationOutcome }[]) {
+  async function answer(tx: Tx, change: Change, feed: Feed, answered: Answered[]) {
     if (answered.length === 0) return;
     await tx.delete(enrollmentValidatorRevocationRequest).where(inArray(enrollmentValidatorRevocationRequest.id, answered.map((a) => a.request.id)));
     await queue(tx, change, feed.profiles[0]!, "revocations", { source: feed.source, outcomes: answered.map((a) => a.outcome) });
@@ -229,7 +232,8 @@ export function createEnrollmentValidatorRuns(deps: { db: Db; unitOfWork: UnitOf
    * (or was already asked to by someone else) is kept, marked asked, and answered once that CA has (`settle`).
    */
   async function revoke(tx: Tx, change: Change, feed: Feed, requests: StoredRequest[]) {
-    const asked = await Promise.all(requests.map(async (request) => ({ request, matched: await matching(tx, feed, request) })));
+    const asked: { request: StoredRequest; matched: Awaited<ReturnType<typeof matching>> }[] = [];
+    for (const request of requests) asked.push({ request, matched: await matching(tx, feed, request) });
     const by = { enrollmentValidator: { kind: feed.kindName } };
     const revoked = await revocations.revoke(
       tx,
@@ -239,7 +243,7 @@ export function createEnrollmentValidatorRuns(deps: { db: Db; unitOfWork: UnitOf
     );
     // `revoked` answers for the requests' Device Certificates in turn.
     let next = 0;
-    const answered: { request: StoredRequest; outcome: RevocationOutcome }[] = [];
+    const answered: Answered[] = [];
     for (const { request, matched } of asked) {
       const ofRequest = revoked.slice(next, next + matched.length);
       next += matched.length;
@@ -258,22 +262,23 @@ export function createEnrollmentValidatorRuns(deps: { db: Db; unitOfWork: UnitOf
    * CA has yet to answer is left waiting. All on the change's transaction.
    */
   async function settle(tx: Tx, change: Change, feed: Feed, requests: StoredRequest[]) {
-    const answered: { request: StoredRequest; outcome: RevocationOutcome }[] = [];
+    const answered: Answered[] = [];
     for (const request of requests) {
       const matched = await matching(tx, feed, request);
       if (matched.some((m) => m.requestStatus === "pending")) continue;
       const { ref } = request;
       const failed = matched.find((m) => m.revokedAt === null && m.requestStatus === "failed");
-      const toAskAgain = (counted: boolean) =>
-        tx
-          .update(enrollmentValidatorRevocationRequest)
-          .set({ askedAt: null, ...(counted && { attempts: sql`${enrollmentValidatorRevocationRequest.attempts} + 1` }) })
-          .where(eq(enrollmentValidatorRevocationRequest.id, request.id));
-      if (failed) {
-        if (request.attempts + 1 >= REVOCATION_ATTEMPTS) answered.push({ request, outcome: { ref, outcome: "failed", message: `its CA did not revoke it: ${failed.failureMessage}` } });
-        else await toAskAgain(true);
-      } else if (matched.some((m) => m.revokedAt === null)) await toAskAgain(false);
-      else answered.push({ request, outcome: { ref, outcome: matched.length > 0 ? "revoked" : "not_found" } });
+      if (failed || matched.some((m) => m.revokedAt === null)) {
+        // Not revoked: a try, which is asked again unless it was tried too often.
+        if (request.attempts + 1 >= REVOCATION_ATTEMPTS) {
+          answered.push({ request, outcome: { ref, outcome: "failed", message: `its CA did not revoke it: ${failed?.failureMessage ?? "it gave no answer"}` } });
+        } else {
+          await tx
+            .update(enrollmentValidatorRevocationRequest)
+            .set({ askedAt: null, attempts: sql`${enrollmentValidatorRevocationRequest.attempts} + 1` })
+            .where(eq(enrollmentValidatorRevocationRequest.id, request.id));
+        }
+      } else answered.push({ request, outcome: { ref, outcome: matched.length > 0 ? "revoked" : "not_found" } });
     }
     await answer(tx, change, feed, answered);
   }
@@ -315,28 +320,29 @@ export function createEnrollmentValidatorRuns(deps: { db: Db; unitOfWork: UnitOf
    * Each is answered once, on the change that removes it.
    */
   async function actOnPulled(feed: Feed) {
-    const stored = async (tx: Tx, asked: boolean) =>
-      (
-        await tx
-          .select()
-          .from(enrollmentValidatorRevocationRequest)
-          .where(ofFeed(enrollmentValidatorRevocationRequest, feed))
-          .orderBy(asc(enrollmentValidatorRevocationRequest.pulledAt), asc(enrollmentValidatorRevocationRequest.position))
-          .for("update", { skipLocked: true })
-      ).filter((r) => (r.askedAt !== null) === asked);
-    await unitOfWork.run(null, async (tx, change) => {
-      const rows = await stored(tx, true);
-      if (rows.length > 0) await settle(tx, change, feed, rows);
-    });
+    /** The stored requests, locked: those asked of a CA that confirms later (`awaitingCa`), or the rest. */
+    const stored = (tx: Tx, which: "awaitingCa" | "toAsk") =>
+      tx
+        .select()
+        .from(enrollmentValidatorRevocationRequest)
+        .where(and(ofFeed(enrollmentValidatorRevocationRequest, feed), which === "awaitingCa" ? isNotNull(enrollmentValidatorRevocationRequest.askedAt) : isNull(enrollmentValidatorRevocationRequest.askedAt)))
+        .orderBy(asc(enrollmentValidatorRevocationRequest.pulledAt), asc(enrollmentValidatorRevocationRequest.position))
+        .for("update", { skipLocked: true });
+    await unitOfWork
+      .run(null, async (tx, change) => {
+        const rows = await stored(tx, "awaitingCa");
+        if (rows.length > 0) await settle(tx, change, feed, rows);
+      })
+      .catch((err) => console.error(`could not settle what an Enrollment Validator ${feed.kindName}'s feed asked of a CA that confirms later`, err instanceof Error ? err.message : err));
     try {
       await unitOfWork.run(null, async (tx, change) => {
-        const rows = await stored(tx, false);
+        const rows = await stored(tx, "toAsk");
         if (rows.length > 0) await revoke(tx, change, feed, rows);
       });
     } catch (err) {
       console.error(`could not revoke what an Enrollment Validator ${feed.kindName}'s feed asked for`, err instanceof Error ? err.message : err);
       await unitOfWork.run(null, async (tx, change) => {
-        const rows = await stored(tx, false);
+        const rows = await stored(tx, "toAsk");
         const givenUp = rows.filter((r) => r.attempts + 1 >= REVOCATION_ATTEMPTS);
         const kept = rows.filter((r) => r.attempts + 1 < REVOCATION_ATTEMPTS);
         if (kept.length > 0) {
@@ -345,7 +351,8 @@ export function createEnrollmentValidatorRuns(deps: { db: Db; unitOfWork: UnitOf
             .set({ attempts: sql`${enrollmentValidatorRevocationRequest.attempts} + 1` })
             .where(inArray(enrollmentValidatorRevocationRequest.id, kept.map((r) => r.id)));
         }
-        const message = "the platform could not revoke it; ask again";
+        // A CA's own refusal (such as no Agent online to ask ADCS) says why; anything else is the platform's.
+        const message = err instanceof CertificateAuthorityError ? `its CA did not revoke it: ${err.message}` : "the platform could not revoke it; ask again";
         await answer(tx, change, feed, givenUp.map((request) => ({ request, outcome: { ref: request.ref, outcome: "failed", message } })));
       });
     }

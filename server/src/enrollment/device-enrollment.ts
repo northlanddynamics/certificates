@@ -6,10 +6,10 @@
 // allow it; then the profile's issuer issues a Device Certificate (enrollment-issuer.ts), which is stored with its Audit
 // Event in one Unit of Work, and for a renewal that Unit of Work also revokes the Device Certificate it was signed with
 // as superseded (device-certificate-revocation.ts), which renews nothing from then on; an ADCS CA confirms that later,
-// and one it could not be asked of, or that failed, is asked again by its own pass. A request is answered with its Device Certificate or refused, never
-// left pending; a refusal is an Audit Event. Each request belongs to a transaction, which is answered the same each
-// time it is asked again (scep-transactions.ts). The validator is told the outcome afterwards, in the background
-// (enrollment-validators.ts).
+// and one it could not be asked of, or that failed, is asked again by its own pass. A request is answered with its
+// Device Certificate or refused, never left pending; a refusal is an Audit Event. Each request belongs to a transaction,
+// which is answered the same each time it is asked again (scep-transactions.ts). The validator is told the outcome
+// afterwards, in the background (enrollment-validators.ts).
 //
 // A profile on an ADCS CA cannot issue at once: once a request is decided, an Agent submits its CSR to ADCS under the
 // profile's template (adcs-issuance.ts) and the device is answered PENDING, as it is each time it asks again, until ADCS
@@ -127,7 +127,13 @@ export function createDeviceEnrollment(deps: {
     if (!kindOf(kinds, profile.validatorKind)?.allowsRenewal) return { refusal: "RenewalReq is not supported: enroll again with PKCSReq" };
     const fingerprint = fingerprintOf(signedWith);
     const [current] = await db
-      .select({ id: deviceCertificate.id, serial: deviceCertificate.serial, revokedAt: deviceCertificate.revokedAt, notAfter: deviceCertificate.notAfter, supersededBy: deviceCertificate.supersededBy })
+      .select({
+        id: deviceCertificate.id,
+        serial: deviceCertificate.serial,
+        revokedAt: deviceCertificate.revokedAt,
+        notAfter: deviceCertificate.notAfter,
+        supersededBy: deviceCertificate.supersededBy,
+      })
       .from(deviceCertificate)
       .where(and(eq(deviceCertificate.enrollmentProfileId, profile.id), eq(deviceCertificate.fingerprint, fingerprint)));
     if (!current) return { refusal: "the RenewalReq is not signed with a Device Certificate of this Enrollment Profile" };
@@ -144,24 +150,27 @@ export function createDeviceEnrollment(deps: {
    * `supersedeRenewed`, as is one whose revocation fails. Revoked or renewed since it was checked (by an administrator,
    * the feed, or another renewal signed with it), it is not renewed, so that no Revocation is undone by a replacement.
    */
-  async function supersede(tx: Tx, change: Change, profile: ProfileRow, renewed: Renewed, replacementSerial: string, replacementIssuer: DeviceCertificateIssuer) {
+  async function supersede(tx: Tx, change: Change, profile: ProfileRow, renewed: Renewed, replacementSerial: string) {
     const marked = await tx
       .update(deviceCertificate)
       .set({ supersededBy: replacementSerial })
       .where(and(eq(deviceCertificate.id, renewed.id), isNull(deviceCertificate.supersededBy)))
-      .returning({ id: deviceCertificate.id });
+      .returning({ issuerKind: deviceCertificate.issuerKind });
     if (marked.length === 0) throw new RevokedMeanwhile();
-    const [superseded] = await revocations
-      .revoke(tx, change, profile.organizationId, [{ id: renewed.id, reason: "superseded", by: { renewal: { serial: replacementSerial } } }])
-      .catch((err: unknown) => {
-        // ADCS revokes through an Agent: when none can be asked now, the replacement is kept, and the one it renews is asked again later.
-        if (replacementIssuer.kind === "adcs" && err instanceof CertificateAuthorityError) {
-          console.error("could not have ADCS revoke a renewed Device Certificate now; it is asked again later:", err.message);
-          return ["requested" as const];
-        }
-        throw err;
-      });
-    if (!superseded) throw new RevokedMeanwhile();
+    const asked = { id: renewed.id, reason: "superseded" as const, by: { renewal: { serial: replacementSerial } } };
+    if (marked[0]!.issuerKind !== "adcs") {
+      const [superseded] = await revocations.revoke(tx, change, profile.organizationId, [asked]);
+      if (!superseded) throw new RevokedMeanwhile();
+      return;
+    }
+    // ADCS revokes through an Agent, and refuses before anything is written when none can be asked now: the replacement
+    // is kept then, and the one it renews asked again later (`supersedeRenewed`).
+    const answered = await revocations.revoke(tx, change, profile.organizationId, [asked]).catch((err: unknown) => {
+      if (!(err instanceof CertificateAuthorityError)) throw err;
+      console.error("could not have ADCS revoke a renewed Device Certificate now; it is asked again later:", err.message);
+      return undefined;
+    });
+    if (answered && !answered[0]) throw new RevokedMeanwhile();
   }
 
   /** A recorded answer, as the device is sent it: its Device Certificate with the chain the profile's issuer has now, or the refusal, or that it is pending. */
@@ -226,7 +235,7 @@ export function createDeviceEnrollment(deps: {
         ...(issuer.kind === "adcs" && { adcsCa: { id: issuer.adcsCaId }, template: { id: issuer.templateId }, adcsRequestId: issuer.requestId }),
       },
     });
-    if (decided.renewalOf) await supersede(tx, change, profile, decided.renewalOf, serial, issuer);
+    if (decided.renewalOf) await supersede(tx, change, profile, decided.renewalOf, serial);
     await validators.tellIssued(tx, change, profile, decidedOf(decided), { pem: certificate.toString("pem"), serial, notAfter: certificate.notAfter, issuer: certificate.issuer });
     return row!.id;
   }

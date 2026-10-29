@@ -664,6 +664,8 @@ describe("a profile's Device Certificates", () => {
       keyType: "rsa-2048",
       sharedChallenge: null,
       issuer: first.issuer,
+      issuerKind: "private_ca",
+      crlDistributionPoints: [expect.stringMatching(/\/ca\.crl$/)],
       notBefore: new Date(START).toISOString(),
       notAfter: new Date(START + 365 * DAY_MS).toISOString(),
       status: "active",
