@@ -16,7 +16,7 @@ export function IssuerName({ org, issuer, acmeCas }: { org: Me["organizations"][
     return (
       <>
         {issuer.template.displayName || issuer.template.name} ·{" "}
-        <CaLink show={can(org, "adcsCa", "read")} to={`/organizations/${org.id}/adcs-cas`}>
+        <CaLink show={can(org, "adcsCa", "read")} to={`/organizations/${org.id}/private-cas/adcs/${issuer.adcsCa.id}`}>
           {issuer.adcsCa.name}
         </CaLink>
       </>
@@ -25,7 +25,7 @@ export function IssuerName({ org, issuer, acmeCas }: { org: Me["organizations"][
   return (
     <>
       {commonNameOf(issuer.issuingCa.subject)} ·{" "}
-      <CaLink show={can(org, "privateCa", "create")} to={`/organizations/${org.id}/private-cas`}>
+      <CaLink show={can(org, "privateCa", "create")} to={`/organizations/${org.id}/private-cas/platform/${issuer.privateCa.id}`}>
         {issuer.privateCa.name}
       </CaLink>
     </>

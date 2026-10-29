@@ -1,4 +1,4 @@
-import type { IssuingCa, PermittedNames, PrivateCa, PrivateCaValidity } from "@/lib/api";
+import type { IssuingCa, PermittedNames, PrivateCa, PrivateCaValidity } from "./api";
 // The server's own limits, from a module that imports nothing, so what the forms offer is what the API accepts.
 import { DEFAULT_VALIDITY_DAYS, MAX_LIFETIME_YEARS, MAX_VALIDITY_DAYS } from "../../../server/src/private-ca/private-ca-kinds";
 

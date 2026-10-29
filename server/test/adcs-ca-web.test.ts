@@ -1,4 +1,4 @@
-// What the ADCS CAs page says of a CA and its templates (web/src/lib/adcs-ca.ts). It decides nothing: the server refuses an
+// What the Private CAs pages say of an ADCS CA and its templates (web/src/lib/adcs-ca.ts). It decides nothing: the server refuses an
 // Agent or a config string it cannot take, and says which templates are available.
 import { describe, expect, test } from "bun:test";
 import { assignableAgents, ekuLabel, isConfigString, templatePurposes } from "../../web/src/lib/adcs-ca";

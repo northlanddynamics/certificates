@@ -1,4 +1,4 @@
-// What the ADCS CAs page says of a CA, its templates and the Agents it may be assigned. Pure and free of the app's imports,
+// What the Private CAs pages say of an ADCS CA, its templates and the Agents it may be assigned. Pure and free of the app's imports,
 // so the server's tests can run it.
 import type { AdcsCa, AdcsRequest, AdcsTemplate, Agent } from "./api";
 // The server's own EKUs and config-string pattern, from a module that imports nothing, so the console sorts templates as the API does.

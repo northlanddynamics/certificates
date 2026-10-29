@@ -8,7 +8,8 @@ import { AccountSecurityPage } from "./pages/account-security";
 import { AcmeAccountsPage } from "./pages/acme-accounts";
 import { PrivateCaGuidePage } from "./pages/private-ca-guide";
 import { PrivateCasPage } from "./pages/private-cas";
-import { AdcsCasPage } from "./pages/adcs-cas";
+import { AdcsCaOverview, AdcsCaPage, AdcsCaTemplates } from "./pages/adcs-ca";
+import { PlatformCaPage } from "./pages/platform-ca";
 import { DeviceCertificatesPage } from "./pages/device-certificates";
 import { EnrollmentGuidePage } from "./pages/enrollment-guide";
 import { EnrollmentProfilesPage } from "./pages/enrollment-profiles";
@@ -157,16 +158,44 @@ const acmeAccountsRoute = createRoute({
   component: AcmeAccountsPage,
 });
 
+// The Organization's own CAs of both kinds; `kind` narrows the list to one, kept in the address so that it survives Back.
 const privateCasRoute = createRoute({
   getParentRoute: () => appRoute,
   path: "/organizations/$orgId/private-cas",
+  validateSearch: (search: Record<string, unknown>): { kind?: "platform" | "adcs" } =>
+    search.kind === "platform" || search.kind === "adcs" ? { kind: search.kind } : {},
   component: PrivateCasPage,
 });
 
+const platformCaRoute = createRoute({
+  getParentRoute: () => appRoute,
+  path: "/organizations/$orgId/private-cas/platform/$caId",
+  component: PlatformCaPage,
+});
+
+// An ADCS CA's page is a layout, and each of its tabs a route of its own.
+const adcsCaRoute = createRoute({
+  getParentRoute: () => appRoute,
+  path: "/organizations/$orgId/private-cas/adcs/$caId",
+  component: AdcsCaPage,
+});
+const adcsCaOverviewRoute = createRoute({ getParentRoute: () => adcsCaRoute, path: "/", component: AdcsCaOverview });
+const adcsCaTemplatesRoute = createRoute({ getParentRoute: () => adcsCaRoute, path: "templates", component: AdcsCaTemplates });
+const adcsCaUnknownTabRoute = createRoute({
+  getParentRoute: () => adcsCaRoute,
+  path: "$",
+  beforeLoad: ({ params }) => {
+    throw redirect({ to: "/organizations/$orgId/private-cas/adcs/$caId", params: { orgId: params.orgId, caId: params.caId }, replace: true });
+  },
+});
+
+// The ADCS CAs had a page of their own before they joined the Private CAs.
 const adcsCasRoute = createRoute({
   getParentRoute: () => appRoute,
   path: "/organizations/$orgId/adcs-cas",
-  component: AdcsCasPage,
+  beforeLoad: ({ params }) => {
+    throw redirect({ to: "/organizations/$orgId/private-cas", params: { orgId: params.orgId }, search: { kind: "adcs" }, replace: true });
+  },
 });
 
 const privateCaGuideRoute = createRoute({
@@ -321,7 +350,7 @@ const routeTree = rootRoute.addChildren([
       certificateNotificationsRoute,
       certificateUnknownTabRoute,
     ]),
-    membersRoute, teamsRoute, apiKeysRoute, agentsRoute, agentGuideRoute, deploymentsRoute, deploymentScriptsRoute, deploymentScriptGuideRoute, acmeAccountsRoute, acmeAccountGuideRoute, privateCasRoute, privateCaGuideRoute, adcsCasRoute, certificateProfilesRoute, enrollmentProfilesRoute, enrollmentGuideRoute, deviceCertificatesRoute, dnsProvidersRoute, dnsProviderGuideRoute, dcvRoute, dcvGuideRoute, notificationChannelsRoute, auditLogRoute, auditForwardingRoute, signInSettingsRoute,
+    membersRoute, teamsRoute, apiKeysRoute, agentsRoute, agentGuideRoute, deploymentsRoute, deploymentScriptsRoute, deploymentScriptGuideRoute, acmeAccountsRoute, acmeAccountGuideRoute, privateCasRoute, privateCaGuideRoute, platformCaRoute, adcsCaRoute.addChildren([adcsCaOverviewRoute, adcsCaTemplatesRoute, adcsCaUnknownTabRoute]), adcsCasRoute, certificateProfilesRoute, enrollmentProfilesRoute, enrollmentGuideRoute, deviceCertificatesRoute, dnsProvidersRoute, dnsProviderGuideRoute, dcvRoute, dcvGuideRoute, notificationChannelsRoute, auditLogRoute, auditForwardingRoute, signInSettingsRoute,
     loginPolicyRedirectRoute, ssoConnectionsRedirectRoute, csrToolsRoute, viewerRoute,
     accountSecurityRoute,
     platformOrganizationsRoute,

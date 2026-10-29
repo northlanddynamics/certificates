@@ -1,4 +1,4 @@
-import { BadgeCheckIcon, FileBadgeIcon, BellIcon, BuildingIcon, PlugIcon, ScrollTextIcon, SendIcon, BotIcon, GlobeIcon, LandmarkIcon, FileKey2Icon, FileSearchIcon, FileTerminalIcon, KeyRoundIcon, LogInIcon, RocketIcon, SearchCheckIcon, ServerCogIcon, ShieldCheckIcon, ShieldEllipsisIcon, ShieldUserIcon, TabletSmartphoneIcon, UserRoundIcon, UsersIcon, type LucideIcon } from "lucide-react";
+import { BadgeCheckIcon, FileBadgeIcon, BellIcon, BuildingIcon, PlugIcon, ScrollTextIcon, SendIcon, BotIcon, GlobeIcon, LandmarkIcon, FileKey2Icon, FileSearchIcon, FileTerminalIcon, KeyRoundIcon, LogInIcon, RocketIcon, SearchCheckIcon, ShieldCheckIcon, ShieldEllipsisIcon, ShieldUserIcon, TabletSmartphoneIcon, UserRoundIcon, UsersIcon, type LucideIcon } from "lucide-react";
 import { can, type Me } from "@/lib/api";
 
 type Org = Me["organizations"][number];
@@ -59,9 +59,9 @@ export function organizationNavGroups(org: Org): NavGroup[] {
           title: "Certificate authorities",
           icon: BadgeCheckIcon,
           items: [
-            // Anyone may list them (to choose one for a Managed Certificate), but the page is for managing them.
-            ...(can(org, "privateCa", "create") ? [{ title: "Private CAs", url: `${base}/private-cas`, icon: ShieldEllipsisIcon }] : []),
-            ...(can(org, "adcsCa", "create") ? [{ title: "ADCS CAs", url: `${base}/adcs-cas`, icon: ServerCogIcon }] : []),
+            // Both kinds, the platform's own and ADCS. Anyone may list them (to choose one for a Managed Certificate), but
+            // the page is for managing them.
+            ...(can(org, "privateCa", "create") || can(org, "adcsCa", "create") ? [{ title: "Private CAs", url: `${base}/private-cas`, icon: ShieldEllipsisIcon }] : []),
             ...(can(org, "acmeAccount", "read") ? [{ title: "ACME accounts", url: `${base}/acme-accounts`, icon: LandmarkIcon }] : []),
           ],
         },
