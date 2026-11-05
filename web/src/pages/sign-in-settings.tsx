@@ -373,7 +373,7 @@ function ConnectionForm({ orgId, existing, onDone }: { orgId: string; existing?:
               <SelectValue />
             </SelectTrigger>
             <SelectContent>
-              <SelectItem value="saml">SAML (Ping, for example)</SelectItem>
+              <SelectItem value="saml">SAML</SelectItem>
               <SelectItem value="oidc">OIDC</SelectItem>
             </SelectContent>
           </Select>
