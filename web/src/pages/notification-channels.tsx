@@ -31,7 +31,7 @@ const columns = columnHelper.columns([
       row.original.kind === "email" ? (
         <span className="break-all">{row.original.email}</span>
       ) : (
-        <span className="break-all" title="The URL is write-only; only its host is shown.">
+        <span className="break-all">
           {row.original.webhookHost}
         </span>
       ),
@@ -108,7 +108,7 @@ function AddChannelDialog({ orgId }: { orgId: string }) {
       <DialogContent>
         <DialogHeader>
           <DialogTitle>Add a notification channel</DialogTitle>
-          <DialogDescription>An email address, or a webhook that is posted each notice as JSON. A webhook's URL cannot be read back once added.</DialogDescription>
+          <DialogDescription>An email address, or a webhook that is posted each notice as JSON.</DialogDescription>
         </DialogHeader>
         {/* Only mounted while open, so each opening starts from a clean form. */}
         {open && <AddChannelForm orgId={orgId} onDone={() => setOpen(false)} />}

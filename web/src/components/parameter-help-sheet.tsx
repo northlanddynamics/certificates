@@ -10,7 +10,6 @@ const RULES: [string, string][] = [
   ["Limits", "One line, up to 1 KiB."],
   ["Renewals", "Every renewal and “Run again” uses these same values."],
   ["Changing", "You can edit them later on the Deployment. The next run uses the new ones."],
-  ["Secrets", "Don't put them here: values are saved as plain text. Keep secrets in the Agent's own environment on its server."],
 ];
 
 /**

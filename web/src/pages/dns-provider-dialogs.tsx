@@ -123,7 +123,7 @@ export function AddDnsProviderDialog({ orgId, relay }: { orgId: string; relay: R
           <ActionLabel>Add a DNS Provider</ActionLabel>
         </Button>
       </DialogTrigger>
-      <WizardDialogContent title="Add a DNS Provider" description="The secret is stored encrypted and is never shown again.">
+      <WizardDialogContent title="Add a DNS Provider" description="Connect a DNS server for Domain Control Validation.">
         <ProviderWizard orgId={orgId} relay={relay} onDone={() => setOpen(false)} />
       </WizardDialogContent>
     </Dialog>
@@ -311,7 +311,6 @@ function ProviderWizard({ orgId, provider, relay, onDone }: { orgId: string; pro
           {!editing && (
             <FieldSet>
               <FieldLegend>Secret</FieldLegend>
-              <FieldDescription>Stored encrypted. It can be replaced or tested later, but it is never shown again.</FieldDescription>
               <SecretFields type={fields.type} secret={secret} user={user} onSecret={setSecret} onUser={setUser} />
             </FieldSet>
           )}
@@ -380,7 +379,7 @@ function Summary({ fields, editing, agents }: { fields: Fields; editing: boolean
           { label: "DNS view", value: fields.view.trim() },
           { label: "Grid authority", value: fields.caCertificate.trim() ? "Provided" : <span className="text-muted-foreground">The system's trusted authorities</span> },
         ]),
-    { label: "Secret", value: editing ? <span className="text-muted-foreground">Unchanged</span> : "Provided; stored encrypted and never shown" },
+    { label: "Secret", value: editing ? <span className="text-muted-foreground">Unchanged</span> : "Provided" },
     {
       label: "Runs through",
       value:
@@ -407,7 +406,7 @@ export function ReplaceSecretDialog({ orgId, provider }: { orgId: string; provid
       <DialogContent className="sm:max-w-lg">
         <DialogHeader>
           <DialogTitle>Replace the secret of {provider.name}</DialogTitle>
-          <DialogDescription>The stored secret is never shown, so there is nothing to edit: enter the new one. Test the connection afterwards.</DialogDescription>
+          <DialogDescription>Enter the new secret. Test the connection afterwards.</DialogDescription>
         </DialogHeader>
         {open && <ReplaceSecretForm orgId={orgId} provider={provider} onDone={() => setOpen(false)} />}
       </DialogContent>

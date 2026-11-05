@@ -69,7 +69,7 @@ export function AgentGuidePage() {
   // Shown as a page or in the help panel over any of the Organization's pages.
   const orgId = useParams({ strict: false }).orgId ?? "";
   const org = useOrg(orgId);
-  if (org && !can(org, "agent", "read")) return <p className="text-sm text-muted-foreground">Only Organization Administrators see the Agents.</p>;
+  if (org && !can(org, "agent", "read")) return null;
   // The address people open the app at is the one the Agent connects to.
   const platform = window.location.origin;
   const linux = linuxSteps(platform);
@@ -79,7 +79,7 @@ export function AgentGuidePage() {
       guide="agents"
       title="Setting up an Agent"
       back={{ to: "/organizations/$orgId/agents", label: "Agents", orgId }}
-      lede="An Agent is a small program you install on one of your own servers. It works for the platform there: it keeps keys and installs Certificates for Deployments, and it can reach DNS inside your network. It only ever connects out to the platform, so you don't need to open any ports."
+      lede="An Agent is a small program you install on one of your own servers. It works for the platform there: it keeps keys and installs Certificates for Deployments, and it can reach DNS inside your network."
     >
       <GuideSection guide="agents" id="what">
         <div className="grid gap-3 md:grid-cols-2">

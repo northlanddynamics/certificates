@@ -103,7 +103,7 @@ export function AuditLogPage() {
       <PageHeader
         title="Audit log"
         description="Every change to the Organization, newest first."
-        howItWorks={<p>Audit Events are kept for ever and cannot be changed or deleted. To send them to a SIEM, see Audit forwarding.</p>}
+        howItWorks={<p>To send them to a SIEM, see Audit forwarding.</p>}
       />
       <div className="flex flex-col gap-3">
         <div className="flex flex-wrap items-center gap-2">

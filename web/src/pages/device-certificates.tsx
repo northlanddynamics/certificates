@@ -119,9 +119,7 @@ export function DeviceCertificatesPage() {
   return (
     <div className="flex flex-col gap-6">
       <PageHeader title={profile.data ? `${profile.data.name}: Device Certificates` : "Device Certificates"} />
-      {org && !allowed ? (
-        <p className="text-sm text-muted-foreground">Only Organization Administrators see Device Certificates.</p>
-      ) : (
+      {org && !allowed ? null : (
         <div className="flex flex-col gap-4">
           <div className="flex flex-wrap items-center gap-2">
             <InputGroup className="w-full sm:w-96">

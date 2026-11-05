@@ -17,7 +17,7 @@ const WAYS: { title: string; who: string; body: string; when: string }[] = [
     title: "New Deployment",
     who: "An Agent keeps the key",
     body: "An Agent on your server makes the key, gets the Certificate and runs a Deployment Script to install it. It does the same on every renewal, with nothing for you to do.",
-    when: "Use it when you want renewals installed for you. Only Organization Administrators set these up.",
+    when: "Use it when you want renewals installed for you.",
   },
 ];
 
@@ -133,7 +133,7 @@ export function ManagedCertificateGuidePage() {
           <TriangleAlertIcon />
           <AlertTitle>Keep the key safe</AlertTitle>
           <AlertDescription>
-            The platform only ever gets the CSR, never the key. If you lose the key, the Certificate is no use: replace the key from the certificate's page and install the new
+            If you lose the key, the Certificate is no use: replace the key from the certificate's page and install the new
             Certificate.
           </AlertDescription>
         </Alert>

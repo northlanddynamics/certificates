@@ -86,11 +86,9 @@ export function DnsProvidersPage() {
           </>
         }
         description="The Organization's way into its own DNS, through which the platform publishes the records that prove control of a domain."
-        howItWorks={<p>The platform removes the records again once they are checked. Each provider's secret is stored encrypted and never shown; it can be replaced or tested.</p>}
+        howItWorks={<p>The platform removes the records again once they are checked.</p>}
       />
-      {org && !allowed ? (
-        <p className="text-sm text-muted-foreground">Only Organization Administrators see the DNS Providers.</p>
-      ) : (
+      {org && !allowed ? null : (
         <div className="flex flex-col gap-4">
           <DataTable table={table} empty={providers.isPending ? "Loading…" : "No DNS Provider is connected yet."} />
           {providers.error && <p className="text-sm text-destructive">{providers.error.message}</p>}

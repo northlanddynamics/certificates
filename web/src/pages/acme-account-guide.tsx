@@ -28,7 +28,7 @@ export function AcmeAccountGuidePage() {
   const allowed = org ? can(org, "acmeAccount", "read") : false;
   // The built-in ones as the platform has them, so the table can't fall out of step.
   const builtIn = useAcmeCas(orgId).data?.items.filter((ca) => ca.builtIn) ?? [];
-  if (org && !allowed) return <p className="text-sm text-muted-foreground">Only Organization Administrators see the ACME accounts.</p>;
+  if (org && !allowed) return null;
   return (
     <GuidePage
       guide="acme-accounts"
@@ -40,7 +40,6 @@ export function AcmeAccountGuidePage() {
         <ul className="flex list-disc flex-col gap-1.5 pl-5">
           <li>Each ACME CA needs its own account, and your Organization has one account per CA.</li>
           <li>Every Managed Certificate from that CA is issued under the account.</li>
-          <li>The platform makes the account's key and keeps it safe. Nobody, including you, ever sees it.</li>
           <li>Without an account, certificates from that CA can't be issued. The ACME accounts page says which CAs have none yet.</li>
         </ul>
       </GuideSection>
@@ -134,7 +133,6 @@ export function AcmeAccountGuidePage() {
         </p>
         <ul className="flex list-disc flex-col gap-1.5 pl-5">
           <li>Enter both, exactly as the CA shows them, in the External Account Binding step.</li>
-          <li>The HMAC key is stored securely and never shown again.</li>
           <li>Some CAs let you use a pair only once. If registering fails, you may need a new pair from the CA.</li>
           <li>If the CA doesn't mention EAB, leave both blank.</li>
         </ul>

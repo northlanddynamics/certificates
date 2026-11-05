@@ -113,9 +113,7 @@ export function AcmeAccountsPage() {
           </p>
         }
       />
-      {org && !allowed ? (
-        <p className="text-sm text-muted-foreground">Only Organization Administrators see the ACME accounts.</p>
-      ) : (
+      {org && !allowed ? null : (
         <div className="flex flex-col gap-4">
           <DataTable table={table} empty={loading ? "Loading…" : "There is no ACME CA."} />
           {missing.length > 0 && !loading && (
@@ -259,7 +257,7 @@ function DeleteAcmeCa({ orgId, ca }: { orgId: string; ca: AcmeCa }) {
           if (!next) remove.reset();
         }}
         title={`Delete ${ca.name}?`}
-        description="Its account and the account's key go with it. It cannot be deleted while it is the issuer of any Managed Certificate or Certificate, archived ones included."
+        description="Its account and the account's key go with it."
         confirmLabel="Delete"
         pending={remove.isPending}
         error={remove.error}
@@ -282,7 +280,7 @@ function RegisterAccountDialog({ orgId, acmeCas }: { orgId: string; acmeCas: Acm
       <DialogContent className={STEPPED_DIALOG}>
         <DialogTitle className="sr-only">Register an ACME account</DialogTitle>
         <DialogDescription className="sr-only">
-          With a built-in ACME CA, or a custom one added in the same step. The platform makes the account's key and keeps it; it is never shown.
+          With a built-in ACME CA, or a custom one added in the same step.
         </DialogDescription>
         {/* Only mounted while open, so each opening starts from a clean form. */}
         {open && <RegisterAccountForm orgId={orgId} acmeCas={acmeCas} onDone={() => setOpen(false)} />}
@@ -359,7 +357,7 @@ function RegisterAccountForm({ orgId, acmeCas, onDone }: { orgId: string; acmeCa
         <FieldSet>
           <FieldLegend>ACME CA</FieldLegend>
           <FieldDescription>
-            With a built-in ACME CA, or a custom one added in the same step. The platform makes the account's key and keeps it; it is never shown.{" "}
+            With a built-in ACME CA, or a custom one added in the same step.{" "}
             <GuideLink guide="acme-accounts" section="letsencrypt">
               Which should I choose?
             </GuideLink>
@@ -411,7 +409,7 @@ function RegisterAccountForm({ orgId, acmeCas, onDone }: { orgId: string; acmeCa
                   </option>
                 ))}
               </select>
-              <FieldDescription>A label of what it is for, shown beside its name; it changes nothing about how it issues.</FieldDescription>
+              <FieldDescription>A label of what it is for, shown beside its name.</FieldDescription>
             </Field>
           </FieldGroup>
         </FieldSet>
@@ -420,7 +418,7 @@ function RegisterAccountForm({ orgId, acmeCas, onDone }: { orgId: string; acmeCa
         <FieldSet>
           <FieldLegend>External Account Binding (optional)</FieldLegend>
           <FieldDescription>
-            For a CA that requires one: the key id and HMAC key it gave you. The HMAC key is kept as a secret and never shown again. Neither can be changed once the CA is added.{" "}
+            For a CA that requires one: the key id and HMAC key it gave you. Neither can be changed once the CA is added.{" "}
             <GuideLink guide="acme-accounts" section="eab">
               What is this?
             </GuideLink>

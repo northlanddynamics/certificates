@@ -287,7 +287,7 @@ function AddConnectionDialog({ orgId }: { orgId: string }) {
       <DialogContent>
         <DialogHeader>
           <DialogTitle>Add an SSO connection</DialogTitle>
-          <DialogDescription>An OIDC provider is checked against its discovery document when it is added. A client secret cannot be read back.</DialogDescription>
+          <DialogDescription>An OIDC provider is checked against its discovery document when it is added.</DialogDescription>
         </DialogHeader>
         {/* Only mounted while open, so each opening starts from a clean form. */}
         {open && <ConnectionForm orgId={orgId} onDone={() => setOpen(false)} />}
