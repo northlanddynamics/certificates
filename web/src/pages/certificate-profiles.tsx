@@ -156,7 +156,7 @@ export function CertificateProfilesPage() {
 function ProfileGuide() {
   return (
     <>
-      <p>A profile sets how one kind of certificate is issued, so members don't have to choose. Changing a profile only affects new requests.</p>
+      <p>A profile sets how one kind of certificate is issued, so members don't have to choose.</p>
       {CERTIFICATE_PROFILE_GUIDE.map((section) => (
         <section key={section.title} className="flex flex-col gap-2 pt-2">
           <h2 className="text-sm font-medium text-foreground">{section.title}</h2>
@@ -185,10 +185,6 @@ function RequireProfileSetting({ orgId }: { orgId: string }) {
           />
           <div className="flex flex-col gap-1">
             <Label htmlFor="require-profile">Require a Certificate Profile</Label>
-            <p className="text-sm text-muted-foreground">
-              Whoever may not create a Managed Certificate outright may propose one only through a profile, with their API keys too, and is no longer offered Custom.
-              Those who may create one outright, such as Organization Administrators, are not held to it, and Name Changes of existing Managed Certificates are not affected.
-            </p>
           </div>
         </div>
       )}
@@ -399,8 +395,7 @@ function ProfileForm({ orgId, profile, onDone }: { orgId: string; profile?: Cert
         <FieldSet>
           <FieldLegend>Name rules</FieldLegend>
           <FieldDescription>
-            Which names members may request through it, within what the issuer allows. With no names and no zones, any name the issuer takes. Organization Administrators are
-            held only to the issuer's limits, and editing the rules does not re-check pending Proposals.
+            Which names members may request through it, within what the issuer allows. With no names and no zones, any name the issuer takes.
           </FieldDescription>
           <FieldGroup>
             <div className="grid gap-4 sm:grid-cols-2">

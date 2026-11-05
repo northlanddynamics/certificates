@@ -160,9 +160,7 @@ export function EnrollmentProfilesPage() {
           </p>
         }
       />
-      {org && !allowed ? (
-        <p className="text-sm text-muted-foreground">Only Organization Administrators see the Enrollment Profiles.</p>
-      ) : (
+      {org && !allowed ? null : (
         <div className="flex flex-col gap-4">
           <DataTable table={table} empty={profiles.isPending ? "Loading…" : "No Enrollment Profile yet."} />
           {profiles.error && <p className="text-sm text-destructive">{profiles.error.message}</p>}
@@ -815,7 +813,7 @@ function ShownOnceSharedChallenge({ challenge }: { challenge: string }) {
       <Alert>
         <TriangleAlertIcon />
         <AlertTitle>Copy the Shared Challenge now</AlertTitle>
-        <AlertDescription>It is shown only this once: the platform keeps only what it needs to check it. Anyone who holds it can enroll, so keep it where only your device management platform reads it.</AlertDescription>
+        <AlertDescription>It is shown only this once. Anyone who holds it can enroll, so keep it where only your device management platform reads it.</AlertDescription>
       </Alert>
       <CopyableValue label="Shared Challenge" value={challenge} />
     </>
@@ -1181,7 +1179,6 @@ function NewProfileForm({ orgId, onDone }: { orgId: string; onDone: (created: Cr
                     ))}
                   </SelectContent>
                 </Select>
-                <FieldDescription>Only an active Issuing CA under an active root can be chosen, and not an ML-DSA one: SCEP clients cannot verify the RA certificate it would sign.</FieldDescription>
               </Field>
             )}
           </FieldGroup>
@@ -1205,7 +1202,7 @@ function NewProfileForm({ orgId, onDone }: { orgId: string; onDone: (created: Cr
             <FieldLabel htmlFor="profile-validity">Validity (days)</FieldLabel>
             <Input id="profile-validity" inputMode="numeric" autoFocus value={validityDays} onChange={(e) => setChosenValidityDays(e.target.value)} aria-invalid={!validityOk} />
             <FieldDescription>
-              Up to {daysLabel(MAX_DEVICE_VALIDITY_DAYS)}, and never past the Issuing CA's end. Unless you set it, {daysLabel(DEFAULT_DEVICE_VALIDITY_DAYS)}, or {daysLabel(DEFAULT_SHARED_CHALLENGE_VALIDITY_DAYS)} with a
+              Up to {daysLabel(MAX_DEVICE_VALIDITY_DAYS)}. Unless you set it, {daysLabel(DEFAULT_DEVICE_VALIDITY_DAYS)}, or {daysLabel(DEFAULT_SHARED_CHALLENGE_VALIDITY_DAYS)} with a
               Shared Challenge.
             </FieldDescription>
           </Field>
@@ -1261,7 +1258,7 @@ function NewProfileForm({ orgId, onDone }: { orgId: string; onDone: (created: Cr
               <AlertTitle>Anyone who holds the Shared Challenge can enroll</AlertTitle>
               <AlertDescription>
                 <p>
-                  It sits in the SCEP profile on every device, so whoever copies it from one can enroll under any names. The platform cannot tie a certificate to a device. What they can get is still bounded:
+                  It sits in the SCEP profile on every device, so whoever copies it from one can enroll under any names. What they can get is still bounded:
                 </p>
                 <ul className="list-disc pl-5">
                   <li>by the Issuing CA's permitted names, which keep DNS and email names to your Organization's zones;</li>
@@ -1291,7 +1288,7 @@ function NewProfileForm({ orgId, onDone }: { orgId: string; onDone: (created: Cr
                 <Field>
                   <FieldLabel htmlFor="intune-secret">Client secret</FieldLabel>
                   <Input id="intune-secret" type="password" autoComplete="off" value={appSecret} onChange={(e) => setAppSecret(e.target.value)} />
-                  <FieldDescription>Its value, not its ID, from the app's Certificates &amp; secrets. It is stored encrypted and never shown again. Test the connection from the list once the profile is created.</FieldDescription>
+                  <FieldDescription>Its value, not its ID, from the app's Certificates &amp; secrets. Test the connection from the list once the profile is created.</FieldDescription>
                 </Field>
               </FieldGroup>
             </FieldSet>

@@ -48,7 +48,7 @@ export function DnsProviderGuidePage() {
   // Shown as a page or in the help panel over any of the Organization's pages.
   const orgId = useParams({ strict: false }).orgId ?? "";
   const org = useOrg(orgId);
-  if (org && !can(org, "dnsProvider", "read")) return <p className="text-sm text-muted-foreground">Only Organization Administrators see the DNS Providers.</p>;
+  if (org && !can(org, "dnsProvider", "read")) return null;
   return (
     <GuidePage
       guide="dns-providers"
@@ -118,7 +118,6 @@ export function DnsProviderGuidePage() {
         <span className="font-medium">Here</span>
         <p>Add a DNS Provider, choose Infoblox, and fill in:</p>
         <FieldTable rows={INFOBLOX_FIELDS} />
-        <p className="text-muted-foreground">The password, like an RFC 2136 secret, is stored encrypted and never shown again. You can replace it at any time.</p>
       </GuideSection>
 
       <GuideSection guide="dns-providers" id="relay">
@@ -129,7 +128,6 @@ export function DnsProviderGuidePage() {
         <ul className="flex list-disc flex-col gap-1.5 pl-5">
           <li>Choose two Agents on different servers, so changes still work when one is offline.</li>
           <li>Each chosen Agent must be able to reach the DNS server.</li>
-          <li>The Agent is given the secret only for each change, and keeps nothing.</li>
         </ul>
         <p className="text-muted-foreground">
           If the DNS server can be changed but isn't what the internet sees, such as internal-only DNS, the CA can't see the record. Use Delegated validation for those names.

@@ -53,11 +53,10 @@ export function AdcsCasPage() {
       <PageHeader
         title="ADCS CAs"
         action={org && can(org, "adcsCa", "create") && <AdcsCaDialog orgId={orgId} agents={agentList} />}
-        description="The Organization's Active Directory Certificate Services CAs, which the platform reaches only through its Windows Agents."
+        description="The Organization's Active Directory Certificate Services CAs, reached through its Windows Agents."
         howItWorks={
           <p>
-            Each Agent reaches ADCS as its own account (a gMSA), so ADCS's own template permissions decide what can be issued. The platform holds no AD credential and no ADCS key, and ADCS publishes its
-            own CRL.
+            Each Agent reaches ADCS as its own account (a gMSA), so ADCS's own template permissions decide what can be issued.
           </p>
         }
       />

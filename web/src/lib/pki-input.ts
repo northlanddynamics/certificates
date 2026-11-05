@@ -101,7 +101,7 @@ export function readPkiText(text: string): PkiText | null {
   if (trimmed === "") return null;
   if (trimmed.length > MAX_CSR_LENGTH) return { kind: "refused", problem: `This is far larger than a CSR or a certificate chain (more than ${MAX_CSR_LENGTH.toLocaleString("en-US")} characters).`, clear: false };
   if (containsPrivateKey(trimmed))
-    return { kind: "refused", problem: "That is a private key, which is never needed here, so it has been cleared. Paste the CSR or certificate, not the key.", clear: true };
+    return { kind: "refused", problem: "That is a private key, so it has been cleared. Paste the CSR or certificate, not the key.", clear: true };
   const blocks = [...trimmed.matchAll(BLOCK)].map((m) => ({ label: m[1]!, body: m[2]!.replace(/\s+/g, "") }));
   if (blocks.length > 0) {
     let problem: string | null = null;

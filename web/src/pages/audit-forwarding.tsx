@@ -28,7 +28,7 @@ const columns = columnHelper.columns([
     id: "target",
     header: "Sends to",
     cell: ({ row }) => (
-      <span className="break-all" title={row.original.kind === "webhook" ? "The URL is write-only; only its host is shown." : undefined}>
+      <span className="break-all">
         {row.original.port === null ? row.original.host : `${row.original.host}:${row.original.port}`}
       </span>
     ),
@@ -126,7 +126,7 @@ function AddForwarderDialog({ orgId }: { orgId: string }) {
       <DialogContent>
         <DialogHeader>
           <DialogTitle>Forward Audit Events</DialogTitle>
-          <DialogDescription>A webhook is posted each event as JSON; a syslog receiver must accept TLS. A webhook's URL and Authorization header cannot be read back once added.</DialogDescription>
+          <DialogDescription>A webhook is posted each event as JSON; a syslog receiver must accept TLS.</DialogDescription>
         </DialogHeader>
         {/* Only mounted while open, so each opening starts from a clean form. */}
         {open && <AddForwarderForm orgId={orgId} onDone={() => setOpen(false)} />}

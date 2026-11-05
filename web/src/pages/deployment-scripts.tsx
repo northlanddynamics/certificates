@@ -121,14 +121,12 @@ export function DeploymentScriptsPage() {
         description="The Bash or PowerShell that an Agent runs to place a new key and Certificate where they are needed."
         howItWorks={
           <p>
-            A script runs with the Agent's rights on the Agent's host, so only Organization Administrators can upload one. Uploading a change adds a version; earlier versions
+            Uploading a change adds a version; earlier versions
             stay as they were.
           </p>
         }
       />
-      {org && !allowed ? (
-        <p className="text-sm text-muted-foreground">Only Organization Administrators see the Deployment Scripts.</p>
-      ) : (
+      {org && !allowed ? null : (
         <div className="flex flex-col gap-4">
           <ParametersBanner orgId={orgId} />
           <div className="flex flex-wrap items-center gap-2">

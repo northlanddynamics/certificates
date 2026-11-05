@@ -159,7 +159,7 @@ export function DeploymentsPage() {
       <PageHeader
         title="Deployments"
         action={org && can(org, "deployment", "create") && <NewDeploymentDialog org={org} />}
-        description="A Deployment has one Agent make a Managed Certificate's private key on its own host, so the key never reaches the platform."
+        description="A Deployment has one Agent make a Managed Certificate's private key on its own host."
         howItWorks={
           <p>
             The Agent runs a Deployment Script with the Certificate and the key's location each time a Certificate is issued for it. The Agent does its part when it next
@@ -167,9 +167,7 @@ export function DeploymentsPage() {
           </p>
         }
       />
-      {org && !allowed ? (
-        <p className="text-sm text-muted-foreground">Only Organization Administrators see the Deployments.</p>
-      ) : (
+      {org && !allowed ? null : (
         <div className="flex flex-col gap-4">
           <div className="flex flex-wrap items-center gap-2">
             <DataTableFacetedFilter title="State" options={STATE_FACETS} value={state} onChange={narrow(setState)} />

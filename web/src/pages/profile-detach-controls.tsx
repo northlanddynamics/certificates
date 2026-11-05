@@ -33,8 +33,7 @@ export function DetachDialog({ org, m, open, onOpenChange, onChanged }: { org: M
         <DialogHeader>
           <DialogTitle>Detach from {profile.name}</DialogTitle>
           <DialogDescription>
-            It becomes an ordinary Managed Certificate. Its issuer, validity, key algorithm, Renewal Policy, names and Owners stay as they are, but its Name Changes are no longer checked
-            against the profile's name rules{profile.enabled ? "" : ", and it renews again although the profile is disabled"}. It cannot be attached to the profile again.
+            It becomes an ordinary Managed Certificate. Its issuer, validity, key algorithm, Renewal Policy, names and Owners stay as they are{profile.enabled ? "" : ", and it renews again although the profile is disabled"}.
           </DialogDescription>
         </DialogHeader>
         {detach.error && <p className="text-sm text-destructive">{detach.error.message}</p>}

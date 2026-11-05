@@ -107,7 +107,7 @@ export function AgentsPage() {
         }
         description={
           <>
-            An Agent runs on a host inside your network and only ever connects out to the platform.
+            An Agent runs on a host inside your network.
             {agents.data && <> The latest version is {agents.data.latestVersion}.</>}
           </>
         }
@@ -118,9 +118,7 @@ export function AgentsPage() {
           </p>
         }
       />
-      {org && !can(org, "agent", "read") ? (
-        <p className="text-sm text-muted-foreground">Only Organization Administrators see the Agents.</p>
-      ) : (
+      {org && !can(org, "agent", "read") ? null : (
         <div className="flex flex-col gap-4">
           <div className="flex flex-wrap items-center gap-2">
             <DataTableFacetedFilter title="Status" options={STATUS_FACETS} value={status} onChange={narrow(setStatus)} />

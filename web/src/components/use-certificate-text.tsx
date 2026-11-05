@@ -14,7 +14,7 @@ export function useCertificateText(onChange: (text: string) => void) {
   };
   const notice = refused ? (
     <p role="alert" className="text-sm text-destructive">
-      That is a private key, which the platform never takes, so it has been cleared. Use the certificate, not the key.
+      That is a private key, so it has been cleared. Use the certificate, not the key.
     </p>
   ) : null;
   return { accept, notice };

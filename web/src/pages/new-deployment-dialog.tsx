@@ -219,7 +219,7 @@ function NewDeploymentForm({ org, onDone }: { org: Me["organizations"][number]; 
                 ))}
               </SelectContent>
             </Select>
-            <FieldDescription>The Agent makes a key of this type on its own host; the private key never leaves it. Only the types the chosen CA takes are offered.</FieldDescription>
+            <FieldDescription>The Agent makes a key of this type on its own host.</FieldDescription>
           </Field>
           {isMlDsa(keyAlgorithm) && (
             <Alert>
@@ -227,7 +227,7 @@ function NewDeploymentForm({ org, onDone }: { org: Me["organizations"][number]; 
               <AlertTitle>The Deployment Script's target must support ML-DSA</AlertTitle>
               <AlertDescription>
                 Whatever the script installs this key and Certificate into (a web server or load balancer, with OpenSSL 3.5 or later underneath, for example) must itself support ML-DSA, and so must the
-                clients that connect to it. The platform cannot make up for that: check them before you deploy.
+                clients that connect to it. Check them before you deploy.
               </AlertDescription>
             </Alert>
           )}
@@ -297,7 +297,6 @@ function NewDeploymentForm({ org, onDone }: { org: Me["organizations"][number]; 
                   ))}
                 </SelectContent>
               </Select>
-              <FieldDescription>The Deployment keeps to this version; a later version is not run unless you set up another Deployment.</FieldDescription>
             </Field>
           )}
           {declared.length > 0 && (

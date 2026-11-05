@@ -32,7 +32,7 @@ export function DcvGuidePage() {
   // Shown as a page or in the help panel over any of the Organization's pages.
   const orgId = useParams({ strict: false }).orgId ?? "";
   const org = useOrg(orgId);
-  if (org && !can(org, "dcvRule", "read")) return <p className="text-sm text-muted-foreground">Only Organization Administrators see how DCV is done.</p>;
+  if (org && !can(org, "dcvRule", "read")) return null;
   return (
     <GuidePage
       guide="dcv"

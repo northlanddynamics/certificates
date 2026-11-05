@@ -75,7 +75,7 @@ export function NameRulesEditor({ id, draft, onChange }: { id: string; draft: Na
             </button>
           </TooltipTrigger>
           <TooltipContent className="max-w-80 text-left">
-            <p>Patterns are the only special syntax. * stands for any run of characters, including none; everything else is literal. Matching ignores case and must cover the whole value.</p>
+            <p>* stands for any run of characters, including none; everything else is literal. Matching ignores case and must cover the whole value.</p>
             <ul className="mt-1.5 flex list-disc flex-col gap-0.5 pl-4">
               <li>
                 <code>kiosk-*</code> matches <code>kiosk-01</code>, but not <code>my-kiosk-01</code>
@@ -89,13 +89,13 @@ export function NameRulesEditor({ id, draft, onChange }: { id: string; draft: Na
             </ul>
             <p className="mt-1.5">Separate several patterns with commas; a value passes if it matches any one of them. A subject attribute with no patterns takes any value, and a SAN type with none takes any name.</p>
             <p className="mt-1.5">
-              In subject patterns, write one attribute a line, such as <code>CN = kiosk-*</code>. Required attributes must be present in the request. Only * is special, so there are no templates or variables.
+              In subject patterns, write one attribute a line, such as <code>CN = kiosk-*</code>. Required attributes must be present in the request.
             </p>
           </TooltipContent>
         </Tooltip>
       </div>
       <FieldDescription>
-        This validator does not check the names a device asks for. Leave these empty to issue the subject and names of each device's request, within the Issuing CA's Permitted Name Rules. Once any is given, a
+        Leave these empty to issue the subject and names of each device's request, within the Issuing CA's Permitted Name Rules. Once any is given, a
         subject attribute or name type they do not allow is refused. A pattern matches the whole value, ignoring case, and * stands for anything.
       </FieldDescription>
       <FieldGroup>

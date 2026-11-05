@@ -66,7 +66,7 @@ fi`,
     },
     {
       title: "Reload, and say what was installed",
-      note: "The default is repeated here for older Agents. What the script prints is saved, so never print parameter values or secrets.",
+      note: "The default is repeated here for older Agents.",
       code: `systemctl reload "\${DEPLOY_PARAM_SERVICE:-nginx}"
 echo "installed $CERT_FINGERPRINT"`,
     },
@@ -107,7 +107,7 @@ Copy-Item $env:CERT_KEY_FILE (Join-Path $env:DEPLOY_PARAM_TARGET_DIR 'key.pem') 
     },
     {
       title: "Restart, and say what was installed",
-      note: "An optional parameter left blank isn't set at all, so a simple check is enough. What the script prints is saved, so never print parameter values or secrets.",
+      note: "An optional parameter left blank isn't set at all, so a simple check is enough.",
       code: `if ($env:DEPLOY_PARAM_SERVICE) { Restart-Service -Name $env:DEPLOY_PARAM_SERVICE }
 Write-Output "installed $env:CERT_FINGERPRINT"`,
     },
@@ -170,7 +170,7 @@ Write-Output "Deploying $env:CERT_FINGERPRINT for $env:CERT_NAMES"`,
     },
     {
       title: "Report whether it worked",
-      code: `Write-Output "Deployed $env:CERT_FINGERPRINT"  # output is stored: never print values or secrets
+      code: `Write-Output "Deployed $env:CERT_FINGERPRINT"
 exit 0                                         # a throw or any other code fails the run`,
     },
   ],

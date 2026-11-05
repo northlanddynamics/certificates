@@ -55,9 +55,7 @@ export function DcvPage() {
         <code>_acme-challenge</code> CNAME points into (Delegated). A name's own rule wins, then the longest zone; with none, DCV is Direct through whichever DNS Provider
         publishes the name. Private CAs need none of this.
       </p>
-      {org && !allowed ? (
-        <p className="text-sm text-muted-foreground">Only Organization Administrators see how DCV is done.</p>
-      ) : (
+      {org && !allowed ? null : (
         <>
           <RuleCheck orgId={orgId} />
 

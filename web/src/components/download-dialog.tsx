@@ -47,7 +47,6 @@ export function DownloadDialog({ orgId, id, certificateId, trigger }: { orgId: s
       <DialogContent>
         <DialogHeader>
           <DialogTitle>Download Certificate</DialogTitle>
-          <DialogDescription>The platform holds no private key, so the download never contains one.</DialogDescription>
         </DialogHeader>
         <div className="flex flex-col gap-4">
           <Choice id={`download-format-${certificateId ?? "current"}`} label="Format" value={format} onChange={setFormat} choices={EXPORT_FORMATS} />

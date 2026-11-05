@@ -160,6 +160,6 @@ Write-Output "Deploying $env:CERT_FINGERPRINT for $env:CERT_NAMES"
 #      $binding.AddSslCertificate($thumbprint, 'My')
 # ------------------------------------------------------------------------
 
-Write-Output "Deployed $env:CERT_FINGERPRINT"  # output is stored: never print values or secrets
+Write-Output "Deployed $env:CERT_FINGERPRINT"
 exit 0                                         # a throw or any other code fails the run
 ```

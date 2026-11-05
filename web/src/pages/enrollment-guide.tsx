@@ -38,7 +38,7 @@ export function EnrollmentGuidePage() {
   // Shown as a page or in the help panel over any of the Organization's pages.
   const orgId = useParams({ strict: false }).orgId ?? "";
   const org = useOrg(orgId);
-  if (org && !can(org, "enrollmentProfile", "read")) return <p className="text-sm text-muted-foreground">Only Organization Administrators see the Enrollment Profiles.</p>;
+  if (org && !can(org, "enrollmentProfile", "read")) return null;
   return (
     <GuidePage
       guide="enrollment-profiles"
@@ -99,7 +99,7 @@ export function EnrollmentGuidePage() {
               Choose <strong>Grant admin consent</strong>. Without it, every device is refused.
             </>,
             <>
-              Create a <strong>client secret</strong> and copy its value. You paste it here once, and it is never shown again.
+              Create a <strong>client secret</strong> and copy its value.
             </>,
           ]}
         </Steps>

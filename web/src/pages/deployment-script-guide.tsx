@@ -1,5 +1,4 @@
 import { useParams } from "@tanstack/react-router";
-import { ShieldAlertIcon, TriangleAlertIcon } from "lucide-react";
 import type { ReactNode } from "react";
 import { toast } from "sonner";
 import { CopyButton } from "@/components/copy-button";
@@ -51,7 +50,7 @@ const REFUSALS: { says: string; fix: ReactNode }[] = [
   },
   {
     says: "the parameter section must be a JSON array of parameters: …",
-    fix: "Give each entry a name, and use only the five fields above.",
+    fix: "Give each entry a name.",
   },
   {
     says: 'the parameter name "site-id" must be upper-case letters, digits and _, starting with a letter',
@@ -85,7 +84,7 @@ export function DeploymentScriptGuidePage() {
   // Shown as a page or in the help panel over any of the Organization's pages.
   const orgId = useParams({ strict: false }).orgId ?? "";
   const org = useOrg(orgId);
-  if (org && !can(org, "deploymentScript", "read")) return <p className="text-sm text-muted-foreground">Only Organization Administrators see the Deployment Scripts.</p>;
+  if (org && !can(org, "deploymentScript", "read")) return null;
   const mayUpload = org ? can(org, "deploymentScript", "upload") : false;
   return (
     <GuidePage
@@ -173,7 +172,6 @@ export function DeploymentScriptGuidePage() {
             <li className="rounded-md border p-3">
               Don't start a name with <code>{ENV_PREFIX}</code>. The Agent adds it.
             </li>
-            <li className="rounded-md border p-3">Use only the five fields above.</li>
             <li className="rounded-md border p-3">To change the block, upload a new version of the script.</li>
           </ul>
         </GuideSection>
@@ -238,21 +236,6 @@ export function DeploymentScriptGuidePage() {
 
         <GuideSection guide="deployment-scripts" id="safety">
           <div className="grid gap-3 md:grid-cols-2">
-            <Alert variant="destructive">
-              <ShieldAlertIcon />
-              <AlertTitle>Don't put secrets in parameters</AlertTitle>
-              <AlertDescription>
-                Parameters are saved as plain text, and every Organization Administrator can read them. Keep passwords and keys in the Agent's own environment on its server,
-                under a name that doesn't start with <code>{ENV_PREFIX}</code>.
-              </AlertDescription>
-            </Alert>
-            <Alert>
-              <TriangleAlertIcon />
-              <AlertTitle>What your script prints is saved</AlertTitle>
-              <AlertDescription>
-                The first 32 KiB of output is kept with each run. Never print parameter values, secrets or the key, and leave <code>set -x</code> off.
-              </AlertDescription>
-            </Alert>
             <Alert>
               <AlertTitle>Check required parameters</AlertTitle>
               <AlertDescription>

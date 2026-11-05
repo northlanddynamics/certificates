@@ -146,7 +146,7 @@ export function PrivateCasPage() {
         description="The Organization's own CAs, for internal names a public CA will not validate."
         howItWorks={
           <>
-            <p>Each is a root and one or more Issuing CAs under it, each with its own key in the KMS, which never leaves it.</p>
+            <p>Each is a root and one or more Issuing CAs under it.</p>
             <p>A Managed Certificate is issued from one Issuing CA and needs no DCV; download the root to install it wherever its Certificates must be trusted.</p>
             <p>Add an Issuing CA under the same root, for other names or to roll over, and nothing that trusts the root needs anything new.</p>
           </>
@@ -798,7 +798,7 @@ function AddIssuingCaForm({ orgId, ca, onDone }: { orgId: string; ca: PrivateCa;
                   />
                 </div>
                 <FieldDescription>
-                  Leave empty for until the root ends{ca.root ? `, ${date(ca.root.notAfter)}` : ""}. It never outlives the root, and no Certificate outlives it.
+                  Leave empty for until the root ends{ca.root ? `, ${date(ca.root.notAfter)}` : ""}.
                 </FieldDescription>
                 {!lifetimeOk && <FieldError>A whole number of years from 1 to {MAX_LIFETIME_YEARS}.</FieldError>}
               </Field>
